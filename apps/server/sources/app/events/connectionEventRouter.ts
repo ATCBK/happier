@@ -21,7 +21,7 @@ import type { Socket } from "socket.io";
 import { readSessionAccessAuthenticationFromSocket } from "@/app/session/access/sessionAccessAuthentication";
 import { inTx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
-import type { SessionBroadcastContainer } from "@happier-dev/protocol";
+import type { SessionBroadcastContainer } from '@happier-dev/protocol/updates';
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import type { forwardRpcCall, RpcForwardResult } from '@/app/api/socket/rpc/forwardRpcCall';
 import { cancelRpcTarget } from '@/app/api/socket/rpc/cancelRpcTarget';

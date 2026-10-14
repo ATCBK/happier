@@ -1,8 +1,5 @@
-import {
-    isSessionPersonallyTrackedV1,
-    projectViewerReadStateV1,
-    type ViewerReadStateV1,
-} from "@happier-dev/protocol";
+import { isSessionPersonallyTrackedV1 } from '@happier-dev/protocol/sessions/personal/tracking';
+import { projectViewerReadStateV1, type ViewerReadStateV1 } from '@happier-dev/protocol/sessions';
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";

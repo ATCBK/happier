@@ -139,8 +139,8 @@ function credentialDetail(): string {
 
 function importedSecretRef(personalId: string): string {
     const source = SECRETS.find(secret => secret.id === personalId);
-    const resource = account?.resources.find(material => material.entry.name === source?.name);
-    if (!resource) throw new Error(`Missing acknowledged fixture Resource for ${personalId}`);
+    const resource = account?.resources.find(material => 'name' in material.entry && material.entry.name === source?.name);
+    if (!resource || !('ref' in resource.entry)) throw new Error(`Missing acknowledged fixture Resource for ${personalId}`);
     return resource.entry.ref;
 }
 

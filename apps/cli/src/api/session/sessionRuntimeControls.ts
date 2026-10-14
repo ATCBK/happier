@@ -3,6 +3,7 @@ import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 const runtimeControlKeys = [
   'readCodingPromptBehavior',
   'readEffectiveInputConfiguration',
+  'readAppliedChildSelection',
   'withdrawWorkflowStepInput',
   'refreshGoal',
   'setGoal',

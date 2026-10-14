@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -10,13 +10,11 @@ import {
 export const PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY = 'providerAccountUsageRefsV1' as const;
 export const PROVIDER_ACCOUNT_USAGE_REFS_MAX_RECORD_IDS = 32;
 
-export const ProviderAccountUsageRefsV1Schema = lazyZodSchema(() => z
-  .object({
+export const ProviderAccountUsageRefsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    recordIds: z.array(ProviderAccountUsageRecordIdSchema).max(PROVIDER_ACCOUNT_USAGE_REFS_MAX_RECORD_IDS),
-    updatedAtMs: z.number().int().nonnegative(),
-  })
-  .strict());
+    recordIds: z.array(ProviderAccountUsageRecordIdSchema).check(z.maxLength(PROVIDER_ACCOUNT_USAGE_REFS_MAX_RECORD_IDS)),
+    updatedAtMs: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type ProviderAccountUsageRefsV1 = z.infer<typeof ProviderAccountUsageRefsV1Schema>;
 
 function toMetadataRecord(metadata: unknown): Record<string, unknown> {

@@ -9,6 +9,22 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('frame-owned runtime mount', () => {
+    it('resolves the runtime Home from the frame server selection', async () => {
+        const events = new EventTarget();
+        vi.stubGlobal('window', {
+            location: new URL('https://app.happier.dev/embed/new?server=https%3A%2F%2Fcredential-home.example&i=instance&n=nonce'),
+            addEventListener: events.addEventListener.bind(events),
+            removeEventListener: events.removeEventListener.bind(events),
+        });
+        let observedEndpoint: string | null = null;
+        function Probe() {
+            observedEndpoint = useEmbedSessionRuntime().runtime.endpointUrl;
+            return React.createElement('RuntimeProbe');
+        }
+        const screen = await renderScreen(<EmbedSessionRuntimeProvider><Probe /></EmbedSessionRuntimeProvider>);
+        await vi.waitFor(() => expect(observedEndpoint).toBe('https://credential-home.example'));
+        await screen.unmount();
+    });
     it('provides an unadmitted loading runtime with an ephemeral public recipient and no credential', async () => {
         const observed: Array<{ phase: string; token: string | null; publicKey: string; endpoint: string }> = [];
         function Probe() {

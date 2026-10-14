@@ -58,6 +58,13 @@ describe('native email/password draft validation', () => {
 });
 
 describe('native email/password failure copy', () => {
+    it('presents an E2EE mutation proof refusal as Account verification rather than a wrong new password', () => {
+        const failure = new HappyError('refused', false, { kind: 'auth', status: 401, code: 'authentication_failed' });
+        expect(describeEmailPasswordFailure(failure, { credentialField: 'accountKey' })).toEqual({
+            field: 'form', messageKey: 'settingsAccount.nativePassword.accountVerificationFailed',
+        });
+        expect(describeEmailPasswordFailure(failure, { credentialField: 'currentPassword' }).field).toBe('currentPassword');
+    });
     it('keeps unknown addresses and wrong passwords indistinguishable', () => {
         const wrongPassword = new HappyError('x', false, { kind: 'auth', status: 401, code: 'authentication_failed' });
         const unknownAddress = new HappyError('x', false, { kind: 'auth', status: 401, code: 'authentication_failed' });

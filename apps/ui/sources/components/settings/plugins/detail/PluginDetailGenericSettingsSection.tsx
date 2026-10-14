@@ -1483,8 +1483,8 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
                         <PluginSettingsSectionDisclosure
                             key={group.id}
                             testID={`settings.plugins.detail.${props.pluginId}.settings.${group.id}.disclosure`}
-                            title={group.title}
-                            description={groupHasSaveError ? groupDescription : group.description}
+                            title={group.title ?? null}
+                            description={(groupHasSaveError ? groupDescription : group.description) ?? null}
                             summary={changed > 0
                                 ? t('settingsPlugins.genericSettingsChangedCount', { count: changed })
                                 : t('settingsPlugins.genericSettingsDefaults')}

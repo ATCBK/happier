@@ -1,25 +1,3 @@
-import {
-    AnnotationsSchema,
-    AudioContentSchema,
-    BlobResourceContentsSchema,
-    EmbeddedResourceSchema,
-    GetPromptResultSchema,
-    IconSchema,
-    ImageContentSchema,
-    ListPromptsResultSchema,
-    ListResourcesResultSchema,
-    ListResourceTemplatesResultSchema,
-    PromptArgumentSchema,
-    PromptMessageSchema,
-    PromptSchema,
-    ReadResourceResultSchema,
-    ResourceLinkSchema,
-    ResourceSchema,
-    ResourceTemplateSchema,
-    ResourceUpdatedNotificationParamsSchema,
-    TextContentSchema,
-    TextResourceContentsSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 import { PluginError, type Disposable, type JsonValue } from '@happier-dev/plugin-sdk';
 import {
     type McpClient as PluginMcpClient,
@@ -301,83 +279,6 @@ function validateTools(result: unknown): Readonly<{ items: readonly PluginMcpToo
     return validated;
 }
 
-const publicMcpStringSchema = ResourceSchema.shape.uri;
-const publicMcpUnknownSchema = TextContentSchema.shape._meta.unwrap().valueType;
-// The curated DTO intentionally exposes annotation hints as plain JSON primitives,
-// while the MCP wire schema constrains their values further.
-const publicMcpFiniteNumberSchema = publicMcpUnknownSchema.refine(
-    (value): value is number => typeof value === 'number' && Number.isFinite(value),
-);
-const publicMcpAnnotationsSchema = AnnotationsSchema.extend({
-    priority: publicMcpFiniteNumberSchema.optional(),
-    lastModified: publicMcpStringSchema.optional(),
-}).strict();
-const publicMcpIconSchema = IconSchema.strict();
-const publicMcpResourceSchema = ResourceSchema.extend({
-    annotations: publicMcpAnnotationsSchema.optional(),
-    icons: publicMcpIconSchema.array().optional(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpResourceTemplateSchema = ResourceTemplateSchema.extend({
-    annotations: publicMcpAnnotationsSchema.optional(),
-    icons: publicMcpIconSchema.array().optional(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpTextResourceContentsSchema = TextResourceContentsSchema.extend({
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpBlobResourceContentsSchema = BlobResourceContentsSchema.extend({
-    blob: publicMcpStringSchema,
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpResourceContentsSchema = publicMcpTextResourceContentsSchema.or(publicMcpBlobResourceContentsSchema);
-const publicMcpResourcePageSchema = ListResourcesResultSchema.omit({ resources: true }).extend({
-    items: publicMcpResourceSchema.array(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpResourceTemplatePageSchema = ListResourceTemplatesResultSchema.omit({ resourceTemplates: true }).extend({
-    items: publicMcpResourceTemplateSchema.array(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpReadResourceResultSchema = ReadResourceResultSchema.extend({
-    contents: publicMcpResourceContentsSchema.array(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpPromptSchema = PromptSchema.extend({
-    arguments: PromptArgumentSchema.strict().array().optional(),
-    icons: publicMcpIconSchema.array().optional(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpPromptPageSchema = ListPromptsResultSchema.omit({ prompts: true }).extend({
-    items: publicMcpPromptSchema.array(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpPromptContentSchema = TextContentSchema.extend({
-    annotations: publicMcpAnnotationsSchema.optional(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict()
-    .or(ImageContentSchema.extend({
-        data: publicMcpStringSchema,
-        annotations: publicMcpAnnotationsSchema.optional(),
-        _meta: publicMcpUnknownSchema.optional(),
-    }).strict())
-    .or(AudioContentSchema.extend({
-        data: publicMcpStringSchema,
-        annotations: publicMcpAnnotationsSchema.optional(),
-        _meta: publicMcpUnknownSchema.optional(),
-    }).strict())
-    .or(EmbeddedResourceSchema.extend({
-        resource: publicMcpResourceContentsSchema,
-        annotations: publicMcpAnnotationsSchema.optional(),
-        _meta: publicMcpUnknownSchema.optional(),
-    }).strict())
-    .or(publicMcpResourceSchema.extend({ type: ResourceLinkSchema.shape.type }).strict());
-const publicMcpGetPromptResultSchema = GetPromptResultSchema.extend({
-    messages: PromptMessageSchema.extend({ content: publicMcpPromptContentSchema }).strict().array(),
-    _meta: publicMcpUnknownSchema.optional(),
-}).strict();
-const publicMcpResourceUpdatedEventSchema = ResourceUpdatedNotificationParamsSchema.omit({ _meta: true }).strict();
-
 type PublicMcpSchema = Readonly<{
     safeParse(value: unknown): Readonly<{ success: boolean }>;
 }>;
@@ -404,28 +305,28 @@ function validatePublicMcpDto<T>(
     return cloned as unknown as T;
 }
 
-function validateResourcePage(result: unknown): PluginMcpResourcePage {
-    return validatePublicMcpDto(result, 'MCP resource page', publicMcpResourcePageSchema, true);
+function validateResourcePage(result: unknown, schema: PublicMcpSchema): PluginMcpResourcePage {
+    return validatePublicMcpDto(result, 'MCP resource page', schema, true);
 }
 
-function validateResourceTemplatePage(result: unknown): PluginMcpResourceTemplatePage {
-    return validatePublicMcpDto(result, 'MCP resource template page', publicMcpResourceTemplatePageSchema, true);
+function validateResourceTemplatePage(result: unknown, schema: PublicMcpSchema): PluginMcpResourceTemplatePage {
+    return validatePublicMcpDto(result, 'MCP resource template page', schema, true);
 }
 
-function validateReadResourceResult(result: unknown): PluginMcpReadResourceResult {
-    return validatePublicMcpDto(result, 'MCP resource result', publicMcpReadResourceResultSchema);
+function validateReadResourceResult(result: unknown, schema: PublicMcpSchema): PluginMcpReadResourceResult {
+    return validatePublicMcpDto(result, 'MCP resource result', schema);
 }
 
-function validatePromptPage(result: unknown): PluginMcpPromptPage {
-    return validatePublicMcpDto(result, 'MCP prompt page', publicMcpPromptPageSchema, true);
+function validatePromptPage(result: unknown, schema: PublicMcpSchema): PluginMcpPromptPage {
+    return validatePublicMcpDto(result, 'MCP prompt page', schema, true);
 }
 
-function validateGetPromptResult(result: unknown): PluginMcpGetPromptResult {
-    return validatePublicMcpDto(result, 'MCP prompt result', publicMcpGetPromptResultSchema);
+function validateGetPromptResult(result: unknown, schema: PublicMcpSchema): PluginMcpGetPromptResult {
+    return validatePublicMcpDto(result, 'MCP prompt result', schema);
 }
 
-function validateResourceUpdatedEvent(event: unknown): PluginMcpResourceUpdatedEvent {
-    return validatePublicMcpDto(event, 'MCP resource update', publicMcpResourceUpdatedEventSchema);
+function validateResourceUpdatedEvent(event: unknown, schema: PublicMcpSchema): PluginMcpResourceUpdatedEvent {
+    return validatePublicMcpDto(event, 'MCP resource update', schema);
 }
 
 function validateNonEmptyText(value: string, label: string): void {
@@ -782,6 +683,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     return clonePlainJson(result, 'plugin_mcp_result_invalid', MAX_STABLE_PLUGIN_MCP_RESULT_BYTES);
                 },
                 async listResources(request: Readonly<{ cursor?: string; signal?: AbortSignal }> = {}) {
+                    const { publicMcpResourcePageSchema } = await import('./mcpPublicDtoSchemas');
                     if (clientDisposed) fail('plugin_mcp_client_disposed', 'MCP client has been disposed');
                     assertAuthorized(ref, 'listTools');
                     validateActive(seed, disposed);
@@ -796,7 +698,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     }, [seed.signal, request.signal]);
                     validateActive(seed, disposed);
                     if (registration !== null) assertRegistrationCurrent(registration, seed.occurrenceId, ref);
-                    const validated = validateResourcePage(result);
+                    const validated = validateResourcePage(result, publicMcpResourcePageSchema);
                     return Object.freeze({
                         items: validated.items,
                         ...(validated.nextCursor === undefined ? {} : { nextCursor: resourceCursors.issue(validated.nextCursor) }),
@@ -804,6 +706,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     });
                 },
                 async listResourceTemplates(request: Readonly<{ cursor?: string; signal?: AbortSignal }> = {}) {
+                    const { publicMcpResourceTemplatePageSchema } = await import('./mcpPublicDtoSchemas');
                     if (clientDisposed) fail('plugin_mcp_client_disposed', 'MCP client has been disposed');
                     assertAuthorized(ref, 'listTools');
                     validateActive(seed, disposed);
@@ -818,7 +721,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     }, [seed.signal, request.signal]);
                     validateActive(seed, disposed);
                     if (registration !== null) assertRegistrationCurrent(registration, seed.occurrenceId, ref);
-                    const validated = validateResourceTemplatePage(result);
+                    const validated = validateResourceTemplatePage(result, publicMcpResourceTemplatePageSchema);
                     return Object.freeze({
                         items: validated.items,
                         ...(validated.nextCursor === undefined ? {} : { nextCursor: resourceTemplateCursors.issue(validated.nextCursor) }),
@@ -826,6 +729,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     });
                 },
                 async readResource(uri: string, readOptions: Readonly<{ signal?: AbortSignal }> = {}) {
+                    const { publicMcpReadResourceResultSchema } = await import('./mcpPublicDtoSchemas');
                     if (clientDisposed) fail('plugin_mcp_client_disposed', 'MCP client has been disposed');
                     assertAuthorized(ref, 'listTools');
                     validateNonEmptyText(uri, 'MCP resource URI');
@@ -837,7 +741,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     }, [seed.signal, readOptions.signal]);
                     validateActive(seed, disposed);
                     if (registration !== null) assertRegistrationCurrent(registration, seed.occurrenceId, ref);
-                    const validated = validateReadResourceResult(result);
+                    const validated = validateReadResourceResult(result, publicMcpReadResourceResultSchema);
                     return Object.freeze({
                         contents: validated.contents,
                         ...(validated._meta === undefined ? {} : { _meta: validated._meta }),
@@ -862,6 +766,8 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     const serializedListener = (event: PluginMcpResourceUpdatedEvent) => {
                         listenerChain = listenerChain.then(async () => {
                             if (subscriptionRetired) return;
+                            const { publicMcpResourceUpdatedEventSchema } = await import('./mcpPublicDtoSchemas');
+                            if (subscriptionRetired) return;
                             try {
                                 validateActive(seed, disposed);
                                 if (registration !== null) {
@@ -884,7 +790,8 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                                 }
                                 throw error;
                             }
-                            await listener(validateResourceUpdatedEvent(event));
+                            if (subscriptionRetired) return;
+                            await listener(validateResourceUpdatedEvent(event, publicMcpResourceUpdatedEventSchema));
                         }).catch(() => {
                             process.emitWarning('MCP resource subscription listener failed', {
                                 code: 'HAPPIER_MCP_RESOURCE_LISTENER_FAILED',
@@ -902,6 +809,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     let disposeOnCallerAbort: (() => void) | null = null;
                     const subscription: Disposable = Object.freeze({
                         dispose() {
+                            subscriptionRetired = true;
                             if (subscriptionDisposePromise !== null) return subscriptionDisposePromise;
                             if (disposeOnCallerAbort !== null && subscribeOptions.signal !== undefined) {
                                 subscribeOptions.signal.removeEventListener('abort', disposeOnCallerAbort);
@@ -940,6 +848,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     return subscription;
                 },
                 async listPrompts(request: Readonly<{ cursor?: string; signal?: AbortSignal }> = {}) {
+                    const { publicMcpPromptPageSchema } = await import('./mcpPublicDtoSchemas');
                     if (clientDisposed) fail('plugin_mcp_client_disposed', 'MCP client has been disposed');
                     assertAuthorized(ref, 'listTools');
                     validateActive(seed, disposed);
@@ -954,7 +863,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     }, [seed.signal, request.signal]);
                     validateActive(seed, disposed);
                     if (registration !== null) assertRegistrationCurrent(registration, seed.occurrenceId, ref);
-                    const validated = validatePromptPage(result);
+                    const validated = validatePromptPage(result, publicMcpPromptPageSchema);
                     return Object.freeze({
                         items: validated.items,
                         ...(validated.nextCursor === undefined ? {} : { nextCursor: promptCursors.issue(validated.nextCursor) }),
@@ -966,6 +875,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     args?: Readonly<Record<string, string>>,
                     promptOptions: Readonly<{ signal?: AbortSignal }> = {},
                 ) {
+                    const { publicMcpGetPromptResultSchema } = await import('./mcpPublicDtoSchemas');
                     if (clientDisposed) fail('plugin_mcp_client_disposed', 'MCP client has been disposed');
                     assertAuthorized(ref, 'listTools');
                     validateNonEmptyText(name, 'MCP prompt name');
@@ -988,7 +898,7 @@ export function createStablePluginMcpHost(params: StablePluginMcpHostParams): St
                     }, [seed.signal, promptOptions.signal]);
                     validateActive(seed, disposed);
                     if (registration !== null) assertRegistrationCurrent(registration, seed.occurrenceId, ref);
-                    const validated = validateGetPromptResult(result);
+                    const validated = validateGetPromptResult(result, publicMcpGetPromptResultSchema);
                     return Object.freeze({
                         messages: validated.messages,
                         ...(validated.description === undefined ? {} : { description: validated.description }),

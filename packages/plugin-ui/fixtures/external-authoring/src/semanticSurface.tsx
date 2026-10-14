@@ -29,7 +29,7 @@ import {
   WidgetFrame,
 } from '@happier-dev/plugin-ui';
 import { useHappierUiAccessibility, useHappierUiLocalization } from '@happier-dev/plugin-ui/environment';
-import { CountedDisclosureItem, FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
+import { CountedDisclosureItem, ItemAddRow, FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
 import {
   HappierFloatingFrame as FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
   useHappierCollection, type FrameRect, type HappierTreeNode,
@@ -310,6 +310,7 @@ function ExternalAuthoringSemanticSurface() {
         onSubmit={() => undefined}
       />
       <ItemGroup title="External review scope">
+        <ItemAddRow title="Add review scope" onPress={() => setReviewScope('all')} testID="external-add-review-scope" />
         <Item
           title="External review filter"
           accessoryWraps

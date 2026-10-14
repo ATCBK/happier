@@ -49,7 +49,6 @@ export function watchDebounced({
   recoverSignature = readSignature,
   queueCapacity = process.platform === 'linux'
     ? Number(readFileSync('/proc/sys/fs/inotify/max_queued_events', 'utf8')) : 0,
-  now = Date.now,
   shouldPoll = null,
   pollIntervalMs = 0,
   persistent = true,
@@ -67,7 +66,6 @@ export function watchDebounced({
   let t = null;
   let burstTimer = null;
   let burstEvents = 0;
-  let lastNativeEventAt = null;
   let pendingSignatureInitializedAtObservation = null;
   let pendingObservationHandled = false;
   const watchers = [];
@@ -132,21 +130,19 @@ export function watchDebounced({
     if (closed) return;
     onSourceEvent?.({ eventType, filename, watchPath });
     if (queueCapacity > 0) {
-      const observedAt = now();
-      if (lastNativeEventAt === null || observedAt - lastNativeEventAt > debounceMs) burstEvents = 0;
-      lastNativeEventAt = observedAt;
       burstEvents++;
-      if (burstEvents >= Math.ceil(queueCapacity / 2)) {
-        if (burstTimer) clearTimeoutImpl(burstTimer);
-        burstTimer = setTimeoutImpl(() => {
-          burstTimer = null;
-          burstEvents = 0;
-          if (closed) return;
-          logger.warn?.('[local] watch: native event burst risks queue loss; reconciling source inputs.');
-          onSourceEvent?.({ eventType: 'recrawl', filename: null });
-          trigger('recrawl', null);
-        }, debounceMs);
-      }
+      if (burstTimer) clearTimeoutImpl(burstTimer);
+      // Wall-clock gaps can include process/VM suspension while the native
+      // queue is still draining. Only an event-loop quiet turn ends the burst.
+      burstTimer = setTimeoutImpl(() => {
+        burstTimer = null;
+        const risksQueueLoss = burstEvents >= Math.ceil(queueCapacity / 2);
+        burstEvents = 0;
+        if (closed || !risksQueueLoss) return;
+        logger.warn?.('[local] watch: native event burst risks queue loss; reconciling source inputs.');
+        onSourceEvent?.({ eventType: 'recrawl', filename: null });
+        trigger('recrawl', null);
+      }, debounceMs);
     }
     trigger(eventType, filename, { watchPath });
   };

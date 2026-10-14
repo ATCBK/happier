@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     params: {} as Record<string, string>,
     deviceType: 'tablet' as 'phone' | 'tablet',
     installedPlugins: [] as unknown[],
+    installedPluginsRead: true,
     activeView: 'installed' as 'installed' | 'discover',
     setActiveView: vi.fn(),
 }));
@@ -90,7 +91,7 @@ vi.mock('./model/usePluginSettingsScreenState', () => ({
         runDevelopmentSourceInstall: () => {},
         currentDiagnostics: [],
         refreshPluginTruth: () => {},
-        installedPluginsRead: true,
+        installedPluginsRead: mocks.installedPluginsRead,
         pluginProjectionById: {},
         discoverResultsSearchText: '',
         clearDiscoverSearch: () => {},
@@ -177,6 +178,7 @@ describe('Settings > Plugins information architecture', () => {
         mocks.params = {};
         mocks.deviceType = 'tablet';
         mocks.installedPlugins = [];
+        mocks.installedPluginsRead = true;
         mocks.setActiveView.mockClear();
         if (!routerMock.value) throw new Error('Router boundary must be installed');
         routerMock.value.resetParams();
@@ -201,6 +203,13 @@ describe('Settings > Plugins information architecture', () => {
             expect(segmentIds).toContain(activeView);
             standardCleanup();
         }
+    });
+
+    it('projects an unselected administration target as noTarget while the installed snapshot is unread', async () => {
+        mocks.installedPluginsRead = false;
+        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
+        const installedSection = screen.root.findAll((node) => node.type === 'InstalledPluginsSection')[0];
+        expect(installedSection?.props.collectionState).toBe('noTarget');
     });
 
     it('leaves the Installed | Browse choice to the Plugins column beside the app rail, and keeps it where there is no column', async () => {

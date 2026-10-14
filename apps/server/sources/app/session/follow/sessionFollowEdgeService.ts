@@ -1,18 +1,9 @@
-import {
-    compareSessionFollowFrontierProgressV1,
-    deriveSessionFollowWakeEventLocalIdV1,
-    isPlainMachineDataKeyMarker,
-    isSessionFollowFrontierEqualV1,
-    isSessionFollowTurnEqualV1,
-    isSessionFollowConsumptionWithinCurrentV1,
-    type SessionFollowFrontierV1,
-    type SessionFollowAcknowledgeRequestV1,
-    type SessionFollowSourceV1,
-    type SessionFollowSourceProjectionRequestV1,
-    type SessionFollowSourceProjectionResponseV1,
-    SessionFollowSourceProjectionResponseV1Schema,
-    SessionMessageRoleSchema,
-} from "@happier-dev/protocol";
+import { compareSessionFollowFrontierProgressV1, isSessionFollowFrontierEqualV1, isSessionFollowTurnEqualV1, isSessionFollowConsumptionWithinCurrentV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { deriveSessionFollowWakeEventLocalIdV1, type SessionFollowAcknowledgeRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
+import { type SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { type SessionFollowSourceProjectionRequestV1, type SessionFollowSourceProjectionResponseV1, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 
 import {

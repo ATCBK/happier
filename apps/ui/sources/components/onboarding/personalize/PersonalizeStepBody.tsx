@@ -560,7 +560,7 @@ const styles = StyleSheet.create((theme) => ({
     scope: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     scopeLabel: {
         color: theme.colors.text.tertiary,
@@ -570,8 +570,8 @@ const styles = StyleSheet.create((theme) => ({
     note: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
-        paddingHorizontal: 4,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s4,
     },
     noteText: {
         flex: 1,
@@ -581,7 +581,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     inlineAction: {
         flexDirection: 'row',
-        paddingTop: 10,
+        paddingTop: theme.space.s10,
     },
     miniatureViewport: {
         flex: 1,
@@ -600,14 +600,14 @@ const styles = StyleSheet.create((theme) => ({
         width: 280,
         transform: [{ scale: 0.5 }],
         transformOrigin: 'top left',
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     permission: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         paddingHorizontal: 14,
-        paddingVertical: 12,
+        paddingVertical: theme.space.s12,
         borderRadius: 12,
         borderCurve: 'continuous',
         backgroundColor: theme.colors.surface.inset,

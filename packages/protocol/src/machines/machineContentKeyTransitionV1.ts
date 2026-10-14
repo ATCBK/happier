@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { AccessibleMachineAccessV1Schema } from './machineAccessV1.js';
@@ -12,41 +12,41 @@ import { createMachineDataEncryptionKeyV1, isMachineDataEncryptionKeyTransferabl
 import { DevcontainerChildProjectionV1Schema } from './managed/devcontainerV1.js';
 
 /** The persisted owner envelope and both revisions form one content identity. */
-export const MachineKeyBasisV1Schema = lazyZodSchema(() => z.object({
-  dataEncryptionKey: z.string().min(1).nullable(),
-  metadataVersion: z.number().int().nonnegative(),
-  daemonStateVersion: z.number().int().nonnegative(),
-}).strict());
+export const MachineKeyBasisV1Schema = lazyZodSchema(() => z.strictObject({
+  dataEncryptionKey: z.nullable(z.string().check(z.minLength(1))),
+  metadataVersion: z.number().check(z.int(), z.nonnegative()),
+  daemonStateVersion: z.number().check(z.int(), z.nonnegative()),
+}));
 export const MachineKeyBasisStoredReadV1Schema = createStoredReadSchema(MachineKeyBasisV1Schema);
 export type MachineKeyBasisV1 = z.infer<typeof MachineKeyBasisV1Schema>;
 
-export const MachineEncodedWriteBasisV1Schema = lazyZodSchema(() => z.object({
-  expectedDataEncryptionKey: z.string().min(1).nullable(),
-  expectedVersion: z.number().int().nonnegative(),
-}).strict());
+export const MachineEncodedWriteBasisV1Schema = lazyZodSchema(() => z.strictObject({
+  expectedDataEncryptionKey: z.nullable(z.string().check(z.minLength(1))),
+  expectedVersion: z.number().check(z.int(), z.nonnegative()),
+}));
 export type MachineEncodedWriteBasisV1 = z.infer<typeof MachineEncodedWriteBasisV1Schema>;
 
-export const MachineContentKeyTransitionInputV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+export const MachineContentKeyTransitionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   expected: MachineKeyBasisV1Schema,
-  next: z.object({
+  next: z.strictObject({
     dataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema,
     metadata: z.string(),
-    daemonState: z.string().nullable(),
-  }).strict(),
-}).strict());
+    daemonState: z.nullable(z.string()),
+  }),
+}));
 export type MachineContentKeyTransitionInputV1 = z.infer<typeof MachineContentKeyTransitionInputV1Schema>;
 
-export const MachineContentKeyTransitionRefusalV1Schema = lazyZodSchema(() => z.object({
+export const MachineContentKeyTransitionRefusalV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('refused'),
   code: z.enum(['forbidden', 'machine_unavailable', 'machine_storage_mode_mismatch', 'encryption_material_unavailable']),
-}).strict());
+}));
 
 /** Reuse the consuming API's validated published row rather than a second row model. */
-export function createMachineContentKeyTransitionResultV1Schema<T extends z.ZodType>(machineSchema: T) {
+export function createMachineContentKeyTransitionResultV1Schema<T extends z.ZodMiniType>(machineSchema: T) {
   return z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('committed'), machine: machineSchema }).strict(),
-    z.object({ kind: z.literal('conflict'), current: MachineKeyBasisV1Schema }).strict(),
+    z.strictObject({ kind: z.literal('committed'), machine: machineSchema }),
+    z.strictObject({ kind: z.literal('conflict'), current: MachineKeyBasisV1Schema }),
     MachineContentKeyTransitionRefusalV1Schema,
   ]);
 }
@@ -57,36 +57,36 @@ export type MachineContentKeyTransitionResultV1<PublishedMachineRow> =
   | z.infer<typeof MachineContentKeyTransitionRefusalV1Schema>;
 
 /** Known fields of the incumbent Machine row; stored reads drop additive fields. */
-const MachinePublishedRowCanonicalV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
+const MachinePublishedRowCanonicalV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)),
   devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)),
-  metadata: z.string().nullable(),
-  metadataVersion: z.number().int().nonnegative(),
-  daemonState: z.string().nullable(),
-  daemonStateVersion: z.number().int().nonnegative(),
-  dataEncryptionKey: z.string().nullable().optional(),
-  keyBasis: MachineKeyBasisV1Schema.optional(),
-  storageMode: z.enum(['plain', 'e2ee']).optional(),
-  access: AccessibleMachineAccessV1Schema.optional(),
-  kind: MachineKindFromLegacyProjectionSchema.optional(),
-  installationId: z.string().nullable().optional(),
-  installationPublicKey: z.string().nullable().optional(),
-  contentPublicKeyFingerprint: z.string().nullable().optional(),
-  runnerContentKeyBinding: RunnerMachineContentKeyBindingV1Schema.nullable().optional(),
-  operationProtocolCapabilities: MachineOperationProtocolCapabilitiesV1Schema.nullable().optional().catch(null),
-  operationProtocolCapabilitiesRevision: z.number().int().nonnegative().nullable().optional(),
-  replacedByMachineId: z.string().nullable().optional(),
-  replacedAt: z.number().nullable().optional(),
-  replacementReason: z.string().nullable().optional(),
-  replacementSource: z.string().nullable().optional(),
-  replacementActorUserId: z.string().nullable().optional(),
-  seq: z.number().int().nonnegative().optional(),
-  active: z.boolean().optional(),
-  activeAt: z.number().optional(),
-  revokedAt: z.number().nullable().optional(),
-  createdAt: z.number().optional(),
-  updatedAt: z.number().optional(),
-}).strict());
+  metadata: z.nullable(z.string()),
+  metadataVersion: z.number().check(z.int(), z.nonnegative()),
+  daemonState: z.nullable(z.string()),
+  daemonStateVersion: z.number().check(z.int(), z.nonnegative()),
+  dataEncryptionKey: z.optional(z.nullable(z.string())),
+  keyBasis: z.optional(MachineKeyBasisV1Schema),
+  storageMode: z.optional(z.enum(['plain', 'e2ee'])),
+  access: z.optional(AccessibleMachineAccessV1Schema),
+  kind: z.optional(MachineKindFromLegacyProjectionSchema),
+  installationId: z.optional(z.nullable(z.string())),
+  installationPublicKey: z.optional(z.nullable(z.string())),
+  contentPublicKeyFingerprint: z.optional(z.nullable(z.string())),
+  runnerContentKeyBinding: z.optional(z.nullable(RunnerMachineContentKeyBindingV1Schema)),
+  operationProtocolCapabilities: z.catch(z.optional(z.nullable(MachineOperationProtocolCapabilitiesV1Schema)), null),
+  operationProtocolCapabilitiesRevision: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+  replacedByMachineId: z.optional(z.nullable(z.string())),
+  replacedAt: z.optional(z.nullable(z.number())),
+  replacementReason: z.optional(z.nullable(z.string())),
+  replacementSource: z.optional(z.nullable(z.string())),
+  replacementActorUserId: z.optional(z.nullable(z.string())),
+  seq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  active: z.optional(z.boolean()),
+  activeAt: z.optional(z.number()),
+  revokedAt: z.optional(z.nullable(z.number())),
+  createdAt: z.optional(z.number()),
+  updatedAt: z.optional(z.number()),
+}));
 export const MachinePublishedRowV1Schema = createStoredReadSchema(MachinePublishedRowCanonicalV1Schema);
 export type MachinePublishedRowV1 = z.infer<typeof MachinePublishedRowV1Schema>;
 export const MachineContentKeyTransitionResultV1Schema = lazyZodSchema(() =>

@@ -1,19 +1,11 @@
-import {
-    parseAutomationRunExecutionRecipeV1,
-    type AutomationRunExecutionRecipeV1,
-    type AutomationStoredWorkflowDefinitionRecipeV2,
-    type AutomationReplyHandoffStateV1,
-    type AutomationExecutionDispatchStateV3,
-    AutomationRunStateV3Schema,
-    AUTOMATION_RUN_TERMINAL_STATES_V3,
-    isTerminalAutomationRunStateV3,
-    type AutomationRunStateV3,
-    type AutomationPluginEventDefinitionTriggerInput,
-    type AutomationTriggerCreateRequest,
-    type AutomationTriggerDefinitionInput,
-    type AutomationRunCause,
-    type AutomationSessionLifecycleEvent,
-} from '@happier-dev/protocol';
+import { parseAutomationRunExecutionRecipeV1, type AutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { type AutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+import { type AutomationReplyHandoffStateV1 } from '@happier-dev/protocol/automations/automationReplyHandoffStateV1';
+import { type AutomationExecutionDispatchStateV3, type AutomationTriggerCreateRequest } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationRunStateV3Schema, AUTOMATION_RUN_TERMINAL_STATES_V3, isTerminalAutomationRunStateV3, type AutomationRunStateV3 } from '@happier-dev/protocol/automations/automationRunStateV3';
+import { type AutomationPluginEventDefinitionTriggerInput, type AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { type AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
+import { type AutomationSessionLifecycleEvent } from '@happier-dev/protocol/automations/automationSessionLifecycle';
 import type { automationRunCauseSelect } from './automationPersistenceSelect';
 
 export type AutomationScheduleKind = 'cron' | 'interval';

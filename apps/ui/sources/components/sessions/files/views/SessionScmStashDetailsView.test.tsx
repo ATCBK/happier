@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import {
     createModalModuleMock,
-    createPartialStorageModuleMock,
     flushHookEffects,
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
+import {
+    createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
 import {
     REMOVE_INDEX_LOCK_CONFIRMATION_TOKEN,
     SCM_OPERATION_ERROR_CODES,

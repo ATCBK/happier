@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { canonicalBoundedRecordKeySchema } from '../../common/canonicalRecordKey.js';
 import { ConnectedAccountPurposeIdSchema } from '../../connect/connectedAccountPurposes.js';
@@ -8,10 +8,9 @@ import { PluginMachineMaterializationRefV1Schema } from '../availability/materia
 import { PluginPermissionCapabilityV1Schema } from './capabilityV1.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
-const LowercaseSha256DigestSchema = lazyZodSchema(() => z.string().regex(/^[a-f0-9]{64}$/u));
+const LowercaseSha256DigestSchema = lazyZodSchema(() => z.string().check(z.regex(/^[a-f0-9]{64}$/u)));
 
-export const PluginCredentialAccessSlotIdSchema = canonicalBoundedRecordKeySchema(128)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)
+export const PluginCredentialAccessSlotIdSchema = canonicalBoundedRecordKeySchema(128).check(z.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u))
   .brand<'PluginCredentialAccessSlotId'>();
 export type PluginCredentialAccessSlotId = z.infer<typeof PluginCredentialAccessSlotIdSchema>;
 
@@ -49,33 +48,33 @@ export type PluginInstallReviewPrincipalDigest = z.infer<typeof PluginInstallRev
  * the publisher — so neither participates in this principal, its digest, or any
  * raw-credential permission subject identity.
  */
-export const PluginInstallReviewPrincipalPresentationV1Schema = lazyZodSchema(() => z.object({
+export const PluginInstallReviewPrincipalPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  packageIdentity: z.object({
-    pluginId: z.string().trim().min(1).max(256),
-    packageName: z.string().trim().min(1).max(512).nullable(),
-  }).strict(),
+  packageIdentity: z.strictObject({
+    pluginId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    packageName: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
+  }),
   distributionIdentity: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('path'),
       development: z.boolean(),
-    }).strict(),
-    z.object({ kind: z.literal('archive') }).strict(),
-    z.object({
+    }),
+    z.strictObject({ kind: z.literal('archive') }),
+    z.strictObject({
       kind: z.literal('npm'),
-      packageName: z.string().trim().min(1).max(512),
-      registryOrigin: z.string().url().max(2_048),
-      registryProfileId: z.string().trim().min(1).max(256).optional(),
-    }).strict(),
+      packageName: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+      registryOrigin: z.string().check(z.url(), z.maxLength(2_048)),
+      registryProfileId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    }),
   ]),
-}).strict());
+}));
 export type PluginInstallReviewPrincipalPresentationV1 = z.infer<
   typeof PluginInstallReviewPrincipalPresentationV1Schema
 >;
 
 export const PluginPermissionSubjectV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('general') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('general') }),
+  z.strictObject({
     kind: z.literal('credential_access_disclosure'),
     contribution: asProtocolZod(PluginContributionIdentityV1Schema),
     credentialSlotId: PluginCredentialAccessSlotIdSchema,
@@ -83,7 +82,7 @@ export const PluginPermissionSubjectV1Schema = lazyZodSchema(() => z.discriminat
     accessDeclarationDigest: CredentialAccessDeclarationDigestSchema,
     selectedAuthorityDigest: CredentialAccessSelectedAuthorityDigestSchema,
     selectedRawAccessDigest: CredentialAccessSelectedRawAccessDigestSchema,
-  }).strict(),
+  }),
 ]));
 export type PluginPermissionSubjectV1 = z.infer<typeof PluginPermissionSubjectV1Schema>;
 
@@ -112,21 +111,21 @@ export const GENERAL_PLUGIN_PERMISSION_SUBJECT_V1 = Object.freeze({
   kind: 'general',
 } satisfies PluginPermissionSubjectV1);
 
-export const PluginPermissionGrantPluginIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
+export const PluginPermissionGrantPluginIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type PluginPermissionGrantPluginIdV1 = z.infer<typeof PluginPermissionGrantPluginIdV1Schema>;
 
 export const PluginPermissionGrantTargetScopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('account'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('project'),
-    projectId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    projectId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('workspace'),
-    workspaceId: z.string().trim().min(1),
-  }).strict(),
+    workspaceId: z.string().check(z.trim(), z.minLength(1)),
+  }),
 ]));
 export type PluginPermissionGrantTargetScopeV1 = z.infer<typeof PluginPermissionGrantTargetScopeV1Schema>;
 
@@ -137,77 +136,77 @@ export const PluginPermissionGrantRequestStatusV1Schema = lazyZodSchema(() => z.
 export type PluginPermissionGrantRequestStatusV1 = z.infer<typeof PluginPermissionGrantRequestStatusV1Schema>;
 
 export const PluginPermissionGrantActorV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('user'),
-    userId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    userId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('plugin'),
     pluginId: PluginPermissionGrantPluginIdV1Schema,
-    sessionId: z.string().trim().min(1).optional(),
-    requestId: z.string().trim().min(1).optional(),
-  }).strict(),
-  z.object({
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    requestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  z.strictObject({
     kind: z.literal('host'),
-    label: z.string().trim().min(1).optional(),
-  }).strict(),
+    label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
 ]));
 export type PluginPermissionGrantActorV1 = z.infer<typeof PluginPermissionGrantActorV1Schema>;
 
 export const PluginPermissionGrantAuthoritySourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('bundled'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('machine_installation'),
-    machineId: z.string().trim().min(1),
-    installationId: z.string().trim().min(1),
-  }).strict(),
+    machineId: z.string().check(z.trim(), z.minLength(1)),
+    installationId: z.string().check(z.trim(), z.minLength(1)),
+  }),
 ]));
 export type PluginPermissionGrantAuthoritySourceV1 = z.infer<typeof PluginPermissionGrantAuthoritySourceV1Schema>;
 
 const PluginPermissionGrantAuthoritySourceWithDefaultV1Schema =
-  lazyZodSchema(() => PluginPermissionGrantAuthoritySourceV1Schema.default({ kind: 'bundled' }));
+  lazyZodSchema(() => z._default(PluginPermissionGrantAuthoritySourceV1Schema, { kind: 'bundled' }));
 
-export const PluginPermissionGrantV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  id: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
+  id: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
   pluginId: PluginPermissionGrantPluginIdV1Schema,
   capability: PluginPermissionCapabilityV1Schema,
   targetScope: PluginPermissionGrantTargetScopeV1Schema,
   subject: PluginPermissionSubjectV1Schema,
   authoritySource: PluginPermissionGrantAuthoritySourceWithDefaultV1Schema,
   status: PluginPermissionGrantStatusV1Schema,
-  requestId: z.string().trim().min(1).optional(),
-  grantedByUserId: z.string().trim().min(1),
-  grantedAt: z.number().int().nonnegative(),
-  revokedByUserId: z.string().trim().min(1).optional(),
-  revokedAt: z.number().int().nonnegative().optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict());
+  requestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  grantedByUserId: z.string().check(z.trim(), z.minLength(1)),
+  grantedAt: z.number().check(z.int(), z.nonnegative()),
+  revokedByUserId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  revokedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PluginPermissionGrantV1 = z.infer<typeof PluginPermissionGrantV1Schema>;
 
-export const PluginPermissionGrantRequestV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  id: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
+  id: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
   pluginId: PluginPermissionGrantPluginIdV1Schema,
   capability: PluginPermissionCapabilityV1Schema,
   targetScope: PluginPermissionGrantTargetScopeV1Schema,
   subject: PluginPermissionSubjectV1Schema,
   authoritySource: PluginPermissionGrantAuthoritySourceWithDefaultV1Schema,
   requester: PluginPermissionGrantActorV1Schema,
-  reason: z.string().trim().min(1),
+  reason: z.string().check(z.trim(), z.minLength(1)),
   status: PluginPermissionGrantRequestStatusV1Schema,
-  grantId: z.string().trim().min(1).optional(),
-  createdByUserId: z.string().trim().min(1).optional(),
-  decidedByUserId: z.string().trim().min(1).optional(),
-  decidedAt: z.number().int().nonnegative().optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict());
+  grantId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  createdByUserId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  decidedByUserId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  decidedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PluginPermissionGrantRequestV1 = z.infer<typeof PluginPermissionGrantRequestV1Schema>;
 
 export const PluginPermissionGrantAuditEventKindV1Schema = lazyZodSchema(() => z.enum([
@@ -218,10 +217,10 @@ export const PluginPermissionGrantAuditEventKindV1Schema = lazyZodSchema(() => z
 ]));
 export type PluginPermissionGrantAuditEventKindV1 = z.infer<typeof PluginPermissionGrantAuditEventKindV1Schema>;
 
-export const PluginPermissionGrantAuditEventV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantAuditEventV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  eventId: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
+  eventId: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
   pluginId: PluginPermissionGrantPluginIdV1Schema,
   capability: PluginPermissionCapabilityV1Schema,
   targetScope: PluginPermissionGrantTargetScopeV1Schema,
@@ -229,84 +228,84 @@ export const PluginPermissionGrantAuditEventV1Schema = lazyZodSchema(() => z.obj
   authoritySource: PluginPermissionGrantAuthoritySourceWithDefaultV1Schema,
   eventKind: PluginPermissionGrantAuditEventKindV1Schema,
   actor: PluginPermissionGrantActorV1Schema,
-  requestId: z.string().trim().min(1).optional(),
-  grantId: z.string().trim().min(1).optional(),
-  previousState: z.unknown().optional(),
-  nextState: z.unknown().optional(),
-  reason: z.string().trim().min(1).optional(),
-  createdAt: z.number().int().nonnegative(),
-}).strict());
+  requestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  grantId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  previousState: z.optional(z.unknown()),
+  nextState: z.optional(z.unknown()),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PluginPermissionGrantAuditEventV1 = z.infer<typeof PluginPermissionGrantAuditEventV1Schema>;
 
-export const PluginPermissionGrantListActionInputV1Schema = lazyZodSchema(() => z.object({
-  pluginId: PluginPermissionGrantPluginIdV1Schema.optional(),
-  grantId: z.string().trim().min(1).optional(),
-  capability: PluginPermissionCapabilityV1Schema.optional(),
-  targetScope: PluginPermissionGrantTargetScopeV1Schema.optional(),
-  subject: PluginPermissionSubjectV1Schema.optional(),
+export const PluginPermissionGrantListActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  pluginId: z.optional(PluginPermissionGrantPluginIdV1Schema),
+  grantId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  capability: z.optional(PluginPermissionCapabilityV1Schema),
+  targetScope: z.optional(PluginPermissionGrantTargetScopeV1Schema),
+  subject: z.optional(PluginPermissionSubjectV1Schema),
   /** Exact caller provenance for the signed plugin branch; scoped server-side. */
-  caller: PluginMachineMaterializationRefV1Schema.optional(),
-  includeRevoked: z.boolean().default(false),
-  includeResolvedRequests: z.boolean().default(false),
-  limit: z.number().int().positive().max(200).default(50),
-}).strict());
+  caller: z.optional(PluginMachineMaterializationRefV1Schema),
+  includeRevoked: z._default(z.boolean(), false),
+  includeResolvedRequests: z._default(z.boolean(), false),
+  limit: z._default(z.number().check(z.int(), z.positive(), z.maximum(200)), 50),
+}));
 export type PluginPermissionGrantListActionInputV1 = z.infer<typeof PluginPermissionGrantListActionInputV1Schema>;
 
-export const PluginPermissionGrantRequestActionInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantRequestActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: PluginPermissionGrantPluginIdV1Schema,
   capability: PluginPermissionCapabilityV1Schema,
   targetScope: PluginPermissionGrantTargetScopeV1Schema,
   subject: PluginPermissionSubjectV1Schema,
   requester: PluginPermissionGrantActorV1Schema,
-  reason: z.string().trim().min(1),
+  reason: z.string().check(z.trim(), z.minLength(1)),
   /** Exact caller provenance; server-verified against the signed publisher proof. */
-  caller: PluginMachineMaterializationRefV1Schema.optional(),
-}).strict());
+  caller: z.optional(PluginMachineMaterializationRefV1Schema),
+}));
 export type PluginPermissionGrantRequestActionInputV1 = z.infer<typeof PluginPermissionGrantRequestActionInputV1Schema>;
 
-export const PluginPermissionGrantGrantActionInputV1Schema = lazyZodSchema(() => z.object({
-  requestId: z.string().trim().min(1),
-  reason: z.string().trim().min(1).optional(),
-}).strict());
+export const PluginPermissionGrantGrantActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  requestId: z.string().check(z.trim(), z.minLength(1)),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type PluginPermissionGrantGrantActionInputV1 = z.infer<typeof PluginPermissionGrantGrantActionInputV1Schema>;
 
-export const PluginPermissionGrantRevokeActionInputV1Schema = lazyZodSchema(() => z.object({
-  grantId: z.string().trim().min(1),
-  reason: z.string().trim().min(1).optional(),
+export const PluginPermissionGrantRevokeActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  grantId: z.string().check(z.trim(), z.minLength(1)),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Exact caller provenance for plugin self-revocation; server-verified and atomically ownership-bound. */
-  caller: PluginMachineMaterializationRefV1Schema.optional(),
-}).strict());
+  caller: z.optional(PluginMachineMaterializationRefV1Schema),
+}));
 export type PluginPermissionGrantRevokeActionInputV1 = z.infer<typeof PluginPermissionGrantRevokeActionInputV1Schema>;
 
-export const PluginPermissionGrantDismissRequestActionInputV1Schema = lazyZodSchema(() => z.object({
-  requestId: z.string().trim().min(1),
-  reason: z.string().trim().min(1).optional(),
-}).strict());
+export const PluginPermissionGrantDismissRequestActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  requestId: z.string().check(z.trim(), z.minLength(1)),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type PluginPermissionGrantDismissRequestActionInputV1 = z.infer<typeof PluginPermissionGrantDismissRequestActionInputV1Schema>;
 
-export const PluginPermissionGrantListActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantListActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   grants: z.array(PluginPermissionGrantV1Schema),
   pendingRequests: z.array(PluginPermissionGrantRequestV1Schema),
-}).strict());
+}));
 export type PluginPermissionGrantListActionOutputV1 = z.infer<typeof PluginPermissionGrantListActionOutputV1Schema>;
 
-export const PluginPermissionGrantRequestActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantRequestActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   pendingRequest: PluginPermissionGrantRequestV1Schema,
-}).strict());
+}));
 export type PluginPermissionGrantRequestActionOutputV1 = z.infer<typeof PluginPermissionGrantRequestActionOutputV1Schema>;
 
-export const PluginPermissionGrantGrantActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantGrantActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   grant: PluginPermissionGrantV1Schema,
   pendingRequest: PluginPermissionGrantRequestV1Schema,
-}).strict());
+}));
 export type PluginPermissionGrantGrantActionOutputV1 = z.infer<typeof PluginPermissionGrantGrantActionOutputV1Schema>;
 
-export const PluginPermissionGrantRevokeActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantRevokeActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   grant: PluginPermissionGrantV1Schema,
-}).strict());
+}));
 export type PluginPermissionGrantRevokeActionOutputV1 = z.infer<typeof PluginPermissionGrantRevokeActionOutputV1Schema>;
 
-export const PluginPermissionGrantDismissRequestActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const PluginPermissionGrantDismissRequestActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   pendingRequest: PluginPermissionGrantRequestV1Schema,
-}).strict());
+}));
 export type PluginPermissionGrantDismissRequestActionOutputV1 = z.infer<typeof PluginPermissionGrantDismissRequestActionOutputV1Schema>;

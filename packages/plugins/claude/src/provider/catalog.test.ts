@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
 
 import {
   ANTHROPIC_STATIC_MODELS,
@@ -9,6 +10,10 @@ import {
 } from './catalog.js';
 
 describe('Anthropic Provider catalog', () => {
+  it('publishes low-cost model tier through the strict model descriptor consumed by model admission', () => {
+    const haiku = ANTHROPIC_STATIC_MODELS.find(({ id }) => id === 'claude-haiku-4-5');
+    expect(ProviderModelDescriptorV1Schema.parse(haiku)).toMatchObject({ costTier: 'low' });
+  });
   it('uses provider-relative labels without rewriting non-Anthropic gateway names', () => {
     expect(normalizeAnthropicModelDisplayName('Claude Future 6', 'claude-future-6')).toBe('Future 6');
     expect(normalizeAnthropicModelDisplayName('GLM 4.6', 'glm-4.6')).toBe('GLM 4.6');

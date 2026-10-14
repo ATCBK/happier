@@ -2,7 +2,7 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { enableErrorHandlers } from "@/app/api/utils/enableErrorHandlers";
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
@@ -170,7 +170,7 @@ describe("Account Directory route error contract", () => {
         const app = await createTestApp((typed) => {
             typed.post("/ordinary", {
                 schema: {
-                    body: z.object({ value: z.string().min(1) }).strict(),
+                    body: z.strictObject({ value: z.string().check(z.minLength(1)) }),
                 },
             }, async () => ({ ok: true }));
         });

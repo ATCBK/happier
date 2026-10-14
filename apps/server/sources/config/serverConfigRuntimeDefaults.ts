@@ -1,4 +1,5 @@
-import { readServerConfig, readServerConfigRaw, type ServerConfigEntry, type ServerConfigEnv, type ServerConfigValue } from '@happier-dev/protocol';
+import { readServerConfig, readServerConfigRaw, type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { type ServerConfigEntry, type ServerConfigValue } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import { resolveDefaultAuthOffboardingEnabled } from '@/app/auth/authPolicy';
 import { resolveAuthEmailSmtpPort } from '@/app/auth/email/authEmailSmtpConfig';

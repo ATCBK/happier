@@ -1,4 +1,4 @@
-import type { LocalServicePublicExposureV1 } from "@happier-dev/protocol";
+import type { LocalServicePublicExposureV1 } from '@happier-dev/protocol/local/services/public/v1';
 
 import type { LocalServicePublicRateLimitDependencyEnv } from "@/app/features/catalog/readFeatureEnv";
 

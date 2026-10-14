@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from './actionSpecs.js';
 import { FindOptionsSchema } from './findActionSpecs.js';
 import { WorkspaceAnchorV1Schema } from '../workspace/anchors/v1.js';
@@ -13,74 +13,74 @@ export const WORKSPACE_ACTION_IDS = [
 ] as const;
 export type WorkspaceActionId = typeof WORKSPACE_ACTION_IDS[number];
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 /** Private chat launch input, consumed by the existing pane handoff; never a URL or tab field. */
-export const WorkspaceChatFindSeedSchema = lazyZodSchema(() => z.object({
-  query: z.string().min(1), options: FindOptionsSchema.optional(),
-  target: z.object({ kind: z.literal('native-message'), agentId: id, remoteSessionId: id, sourceItemId: id }).strict(),
-}).strict());
-export const WorkspaceProjectFileFindSeedSchema = lazyZodSchema(() => z.object({
-  query: z.string().min(1), options: FindOptionsSchema.optional(),
-  target: z.object({
+export const WorkspaceChatFindSeedSchema = lazyZodSchema(() => z.strictObject({
+  query: z.string().check(z.minLength(1)), options: z.optional(FindOptionsSchema),
+  target: z.strictObject({ kind: z.literal('native-message'), agentId: id, remoteSessionId: id, sourceItemId: id }),
+}));
+export const WorkspaceProjectFileFindSeedSchema = lazyZodSchema(() => z.strictObject({
+  query: z.string().check(z.minLength(1)), options: z.optional(FindOptionsSchema),
+  target: z.strictObject({
     kind: z.literal('project-file'), workspaceRefId: id, serverId: id, machineId: id,
-    rootPath: z.string().min(1), path: z.string().min(1),
-    anchor: WorkspaceAnchorV1Schema.optional(),
-  }).strict(),
-}).strict());
+    rootPath: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)),
+    anchor: z.optional(WorkspaceAnchorV1Schema),
+  }),
+}));
 export const WorkspaceFindSeedSchema = lazyZodSchema(() => z.union([
   WorkspaceChatFindSeedSchema, WorkspaceProjectFileFindSeedSchema,
 ]));
 export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
-  'workspace.tabs.list': z.object({}).strict(),
-  'workspace.tabs.open': z.object({ href: id.optional(), tabId: id.optional(), groupId: id.optional(),
-    find: WorkspaceFindSeedSchema.optional(),
-    beforeTabId: id.nullable().optional(), reuseExisting: z.boolean().optional(),
-    mode: z.enum(['preview', 'newTab', 'splitLeft', 'splitRight', 'splitUp', 'splitDown']).optional(),
-  }).strict().refine(data => !data.mode?.startsWith('split') || (data.href !== undefined && data.tabId === undefined), {
+  'workspace.tabs.list': z.strictObject({}),
+  'workspace.tabs.open': z.strictObject({ href: z.optional(id), tabId: z.optional(id), groupId: z.optional(id),
+    find: z.optional(WorkspaceFindSeedSchema),
+    beforeTabId: z.optional(z.nullable(id)), reuseExisting: z.optional(z.boolean()),
+    mode: z.optional(z.enum(['preview', 'newTab', 'splitLeft', 'splitRight', 'splitUp', 'splitDown'])),
+  }).check(z.refine(data => !data.mode?.startsWith('split') || (data.href !== undefined && data.tabId === undefined), {
     message: 'A destination split requires href and cannot replace an existing tab',
-  }).refine(data => !data.find || data.href !== undefined, {
+  }), z.refine(data => !data.find || data.href !== undefined, {
     message: 'Find launch input requires an addressed Session href',
-  }),
-  'workspace.tabs.activate': z.object({ tabId: id }).strict(),
-  'workspace.tabs.close': z.object({ tabId: id }).strict(),
-  'workspace.tabs.close_others': z.object({ tabId: id }).strict(),
-  'workspace.tabs.close_left': z.object({ tabId: id }).strict(),
-  'workspace.tabs.close_right': z.object({ tabId: id }).strict(),
-  'workspace.tabs.close_all': z.object({ groupId: id.optional() }).strict(),
-  'workspace.tabs.closed.list': z.object({}).strict(),
-  'workspace.tabs.reopen': z.object({ tabId: id.optional() }).strict(),
-  'workspace.tabs.pin': z.object({ tabId: id, pinned: z.boolean() }).strict(),
-  'workspace.tabs.move': z.object({ tabId: id, targetGroupId: id, beforeTabId: id.nullable().optional() }).strict(),
+  })),
+  'workspace.tabs.activate': z.strictObject({ tabId: id }),
+  'workspace.tabs.close': z.strictObject({ tabId: id }),
+  'workspace.tabs.close_others': z.strictObject({ tabId: id }),
+  'workspace.tabs.close_left': z.strictObject({ tabId: id }),
+  'workspace.tabs.close_right': z.strictObject({ tabId: id }),
+  'workspace.tabs.close_all': z.strictObject({ groupId: z.optional(id) }),
+  'workspace.tabs.closed.list': z.strictObject({}),
+  'workspace.tabs.reopen': z.strictObject({ tabId: z.optional(id) }),
+  'workspace.tabs.pin': z.strictObject({ tabId: id, pinned: z.boolean() }),
+  'workspace.tabs.move': z.strictObject({ tabId: id, targetGroupId: id, beforeTabId: z.optional(z.nullable(id)) }),
   'workspace.tabs.reorder': z.union([
-    z.object({ tabId: id, index: z.number().int().nonnegative() }).strict(),
-    z.object({ tabId: id, beforeTabId: id.nullable() }).strict(),
+    z.strictObject({ tabId: id, index: z.number().check(z.int(), z.nonnegative()) }),
+    z.strictObject({ tabId: id, beforeTabId: z.nullable(id) }),
   ]),
-  'workspace.groups.focus': z.object({ groupId: id }).strict(),
-  'workspace.groups.maximize': z.object({ groupId: id }).strict(),
-  'workspace.groups.restore': z.object({}).strict(),
-  'workspace.split': z.object({ tabId: id.optional(), groupId: id.optional(), direction: z.enum(['left', 'right', 'up', 'down']) }).strict(),
-  'workspace.resize': z.object({ splitId: id, ratio: z.number().finite().min(0).max(1) }).strict(),
+  'workspace.groups.focus': z.strictObject({ groupId: id }),
+  'workspace.groups.maximize': z.strictObject({ groupId: id }),
+  'workspace.groups.restore': z.strictObject({}),
+  'workspace.split': z.strictObject({ tabId: z.optional(id), groupId: z.optional(id), direction: z.enum(['left', 'right', 'up', 'down']) }),
+  'workspace.resize': z.strictObject({ splitId: id, ratio: z.number().check(z.minimum(0), z.maximum(1)) }),
 } as const;
 
-export const WorkspaceTabsListOutputSchema = lazyZodSchema(() => z.object({
+export const WorkspaceTabsListOutputSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-  tabs: z.array(z.object({
-    id, groupId: id, target: z.object({ kind: id, params: z.record(z.string(), z.string()) }).strict(),
+  tabs: z.array(z.strictObject({
+    id, groupId: id, target: z.strictObject({ kind: id, params: z.record(z.string(), z.string()) }),
     pinned: z.boolean(), preview: z.boolean(),
-  }).strict()),
-  groups: z.array(z.object({ id, tabIds: z.array(id), activeTabId: id }).strict()),
-  splits: z.array(z.object({ id, axis: z.enum(['row', 'column']), ratio: z.number().finite().min(0).max(1), firstNodeId: id, secondNodeId: id }).strict()),
+  })),
+  groups: z.array(z.strictObject({ id, tabIds: z.array(id), activeTabId: id })),
+  splits: z.array(z.strictObject({ id, axis: z.enum(['row', 'column']), ratio: z.number().check(z.minimum(0), z.maximum(1)), firstNodeId: id, secondNodeId: id })),
   rootNodeId: id,
-  focusedGroupId: id, maximizedGroupId: id.nullable(),
-}).strict());
-export const WorkspaceClosedTabsListOutputSchema = lazyZodSchema(() => z.object({
+  focusedGroupId: id, maximizedGroupId: z.nullable(id),
+}));
+export const WorkspaceClosedTabsListOutputSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-  tabs: z.array(z.object({
-    id, target: z.object({ kind: id, params: z.record(z.string(), z.string()) }).strict(),
-    pinned: z.boolean(), title: z.string().optional(),
-  }).strict()),
-}).strict());
-const MutationOutputSchema = lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict());
+  tabs: z.array(z.strictObject({
+    id, target: z.strictObject({ kind: id, params: z.record(z.string(), z.string()) }),
+    pinned: z.boolean(), title: z.optional(z.string()),
+  })),
+}));
+const MutationOutputSchema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true) }));
 export const WORKSPACE_ACTION_OUTPUT_SCHEMAS = {
   'workspace.tabs.list': WorkspaceTabsListOutputSchema,
   'workspace.tabs.open': MutationOutputSchema,

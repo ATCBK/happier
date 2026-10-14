@@ -5,14 +5,21 @@ type NormalizedCodexRolloutAction = Exclude<
     { type: 'collaboration-tool-call' } | { type: 'collaboration-tool-result' }
 >;
 
-export function createCodexRolloutSemanticTracker() {
-    const pendingSpawnByCallId = new Map<string, Readonly<{
+export type CodexRolloutSemanticState = Readonly<{
+    pendingSpawnByCallId: readonly (readonly [string, Readonly<{
         prompt: string | null;
         nickname: string | null;
         role: string | null;
-    }>>();
-    const startedThreadIds = new Set<string>();
-    const completedThreadIds = new Set<string>();
+    }>])[];
+    startedThreadIds: readonly string[];
+    completedThreadIds: readonly string[];
+    lastEmittedAssistantText: string | null;
+}>;
+
+export function createCodexRolloutSemanticTracker(state?: CodexRolloutSemanticState) {
+    const pendingSpawnByCallId = new Map(state?.pendingSpawnByCallId);
+    const startedThreadIds = new Set(state?.startedThreadIds);
+    const completedThreadIds = new Set(state?.completedThreadIds);
     /**
      * Pre-frontier Codex recorders write one assistant turn twice: first as
      * `event_msg`/`agent_message`, then as the `response_item` message the model
@@ -21,9 +28,13 @@ export function createCodexRolloutSemanticTracker() {
      * eras publish the turn exactly once without the reader needing to know
      * which recorder produced the file.
      */
-    let lastEmittedAssistantText: string | null = null;
+    let lastEmittedAssistantText = state?.lastEmittedAssistantText ?? null;
 
     return {
+        snapshot(): CodexRolloutSemanticState {
+            return { pendingSpawnByCallId: [...pendingSpawnByCallId], startedThreadIds: [...startedThreadIds],
+                completedThreadIds: [...completedThreadIds], lastEmittedAssistantText };
+        },
         consume(action: CodexRolloutAction): NormalizedCodexRolloutAction[] {
             if (action.type === 'assistant-text') {
                 if (action.text === lastEmittedAssistantText) return [];

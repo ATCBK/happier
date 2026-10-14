@@ -48,48 +48,48 @@ export type BrowserDiagnosticsEvalConsoleControls = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     title: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
     },
     inputRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     input: {
-        ...Typography.keyHint(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }),
         flex: 1,
         borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         color: theme.colors.text.primary,
     },
     entry: {
-        gap: 4,
+        gap: theme.space.s4,
         borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
     },
     expression: {
-        ...Typography.keyHint(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }),
         color: theme.colors.text.primary,
     },
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     error: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         // Q2 measured the theme's semantic FOREGROUNDS as text at 2.20–3.55:1 in light theme —
         // they are fill colours, not text colours. The words carry their own meaning here, so
@@ -98,29 +98,29 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     empty: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     node: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     nodeRow: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     nodeName: {
-        ...Typography.keyHint(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }),
         color: theme.colors.text.primary,
     },
     nodeValue: {
-        ...Typography.keyHint(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
     children: {
-        gap: 2,
-        paddingLeft: 12,
+        gap: theme.space.s2,
+        paddingLeft: theme.space.s12,
     },
 }));
 

@@ -7,20 +7,19 @@ import {
 } from './createHostRuntimeActivityProjection';
 
 describe('createHostRuntimeActivityProjection', () => {
-  it('starts supported hosts unknown until the current-runtime observer binds, then publishes idle', async () => {
+  it('keeps supported hosts unknown until the bound provider reports its first snapshot', async () => {
     const enqueue = vi.fn(async () => undefined);
     const projection = createHostRuntimeActivityProjection({
-      sessionId: 'session-1',
-      agentRuntimeApplicability: 'supported',
+      sessionId: 'session-1', agentRuntimeApplicability: 'supported',
       enqueueRegisteredSessionStateFieldMutation: enqueue,
     });
-
+    const runtime = projection.bindAgentRuntime({ applicability: 'supported' });
+    await projection.reofferCurrentSnapshot();
     expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
       op: { kind: 'set', value: { state: 'unknown', activeCount: 0 } },
     }));
-
-    projection.bindAgentRuntime({ applicability: 'supported' });
-    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(2));
+    await runtime.observeEvent({ kind: 'runtime-activity-snapshot', sessionId: 'session-1',
+      sequence: 1, emittedAtMs: 1, state: 'idle', activeCount: 0 });
     expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
       op: { kind: 'set', value: { state: 'idle', activeCount: 0 } },
     }));
@@ -80,6 +79,7 @@ describe('createHostRuntimeActivityProjection', () => {
 
   it('retries an identical snapshot after enqueue rejection and continues publishing later state', async () => {
     const enqueueFailure = new Error('durable enqueue rejected');
+    const publicationFailures: unknown[] = [];
     let rejectFirstActive = true;
     const enqueue = vi.fn(async (mutation: Parameters<
       Parameters<typeof createHostRuntimeActivityProjection>[0]['enqueueRegisteredSessionStateFieldMutation']
@@ -99,6 +99,7 @@ describe('createHostRuntimeActivityProjection', () => {
       sessionId: 'session-1',
       agentRuntimeApplicability: 'supported',
       enqueueRegisteredSessionStateFieldMutation: enqueue,
+      onPublicationError: (error) => { publicationFailures.push(error); },
     });
     const runtime = projection.bindAgentRuntime({ applicability: 'supported' });
     const active = {
@@ -109,19 +110,27 @@ describe('createHostRuntimeActivityProjection', () => {
       activeCount: 1,
     } as const;
 
-    await expect(runtime.observeEvent({ ...active, sequence: 1 })).rejects.toBe(enqueueFailure);
-    await runtime.observeEvent({ ...active, sequence: 2 });
+    const failedPublications = await Promise.allSettled([
+      runtime.observeEvent({ ...active, sequence: 1 }),
+      runtime.observeEvent({ ...active, sequence: 2 }),
+    ]);
+    expect(failedPublications).toEqual([
+      { status: 'rejected', reason: enqueueFailure },
+      { status: 'rejected', reason: enqueueFailure },
+    ]);
+    expect(publicationFailures).toEqual([enqueueFailure]);
+    await runtime.observeEvent({ ...active, sequence: 3 });
     await runtime.observeEvent({
       ...active,
-      sequence: 3,
+      sequence: 4,
       emittedAtMs: 2,
       state: 'idle',
       activeCount: 0,
     });
 
+    expect(publicationFailures).toEqual([enqueueFailure]);
     expect(enqueue.mock.calls.map(([mutation]) => mutation.op)).toEqual([
       { kind: 'set', value: { state: 'unknown', activeCount: 0 } },
-      { kind: 'set', value: { state: 'idle', activeCount: 0 } },
       { kind: 'set', value: { state: 'active', activeCount: 1 } },
       { kind: 'set', value: { state: 'active', activeCount: 1 } },
       { kind: 'set', value: { state: 'idle', activeCount: 0 } },
@@ -130,7 +139,7 @@ describe('createHostRuntimeActivityProjection', () => {
 
   it('observes construction publication rejection through the fire-and-forget boundary', async () => {
     const enqueueFailure = new Error('construction enqueue rejected');
-    const onFireAndForgetPublicationError = vi.fn();
+    const onPublicationError = vi.fn();
 
     createHostRuntimeActivityProjection({
       sessionId: 'session-1',
@@ -138,10 +147,10 @@ describe('createHostRuntimeActivityProjection', () => {
       enqueueRegisteredSessionStateFieldMutation: async () => {
         throw enqueueFailure;
       },
-      onFireAndForgetPublicationError,
+      onPublicationError,
     });
 
-    await vi.waitFor(() => expect(onFireAndForgetPublicationError).toHaveBeenCalledWith(enqueueFailure));
+    await vi.waitFor(() => expect(onPublicationError).toHaveBeenCalledWith(enqueueFailure, { state: 'unknown', activeCount: 0 }));
   });
 
   it.each([
@@ -179,10 +188,13 @@ describe('createHostRuntimeActivityProjection', () => {
     await predecessor.observeEvent(activeEvent);
 
     await predecessor.revoke();
+    expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
+      op: { kind: 'set', value: { state: 'unknown', activeCount: 0 } },
+    }));
     const successor = projection.bindAgentRuntime({ applicability: 'supported' });
     await predecessor.observeEvent({ ...activeEvent, sequence: 2, activeCount: 9 });
     expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
-      op: { kind: 'set', value: { state: 'idle', activeCount: 0 } },
+      op: { kind: 'set', value: { state: 'unknown', activeCount: 0 } },
     }));
 
     await successor.observeEvent({ ...activeEvent, sequence: 3, activeCount: 2 });
@@ -231,7 +243,7 @@ describe('createHostRuntimeActivityProjection', () => {
       enqueueRegisteredSessionStateFieldMutation: enqueue,
     });
     const runtime = projection.bindAgentRuntime({ applicability: 'supported' });
-    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(2));
+    await projection.reofferCurrentSnapshot();
     const callsBeforeForeignSnapshot = enqueue.mock.calls.length;
 
     await runtime.observeEvent({
@@ -245,7 +257,7 @@ describe('createHostRuntimeActivityProjection', () => {
 
     expect(enqueue).toHaveBeenCalledTimes(callsBeforeForeignSnapshot);
     expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
-      op: { kind: 'set', value: { state: 'idle', activeCount: 0 } },
+      op: { kind: 'set', value: { state: 'unknown', activeCount: 0 } },
     }));
   });
 
@@ -257,7 +269,7 @@ describe('createHostRuntimeActivityProjection', () => {
       enqueueRegisteredSessionStateFieldMutation: enqueue,
     });
     projection.bindAgentRuntime({ applicability: 'supported' });
-    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(2));
+    await projection.reofferCurrentSnapshot();
     projection.notifyRuntimeDetached();
     projection.notifyTransportDisconnected();
     expect(enqueue).toHaveBeenCalledTimes(2);

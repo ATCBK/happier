@@ -1,25 +1,26 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { normalizePluginJsonSchema } from '../actions/protocolComposableSchema.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PluginContributionReferenceV2Schema, PluginJsonSchemaV2Schema, PluginLocalizedStringV2Schema } from './publicTypes.js';
 
 /** Data-only declarations; Resources and UI renderers keep their executable owners. */
-export const PluginInputTypeContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginInputTypeContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  semantic: z.string().trim().min(1),
-  valueSchema: PluginJsonSchemaV2Schema.transform((schema, ctx) => {
+  semantic: z.string().check(z.trim(), z.minLength(1)),
+  valueSchema: zMini.pipe(PluginJsonSchemaV2Schema, zMini.transform((schema, ctx) => {
     try { return normalizePluginJsonSchema(schema); }
     catch (error) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : 'Invalid value schema' });
+      ctx.issues.push({ code: "custom", message: error instanceof Error ? error.message : 'Invalid value schema', input: ctx.value });
       return z.NEVER;
     }
-  }),
-  options: z.object({
+  })),
+  options: z.optional(z.strictObject({
     resource: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict().optional(),
-  picker: asProtocolZod(PluginContributionReferenceV2Schema).optional(),
-}).strict());
+  })),
+  picker: zMini.optional(asProtocolZod(PluginContributionReferenceV2Schema)),
+}));
 export type PluginInputTypeContributionV1 = z.infer<typeof PluginInputTypeContributionV1Schema>;

@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { ARTIFACT_HTML_SHELL_CSP_V1 } from '@happier-dev/protocol/artifacts/artifactHtmlDocumentV1';
 
 import { browserFrameStyles } from '../styles';
+import { BrowserFrameUnavailable } from '../BrowserFrameUnavailable';
 import type {
     BrowserAutomationEngineBridgeConfig,
     BrowserDiagnosticsEngineBridgeConfig,
@@ -82,6 +83,7 @@ function applyWebIframeNavigationCommand(
 }
 
 type WebIframeEngineProps = Readonly<{
+    localPreview?: boolean;
     title: string;
     sandbox: string;
     testID: string;
@@ -126,6 +128,9 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     const hasLoadedCurrentNavigationRef = React.useRef(false);
     const [loadedDocumentRevision, setLoadedDocumentRevision] = React.useState(0);
     const [cooperativeReadyUrl, setCooperativeReadyUrl] = React.useState<string | null>(null);
+    const [previewTransportUnavailable, setPreviewTransportUnavailable] = React.useState(false);
+    const onErrorRef = React.useRef(props.onError);
+    onErrorRef.current = props.onError;
     const cooperativeDocumentRetiredRef = React.useRef(false);
     const diagnosticsRef = React.useRef(props.diagnostics);
     const automationRef = React.useRef(props.automation);
@@ -135,6 +140,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     const bridgeSendRef = React.useRef<((message: unknown) => void) | null>(null);
     const webMessageBridgeRef = React.useRef(props.webMessageBridge);
     webMessageBridgeRef.current = props.webMessageBridge;
+    const reloadCommandId = props.navigationCommand?.kind === 'reload' ? props.navigationCommand.commandId : undefined;
     const bridgeEnabled = props.webMessageBridge !== undefined;
     const bridgeExactDocumentChannel = props.webMessageBridge?.exactDocumentChannel === true;
     const bridgeTargetOrigin = props.webMessageBridge?.targetOrigin;
@@ -191,12 +197,24 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         } catch { return null; }
     }, [props.url, props.sandbox, props.automation?.adapterKind, collectorScript, props.diagnostics?.sourceOrigin]);
 
+    const previewProbeUrl = React.useMemo(() => {
+        const href = cooperativeNavigation?.url ?? (props.localPreview ? props.url : undefined);
+        if (!href) return null;
+        try {
+            const url = new URL(href);
+            if (!['http:', 'https:'].includes(url.protocol)) return null;
+            url.search += `${url.search ? '&' : '?'}${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
+            return url.href;
+        } catch { return null; }
+    }, [cooperativeNavigation?.url, props.localPreview, props.url]);
+
     React.useLayoutEffect(() => {
         hasLoadedCurrentNavigationRef.current = false;
         bridgeDocumentRetiredRef.current = false;
         cooperativeDocumentRetiredRef.current = false;
         setCooperativeReadyUrl(null);
-    }, [props.navigationKey, props.url, props.html, cooperativeNavigation?.url]);
+        setPreviewTransportUnavailable(false);
+    }, [props.navigationKey, props.url, props.html, cooperativeNavigation?.url, reloadCommandId]);
 
     React.useLayoutEffect(() => {
         if (!cooperativeNavigation || typeof window === 'undefined') return;
@@ -217,19 +235,26 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     }, [cooperativeNavigation]);
 
     React.useEffect(() => {
-        if (!cooperativeNavigation || !hasLoadedCurrentNavigationRef.current
-            || cooperativeReadyUrl === cooperativeNavigation.url || cooperativeDocumentRetiredRef.current) return;
+        if (!previewProbeUrl || !hasLoadedCurrentNavigationRef.current
+            || (cooperativeNavigation && (cooperativeReadyUrl === cooperativeNavigation.url || cooperativeDocumentRetiredRef.current))) return;
         const controller = new AbortController();
-        const url = new URL(cooperativeNavigation.url);
-        url.search += `&${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
+        const url = new URL(previewProbeUrl);
         // With script-src 'none' the guest cannot report its own refusal. The same authorized
-        // proxy returns only its CSP decision, including meta policies, without cloning the page.
+        // proxy returns its CSP decision or typed transport refusal without exposing page content.
         const rejectUnavailable = () => {
             if (!controller.signal.aborted) automationRef.current?.onRegistrationRejected?.('runtime_unavailable');
         };
         void fetch(url.href, { credentials: 'include', signal: controller.signal }).then(async (response) => {
-            if (!response.ok || new URL(response.url).origin !== cooperativeNavigation.sourceOrigin) { rejectUnavailable(); return; }
+            if (new URL(response.url).origin !== url.origin) { rejectUnavailable(); return; }
             const result: unknown = await response.json();
+            if (!controller.signal.aborted && response.status === 503 && result && typeof result === 'object'
+                && 'error' in result && result.error === 'preview_transport_unavailable') {
+                setPreviewTransportUnavailable(true);
+                onErrorRef.current?.();
+                rejectUnavailable();
+                return;
+            }
+            if (!response.ok) { rejectUnavailable(); return; }
             if (!controller.signal.aborted && result && typeof result === 'object' && 'state' in result
                 && result.state === 'collector_blocked_by_csp') {
                 automationRef.current?.onRegistrationRejected?.('collector_blocked_by_csp');
@@ -239,7 +264,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
             }
         }).catch(rejectUnavailable);
         return () => controller.abort();
-    }, [cooperativeNavigation, cooperativeReadyUrl, loadedDocumentRevision]);
+    }, [previewProbeUrl, cooperativeNavigation?.url, cooperativeReadyUrl, loadedDocumentRevision, reloadCommandId]);
 
     React.useEffect(() => {
         const diagnostics = props.diagnostics;
@@ -707,6 +732,10 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         setLoadedDocumentRevision((revision) => revision + 1);
         props.onLoad?.();
     }, [props.onLoad, props.onUnexpectedNavigation, props.revokeOnUnexpectedNavigation, cooperativeNavigation]);
+
+    if (previewTransportUnavailable) {
+        return <BrowserFrameUnavailable testID={props.testID} reasonCode="preview_transport_unavailable" />;
+    }
 
     return (
         <View testID={`${props.testID}-container`} style={browserFrameStyles.root}>

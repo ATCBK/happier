@@ -33,6 +33,7 @@ import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/m
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import type { Message } from '@happier-dev/session-core/messages';
@@ -338,7 +339,7 @@ async function createVoiceConversationSessionFixture(raw: unknown) {
     const { machineId, serverId } = args.executionTarget;
     if (args.directory.kind !== 'path') throw new Error('Expected Voice conversation path');
     const directory = args.directory.path;
-    const spawnedAgentId = args.agentTarget.kind === 'builtInAgent' ? args.agentTarget.agentId : 'claude';
+    const spawnedAgentId = readBackendTargetRefV2(args.agentTarget).backendId;
     const sessionId = 'voice-home-session';
     const storage = await getStorage();
     const current = storage.getState();
@@ -769,7 +770,7 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
             uri: string; delete(): void;
         };
         const deleteFile = filePrototype.delete;
-        vi.spyOn(filePrototype, 'delete').mockImplementation(function () {
+        vi.spyOn(filePrototype, 'delete').mockImplementation(function (this: typeof filePrototype) {
             if (this.uri !== recorderUri && this.uri !== 'file:///tmp/rec.m4a') return deleteFile.call(this);
             fileDelete();
             return deleteFile.call(this);
@@ -922,13 +923,15 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         };
         await (await installLocalVoiceAccountHarness()).setup();
         const storage = await getStorage();
+        const fixtureMachine = createMachineFixture();
+        if (!fixtureMachine.metadata) throw new Error('Expected canonical Machine fixture metadata');
         const machine = createMachineFixture({
             id: 'machine-1',
             active: true,
             createdAt: Date.now(),
             activeAt: Date.now(),
             metadata: {
-                ...createMachineFixture().metadata,
+                ...fixtureMachine.metadata,
                 host: 'test',
                 happyHomeDir: '/Users/test/.happier',
             },

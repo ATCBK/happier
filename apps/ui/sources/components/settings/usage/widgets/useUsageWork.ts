@@ -12,7 +12,7 @@ import {
   type UsageWorkSummary,
   type UsageWorkMoneyBasis,
 } from './usageWorkPresentation';
-import { useUsageAnalyticsView } from './usageBodyKit';
+import { useUsageAnalyticsView, useUsageProjectLabels } from './usageBodyKit';
 import { readUsageWidgetPageScope, readUsageWidgetQueryOverrides } from '../usageWidgetPageContext';
 import { buildUsageRouteParams } from '../usageRouteParams';
 import { usageCostKindPhrase } from '../usageCostPresentation';
@@ -58,12 +58,13 @@ export function useUsageWork(
     [format, query.metric, summary?.moneyBasis]);
   const basisLabel = React.useCallback((moneyBasis: UsageWorkMoneyBasis | null) => moneyBasis
     ? `${usageCostKindPhrase(moneyBasis.kind)} · ${moneyBasis.currency}` : undefined, []);
+  const protectedProjectLabels = useUsageProjectLabels(serverId);
   const projectLabels = React.useMemo(
     () =>
       new Map(
-        (view?.breakdowns.projects ?? []).map((row) => [row.key, row.label]),
+        [...(view?.breakdowns.projects ?? []).map((row) => [row.key, row.label] as const), ...protectedProjectLabels],
       ),
-    [view?.breakdowns.projects],
+    [view?.breakdowns.projects, protectedProjectLabels],
   );
   const projectLabel = React.useCallback(
     (projectKey: string | null) =>

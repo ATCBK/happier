@@ -122,7 +122,16 @@ function createScmBackendRuntimeServices(
             ...('stdoutConsumer' in input ? { stdoutConsumer: input.stdoutConsumer } : {}),
         });
     };
-    return { runCommand, runCommandStreaming: runCommand };
+    return { runCommand, runCommandStreaming: runCommand,
+        async renamePathNoReplace({ sourcePath, targetPath, expectedIdentity, signal }) {
+            const { renameStoragePathNoReplace } = await import('@/storage/trash/renameStoragePath');
+            await renameStoragePathNoReplace(sourcePath, targetPath, signal, expectedIdentity);
+        },
+        async removeRetainedPath({ path, expectedIdentity, beforeEffect }) {
+            const { dirname } = await import('node:path');
+            const { removeStoragePath } = await import('@/storage/trash/removeStoragePath');
+            await removeStoragePath(path, { allowedRoot: dirname(path), expectedIdentity: { ...expectedIdentity, kind: 'directory' }, beforeEffect });
+        } };
 }
 
 function useWorktreeMutationHandler<TInput extends object, TResult>(
@@ -328,14 +337,14 @@ export function createRegisteredScmBackendAdapter(input: Readonly<{
             )),
             preferenceAllowedModes: Object.freeze([...input.executableDefinition.repoModes]),
         },
-        async detectRepo({ cwd }) {
+        async detectRepo({ cwd, includeRetainedWorktrees }) {
             const handler = input.registration.handlers.detection?.detectRepo;
             return handler
                 ? await runWithScmBackendRuntimeServices(
                     runtimeServices,
                     async () => await runWithScmHostingProviderRuntimeServices(
                         hostingProviderRuntimeServices,
-                        async () => await handler({ cwd }),
+                        async () => await handler({ cwd, ...(includeRetainedWorktrees ? { includeRetainedWorktrees: true } : {}) }),
                     ),
                 )
                 : {

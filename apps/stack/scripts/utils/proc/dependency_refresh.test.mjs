@@ -7,6 +7,33 @@ import test from 'node:test';
 
 import { inspectDependencyRefresh, isDependencyRefreshLockActive, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock, resolveDependencyRefreshLockPath } from './dependency_refresh.mjs';
 
+test('dependency writers reject live inherited read custody instead of waiting on their containing reader', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-read-upgrade-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  let inheritedEnv;
+  let mutations = 0;
+  await withDependencyConsumption({ installDir: root, env, signal: t.signal }, async custody => {
+    inheritedEnv = custody;
+    let independentMutations = 0;
+    await withDependencyRefreshLock({ installDir: join(root, 'independent'), env: custody, signal: t.signal },
+      async () => { independentMutations += 1; });
+    assert.equal(independentMutations, 1, 'live custody of a different installation must not prohibit its writer');
+    const cancellation = new AbortController();
+    const attemptedUpgrade = withDependencyRefreshLock({ installDir: root, env: custody, signal: cancellation.signal },
+      async () => { mutations += 1; });
+    // Cancellation lets the old queued implementation terminate; the owner must
+    // reject the impossible upgrade before entering its cancellable wait.
+    cancellation.abort();
+    await assert.rejects(attemptedUpgrade, { code: 'HSTACK_WORKSPACE_ADMISSION_ORDER' });
+    assert.equal(mutations, 0);
+    assert.equal(isDependencyRefreshLockActive({ installDir: root, env }), true);
+  });
+  await withDependencyRefreshLock({ installDir: root, env: inheritedEnv, signal: t.signal }, async () => { mutations += 1; });
+  assert.equal(mutations, 1, 'released custody must not prohibit an independent writer');
+});
+
 test('finite dependency readers share while queued writers exclude new readers', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-shared-readers-'));
   t.after(() => rm(root, { recursive: true, force: true }));

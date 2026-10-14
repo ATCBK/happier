@@ -1,12 +1,4 @@
-import type {
-    UsageAccountingCoverageReason,
-    UsageAnalyticsBreakdownDimension,
-    UsageAnalyticsCostFact,
-    UsageAnalyticsCoverage,
-    UsageAnalyticsQueryRequest,
-    UsageAnalyticsQueryResponse,
-    UsageObservationTokens,
-} from "@happier-dev/protocol";
+import type { UsageAccountingCoverageReason, UsageAnalyticsBreakdownDimension, UsageAnalyticsCostFact, UsageAnalyticsCoverage, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { readUsageAccountingMetadata, readUsageRequestAttribution } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
 import { resolveUsageContributionDimensionKey, resolveUsageCostBasis, resolveUsageCostFacts, resolveUsageCostMode } from "@happier-dev/protocol/usage/usageCost";
 import { resolveUsageTokenCategories } from "@happier-dev/protocol/usage/usageTokenCategories";

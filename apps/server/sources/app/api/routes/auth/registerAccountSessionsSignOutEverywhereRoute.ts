@@ -1,9 +1,4 @@
-import {
-    ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1,
-    AccountSessionsSignOutEverywhereActionInputV1Schema,
-    AccountSessionsSignOutEverywhereServerErrorV1Schema,
-    AccountSessionsSignOutEverywhereServerOutputV1Schema,
-} from "@happier-dev/protocol";
+import { ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1, AccountSessionsSignOutEverywhereActionInputV1Schema, AccountSessionsSignOutEverywhereServerErrorV1Schema, AccountSessionsSignOutEverywhereServerOutputV1Schema } from '@happier-dev/protocol/auth/accountSessions';
 
 import { auth } from "@/app/auth/auth";
 import {

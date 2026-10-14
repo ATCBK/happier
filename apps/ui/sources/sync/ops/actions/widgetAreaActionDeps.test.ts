@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { z } from 'zod';
 import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, readWidgetSurfaceArtifactV1, projectOverviewDefaultPlacementsV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -57,8 +58,7 @@ it('uses a stable Project key without a Source through the actual Account Artifa
         if (init?.method === 'POST' && new URL(String(url)).pathname.startsWith('/v1/artifacts')) {
             const wire: unknown = JSON.parse(String(init.body));
             if (!wire || typeof wire !== 'object') throw new Error('Expected Artifact mutation');
-            const header = StrictJsonValueSchema.parse(decodePlainArtifactStoredContent(String(Reflect.get(wire, 'header'))));
-            if (!header || typeof header !== 'object' || Array.isArray(header)) throw new Error('Expected Artifact header');
+            const header = z.record(z.string(), StrictJsonValueSchema).parse(decodePlainArtifactStoredContent(String(Reflect.get(wire, 'header'))));
             const body = decodePlainArtifactStoredContent(String(Reflect.get(wire, 'body')));
             if (!body || typeof body !== 'object' || typeof Reflect.get(body, 'body') !== 'string') throw new Error('Expected Artifact text body');
             const text = String(Reflect.get(body, 'body'));

@@ -292,6 +292,8 @@ export function createAcpTransportHandlerFromDefinition(
       return base.extractToolNameFromId?.(toolCallId) ?? null;
     },
     determineToolName: (toolName, toolCallId, input, context) => {
+      const callbackToolName = resolveCallbackToolName({ definition, toolName, toolCallId, input, context });
+      if (callbackToolName && callbackToolName !== toolName) return callbackToolName;
       if (definition.mcpServerKeys) {
         if (parseMcpToolWireNameV1(toolName, definition.mcpServerKeys)) return toolName;
         const metadata = input._acp;
@@ -309,13 +311,6 @@ export function createAcpTransportHandlerFromDefinition(
         if (shellBridgeToolName) return shellBridgeToolName;
       }
 
-      const callbackToolName = resolveCallbackToolName({
-        definition,
-        toolName,
-        toolCallId,
-        input,
-        context,
-      });
       if (callbackToolName) return callbackToolName;
 
       const directToolName = findToolNameFromId(toolName, patterns, { preferLongestMatch });

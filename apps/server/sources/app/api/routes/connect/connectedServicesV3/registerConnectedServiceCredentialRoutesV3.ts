@@ -1,16 +1,11 @@
 import { z } from "zod";
 import type { Fastify } from "../../../types";
-import {
-    CONNECTED_SERVICE_ERROR_CODES,
-    ConnectedServiceCredentialMutationSupersededV1Schema,
-    ConnectedServiceCredentialHealthV1Schema,
-    ConnectedServiceCredentialRecordV1Schema,
-    ConnectedServiceIdSchema,
-    StoredJsonContentEnvelopeSchema,
-    assertConnectedServiceCredentialRecordBinding,
-    projectBuiltInLegacyConnectedServiceCredentialRecordV1,
-    type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
+import { ConnectedServiceCredentialMutationSupersededV1Schema, ConnectedServiceCredentialHealthV1Schema, ConnectedServiceCredentialRecordV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { assertConnectedServiceCredentialRecordBinding } from '@happier-dev/protocol/connect/connectedServiceCredentialBinding';
+import { projectBuiltInLegacyConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { ConnectedServiceProfileIdSchema } from "../connectedServicesV2/profileIdSchema";
 import {
     isConnectedServiceCredentialMetadataV3,

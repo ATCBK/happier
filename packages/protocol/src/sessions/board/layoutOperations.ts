@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { getWidgetSizeFootprintV1, WIDGET_SIZE_POLICY_V1 } from '../../widgets/widgetPresentationV1.js';
 
 import { SessionBoardErrorCodeSchema, type SessionBoardErrorCode } from './errors.js';
@@ -22,15 +22,15 @@ export const SESSION_BOARD_DEFAULT_ITEM_WIDTH_V1: SessionBoardItemWidth = Sessio
   getWidgetSizeFootprintV1('sessionBoard', WIDGET_SIZE_POLICY_V1.sessionBoard.defaultSize)!.width,
 );
 
-const SessionBoardTabAnchorV1Schema = lazyZodSchema(() => z.object({
+const SessionBoardTabAnchorV1Schema = lazyZodSchema(() => z.strictObject({
   side: z.enum(['before', 'after']),
   tabId: SessionBoardTabIdSchema,
-}).strict());
+}));
 
-const SessionBoardItemAnchorV1Schema = lazyZodSchema(() => z.object({
+const SessionBoardItemAnchorV1Schema = lazyZodSchema(() => z.strictObject({
   side: z.enum(['before', 'after']),
   itemId: SessionSurfaceItemIdSchema,
-}).strict());
+}));
 
 /**
  * The closed set of Board organization edits. Positions are expressed only as
@@ -38,81 +38,81 @@ const SessionBoardItemAnchorV1Schema = lazyZodSchema(() => z.object({
  * editor reordered the same view between the read and the write.
  */
 export const SessionBoardLayoutOperationV1Schema = lazyZodSchema(() => z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('tab.create'),
     tabId: SessionBoardTabIdSchema,
-    title: z.string().trim(),
-    anchor: SessionBoardTabAnchorV1Schema.optional(),
-  }).strict(),
-  z.object({
+    title: z.string().check(z.trim()),
+    anchor: z.optional(SessionBoardTabAnchorV1Schema),
+  }),
+  z.strictObject({
     op: z.literal('tab.rename'),
     tabId: SessionBoardTabIdSchema,
-    title: z.string().trim(),
-  }).strict(),
-  z.object({
+    title: z.string().check(z.trim()),
+  }),
+  z.strictObject({
     op: z.literal('tab.move'),
     tabId: SessionBoardTabIdSchema,
     anchor: SessionBoardTabAnchorV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('tab.remove'),
     tabId: SessionBoardTabIdSchema,
     // Removing a view never silently decides what happens to its items.
     disposition: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('move'), tabId: SessionBoardTabIdSchema }).strict(),
-      z.object({ kind: z.literal('unpin') }).strict(),
+      z.strictObject({ kind: z.literal('move'), tabId: SessionBoardTabIdSchema }),
+      z.strictObject({ kind: z.literal('unpin') }),
     ]),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('item.place'),
     itemId: SessionSurfaceItemIdSchema,
     tabId: SessionBoardTabIdSchema,
     /** Only a missing view consumes this explicit title; existing views are never renamed. */
-    tabTitle: z.string().trim().optional(),
+    tabTitle: z.optional(z.string().check(z.trim())),
     width: SessionBoardItemWidthSchema,
-    anchor: SessionBoardItemAnchorV1Schema.optional(),
-  }).strict(),
-  z.object({
+    anchor: z.optional(SessionBoardItemAnchorV1Schema),
+  }),
+  z.strictObject({
     op: z.literal('item.move'),
     itemId: SessionSurfaceItemIdSchema,
     fromTabId: SessionBoardTabIdSchema,
     toTabId: SessionBoardTabIdSchema,
-    anchor: SessionBoardItemAnchorV1Schema.optional(),
-  }).strict(),
-  z.object({
+    anchor: z.optional(SessionBoardItemAnchorV1Schema),
+  }),
+  z.strictObject({
     op: z.literal('item.unpin'),
     itemId: SessionSurfaceItemIdSchema,
     tabId: SessionBoardTabIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     // Explicit whole-Board reference cleanup, including an already-missing item.
     // Unlike item removal, this does not delete or require a shared item record.
     op: z.literal('item.unpinAll'),
     itemId: SessionSurfaceItemIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('item.resize'),
     itemId: SessionSurfaceItemIdSchema,
     tabId: SessionBoardTabIdSchema,
     width: SessionBoardItemWidthSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('item.frameStyle'),
     itemId: SessionSurfaceItemIdSchema,
     tabId: SessionBoardTabIdSchema,
-    frameStyle: SessionBoardItemFrameStyleSchema.nullable(),
-  }).strict(),
+    frameStyle: z.nullable(SessionBoardItemFrameStyleSchema),
+  }),
 ]));
 export type SessionBoardLayoutOperationV1 = z.infer<typeof SessionBoardLayoutOperationV1Schema>;
 
 /** The optional placement an item upsert may carry; see Plan 04 §3.2. */
-export const SessionBoardItemPlacementV1Schema = lazyZodSchema(() => z.object({
-  tabId: SessionBoardTabIdSchema.optional(),
-  tabTitle: z.string().trim().optional(),
-  width: SessionBoardItemWidthSchema.optional(),
-  frameStyle: SessionBoardItemFrameStyleSchema.optional(),
-  anchor: SessionBoardItemAnchorV1Schema.optional(),
-}).strict());
+export const SessionBoardItemPlacementV1Schema = lazyZodSchema(() => z.strictObject({
+  tabId: z.optional(SessionBoardTabIdSchema),
+  tabTitle: z.optional(z.string().check(z.trim())),
+  width: z.optional(SessionBoardItemWidthSchema),
+  frameStyle: z.optional(SessionBoardItemFrameStyleSchema),
+  anchor: z.optional(SessionBoardItemAnchorV1Schema),
+}));
 export type SessionBoardItemPlacementV1 = z.infer<typeof SessionBoardItemPlacementV1Schema>;
 
 export type SessionBoardLayoutEditResultV1 =
@@ -127,11 +127,11 @@ type MutableTab = {
 
 const INVALID = Object.freeze({
   ok: false,
-  error: SessionBoardErrorCodeSchema.enum.session_board_invalid,
+  error: SessionBoardErrorCodeSchema._zod.def.entries.session_board_invalid,
 } as const) satisfies SessionBoardLayoutEditResultV1;
 const ITEM_NOT_FOUND = Object.freeze({
   ok: false,
-  error: SessionBoardErrorCodeSchema.enum.session_board_item_not_found,
+  error: SessionBoardErrorCodeSchema._zod.def.entries.session_board_item_not_found,
 } as const) satisfies SessionBoardLayoutEditResultV1;
 
 function draft(layout: SessionBoardLayoutV1): MutableTab[] {

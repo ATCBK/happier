@@ -1,15 +1,15 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const AutomationEventRefreshDefinitionStatusV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventRefreshDefinitionStatusV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('refreshDefinition'),
   reason: z.enum(['definitionStale', 'observationTargetChanged']),
-}).strict());
+}));
 
-export const AutomationEventBlockedStatusV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventBlockedStatusV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('blocked'),
   reason: z.enum(['capacity', 'temporarilyUnavailable', 'occurrenceConflict', 'noEnabledAssignment']),
-}).strict());
+}));
 
 /**
  * The canonical unresolved Event-admission status. Webhook dead-letter

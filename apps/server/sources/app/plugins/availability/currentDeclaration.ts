@@ -1,13 +1,6 @@
-import {
-    createCanonicalJsonSigningInput,
-    PluginManifestV2Schema,
-    type ParsedPluginManifestV2,
-} from "@happier-dev/protocol";
-import {
-    computePluginUiArtifactSha256DigestV1,
-    PluginUiArtifactDigestV1Schema,
-    type PluginUiArtifactDigestV1,
-} from "@happier-dev/protocol/plugins/ui";
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { PluginManifestV2Schema, type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
+import { computePluginUiArtifactSha256DigestV1, PluginUiArtifactDigestV1Schema, type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 
 import type { Tx } from "@/storage/inTx";
 

@@ -211,9 +211,11 @@ function toPluginDiagnosticsByPluginId(
 function hasUsableSchema(action: ResolvedActionContribution): boolean {
     const inputSchema = action.definition.inputSchema;
     const outputSchema = action.definition.outputSchema;
-    return Boolean(inputSchema)
+    // An absent author input contract is unconstrained, not an unusable
+    // contributor-defined input. Normalization must not fabricate a schema.
+    return (inputSchema === undefined || (Boolean(inputSchema)
         && typeof inputSchema === 'object'
-        && !Array.isArray(inputSchema)
+        && !Array.isArray(inputSchema)))
         && Boolean(outputSchema)
         && typeof outputSchema === 'object'
         && !Array.isArray(outputSchema);

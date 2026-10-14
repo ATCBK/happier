@@ -1,22 +1,22 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
-const id = z.string().min(1);
+const id = z.string().check(z.minLength(1));
 
 /** V1 portable tab-set epoch: identity and persisted envelopes are closed.
  * Destination params stay an opaque string map owned by the destination catalog.
  * Unknown kinds survive to render the host's unavailable state.
  */
-export const WorkspaceTabsV1Schema = z.object({
+export const WorkspaceTabsV1Schema = z.strictObject({
     v: z.literal(1),
-    tabsById: z.record(id, z.object({
+    tabsById: z.record(id, z.strictObject({
         id,
-        target: z.object({ kind: id, params: z.record(z.string(), z.string()) }).strict(),
+        target: z.strictObject({ kind: id, params: z.record(z.string(), z.string()) }),
         pinned: z.boolean(),
-    }).strict()),
+    })),
     order: z.array(id),
-    pairs: z.array(z.array(id).min(2)),
-}).strict().superRefine((value, context) => {
+    pairs: z.array(z.array(id).check(z.minLength(2))),
+}).check(z.superRefine((value, context) => {
     const liveIds = Object.keys(value.tabsById);
     for (const key of liveIds) {
         if (value.tabsById[key].id !== key) context.addIssue({ code: 'custom', path: ['tabsById', key, 'id'], message: 'Tab identity must match its record key' });
@@ -34,7 +34,7 @@ export const WorkspaceTabsV1Schema = z.object({
             paired.add(tabId);
         });
     });
-});
+}));
 
 export type WorkspaceTabsV1 = z.infer<typeof WorkspaceTabsV1Schema>;
 export const WorkspaceTabsV1StoredSchema = createStoredReadSchema(WorkspaceTabsV1Schema);

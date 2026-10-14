@@ -1,9 +1,4 @@
-import {
-    PluginWebhookAccountStatusResultV1Schema,
-    PluginWebhookAutomationAdmissionUnresolvedV1Schema,
-    type PluginWebhookAccountStatusRequestV1,
-    type PluginWebhookAccountStatusResultV1,
-} from "@happier-dev/protocol";
+import { PluginWebhookAccountStatusResultV1Schema, PluginWebhookAutomationAdmissionUnresolvedV1Schema, type PluginWebhookAccountStatusRequestV1, type PluginWebhookAccountStatusResultV1 } from '@happier-dev/protocol/plugins/webhooks/statusV1';
 
 import { resolveCurrentClaimablePluginMachineMaterializationTx } from "@/app/plugins/availability/operations";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";

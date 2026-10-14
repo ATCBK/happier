@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentIdV1Schema } from '../agents/agentIdV1.js';
 
@@ -39,8 +39,7 @@ export const SESSION_AGENT_TRANSITION_DIVIDER_MESSAGE = 'Continued with another 
  */
 export const SESSION_AGENT_TRANSITION_DIVIDER_LOCAL_ID_PREFIX = 'agent-transition:';
 
-export const SessionAgentTransitionDividerV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAgentTransitionDividerV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     fromAgentId: AgentIdV1Schema,
     toAgentId: AgentIdV1Schema,
@@ -66,7 +65,7 @@ export const SessionAgentTransitionDividerV1Schema = lazyZodSchema(() => z
      * shape was already designed for: the whole sidecar is dropped and the
      * stored prose is rendered, exactly as in an older reader.
      */
-    sourceCutoffSeqInclusive: z.number().int().nonnegative(),
+    sourceCutoffSeqInclusive: z.number().check(z.int(), z.nonnegative()),
     /**
      * LOWER bound, exclusive, on a NATIVE RETURN only: the transcript head the
      * arriving Agent had already seen when it last ran this Session.
@@ -85,9 +84,8 @@ export const SessionAgentTransitionDividerV1Schema = lazyZodSchema(() => z
      * means exactly one thing, which is why this is optional rather than a
      * required nullable third state every reader would have to model.
      */
-    returningAgentLastSeenSeqInclusive: z.number().int().nonnegative().optional(),
-  })
-  .strict());
+    returningAgentLastSeenSeqInclusive: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type SessionAgentTransitionDividerV1 = z.infer<typeof SessionAgentTransitionDividerV1Schema>;
 
 /**

@@ -1,3 +1,4 @@
+import './configureZodLocale';
 import 'reflect-metadata';
 import { runFullServerMain } from '@/flavors/full/main';
 

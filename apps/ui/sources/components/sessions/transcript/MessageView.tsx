@@ -42,6 +42,8 @@ import { useMessageComposerAttachments } from '@/components/sessions/transcript/
 import { useTranscriptMotion } from '@/components/sessions/transcript/motion/TranscriptMotionContext';
 import { ThinkingTimelineRow } from '@/components/sessions/transcript/thinking/ThinkingTimelineRow';
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
+import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
+import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
 import { AttachmentsMessageRow } from '@/components/sessions/attachments/messages/AttachmentsMessageRow';
@@ -577,6 +579,9 @@ function RenderBlock(props: {
       );
 
     case 'agent-text':
+      if (!props.message.isThinking && isRuntimeIssueMessageMeta(props.message.meta)) {
+        return <RuntimeIssueRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} />;
+      }
       return (
         <AgentTextBlock
           message={props.message}
@@ -652,6 +657,25 @@ function RenderBlock(props: {
       const _exhaustive: never = props.message;
       throw new Error(`Unknown message kind: ${_exhaustive}`);
   }
+}
+
+/** A typed turn failure or input rejection reads as one event row, not as the end of the assistant's reply. */
+function RuntimeIssueRow(props: Readonly<{
+  message: AgentTextMessage;
+  sessionId: string;
+  serverId?: string | null;
+}>) {
+  const event = React.useMemo<AgentEvent>(() => ({ type: 'message', message: props.message.text }), [props.message.text]);
+  return (
+    <TranscriptEventRow
+      event={event}
+      tone="failure"
+      messageId={props.message.id}
+      sessionId={props.sessionId}
+      serverId={props.serverId}
+      createdAt={props.message.createdAt}
+    />
+  );
 }
 
 function UserTextBlock(props: {
@@ -1642,7 +1666,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.message.event.foreground,
   },
     messageProvenanceAttribution: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     alignSelf: 'stretch',
     marginHorizontal: theme.space.s16,
     marginBottom: theme.space.s4,
@@ -1660,7 +1684,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   workflowProvenanceText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     flexShrink: 1,
     color: theme.colors.text.secondary,
   },

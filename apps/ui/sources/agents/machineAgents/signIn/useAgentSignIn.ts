@@ -2,7 +2,7 @@ import * as React from 'react';
 import { machineAgentSignInTerminalKey, type AgentSignInStatusResponse, type MachinesAgentsSignInStartOutput, type MachinesAgentsSignInCancelOutput } from '@happier-dev/protocol/daemon/agentSignIn';
 import type { DaemonTerminalStreamEventUrl } from '@happier-dev/protocol/daemon/terminal';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { serverAccountScopedResourceKey, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { replaceTerminalSurfaceState, createEmptyTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -51,11 +51,15 @@ function schedulePoll(entry: Entry) {
     fireAndForget(checkAgain(entry).finally(() => schedulePoll(entry)), { tag: 'AgentSignIn.poll' });
   }, SIGN_IN_POLL_INTERVAL_MS);
 }
-function checkAgain(entry: Entry): Promise<AgentSignInStatusResponse | null> {
+function checkAgain(entry: Entry, requestedTarget?: BoundTarget, signal?: AbortSignal): Promise<AgentSignInStatusResponse | null> {
   if (entry.checking) return entry.checking;
-  const target = currentTarget(entry);
+  const target = requestedTarget ?? currentTarget(entry);
   if (!target) return Promise.resolve(null);
   const abort = new AbortController(); entry.probeAbort = abort;
+  const retire = target.lifetime.onRetire(() => abort.abort());
+  const abortFromSignal = () => abort.abort();
+  signal?.addEventListener('abort', abortFromSignal, { once: true });
+  if (signal?.aborted) abort.abort();
   const checking = (async () => {
     try {
       const result = await checkAgentSignInRpc({ ...target, signal: abort.signal }, target.agentId);
@@ -76,6 +80,7 @@ function checkAgain(entry: Entry): Promise<AgentSignInStatusResponse | null> {
       }
       return null;
     } finally {
+      retire.dispose(); signal?.removeEventListener('abort', abortFromSignal);
       if (entry.probeAbort === abort) entry.probeAbort = null;
       entry.checking = null;
     }
@@ -156,19 +161,29 @@ async function cancel(entry: Entry, requestedTarget?: BoundTarget, acquiredTermi
   }
 }
 
-/** Actions and presenters consume the same Account-scoped process custody and state. */
+/** Admitted Actions and passive presenters consume the same Account-scoped process custody and state. */
 type LifecycleTarget = Readonly<{ serverId: string; machineId: string; agentId: string; lifetime: ServerAccountScopeLifetime; signal?: AbortSignal }>;
 export function executeAgentSignInLifecycle(target: LifecycleTarget, operation: 'cancel', terminalId: string): Promise<MachinesAgentsSignInCancelOutput>;
 export function executeAgentSignInLifecycle(target: LifecycleTarget, operation: 'start' | 'restart', terminalId?: string): Promise<MachinesAgentsSignInStartOutput>;
+export function executeAgentSignInLifecycle(target: LifecycleTarget, operation: 'status'): Promise<AgentSignInStatusResponse>;
 export async function executeAgentSignInLifecycle(
   target: LifecycleTarget,
-  operation: 'start' | 'cancel' | 'restart',
+  operation: 'start' | 'cancel' | 'restart' | 'status',
   terminalId?: string,
-): Promise<MachinesAgentsSignInStartOutput | MachinesAgentsSignInCancelOutput> {
-  if (!target.lifetime.isCurrent() || target.lifetime.scope.serverId !== target.serverId) return { ok: false, errorCode: 'sign_in_unavailable', error: 'Sign-in Account is unavailable.' };
+): Promise<MachinesAgentsSignInStartOutput | MachinesAgentsSignInCancelOutput | AgentSignInStatusResponse> {
+  if (!target.lifetime.isCurrent() || target.lifetime.scope.serverId !== target.serverId) {
+    if (operation === 'status') throw new Error('sign_in_unavailable');
+    return { ok: false, errorCode: 'sign_in_unavailable', error: 'Sign-in Account is unavailable.' };
+  }
   const entry = getEntry(serverAccountScopedResourceKey(target.lifetime.scope, 'agent-sign-in', target.machineId, target.agentId));
   entry.targets.add(target);
   try {
+    if (operation === 'status') {
+      const result = await checkAgain(entry, target, target.signal);
+      if (!result) throw new Error(entry.state.failure ?? 'sign_in_status_unavailable');
+      schedulePoll(entry);
+      return result;
+    }
     if (operation !== 'start') {
       const closed = await cancel(entry, target, terminalId, target.signal);
       if (!closed.ok || operation === 'cancel') return closed;
@@ -183,7 +198,7 @@ export async function executeAgentSignInLifecycle(
 export function useAgentSignIn(target: Readonly<{ serverId?: string | null; machineId: string | null; agentId: string }>) {
   const activeServer = useActiveServerSnapshot(!target.serverId);
   const serverId = target.serverId?.trim() || activeServer.serverId;
-  const { binding } = useServerCredentialAccountScopeBinding(serverId);
+  const { binding, execute } = useMountedActionExecution(serverId);
   const boundTarget = React.useMemo<BoundTarget | null>(() => binding?.isCurrent() && target.machineId
     ? { serverId: binding.scope.serverId, machineId: target.machineId, agentId: target.agentId, lifetime: binding } : null,
   [binding, serverId, target.machineId, target.agentId]);
@@ -207,11 +222,25 @@ export function useAgentSignIn(target: Readonly<{ serverId?: string | null; mach
     setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [state.phase, state.startedAtMs]);
+  const executeIntent = React.useCallback(async (operation: 'start' | 'status' | 'cancel' | 'restart') => {
+    if (!entry || !boundTarget?.lifetime.isCurrent()) return;
+    // Cancel/restart address the daemon's acquired process, never a made-up terminal id.
+    if ((operation === 'cancel' || operation === 'restart') && !entry.terminalId && entry.opening) await entry.opening;
+    const terminalId = entry.terminalId;
+    if (operation === 'cancel' && !terminalId) return;
+    const actionOperation = operation === 'restart' && !terminalId ? 'start' : operation;
+    if (!boundTarget.lifetime.isCurrent()) return;
+    return await execute(`machines.agents.signIn.${actionOperation}`, {
+      machineId: boundTarget.machineId, agentId: boundTarget.agentId,
+      ...(actionOperation === 'start' ? { method: 'native' } : {}),
+      ...((actionOperation === 'cancel' || actionOperation === 'restart') ? { terminalId } : {}),
+    });
+  }, [boundTarget, entry, execute]);
   const actions = React.useMemo(() => ({
-    start: () => entry ? start(entry) : Promise.resolve(),
-    checkAgain: async () => { if (entry) { await checkAgain(entry); schedulePoll(entry); } },
-    cancel: () => entry ? cancel(entry) : Promise.resolve(),
-    restart: async () => { if (entry) { const closed = await cancel(entry); if (closed.ok) await start(entry); } },
+    start: () => executeIntent('start'),
+    checkAgain: () => executeIntent('status'),
+    cancel: () => executeIntent('cancel'),
+    restart: () => executeIntent('restart'),
     reportTerminalUrl: (event: Pick<DaemonTerminalStreamEventUrl, 'kind' | 'url'> | null) => {
       if (entry && boundTarget?.lifetime.isCurrent() && event?.kind === 'auth' && entry.state.terminalKey) publish(entry, { authUrl: event.url });
     },
@@ -227,7 +256,7 @@ export function useAgentSignIn(target: Readonly<{ serverId?: string | null; mach
     reportTerminalFailure: (failure: string) => {
       if (entry && boundTarget?.lifetime.isCurrent() && entry.state.terminalKey) { stopPolling(entry); publish(entry, { phase: 'failed', failure }); }
     },
-  }), [boundTarget, entry]);
+  }), [boundTarget, entry, executeIntent]);
   return { ...state, state, terminalId: state.terminalKey ? entry?.terminalId ?? null : null,
     available: Boolean(boundTarget?.lifetime.isCurrent()), elapsedMs: state.startedAtMs === null ? 0 : Math.max(0, now - state.startedAtMs),
     accountLabel: entry?.accountLabel ?? null, ...actions };

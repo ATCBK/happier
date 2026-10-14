@@ -308,7 +308,9 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(queueCalls).toEqual([]);
-    expect(steerText.mock.calls[0]?.[1]).toMatchObject({ localId: 'local-image-1', structuredInput });
+    expect(steerText.mock.calls[0]?.[1]).toMatchObject({ localId: 'local-image-1',
+      structuredInput: { v: 1, imageInputs: [{ id: 'image-1', kind: 'localImage',
+        path: '.happier/uploads/messages/message-1/image.png', mimeType: 'image/png' }] } });
   });
 
   it('renders a Session reference in structured steer', async () => {
@@ -622,7 +624,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     ]);
   });
 
-  it('updates permission mode from message metadata before queueing', () => {
+  it('queues the message permission intent without changing the owner baseline', () => {
     const harness = createHarness();
 
     harness.emit({
@@ -633,9 +635,9 @@ describe('registerPermissionModeMessageQueueBinding', () => {
       createdAt: 42,
     } as UserMessage);
 
-    expect(harness.getCurrentPermissionMode()).toBe('safe-yolo');
-    expect(harness.getMetadata().permissionMode).toBe('safe-yolo');
-    expect(harness.getMetadata().permissionModeUpdatedAt).toBe(42);
+    expect(harness.getCurrentPermissionMode()).toBeUndefined();
+    expect(harness.getMetadata().permissionMode).toBe('default');
+    expect(harness.getMetadata().permissionModeUpdatedAt).toBe(0);
     expect(harness.queueCalls).toEqual([
       {
         type: 'push',
@@ -773,7 +775,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     ]);
   });
 
-  it('updates metadata through the rebound session after bindSession swaps the client', () => {
+  it('keeps turn overrides local after bindSession swaps the client', () => {
     const harness = createHarness();
     const reboundSession = createSessionHarness();
 
@@ -787,8 +789,8 @@ describe('registerPermissionModeMessageQueueBinding', () => {
       createdAt: 42,
     } as UserMessage);
 
-    expect(reboundSession.getMetadata().permissionMode).toBe('safe-yolo');
-    expect(reboundSession.getMetadata().permissionModeUpdatedAt).toBe(42);
+    expect(reboundSession.getMetadata().permissionMode).toBe('default');
+    expect(reboundSession.getMetadata().permissionModeUpdatedAt).toBe(0);
     expect(harness.getMetadata().permissionMode).toBe('default');
     expect(harness.getMetadata().permissionModeUpdatedAt).toBe(0);
     expect(harness.queueCalls).toEqual([

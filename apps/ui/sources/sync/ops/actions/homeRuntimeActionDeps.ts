@@ -71,7 +71,7 @@ export function createUiHomeRuntimeActionExecute(
             }
         }
         if (request.actionId === 'home.runtime.get') {
-            const snapshot = await getServerFeaturesSnapshot({ serverId: account?.serverId ?? context.serverId, force: request.input.force });
+            const snapshot = await getServerFeaturesSnapshot({ serverId: account?.serverId ?? context.serverId ?? undefined, force: request.input.force });
             assertCurrent();
             return { ok: true, result: snapshot.status === 'ready'
                 ? { status: 'ready', serverRelease: snapshot.features.capabilities.serverRelease ?? null,

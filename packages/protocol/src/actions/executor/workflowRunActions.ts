@@ -1,5 +1,5 @@
 import { deriveWorkflowReplacementId } from '../../workflows/workflowInvocationIdentityV1.js';
-import { ZodError } from 'zod';
+import { z as zodMiniCore0 } from 'zod/mini';
 
 import { WorkflowAcceptedSnapshotV1Schema, type WorkflowDefinitionSavedByV1 } from '../../workflows/workflowDefinitionV1.js';
 import { deriveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
@@ -37,6 +37,7 @@ import { resolveInputTypeOptions, readInputFieldOptionsConstraint, validateInput
 import type { InputOption } from '../../inputs/inputFields.js';
 import { ActionExecuteFailureSchema } from '../actionExecutionResult.js';
 import { WorkflowOperationErrorCodeV1Schema } from '../../workflows/workflowProgressV1.js';
+import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
 
 export type WorkflowAccountRunEncryption = AvailableAutomationAccountEncryptionV1;
 
@@ -372,12 +373,13 @@ function assertRunResourceRestriction(
 ): void {
   const target = context.externalActionTarget;
   if (target === undefined) return;
-  if (target.kind !== 'machine' || target.machineId !== resource.machineId) throw workflowError('target_unavailable');
+  if (target.kind !== 'machine' || target.machineId !== resource.machineId) throw workflowError('target_unavailable',
+    { code: 'target_unavailable', reason: 'target_binding_mismatch' });
   if (target.project) {
     const requestedProject = normalizeProjectTargetForComparison(target.project, normalizeAbsolutePath);
     const acceptedProject = resource.project && normalizeProjectTargetForComparison(resource.project, normalizeAbsolutePath);
     if (!requestedProject || !acceptedProject || !sameStrictJsonValue(requestedProject, acceptedProject)) {
-      throw workflowError('target_unavailable');
+      throw workflowError('target_unavailable', { code: 'target_unavailable', reason: 'target_binding_mismatch' });
     }
   }
 }
@@ -443,7 +445,7 @@ async function assertAcceptedAuthorizationCurrent(
 }
 
 function translateStorageError(error: unknown): never {
-  if (error instanceof ZodError) throw workflowError('content_unavailable');
+  if (error instanceof zodMiniCore0.core.$ZodError) throw workflowError('content_unavailable');
   const code = (error as { code?: unknown })?.code;
   if (code === 'ERR_CANCELED' || (error instanceof Error && error.name === 'AbortError')) throw error;
   const response = (error as { response?: { data?: { error?: unknown } } })?.response;
@@ -753,7 +755,8 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     let metadata = replaySource ? replaySource.accepted.metadata ?? undefined : input.metadata;
     let source: Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0]['context']['source'];
     const projectTarget = workflowProjectTarget(args.context);
-    if (!projectTarget) throw workflowError('target_unavailable', { code: 'target_unavailable', reason: 'workspace_unavailable' });
+    if (!projectTarget) throw workflowError('target_unavailable',
+      actionStartTargetUnavailableV1(args.context, 'workflow_workspace', 'workspace_unavailable').details);
     let materialization: Awaited<ReturnType<NonNullable<WorkflowAccountRunActionDeps['resolveMaterializationContext']>>> | undefined;
     if (replaySource) {
       definition = replaySource.accepted.authoredDefinition;
@@ -802,7 +805,8 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         savedBy: saved.savedBy ?? null };
     } else {
       if (!deps.resolveMaterializationContext) throw workflowError('source_unavailable');
-      materialization = await deps.resolveMaterializationContext(args, projectTarget);
+      materialization = await measureActionStartPhaseV1(args.context, 'workflow_materialization_context',
+        () => deps.resolveMaterializationContext!(args, projectTarget));
       const resolved = await resolveWorkflowDefinitionRefV1(inputSource.workflow, {
         readPluginWorkflows: deps.readPluginWorkflows,
         ...(args.context.signal ? { signal: args.context.signal } : {}),
@@ -817,8 +821,10 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       source = { kind: 'catalog', ref: inputSource.workflow, version: resolved.version };
     }
     if (!materialization) {
-      if (!deps.resolveMaterializationContext) throw workflowError('target_unavailable');
-      materialization = await deps.resolveMaterializationContext(args, projectTarget);
+      if (!deps.resolveMaterializationContext) throw workflowError('target_unavailable', actionStartTargetUnavailableV1(args.context,
+        'workflow_materialization_context', 'materialization_owner_unavailable').details);
+      materialization = await measureActionStartPhaseV1(args.context, 'workflow_materialization_context',
+        () => deps.resolveMaterializationContext!(args, projectTarget));
     }
     const readArtifactDefinition = materialization.effects.readWorkflowDefinition;
     materialization = { ...materialization, effects: { ...materialization.effects,
@@ -858,20 +864,28 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         if (!current || current.occurrenceId !== type.occurrenceId) throw workflowError('input_type_retired');
       }
     }
-    if (!replaySource && !deps.prepareWorkspace) throw workflowError('target_unavailable', { code: 'target_unavailable', reason: 'workspace_unavailable' });
+    if (!replaySource && !deps.prepareWorkspace) throw workflowError('target_unavailable', actionStartTargetUnavailableV1(args.context,
+      'workflow_workspace', 'workspace_unavailable').details);
     const preparedWorkspace = replaySource ? { ok: true as const, workspaceTarget: replaySource.accepted.workspaceTarget }
-      : await deps.prepareWorkspace!({ projectTarget, definition });
-    if (!preparedWorkspace.ok) throw workflowError('target_unavailable', { code: 'target_unavailable', reason: 'workspace_unavailable' });
+      : await measureActionStartPhaseV1(args.context, 'workflow_workspace',
+        () => deps.prepareWorkspace!({ projectTarget, definition }));
+    if (!preparedWorkspace.ok) throw workflowError('target_unavailable',
+      actionStartTargetUnavailableV1(args.context, 'workflow_workspace', 'workspace_unavailable').details);
     const controller = currentControllerAuthorization(args);
     const resolvedAgentContext = args.context.surface === 'agent'
       ? await resolveActionAgentStartContextV1(deps, args.context) : null;
-    const materialized = await materializeWorkflowAcceptedSnapshotV1({
+    const materialized = await measureActionStartPhaseV1(args.context, 'workflow_materialization',
+      () => materializeWorkflowAcceptedSnapshotV1({
       definition, ...materialization,
       ...(ingressContext ? { ingressContext } : {}),
       roleOverrides: input.roleOverrides,
       ...(replaySource && replayRequest ? { replay: { snapshot: replaySource.accepted,
         ...(replayRequest.agentOverride ? { agentOverride: replayRequest.agentOverride } : {}) } } : {}),
       admission: args.context.surface === 'agent' ? { kind: 'agent',
+      admitRun: async ({ permissionCeiling }) => admitActionAgentStartV1(args.context, {
+        kind: 'workflow_run', facts: { machineId: projectTarget.machineId, directory: projectTarget.directory,
+          permissionMode: permissionCeiling }, ...(originSessionId ? { targetSessionId: originSessionId } : {}),
+      }, resolvedAgentContext),
       admitLeaf: async (leaf, facts) => {
         if (!assertNonEscalatingPermissionMode({ requestedMode: facts.permissionCeiling,
           callerMode: controller.effectivePermissionMode }).ok) throw workflowError('run_access_denied');
@@ -894,8 +908,12 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         },
       } : {}),
       },
-    });
-    if (!materialized.ok) throw workflowError(materialized.error.code, materialized.error);
+    }));
+    if (!materialized.ok) {
+      if (materialized.error.code === 'target_unavailable' && 'reason' in materialized.error)
+        args.context.recordActionStartDiagnostic?.({ phase: 'workflow_materialization', refusalReason: materialized.error.reason });
+      throw workflowError(materialized.error.code, materialized.error);
+    }
     const accepted = materialized.snapshot;
     if (!('origin' in accepted)) throw workflowError('invalid_input');
     if (!assertNonEscalatingPermissionMode({ requestedMode: accepted.authorization.admittedPermissionCeiling,

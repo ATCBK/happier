@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import * as z from 'zod/mini';
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { DEFAULT_AGENT_ID } from '../agents/defaultAgent.js';
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
@@ -82,9 +84,9 @@ function convertStoredTemplate(params: LegacyStoredTemplate, machineId: string |
     ? 'runtime_descriptor_unsupported' : 'settings_unrepresentable');
   const definition = { ...projectLegacyAutomationTemplateToWorkflowDefinitionV1({ ...params, machineId }), defaults: selection.data };
   const validated = validateWorkflowDefinition(definition);
-  const project = WorkflowProjectTargetV1Schema.omit({ machineId: true }).extend({
-    machineId: WorkflowProjectTargetV1Schema.shape.machineId.optional(),
-  }).safeParse(params.targetType === 'existing_session'
+  const project = lazyZodSchema(() => z.extend(z.omit(WorkflowProjectTargetV1Schema, { machineId: true }), {
+    machineId: z.optional(WorkflowProjectTargetV1Schema.shape.machineId),
+  })).safeParse(params.targetType === 'existing_session'
     ? session!.project : { ...(machineId === null ? {} : { machineId }), directory: params.template.directory });
   if (!validated.valid || !validated.normalizedDefinition) return refuse('settings_unrepresentable');
   if (!project.success) return refuse('workspace_unrepresentable');

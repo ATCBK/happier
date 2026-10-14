@@ -206,6 +206,32 @@ describe('ChatHeaderView', () => {
         expect(onPress).toHaveBeenCalledOnce();
     });
 
+    it('gives the title accessory its compact form when the whole chip and the title no longer fit', async () => {
+        // A role chip cut to "O…" beside a cut title reads broken: the chip is whole or it is its mark.
+        const { ChatHeaderTitleAccessoryCompactContext } = await import('./chatHeaderCompact');
+        function Accessory() {
+            const compact = React.useContext(ChatHeaderTitleAccessoryCompactContext);
+            return React.createElement('Text', null, compact ? 'MARK' : 'Orchestrator');
+        }
+        const screen = await renderScreen(<ChatHeaderView title="Payments v2 rollout" titleAccessory={<Accessory />} />);
+        const layout = async (testID: string, width: number) => {
+            await act(async () => {
+                screen.findHostByTestId(testID)!.props.onLayout({ nativeEvent: { layout: { width, height: 20, x: 0, y: 0 } } });
+            });
+        };
+        await layout('session-header-title-accessory', 110);
+        await layout('session-header-title-measure', 150);
+        await layout('session-header-title-row', 400);
+        expect(screen.getTextContent()).toContain('Orchestrator');
+
+        await layout('session-header-title-row', 220);
+        expect(screen.getTextContent()).toContain('MARK');
+        expect(screen.getTextContent()).not.toContain('Orchestrator');
+
+        await layout('session-header-title-row', 400);
+        expect(screen.getTextContent()).toContain('Orchestrator');
+    });
+
     it('stretches header width when constrainWidth is false', async () => {
         const { ChatHeaderView } = await import('./ChatHeaderView');
 

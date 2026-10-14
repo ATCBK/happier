@@ -1,19 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Prisma } from "@prisma/client";
 import * as privacyKit from "privacy-kit";
-import {
-    parseEncryptedDataKeyEnvelopeV1,
-    type ArtifactAccessErrorCodeV1,
-    type ArtifactAccessGrantSetStorageInputV1,
-    type ArtifactAccessGrantRemoveInputV1,
-    type ArtifactAccessGrantsListResponseV1,
-    type ArtifactAccessGrantMutationResponseV1,
-    type ArtifactAccessRecipientCensusResponseV1,
-    type ArtifactCallerAccessV1,
-    type ArtifactRecipientKeyEnvelopeCommitInputV1,
-    type ArtifactRecipientKeyEnvelopeCommitResponseV1,
-    type ArtifactRecipientKeyEnvelopeInputV1,
-} from "@happier-dev/protocol";
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { type ArtifactAccessErrorCodeV1, type ArtifactAccessGrantSetStorageInputV1, type ArtifactAccessGrantRemoveInputV1, type ArtifactAccessGrantsListResponseV1, type ArtifactAccessGrantMutationResponseV1, type ArtifactAccessRecipientCensusResponseV1, type ArtifactCallerAccessV1, type ArtifactRecipientKeyEnvelopeCommitInputV1, type ArtifactRecipientKeyEnvelopeCommitResponseV1, type ArtifactRecipientKeyEnvelopeInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { artifactVisibleWhere } from "./artifactClassification";

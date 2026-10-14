@@ -42,6 +42,19 @@ function connectedSelectionsWithCredentialRevision(credentialRevision: string): 
 }
 
 describe('ConnectedServiceRuntimeRegistry', () => {
+  it('reads a wrapper target from its witnessed runner identity and refuses a replaced runner', () => {
+    const registry = new ConnectedServiceRuntimeRegistry();
+    registry.registerTarget({ pid: 123, sessionId: 'parent', agentId: 'codex',
+      connectedServicesBindingsRaw: connectedBindings, connectedServiceSelectionsEnvRaw: connectedSelections });
+    const tracked = { pid: 123, sessionRunnerPid: 124, happySessionId: 'parent' };
+    const request = { runnerPid: 124, sessionId: 'parent', agentId: 'codex' };
+    expect(registry.readAppliedSessionBindings(request, tracked)).toMatchObject({ status: 'applied',
+      connectedServices: { bindingsByServiceId: { 'acme.accounts/session-auth': { source: 'connected', groupId: 'codex-team' } } } });
+    expect(registry.readAppliedSessionBindings(request, { ...tracked, sessionRunnerPid: 125 }))
+      .toEqual({ status: 'unavailable' });
+    expect(registry.readAppliedSessionBindings(request, { ...tracked, happySessionId: 'other' }))
+      .toEqual({ status: 'unavailable' });
+  });
   it('reads only an exact applied parent pool identity, without its member or pending bootstrap selection', () => {
     const registry = new ConnectedServiceRuntimeRegistry();
     registry.registerTarget({ pid: 123, sessionId: 'parent', agentId: 'codex',

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SessionDiscussionAccountIdSchema,
@@ -11,44 +11,41 @@ import {
 import { actionCliDerivedDefault, type ActionCliBindContext, type ActionCliProjection } from '../actionCliProjection.js';
 import type { ActionInputHints } from '../metadata.js';
 
-const SessionSelectorSchema = lazyZodSchema(() => z.string().trim().min(1));
-const MentionedAccountIdsSchema = lazyZodSchema(() => z.array(SessionDiscussionAccountIdSchema).refine(
-  (value) => new Set(value).size === value.length,
-  'Mentioned Account ids must be deduplicated',
-));
-const AuthoredTextSchema = lazyZodSchema(() => z.string().refine((value) => value.trim().length > 0, {
+const SessionSelectorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const MentionedAccountIdsSchema = lazyZodSchema(() => z.array(SessionDiscussionAccountIdSchema).check(z.refine((value) => new Set(value).size === value.length, 'Mentioned Account ids must be deduplicated')));
+const AuthoredTextSchema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0, {
   message: 'message must not be blank',
-}));
+})));
 
 /**
  * The friendly create spelling is intentionally a scalar projection. The
  * canonical Action still owns the structured content schema and validates the
  * bound document; argv parsing never becomes another discussion input model.
  */
-export const SessionDiscussionCreateCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionDiscussionCreateCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
   title: AuthoredTextSchema,
   message: AuthoredTextSchema,
-  mentionedAccountIds: MentionedAccountIdsSchema.optional(),
-  creationLocalId: SessionDiscussionLocalIdSchema.optional(),
-  messageLocalId: SessionDiscussionLocalIdSchema.optional(),
-}).strict());
+  mentionedAccountIds: z.optional(MentionedAccountIdsSchema),
+  creationLocalId: z.optional(SessionDiscussionLocalIdSchema),
+  messageLocalId: z.optional(SessionDiscussionLocalIdSchema),
+}));
 export type SessionDiscussionCreateCliInput = z.infer<typeof SessionDiscussionCreateCliInputSchema>;
 
-export const SessionDiscussionPostCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionDiscussionPostCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
   discussionId: SessionDiscussionIdSchema,
   message: AuthoredTextSchema,
-  mentionedAccountIds: MentionedAccountIdsSchema.optional(),
-  localId: SessionDiscussionLocalIdSchema.optional(),
-}).strict());
+  mentionedAccountIds: z.optional(MentionedAccountIdsSchema),
+  localId: z.optional(SessionDiscussionLocalIdSchema),
+}));
 export type SessionDiscussionPostCliInput = z.infer<typeof SessionDiscussionPostCliInputSchema>;
 
-export const SessionDiscussionRenameCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionDiscussionRenameCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
   discussionId: SessionDiscussionIdSchema,
   title: AuthoredTextSchema,
-}).strict());
+}));
 export type SessionDiscussionRenameCliInput = z.infer<typeof SessionDiscussionRenameCliInputSchema>;
 
 function normalizeAuthoredCliText(value: string): string {

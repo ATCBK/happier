@@ -138,6 +138,20 @@ describe('public data nodes through React Native Web', () => {
     }
   });
 
+  it('draws one series in one ink: the public chart has no "latest" bucket to single out', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <HappierDataChart testID="orders" theme={context.theme} label="Orders" style="bar" points={[{ x: 'Mon', y: 17 }, { x: 'Tue', y: 23 }]} />,
+    );
+    try {
+      const bars = [...mount.container.querySelectorAll<HTMLElement>('[data-testid^="orders-bar-"]')];
+      expect(bars).toHaveLength(2);
+      expect(new Set(bars.map(bar => `${bar.style.backgroundColor}|${bar.style.opacity}`)).size).toBe(1);
+    } finally {
+      mount.unmount();
+    }
+  });
+
   it('keeps the metric node identity when its value changes', async () => {
     const context = createSurfaceContext();
     const element = (value: number) => (
@@ -152,6 +166,36 @@ describe('public data nodes through React Native Web', () => {
       await mount.render(element(1290));
       expect(query(mount.container, 'metric-value')).toBe(node);
       expect(node.textContent).toBe('1,290');
+    } finally {
+      mount.unmount();
+    }
+  });
+
+  it('never clamps a metric value to one line, so a long figure wraps instead of ending in an ellipsis', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Metric testID="metric" label="Agent time" size="stat" value={6840000} valueFormatter={() => '1 h 54 min'} />
+      </PluginUiProvider>,
+    );
+    try {
+      const style = getComputedStyle(query(mount.container, 'metric-value')!);
+      expect(style.textOverflow).not.toBe('ellipsis');
+      expect(style.whiteSpace).not.toBe('nowrap');
+    } finally {
+      mount.unmount();
+    }
+  });
+
+  it('binds each number to its unit so a narrow cell wraps between "1 h" and "54 min", never before "min"', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Metric testID="metric" label="Agent time" size="stat" value={6840000} valueFormatter={() => '1 h 54 min'} />
+      </PluginUiProvider>,
+    );
+    try {
+      expect(query(mount.container, 'metric-value')!.textContent).toBe('1\u00a0h 54\u00a0min');
     } finally {
       mount.unmount();
     }

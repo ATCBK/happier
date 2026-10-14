@@ -86,10 +86,6 @@ export {
   type PluginSettingsContribution,
 } from '../contributions/settings.js';
 export {
-  type PromptAssetCapabilities,
-  type PromptAssetTypeDescriptor,
-} from '../../prompts/library/promptAssetDescriptorsV1.js';
-export {
   decodePluginManifestUtf8,
   formatPluginManifestIngestionDiagnostic,
   formatPluginManifestIngestionDiagnostics,

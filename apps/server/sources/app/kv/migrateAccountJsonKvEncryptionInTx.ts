@@ -1,9 +1,5 @@
-import {
-    type AccountEncryptionMigrateTodosDirective,
-    type AccountEncryptionMigrateWorkspaceDirective,
-    type AccountJsonKvNamespace,
-    ACCOUNT_JSON_KV_PREFIXES,
-} from "@happier-dev/protocol";
+import { type AccountEncryptionMigrateTodosDirective, type AccountEncryptionMigrateWorkspaceDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import { type AccountJsonKvNamespace, ACCOUNT_JSON_KV_PREFIXES } from '@happier-dev/protocol/account/accountJsonKv';
 import * as privacyKit from "privacy-kit";
 
 import type { Tx } from "@/storage/inTx";

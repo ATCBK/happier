@@ -21,6 +21,7 @@ import { createSettingsDeclarationAction } from './settingsDeclarationAction';
 import { readSettingsPageGate } from '@/components/settings/catalog/pageCatalog';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { UsageCoachReversalSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageCoachPreferencesV1Schema } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import { createUiUsageActionPorts } from './usageActionDeps';
@@ -59,6 +60,7 @@ describe('scoped Account workflow Artifact operations', () => {
         });
         let revision = 3;
         let witnessedRevision = 3;
+        let witnessedBindingRevision = catalog.bindings[0]!.updatedAt;
         let witnessSequence = 1;
         let calls = 0;
         let coverage: 'complete' | 'partial' = 'complete';
@@ -86,7 +88,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 return json({ status: 'updated', revision, cursor: revision });
             }
             if (path === '/v2/sessions/coach-session') return json({ session: {
-                id: 'coach-session', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+                id: 'coach-session', createdAt: 1, updatedAt: 900, seq: witnessSequence, active: true, activeAt: 900,
                 encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
                 effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
                 responsibleAccountId: null, responsibleAccount: null,
@@ -97,8 +99,8 @@ describe('scoped Account workflow Artifact operations', () => {
             if (path === '/v1/sessions/coach-session/messages') {
                 const usage = { v: 1, evidenceId: `mcp-window-${witnessSequence}`, sessionId: 'coach-session', turnId: `turn-${witnessSequence}`, observedAtMs: 300 + witnessSequence,
                     window: { startMs: 200 + witnessSequence, endMs: 300 + witnessSequence }, coverage, bindings: [{ serverId: 'server', bindingId: 'binding', catalogRevision: witnessedRevision,
-                        bindingRevision: 20, serverRevision: 10, toolCallCount: calls, schemaBytes: null }] };
-                return json({ messages: [{ id: 'usage-row', seq: 1, localId: null, createdAt: 300,
+                        bindingRevision: witnessedBindingRevision, serverRevision: 10, toolCallCount: calls, schemaBytes: null }] };
+                return json({ messages: [{ id: `usage-row-${witnessSequence}`, seq: witnessSequence, localId: null, createdAt: 300,
                     content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: 'mcp-event', data: { type: 'mcp-binding-usage', usage } } } } }], hasMore: false });
             }
             return json({ error: 'unexpected' }, 404);
@@ -114,7 +116,7 @@ describe('scoped Account workflow Artifact operations', () => {
             }));
             const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, actionsSettings } as const;
             const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, session: 'coach-session', timeZoneOffsetMinutes: 0 });
-            const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+            const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
             releaseUsage = entry.subscribe(() => {}, true);
             const find = async () => {
                 // The page owner refreshes changed native/catalog evidence;
@@ -153,6 +155,7 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(catalog.bindings[0]!.enabled).toBe(true);
             // A new successful native window witnesses the configuration after Undo.
             witnessedRevision = revision;
+            witnessedBindingRevision = catalog.bindings[0]!.updatedAt;
             witnessSequence += 1;
             finding = await find();
             if (!finding) throw new Error('Expected fresh binding witness after Undo');
@@ -164,11 +167,14 @@ describe('scoped Account workflow Artifact operations', () => {
                 .toMatchObject({ ok: true, result: { kind: 'undone' } });
             expect(catalog.bindings[0]!.enabled).toBe(true);
             calls = 1;
+            witnessSequence += 1;
             expect(await find()).toBeUndefined();
             calls = 0;
             coverage = 'partial';
+            witnessSequence += 1;
             expect(await find()).toBeUndefined();
             coverage = 'complete';
+            witnessSequence += 1;
             catalog = { ...catalog, servers: catalog.servers.map(server => ({ ...server, updatedAt: 11 })) };
             revision += 1;
             expect((await find())?.remedy ?? null).toBeNull();
@@ -390,7 +396,7 @@ describe('scoped Account workflow Artifact operations', () => {
             }));
             const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, actionsSettings } as const;
             if (scenario === 'coachPreferences') {
-                const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+                const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
                 releaseUsage = entry.subscribe(() => {}, true);
                 await entry.refresh();
                 const queried = await executor.execute('usage.query', { queries: [query] }, context);

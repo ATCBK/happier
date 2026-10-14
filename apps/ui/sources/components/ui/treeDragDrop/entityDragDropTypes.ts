@@ -13,7 +13,11 @@ export type EntityDropResolveContext = Readonly<{
     input: EntityDragInput;
 }>;
 /** The carried card's identity: a title, one quiet state line, and the item's own mark (lab C2). */
-export type EntityDragSourceDescription = Readonly<{ title: string; subtitle?: string; renderMark?: (size: number) => React.ReactNode }>;
+export type EntityDragSourceDescription = Readonly<{
+    title: string; subtitle?: string; renderMark?: (size: number) => React.ReactNode;
+    /** A mounted source that announces its own moves also owns acknowledgement clearing. */
+    announcementOwner?: 'source';
+}>;
 export type EntityDragSource = Readonly<{
     id: string;
     scope: EntityDragScopeV1;

@@ -91,6 +91,7 @@ export function readProjectFiniteIngressRefusal(ingress: RpcHandlerContext): Act
 
 /** Both finite execution and Service Start consume the installed admission owner, not owner credentials. */
 export async function readProjectRuntimeRequesterRefusal(runtime: ProjectFiniteActionRuntime, ingress: RpcHandlerContext): Promise<ActionExecuteFailure | null> {
+    if (ingress.signal.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const refused = readProjectFiniteIngressRefusal(ingress);
     if (refused) return refused;
     const admission = ingress.machineAdmission;
@@ -99,9 +100,18 @@ export async function readProjectRuntimeRequesterRefusal(runtime: ProjectFiniteA
         const requester = runtime.accountAuthorization === ingress.callerInputAuthorization
             ? await resolveAdmittedRequesterAccountReadRuntime({ ingress, serverId: runtime.serverId, machineId: runtime.machineId,
                 installationId: admission.installationId, isInstalledCurrent: runtime.isCurrent ?? (() => true) }) : null;
+        if (ingress.signal.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         if (requester && requester.accountId === runtime.accountId && requester.serverHttpBaseUrl === runtime.serverHttpBaseUrl) return null;
     } else if (runtime.credentials && admission.actorAccountId === runtime.accountId && admission.custodianAccountId === runtime.accountId) return null;
     return { ok: false, errorCode: 'project_requester_credentials_unavailable', error: 'project_requester_credentials_unavailable' };
+}
+
+/** Currentness can refuse because the containing request ended during its read. */
+export async function readProjectRuntimeCurrentnessRefusal(runtime: ProjectFiniteActionRuntime, signal: AbortSignal): Promise<ActionExecuteFailure | null> {
+    if (signal.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+    const current = !runtime.isCurrent || await runtime.isCurrent();
+    if (signal.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+    return current ? null : { ok: false, errorCode: 'project_requester_credentials_unavailable', error: 'project_requester_credentials_unavailable' };
 }
 
 type FiniteRequest =
@@ -174,11 +184,11 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 ? parsed.data : undefined;
         };
         const assertCurrent = async () => {
-            if (signal.aborted) throw coded('cancelled');
-            if (runtime.isCurrent && !await runtime.isCurrent()) throw coded('project_requester_credentials_unavailable');
+            const requester = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
+            if (requester) throw coded(requester.errorCode);
             if (!await ingress.verifyMachineAdmissionCurrent!()) throw coded('machine_admission_changed');
-            if (runtime.isCurrent && !await runtime.isCurrent()) throw coded('project_requester_credentials_unavailable');
-            if (signal.aborted) throw coded('cancelled');
+            const fresh = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
+            if (fresh) throw coded(fresh.errorCode);
         };
         let workerBasis: WorkspaceSyncWorkerTargetBasis | undefined;
         const resolveAccepted = async () => {

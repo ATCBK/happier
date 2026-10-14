@@ -5,7 +5,8 @@ import { resolveSessionCapabilitiesForDirectory } from './resolveSessionCapabili
 
 vi.mock('node:fs', async importOriginal => ({
   ...await importOriginal<typeof import('node:fs')>(),
-  realpathSync: (value: unknown) => String(value).endsWith('session') ? 'c:\\repo\\x' : 'C:\\Repo',
+  realpathSync: (value: unknown) => String(value).endsWith('session') ? 'c:\\repo\\x'
+    : String(value).endsWith('neighbour') ? 'c:\\repo2\\x' : 'C:\\Repo',
 }));
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -24,9 +25,14 @@ describe('createRealpathNormalizer Windows MCP resolution', () => {
       strictMode: false,
       servers: [{ id: 'server-1', name: 'example', transport: 'stdio', stdio: { command: 'example', args: [] }, env: {}, createdAt: 0, updatedAt: 0 }],
       bindings: [{ id: 'binding-1', serverId: 'server-1', enabled: true,
-        target: { t: 'workspace', machineId: 'machine-1', workspaceRoot: 'C:\\Repo' }, createdAt: 0, updatedAt: 0 }],
+        target: { t: 'workspace', machineId: 'machine-1', workspaceRoot: 'C:\\Linked' }, createdAt: 0, updatedAt: 0 }],
     });
-    const resolved = resolveSessionCapabilitiesForDirectory({ settings, machineId: 'machine-1', directory: 'session' });
+    const skills = { items: [{ skillId: 'skill', name: 'skill' }], rules: [{ ...settings.bindings[0]!, skillId: 'skill' }] };
+    const resolved = resolveSessionCapabilitiesForDirectory({ settings, skills, machineId: 'machine-1', directory: 'session' });
     expect(resolved.selectedServersByName.example?.bindingId).toBe('binding-1');
+    expect(resolved.skills.items[0]).toMatchObject({ selected: true, reason: 'rule_on' });
+    const neighbour = resolveSessionCapabilitiesForDirectory({ settings, skills, machineId: 'machine-1', directory: 'neighbour' });
+    expect(neighbour.mcp.items[0]).toMatchObject({ selected: false, reason: 'no_rule' });
+    expect(neighbour.skills.items[0]).toMatchObject({ selected: false, reason: 'no_rule' });
   });
 });

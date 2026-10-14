@@ -642,9 +642,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     if (showCompanionInOverflow && companionHeaderIntent) {
       push('open', {
         id: 'header.openCompanion',
-        title: t('sessionBoard.companion.a11y.headerAction', {
+        title: `${t('sessionBoard.companion.title')} · ${t('sessionBoard.companion.pane.itemCount', {
           count: companionHeaderIntent.itemCount,
-        }),
+        })}`,
         accessibilityLabel: resolveSessionCompanionHeaderAccessibilityLabel(companionHeaderIntent),
         checked: companionHeaderIntent.checked,
         icon: <Icon name="stack-simple" size={16} color={theme.colors.chrome.header.foreground} />,

@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { githubRegistryAdapterV1 } from './github.js';
 import type { RegistrySkillFormatAdapterV1 } from './registryFormatAdapterV1.js';
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
 const safeSegments=(value:string)=>value.split('/').every(segment=>segment!=='.'&&segment!=='..');
-const catalogRef = z.object({source:z.string().regex(/^[\w.-]+\/[\w.-]+$/).refine(safeSegments),skillId:z.string().regex(/^[\w.-]+(?:\/[\w.-]+)*$/).refine(safeSegments),
-  name:z.string().optional(),installs:z.number().nonnegative().optional()});
+const catalogRef = z.object({source:z.string().check(z.regex(/^[\w.-]+\/[\w.-]+$/), z.refine(safeSegments)),skillId:z.string().check(z.regex(/^[\w.-]+(?:\/[\w.-]+)*$/), z.refine(safeSegments)),
+  name:z.optional(z.string()),installs:z.optional(z.number().check(z.nonnegative()))});
 export const skillsShRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
   format:'skills-sh',kinds:['skill'],supportsQuery:true,browserFetchable:()=>false,
   async list(ctx,req) {

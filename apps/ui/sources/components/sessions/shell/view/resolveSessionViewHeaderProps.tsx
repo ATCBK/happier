@@ -211,7 +211,7 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
     sessionAutomationsHref: string;
     isConnected: boolean;
     flavor: string | null;
-    storageBadge: string;
+    storageBadge: string | null;
     providerBadge: string | null;
     actionRailVisible: boolean;
     mobileTerminalTabAvailable: boolean;
@@ -263,7 +263,7 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
         input.sessionAutomationsHref,
         input.isConnected,
         input.flavor ?? '',
-        input.storageBadge,
+        input.storageBadge ?? '',
         input.providerBadge ?? '',
         input.actionRailVisible,
         input.mobileTerminalTabAvailable,
@@ -358,7 +358,9 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         ?? resolveAgentIdFromFlavor(session.metadata?.flavor ?? null);
     const isConnected = getSessionStatus(session).isConnected;
     const flavor = readSessionPresentationAgentId(session) ?? ownerMetadata?.flavor ?? null;
-    const resolvedStorageBadge = externalSessionIdentity.storageLabel;
+    // Only an external Session names its storage: every other Session here is a Happier Session,
+    // and a badge saying so is healthy-state noise that costs the title its width.
+    const resolvedStorageBadge = externalSessionIdentity.agentId !== null ? externalSessionIdentity.storageLabel : null;
     const resolvedProviderBadge = externalSessionIdentity.identityLabel;
 
     if (input.blockedSurface === 'content_blocked') {

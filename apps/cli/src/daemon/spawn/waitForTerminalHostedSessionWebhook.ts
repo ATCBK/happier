@@ -78,6 +78,7 @@ export async function waitForTerminalHostedSessionWebhook(params: Readonly<{
       }
       return await completeStartupCancellationCleanup({
         trackedSession,
+        wrapperPid: params.pid,
         pidToTrackedSession: params.pidToTrackedSession,
         onChildExited: params.onChildExited,
       });

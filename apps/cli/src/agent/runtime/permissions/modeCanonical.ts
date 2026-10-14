@@ -9,15 +9,3 @@ export function normalizePermissionModeToIntent(raw: unknown): PermissionMode | 
   // Defensive: keep CLI's PermissionMode as the runtime gate until the wire schema is narrowed.
   return isPermissionMode(parsed) ? parsed : null;
 }
-
-export function resolvePermissionModeUpdatedAtFromMessage(
-  message: { createdAt?: unknown } | null | undefined,
-  nowMs: () => number = Date.now,
-): number {
-  const createdAt = message?.createdAt;
-  if (typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0) {
-    return createdAt;
-  }
-  return nowMs();
-}
-

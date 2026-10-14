@@ -13,6 +13,7 @@ import { Modal, type CustomModalInjectedProps } from '@/modal';
 import type { TranslationKey } from '@/text/i18n';
 import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
 import { t } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type LocalServiceExposureDecision = Readonly<{
     mode: LocalServicePublicExposureModeV1;
@@ -274,7 +275,7 @@ export async function showLocalServiceExposureSheet(params: Readonly<{
             subtitle: t('localServices.publicPreview.confirmMessage', { service: params.serviceTitle }),
             testID: `${testIDPrefix}-modal`,
             bodyScroll: 'auto',
-            dimensions: { width: 420, maxHeightRatio: 0.85, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.85, size: 'md' },
         },
         closeOnBackdrop: true,
     });

@@ -1,6 +1,6 @@
 import type { UsageAnalyticsContribution, UsageAnalyticsCostFactKind, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageObservationCost } from './usageAnalyticsContracts.js';
 import { reprojectUsageLeaders } from './usageLeaderProjection.js';
-import { addUsageCostForMode, createEmptyUsageCost, usageCostAggregationBasis, type AggregatedUsageCost } from './usageAggregation.js';
+import { aggregateUsageContributionCosts, resolveUsageContributionCosts, usageCostAggregationBasis, type AggregatedUsageCost } from './usageAggregation.js';
 import { canonicalUsageModelPriceId } from './usageModelPriceSchemas.js';
 
 export type UsageCostMode = NonNullable<UsageAnalyticsQueryRequest['costMode']> | 'auto';
@@ -12,6 +12,11 @@ export interface UsageCostBasis {
 }
 /** A best-available aggregate labels unlike witnessed kinds rather than calling them reported. */
 export type UsageSelectedCostBasis = Omit<UsageCostBasis, 'kind'> & Readonly<{ kind: UsageCostBasis['kind'] | 'mixed' }>;
+
+/** Covered fallback facts remain readable, but are not another selected charge or attributed zero. */
+export function isUsageCostCoveredByReportedTotal(cost: UsageObservationCost, mode: UsageCostMode): boolean {
+  return cost.reportedTotalId !== undefined && (mode === 'auto' || mode === 'reported');
+}
 
 export function resolveUsageCostMode(mode: UsageAnalyticsQueryRequest['costMode']): UsageCostMode {
   return mode ?? 'auto';
@@ -71,7 +76,8 @@ export function projectUsagePageCost(response: UsageAnalyticsQueryResponse, mode
       && (selection.mode === 'auto' || selection.kind === 'mixed' || selection.kind === kind);
     return { selection, amountUsd: matches ? presentation.effectiveUsd : null, accounting: response };
   }
-  const costs = rows?.map(row => row.cost) ?? [response.totals.cost];
+  const costs = (rows ? resolveUsageContributionCosts(rows, mode) : [response.totals.cost])
+    .filter(cost => !(cost as AggregatedUsageCost)[usageCostAggregationBasis]?.covered);
   const facts = costs.flatMap(cost => { const fact = resolveUsageCostBasis(cost, mode); return fact ? [fact] : []; });
   const first = facts[0];
   const selection: UsagePageCostSelection | null = selected === undefined ? first ? {
@@ -83,14 +89,16 @@ export function projectUsagePageCost(response: UsageAnalyticsQueryResponse, mode
   if (!rows || !selection) return { selection, amountUsd, accounting: response };
   const selectedMode = selectionMode(selection);
   const projectCost = (raw: UsageObservationCost, contributions: readonly UsageAnalyticsContribution[]): UsageObservationCost => {
-    const amounts = contributions.map(row => resolveUsageCostForSelection(row.cost, selection));
+    const selectedCosts = resolveUsageContributionCosts(contributions, selectedMode)
+      .filter(cost => !(cost as AggregatedUsageCost)[usageCostAggregationBasis]?.covered);
+    const amounts = selectedCosts.map(cost => resolveUsageCostForSelection(cost, selection));
     const { effectiveUsd: _old, ...original } = raw;
-    if (contributions.length === 0 || amounts.some(amount => amount === null)) {
+    if (selectedCosts.length === 0 || amounts.some(amount => amount === null)) {
       const unavailable: AggregatedUsageCost = { ...original, costSource: 'none',
         [usageCostAggregationBasis]: { mode: selectedMode, available: false } };
       return unavailable;
     }
-    return contributions.reduce((total, row) => addUsageCostForMode(total, row.cost, selectedMode), createEmptyUsageCost());
+    return aggregateUsageContributionCosts(contributions, selectedMode);
   };
   const ranking = reprojectUsageLeaders(response, rows, selectedMode, projectCost);
   return { selection, amountUsd, accounting: { ...response, ...ranking,
@@ -119,9 +127,10 @@ export function resolveUsageCostFacts(cost: UsageObservationCost): UsageCostBasi
 export function resolveUsageCostBasis(cost: UsageObservationCost, mode: UsageCostMode): UsageSelectedCostBasis | null {
   const aggregation = (cost as AggregatedUsageCost)[usageCostAggregationBasis];
   if (aggregation?.mode === mode) {
-    if (!aggregation.available) return null;
-    if (aggregation.selected) return aggregation.selected;
+    return aggregation.available ? aggregation.selected ?? null : null;
   }
+  if (isUsageCostCoveredByReportedTotal(cost, mode)) return null;
+  if (cost.reportedTotalContributionIds && (mode === 'auto' || mode === 'reported')) return null;
   if (mode === 'api_equivalent') return cost.apiEquivalentUsd === undefined ? null
     : { kind: 'api_equivalent', currency: 'USD', amountUsd: cost.apiEquivalentUsd, source: cost.pricingSource ?? 'catalog' };
   if (cost.currency === 'MIXED' || cost.costSource === 'none' && cost.apiEquivalentUsd === undefined) return null;

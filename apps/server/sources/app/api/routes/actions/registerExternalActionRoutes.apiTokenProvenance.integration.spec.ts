@@ -3,13 +3,20 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 import { prepareExternalActionResponseEnvelopeV1 } from "@happier-dev/protocol/actions";
-import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
+import { API_TOKEN_FULL_GRANT_V1, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
+import { ApiTokenGrantV1Schema } from "@happier-dev/protocol/auth/apiTokenGrant";
+import { AutomationV3RunMutationResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { ExternalActionDaemonDispatchRequestSchema, createExternalActionDaemonDispatchResponseV1 } from "@happier-dev/protocol/actions/externalActionApi";
+import { computeExternalActionRequestEnvelopeDigestV1 } from "@happier-dev/protocol/actions/externalActionExecutionAuthorization";
+import { Server } from "socket.io";
 
 import { auth } from "@/app/auth/auth";
 import type { Fastify as AppFastify } from "@/app/api/types";
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
 import { resolveApiRateLimitPluginOptions } from "@/app/api/utils/apiRateLimitPolicy";
-import type { ExternalActionDaemonDispatcher } from "@/app/api/socket/externalActionDispatcher";
+import { createExternalActionDaemonDispatcher, type ExternalActionDaemonDispatcher, type ExternalActionForwardRpcCall } from "@/app/api/socket/externalActionDispatcher";
+import { verifyCurrentExternalActionPrincipal } from "@/app/auth/externalActionExecutionAuthorization";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
@@ -58,6 +65,74 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it("admits exactly the granted Automation through HTTP and the real signed relay", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const machineId = crypto.randomUUID();
+        await db.machine.create({ data: { id: machineId, accountId: account.id,
+            metadata: encodePlainMachineStoredContent({ host: "grant-test", platform: "linux" }),
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"),
+            installationId: crypto.randomUUID(), installationPublicKey: new Uint8Array(32), active: true,
+            operationProtocolCapabilitiesRevision: 1,
+            operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } },
+        } });
+        const grant = ApiTokenGrantV1Schema.parse({ ...API_TOKEN_FULL_GRANT_V1,
+            actions: { families: [], ids: ["workflow.trigger.run_now"] },
+            targets: { sessions: [], machines: [machineId] }, automationIds: ["brief"],
+        });
+        const pat = await auth.createApiToken({ accountId: account.id, tokenId: crypto.randomUUID(), label: "Brief only", grant });
+        const admitted: string[] = [];
+        let signed: ReturnType<typeof ExternalActionDaemonDispatchRequestSchema.parse> | null = null;
+        // The network hop is the only substitute: authentication, persisted
+        // grant, Machine admission and signed request production remain real.
+        const forwardRpc: ExternalActionForwardRpcCall = async ({ callParams }) => {
+            const request = ExternalActionDaemonDispatchRequestSchema.parse(callParams);
+            const authorization = request.executionAuthorization;
+            if (!authorization) throw new Error("Expected signed execution admission");
+            expect(await auth.verifyExternalActionExecutionAuthorization(authorization.token)).toEqual(authorization.binding);
+            expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).not.toBeNull();
+            expect(authorization.binding.requestEnvelopeDigest).toBe(computeExternalActionRequestEnvelopeDigestV1(request.envelope));
+            expect(authorization.binding.automationId).toBe("brief");
+            signed = request;
+            admitted.push("brief");
+            const result = AutomationV3RunMutationResponseSchema.parse({ run: {
+                id: 'run-brief', automationId: 'brief', revision: 1, triggerId: null, triggerRetired: false,
+                state: 'queued', cause: { kind: 'manual', invokedAt: 1 }, dueAt: 1,
+                claimedAt: null, startedAt: null, finishedAt: null, claimedByMachineId: null, leaseExpiresAt: null,
+                attempt: 0, errorCode: null, producedSessionId: null, executionDispatchState: null, executionAttempt: 0,
+                replyHandoffState: 'none', replyHandoffAttempt: 0, replyHandoffDueAt: null, createdAt: 1, updatedAt: 1,
+            } });
+            return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({ v: 1,
+                actionId: request.actionId, requestId: request.envelope.requestId,
+                execution: { ok: true, result },
+            })) };
+        };
+        const io = new Server();
+        const app = createTestApp(createExternalActionDaemonDispatcher({ io, forwardRpc }));
+        await app.listen({ host: "127.0.0.1", port: 0 });
+        try {
+            const address = app.server.address();
+            if (!address || typeof address === "string") throw new Error("Expected HTTP listener");
+            const send = async (automationId: unknown) => fetch(`http://127.0.0.1:${address.port}/v1/actions/workflow.trigger.run_now`, {
+                method: "POST", headers: { authorization: `Bearer ${pat.token}`, "content-type": "application/json" },
+                body: JSON.stringify({ v: 1, requestId: crypto.randomUUID(), target: { kind: "machine", machineId },
+                    input: { automationId } }),
+            });
+            const allowed = await send("brief");
+            expect(allowed.status).toBe(200);
+            expect(await allowed.json()).toMatchObject({ execution: { ok: true, result: { run: { automationId: "brief", state: 'queued' } } } });
+            for (const automationId of ["other", undefined]) {
+                const denied = await send(automationId);
+                expect(denied.status).toBe(403);
+                expect(await denied.json()).toMatchObject({ error: "credential_scope_denied" });
+            }
+            expect(admitted).toEqual(["brief"]);
+            expect(signed).not.toBeNull();
+        } finally {
+            await app.close();
+            io.close();
+        }
     });
 
     it("relays only the request-local PAT principal and refuses it after revocation", async () => {

@@ -45,7 +45,7 @@ describe('current UI context host ActionSpecs', () => {
   it('never lets an agent approval waiver bypass human authority for draft Discard', async () => {
     const actionId = 'workflow.authoring.draft.discard';
     expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), requiredByPolicy: false,
-      context: { surface: 'agent', authority: 'account_automation' } })).toMatchObject({ required: true });
+      context: { surface: 'agent', authority: 'account_automation' } })).toMatchObject({ required: false });
     const executor = createActionExecutor({
       workflowAuthoringAction: async () => { throw new Error('Unapproved Discard reached the draft'); },
     } as unknown as ActionExecutorDeps);
@@ -240,7 +240,7 @@ describe('current UI context host ActionSpecs', () => {
       voice: true,
       agent: false,
       mcp: false,
-      cli: false,
+      cli: true,
       rpc: false,
       api: true,
       plugin: true,

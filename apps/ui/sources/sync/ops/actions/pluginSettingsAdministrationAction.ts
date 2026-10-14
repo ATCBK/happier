@@ -46,7 +46,9 @@ function resolveDeclaredInput(params: AdministrationRequest & AdministrationDecl
     const matches = localId === undefined ? [] : declared.filter(field => field.key === localId);
     if (localId !== undefined && matches.length !== 1) return { ok: false as const, errorCode: 'plugin_settings_unknown_key' };
     const field = matches[0];
-    const bindingServerIdentityId = 'bindingServerIdentityId' in input ? input.bindingServerIdentityId : undefined;
+    const bindingServerIdentityId = params.actionId === 'plugins.settings.get' || params.actionId === 'plugins.settings.set'
+        || params.actionId === 'plugins.settings.reset'
+        ? PluginSettingsAdministrationActionInputSchemasV1[params.actionId].parse(params.input).bindingServerIdentityId : undefined;
     if (bindingServerIdentityId !== undefined && (scope.kind !== 'account' || !field
         || projectScopedPluginSettingsField(field).binding?.kind !== 'perActiveServer'))
         return { ok: false as const, errorCode: 'invalid_arguments' };
@@ -138,10 +140,10 @@ async function executeScopedPluginSettingsAdministrationActionCore(
             target: { kind: 'account' }, revision, state: before.snapshot.secretStates?.[localId] ?? 'missing' });
         if ('expectedRevision' in input && input.expectedRevision !== undefined && input.expectedRevision !== revision)
             return fail(isSecret ? 'plugin_secret_revision_conflict' : 'plugin_settings_revision_conflict', settlement(before.snapshot));
-        let mutation = params.actionId === 'plugins.settings.set' && 'value' in input
-            ? { kind: 'set' as const, value: input.value }
-            : params.actionId === 'plugins.settings.secret.bind' && 'savedSecretId' in input
-                ? { kind: 'bind' as const, savedSecretId: input.savedSecretId }
+        let mutation = params.actionId === 'plugins.settings.set'
+            ? { kind: 'set' as const, value: PluginSettingsAdministrationActionInputSchemasV1[params.actionId].parse(params.input).value }
+            : params.actionId === 'plugins.settings.secret.bind'
+                ? { kind: 'bind' as const, savedSecretId: PluginSettingsAdministrationActionInputSchemasV1[params.actionId].parse(params.input).savedSecretId }
                 : params.actionId === 'plugins.settings.secret.unbind' ? { kind: 'unbind' as const }
                     : { kind: 'delete' as const };
         if (mutation.kind === 'set' && !isValidPluginJsonSchemaValue(compilePluginJsonSchema(field.valueSchema), mutation.value))

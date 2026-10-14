@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pruneRuntimeSnapshots } from './runtime_retention.mjs';
+import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 
 import {
   activateRuntimeSnapshot,
@@ -181,6 +182,9 @@ function createSourceMetadata() {
 }
 
 test('an exact consumer selection installs its retention pin before concurrent pruning', async (t) => {
+  // These temporary publishers are independent owners, not descendants of
+  // the public test runner's already-charged workspace consumption.
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const root = await mkdtemp(join(tmpdir(), 'runtime-selection-pruning-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const producerStackBaseDir = join(root, 'producer');
@@ -961,7 +965,8 @@ test('published runtime snapshot can be selected by another managed stack withou
   }
 });
 
-test('two consumers select the valid current producer snapshot while a newer publication is incomplete', async () => {
+test('two consumers select the valid current producer snapshot while a newer publication is incomplete', async t => {
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const storageRoot = await mkdtemp(join(tmpdir(), 'shared-runtime-snapshot-in-flight-'));
   const producerStackName = 'repo-happier-producer';
   const producerStackBaseDir = join(storageRoot, producerStackName);

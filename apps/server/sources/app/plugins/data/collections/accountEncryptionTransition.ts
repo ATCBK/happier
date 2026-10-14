@@ -1,11 +1,8 @@
 import type { Prisma } from "@prisma/client";
-import {
-    ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS,
-    buildPluginDomainAccountChangeEntityId,
-    pluginJsonValuesEqual,
-    type AccountEncryptionMigrateCollectionStageItem,
-    type PluginCollectionContentEnvelopeV1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS, type AccountEncryptionMigrateCollectionStageItem } from '@happier-dev/protocol/account/encryptionMigrate';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { type PluginCollectionContentEnvelopeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";

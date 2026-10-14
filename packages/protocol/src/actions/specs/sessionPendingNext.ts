@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
-export const SessionPendingNextInputSchema = lazyZodSchema(() => z.object({}).strict());
-export const SessionPendingNextOutputSchema = lazyZodSchema(() => z.object({
+export const SessionPendingNextInputSchema = lazyZodSchema(() => z.strictObject({}));
+export const SessionPendingNextOutputSchema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['opened', 'none', 'unavailable']),
-}).strict());
+}));
 
 /** Navigation belongs to the current mounted client, never Session resume. */
 export const SESSION_PENDING_NEXT_ACTION_SPECS = [{

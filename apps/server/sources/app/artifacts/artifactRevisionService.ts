@@ -5,7 +5,9 @@ import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurr
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes } from "./artifactStoredContent";
 import { updateArtifactTx, type UpdateArtifactResult } from "./artifactWriteService";
 import { cleanupArtifactOrphanBlobs } from './artifactBlobService';
-import { ArtifactBodyEnvelopeV1Schema, ArtifactBodyEnvelopeV1StoredSchema, decodePlainArtifactStoredContent, sameStrictJsonValue } from '@happier-dev/protocol';
+import { ArtifactBodyEnvelopeV1Schema, ArtifactBodyEnvelopeV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import * as privacyKit from 'privacy-kit';
 
 /** Reads history under the same current access, mode and recipient envelope admission as the head. */

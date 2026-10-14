@@ -1,5 +1,6 @@
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext, ActionOperationDomainRefV1 } from '@happier-dev/protocol';
+import { ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { TerminalPtyCustody, TerminalPtySessionManager } from './sessions';
 
 export type HostFiniteTerminalOperation = Pick<ActionExecutorContext,
@@ -14,7 +15,7 @@ export type HostFiniteTerminalOutcome = Readonly<{
  * attachment projection remain with the calling machine or Project owner. */
 export async function executeHostFiniteTerminalProcess(input: Readonly<{
   operation: HostFiniteTerminalOperation;
-  terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop'>;
+  terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop' | 'observeOutput'>;
   requesterAccountId: string;
   terminalCustody?: TerminalPtyCustody;
   terminalKey: string;
@@ -44,6 +45,12 @@ export async function executeHostFiniteTerminalProcess(input: Readonly<{
   if (!terminal.ok) return failure('no_launch', terminal.errorCode);
   input.operation.operationOwnerUpdate?.update({ state: 'running', progress: input.progress,
     domainRef: input.attachment({ terminalId: terminal.terminalId }) });
+  const unsubscribeOutput = input.terminalSessions.observeOutput({ terminalId: terminal.terminalId,
+    maxLength: ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1,
+    onOutput: label => {
+      if (!signal.aborted) input.operation.operationProgress?.update({ label });
+    },
+  });
   const stop = () => {
     input.operation.operationProgress?.update({ phase: 'stopping', label: 'Stopping command' });
     void input.terminalSessions.requestStop({ terminalId: terminal.terminalId }).then(observation => {
@@ -67,7 +74,7 @@ export async function executeHostFiniteTerminalProcess(input: Readonly<{
     observation = await input.terminalSessions.waitForExit({ terminalId: terminal.terminalId,
       onOutcomeUncertain: () => input.operation.operationOwnerUpdate?.update({ observation: { kind: 'outcome_uncertain', code: 'outcome_uncertain' } }) });
   } catch { return failure('outcome_uncertain', signal.aborted ? 'stop_unconfirmed' : 'outcome_uncertain', terminal.terminalId); }
-  finally { signal.removeEventListener('abort', onAbort); unsubscribe?.(); }
+  finally { signal.removeEventListener('abort', onAbort); unsubscribe?.(); unsubscribeOutput(); }
   if (observation.kind === 'unavailable') return failure('outcome_uncertain', signal.aborted ? 'stop_unconfirmed' : 'outcome_uncertain', terminal.terminalId);
   input.operation.operationOwnerUpdate?.update({ domainRef: input.attachment({ terminalId: terminal.terminalId,
     ...(observation.exit.exitCode !== null ? { exitCode: observation.exit.exitCode } : {}) }) });

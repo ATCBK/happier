@@ -26,20 +26,19 @@ export type WizardTerminalHandoffProps = Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 12,
+        gap: theme.space.s12,
         alignItems: 'flex-start',
     },
     section: {
         width: '100%',
-        gap: 8,
+        gap: theme.space.s8,
     },
     // Title/subtitle margins removed (F-W13-2): the section `gap` already
     // spaces the stack, and the setup columns must fit at 1440×900.
     sectionTitle: {
         textAlign: 'left',
         color: theme.colors.text.primary,
-        fontSize: 16,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
     },
     sectionSubtitle: {
         textAlign: 'left',

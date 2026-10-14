@@ -56,33 +56,7 @@ export type SessionAuthoringActionInputById = {
                 resource?: {
                     kind: 'file';
                     path: string;
-                    anchor?: {
-                        kind: 'range';
-                        filePath: string;
-                        startLine: number;
-                        endLine: number;
-                        side?: 'before' | 'after' | undefined;
-                        startLineHash?: `lh1:${string}` | undefined;
-                        endLineHash?: `lh1:${string}` | undefined;
-                        selectedTextHash?: `lh1:${string}` | undefined;
-                    } | {
-                        kind: 'fileLine';
-                        startLine: number;
-                        lineHash?: `lh1:${string}` | undefined;
-                    } | {
-                        kind: 'diffLine';
-                        startLine: number;
-                        side: 'before' | 'after';
-                        oldLine: number | null;
-                        newLine: number | null;
-                        lineHash?: `lh1:${string}` | undefined;
-                    } | {
-                        kind: 'line';
-                        filePath: string;
-                        line: number;
-                        side?: 'before' | 'after' | undefined;
-                        lineHash?: `lh1:${string}` | undefined;
-                    } | undefined;
+                    anchor?: any;
                     anchorSource?: 'file' | 'diff' | undefined;
                 } | {
                     kind: 'commit';
@@ -135,12 +109,12 @@ export type SessionAuthoringActionInputById = {
             attachments?: readonly {
                 attachmentLocalId: string;
                 value: {
-                    key: string;
+                    key: unknown;
                     value: unknown;
                     presentation: {
-                        label: string;
-                        description?: string | undefined;
-                        icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'browser' | 'action' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        label: unknown;
+                        description?: unknown;
+                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'browser' | 'action' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };

@@ -730,6 +730,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
     expectedSessionId?: string;
     occurrenceId?: string;
     runtimeAuthority?: PluginRuntimeAuthoritySnapshotV1;
+    executionRunSnapshot?: import('./executionRunSnapshotProtocol').RunnerExecutionRunSnapshotV1;
 }>): Promise<RunnerAgentSessionRuntimeSource | null> {
     const authority =
         await readCurrentRunnerAgentRuntimeDaemonServiceAuthority({
@@ -742,7 +743,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         });
     if (!authority) return null;
 
-    const binding = authority.retainedAgent;
+    const binding = input.executionRunSnapshot?.agent?.binding ?? authority.retainedAgent;
     if (
         binding.sourceCustody.kind === 'development'
         && !input.occurrenceId?.trim()
@@ -768,7 +769,8 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         path: input.authorityFilePath,
         sessionId: authority.sessionId,
         runner: authority.runner,
-        retainedAgent: binding,
+        retainedAgent: authority.retainedAgent,
+        ...(input.executionRunSnapshot ? { executionRunSnapshotId: input.executionRunSnapshot.snapshotId } : {}),
     });
     const runnerManagedServiceOwner =
         await createRunnerManagedServiceInvocationOwner({
@@ -1333,7 +1335,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         > | null = null;
     let preparedManagedProviderPluginServices:
         PluginServices | null = null;
-    return Object.freeze({
+    const source: RunnerAgentSessionRuntimeSource = Object.freeze({
         agentContribution: verifiedAgentContribution,
         identity: Object.freeze({
             pluginId: binding.pluginId,
@@ -1809,4 +1811,13 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         agentSessionRealtimeVoiceAuthority:
             daemonFacets.agentSessionRealtimeVoiceAuthority,
     });
+    if (input.executionRunSnapshot?.agent) {
+        try {
+            assertBootstrapIdentityMatchesClaim(input.executionRunSnapshot.agent.descriptor, source);
+        } catch (error) {
+            await source.retire?.();
+            throw error;
+        }
+    }
+    return source;
 }

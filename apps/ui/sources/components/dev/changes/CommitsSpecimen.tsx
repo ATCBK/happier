@@ -23,7 +23,10 @@ import { GitChangesTree } from '@/components/sessions/panes/git/display/GitChang
 import { resolveScmChangePathTag } from '@/scm/scmChangePathTag';
 import { t } from '@/text';
 
-import { SPECIMEN_COMPARISON } from './walkthroughSpecimenFixture';
+import type { ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
+import { ScmDiffSummaryStartOptions } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
+import { SPECIMEN_COMPARISON, SPECIMEN_START_FAILURES } from './walkthroughSpecimenFixture';
 
 /**
  * Dev-only: the Commits view and the Git pane's proposal (Walkthrough lab WT4) drawn through the real
@@ -120,14 +123,32 @@ function CommitsBar() {
     );
 }
 
-function CommitsFrame(props: Readonly<{ proposal: CommitProposal; phone: boolean; actions: CommitProposalActions }>) {
+function CommitsFrame(props: Readonly<{ proposal: CommitProposal; phone: boolean; actions: CommitProposalActions; failure?: ScmDiffSummaryFailurePresentation }>) {
     return (
         <View style={styles.fill}>
             {props.phone ? <ScmComparisonPhoneHeader view="commits" views={['files', 'walkthrough', 'commits']}
                 scope={{ options: SCOPE_OPTIONS, current: PENDING_SCOPE, currentLabel: t('scmComparison.scope.workingTree'), fileCount: 9, onSelect: noop }}
                 onSelectView={noop} onBack={noop} onStartReview={noop} /> : <CommitsBar />}
             <CommitProposalView proposal={props.proposal} phase="ready" branch="v0.3" modelLabel="Opus 5.5"
-                layout={props.phone ? 'phone' : 'wide'} actions={props.actions} active={false} />
+                layout={props.phone ? 'phone' : 'wide'} actions={props.actions} active={false}
+                failureNotice={props.failure ? <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={props.failure} phone={props.phone}
+                    onChooseModel={noop} onEnableExplain={noop} onRetry={noop} /> : undefined} />
+        </View>
+    );
+}
+
+/** The empty state with its start: the model beside Propose commits, and the typed reason a start was refused. */
+function StartFrame(props: Readonly<{ phone: boolean; failure: ScmDiffSummaryFailurePresentation | null; disabled?: boolean }>) {
+    return (
+        <View style={styles.fill}>
+            {props.phone ? <ScmComparisonPhoneHeader view="commits" views={['files', 'walkthrough', 'commits']}
+                scope={{ options: SCOPE_OPTIONS, current: PENDING_SCOPE, currentLabel: t('scmComparison.scope.workingTree'), fileCount: 9, onSelect: noop }}
+                onSelectView={noop} onBack={noop} onStartReview={noop} /> : <CommitsBar />}
+            <CommitProposalView proposal={null} phase="none" branch="v0.3" modelLabel={null}
+                layout={props.phone ? 'phone' : 'wide'} actions={EDIT_ACTIONS} active={false}
+                start={{ onStart: noop, busy: false, disabled: Boolean(props.disabled), reason: null,
+                    options: <ScmDiffSummaryStartOptions testID="commit-proposal-start-options" failure={props.failure} message={null}
+                        model={{ value: '', onChange: noop, testID: 'commit-proposal-model-choice' }} onChooseModel={noop} onEnableExplain={noop} /> }} />
         </View>
     );
 }
@@ -262,15 +283,19 @@ export const COMMITS_SPECIMEN_FRAMES: readonly CommitsSpecimenFrame[] = [
     { id: 'C2a', title: 'WT4-C2a · Git pane, nothing selected', render: (phone) => <GitPane selected={null} phone={phone} /> },
     { id: 'C2t', title: 'WT4-C2 · Git pane tree, commit 1 selected', render: (phone) => <GitPaneTree selected="route-key" phone={phone} /> },
     { id: 'C3', title: 'WT4-C3 · creating', render: (phone) => <CommitsFrame proposal={CREATING} phone={phone} actions={RUN_ACTIONS} /> },
+    { id: 'C5', title: 'Empty · Propose with its model', render: (phone) => <StartFrame phone={phone} failure={null} /> },
+    { id: 'C5r', title: 'Empty · refused: outdated machine', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.outdated} /> },
+    { id: 'C5e', title: 'Empty · Explain changes is off', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.explainOff} disabled /> },
+    { id: 'C6', title: 'Proposal kept · regeneration refused: model unavailable', render: (phone) => <CommitsFrame proposal={EDITING} phone={phone} actions={EDIT_ACTIONS} failure={SPECIMEN_START_FAILURES.model} /> },
     { id: 'C4', title: 'WT4-C4 · every divergence', render: (phone) => (phone ? <CommitsFrame proposal={HOOK_CHANGED} phone actions={RUN_ACTIONS} /> : <Divergences />) },
 ];
 
 const styles = StyleSheet.create((theme) => ({
     fill: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 28, rowGap: 22, padding: 24 },
-    cell: { width: 470, gap: 10 },
-    stack: { gap: 12 },
-    cellCaption: { fontSize: 13, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 28, rowGap: 22, padding: theme.space.s24 },
+    cell: { width: 470, gap: theme.space.s10 },
+    stack: { gap: theme.space.s12 },
+    cellCaption: { ...Typography.variant('body', 'semiBold'), color: theme.colors.text.primary,  },
     cellDetail: { color: theme.colors.text.secondary, ...Typography.default() },
     cellFrame: {
         padding: 14,
@@ -281,8 +306,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     gitPane: { width: 340, alignSelf: 'flex-end', flex: 1, minHeight: 0, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default, backgroundColor: theme.colors.surface.base },
     gitPanePhone: { width: '100%', borderLeftWidth: 0 },
-    gitSection: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
-    gitSectionTitle: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
-    gitSectionCount: { fontSize: 12, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default() },
+    gitSection: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, paddingHorizontal: theme.space.s12, paddingTop: theme.space.s12, paddingBottom: theme.space.s6 },
+    gitSectionTitle: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary,  },
+    gitSectionCount: { ...Typography.variant('meta'), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'],  },
     gitInCommit: { marginLeft: 'auto', color: theme.colors.state.active.foreground, ...Typography.default('semiBold') },
 }));

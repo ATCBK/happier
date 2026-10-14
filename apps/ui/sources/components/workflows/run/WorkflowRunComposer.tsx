@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
 import type { JsonValue, RoleOverrideV1, WorkflowDefinitionV1, WorkflowMaterializedLeafV1 } from '@happier-dev/protocol';
-import { workflowInputToFieldHint, type WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
+import { workflowInputTitle, workflowInputToFieldHint, type WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 import { validateWorkflowDefinition } from '@happier-dev/protocol/workflows/workflowValidationV1';
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
 import { actionInputOptionValueKey, isSameActionInputOptionValue, readActionInputOptionValue, type ActionInputOptionValue } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
@@ -14,6 +14,7 @@ import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { PluginContextualResourceStoreProvider } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
@@ -40,19 +41,19 @@ import { countWorkflowStepsV1, walkWorkflowBlocks } from '@happier-dev/protocol/
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
     // The composer's text edge is the card's: the title, the summary, the chips and Start share it.
-    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.margins.sm, paddingHorizontal: theme.margins.lg, paddingBottom: theme.margins.md, paddingTop: theme.margins.sm },
-    status: { flex: 1, minWidth: 0, minHeight: theme.margins.lg, justifyContent: 'center', gap: theme.margins.xs },
+    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s12, paddingTop: theme.space.s8 },
+    status: { flex: 1, minWidth: 0, minHeight: theme.space.s16, justifyContent: 'center', gap: theme.space.s4 },
     hostedPanel: { borderWidth: 0, borderTopWidth: 0, borderBottomWidth: 0, borderRadius: 0 },
-    summary: { ...Typography.rowMeta(), color: theme.colors.text.secondary, paddingHorizontal: theme.margins.lg, paddingVertical: theme.margins.md, paddingBottom: theme.margins.sm },
-    mainLabel: { ...Typography.rowMeta(), color: theme.colors.text.primary, paddingHorizontal: theme.margins.lg, paddingTop: theme.margins.md },
-    start: { alignItems: 'flex-end', gap: theme.margins.xs },
-    shortcut: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.xs },
-    keyHint: { ...Typography.keyHint(), color: theme.colors.text.secondary },
-    fields: { gap: theme.margins.md, padding: theme.margins.md },
-    secondary: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
-    required: { ...Typography.rowMeta(), color: theme.colors.text.destructive },
+    summary: { ...Typography.variant('meta'), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, paddingBottom: theme.space.s8 },
+    mainLabel: { ...Typography.variant('meta'), color: theme.colors.text.primary, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s12 },
+    start: { alignItems: 'flex-end', gap: theme.space.s4 },
+    shortcut: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
+    keyHint: { ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }), color: theme.colors.text.secondary },
+    fields: { gap: theme.space.s12, padding: theme.space.s12 },
+    secondary: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
+    required: { ...Typography.variant('meta'), color: theme.colors.text.destructive },
     /** Readiness, not an error: quiet warning tone, aligned with the composer card's content edge. */
-    readiness: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.xs },
+    readiness: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
     readinessText: { color: theme.colors.state.warning.foreground, flexShrink: 1 },
     visibilityStatus: { color: theme.colors.text.secondary, flexShrink: 1 },
 }));
@@ -141,7 +142,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const remaining = fields.filter((field) => field !== main);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
     const missing = missingFields.length;
-    const inputTitle = (definition: WorkflowInputDefinition) => props.inputPresentation?.[definition.name]?.title ?? definition.name;
+    const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, props.inputPresentation?.[definition.name]);
     const blocked = fields.find((field) => field.blocking) ?? null;
     const disabled = props.pending === true || props.startDisabled === true || blocked !== null || definitionIssue !== null
         || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok;
@@ -419,10 +420,10 @@ export function WorkflowRunInputs(props: Readonly<{
     return <InputTypePickerHostProvider enabled={props.fields.some((field) => field.definition.inputType !== undefined)}
         {...resolveOptions.pickerContext}
         contextKey={JSON.stringify([props.optionsConsumer, props.values, snapshot])}>
-        <View style={styles.fields}>{props.fields.map((field) => {
+        <CoreCollectionScope><View style={styles.fields}>{props.fields.map((field) => {
         const definition = field.definition;
         const presentation = props.presentation?.[definition.name];
-        const title = presentation?.title ?? definition.name;
+        const title = workflowInputTitle(definition, presentation);
         const id = `${props.prefix}-${definition.name}`;
         const repair = field.errorCode === 'missing_required_input' ? t('workflows.start.required')
             : describeWorkflowInputRepair({ valueType: definition.valueType, errorCode: field.errorCode });
@@ -473,5 +474,5 @@ export function WorkflowRunInputs(props: Readonly<{
                 inputMode={definition.valueType === 'number' ? 'decimal' : undefined}
                 editable={!props.pending} onChangeText={(text) => props.onChangeText(definition.name, text)} />
         </FieldItem>;
-    })}</View></InputTypePickerHostProvider>;
+    })}</View></CoreCollectionScope></InputTypePickerHostProvider>;
 }

@@ -11,6 +11,33 @@ import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN, SOCKET_RPC_AUTHORIZATION_CONTEXT_KIN
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent, verifyManagedActivityTargetCurrent, type MachineRpcAdmissionBoundary } from './machineRpcAuthorization';
 
 describe('authorizeMachineRpcRequest', () => {
+  it('admits prepared Machine phases after current Home admission while retaining Session attachment admission', async () => {
+    const machineAdmission = { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
+      installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };
+    const signing = tweetnacl.sign.keyPair();
+    // Only the Home HTTP boundary is substituted; the signing and admission owners remain real.
+    const network = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { v: 1, ok: true },
+      statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } });
+    const boundary: MachineRpcAdmissionBoundary = { machineId: 'machine', resolveInstallationId: () => 'installation',
+      resolveCustodianAccountId: async () => 'owner', verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({
+        ...input, privateKey: signing.secretKey, daemonToken: 'daemon', serverHttpBaseUrl: 'https://home.invalid',
+      }) };
+    const request = { method: `machine:${RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT}`, machineAdmission,
+      params: { t: 'prepared_machine_transfer_v1', path: '/machine-transfers/direct/YmluYXJ5/open', httpMethod: 'POST',
+        authorizationToken: 'prepared-token', recipientPublicKeyBase64: 'recipient' } };
+    try {
+      expect(await authorizeMachineRpcRequest(request, boundary)).toEqual({ ok: true });
+      for (const refused of [
+        { ...request, machineAdmission: undefined },
+        { ...request, method: `machine:${RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK}` },
+        { ...request, params: { t: 'session_file_download_v1', path: '/private/file' } },
+        { ...request, params: { t: 'session_attachment_download_v1', attachmentHandle: { sessionId: 'session' } } },
+      ]) expect(await authorizeMachineRpcRequest(refused, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      network.mockResolvedValue({ status: 403, data: { v: 1, ok: false }, statusText: 'Forbidden',
+        headers: {}, config: { headers: new AxiosHeaders() } });
+      expect(await authorizeMachineRpcRequest(request, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    } finally { network.mockRestore(); }
+  });
   it.each([RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE, RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY])(
     'binds %s to the source Session in the decrypted request', async method => {
       const params = method === RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY

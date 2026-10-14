@@ -250,7 +250,7 @@ async function main(argv) {
 
 export async function runCliUnitChecks() {
   for (const invocation of [
-    { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
+    { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs'] },
     resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
   ]) {
     const { windowsVerbatimArguments, ...command } = invocation;

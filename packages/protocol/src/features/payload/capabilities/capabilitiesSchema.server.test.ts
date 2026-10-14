@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { CapabilitiesSchema } from './capabilitiesSchema.js';
 
@@ -23,10 +23,10 @@ describe('CapabilitiesSchema (server capabilities)', () => {
     // The prospective predecessor has a root-open reader. It must discard the
     // new family rather than treating it as a strict child-field extension.
     const OldCapabilitiesSchema = z.object({
-      server: z.object({
-        canonicalServerUrl: z.string().trim().min(1).optional(),
-        webappUrl: z.string().trim().min(1).optional(),
-      }).strict().optional().default({}),
+      server: z._default(z.optional(z.strictObject({
+        canonicalServerUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        webappUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+      })), {}),
     });
     expect(OldCapabilitiesSchema.parse({ pluginDataCollections: limits })).toEqual({ server: {} });
   });
@@ -48,11 +48,11 @@ describe('CapabilitiesSchema (server capabilities)', () => {
     // `retention`/`usageAnalytics` leaves are omitted from the payload because released readers of
     // 0.3 servers are not a supported direction (one-way 0.3 upgrade); this pins only the new family.
     const ReleasedCapabilitiesSchema = z.object({
-      server: z.object({
-        canonicalServerUrl: z.string().trim().min(1).optional(),
-        webappUrl: z.string().trim().min(1).optional(),
-        retention: z.unknown().optional(),
-      }).strict().optional(),
+      server: z.optional(z.strictObject({
+        canonicalServerUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        webappUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        retention: z.optional(z.unknown()),
+      })),
     });
     expect(ReleasedCapabilitiesSchema.safeParse(payload)).toMatchObject({
       success: true,
@@ -105,10 +105,10 @@ describe('CapabilitiesSchema (server capabilities)', () => {
 
   it('keeps new server identity payloads parseable for old strict server capability shapes', () => {
     const OldCapabilitiesSchema = z.object({
-      server: z.object({
-        canonicalServerUrl: z.string().trim().min(1).optional(),
-        webappUrl: z.string().trim().min(1).optional(),
-      }).strict().optional().default({}),
+      server: z._default(z.optional(z.strictObject({
+        canonicalServerUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        webappUrl: z.optional(z.string().check(z.trim(), z.minLength(1))),
+      })), {}),
     });
 
     const parsed = OldCapabilitiesSchema.parse({

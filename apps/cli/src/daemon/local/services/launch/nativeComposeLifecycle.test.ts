@@ -21,7 +21,7 @@ describe('Compose exact native resource lifetime', () => {
         } };
         const control = createNativeComposeLifecycle({ args: ['compose', '--project-name', 'happier-test', '--file', '/root/compose.yaml', 'up', '--detach', 'worker'], io });
         control.bindLaunch({ command: '/docker', args: ['compose', '--project-name', 'happier-test', '--file', '/root/compose.yaml', 'up', '--detach', 'worker'], cwd: '/root', env: {}, release() {} });
-        return { control, requests, setRows(value: unknown) { rows = value; }, fail() { code = 1; } };
+        return { control, requests, setRows(value: unknown) { rows = value; }, fail() { code = 1; }, recover() { code = 0; } };
     }
     function container(id: string, state: string, ports: unknown = {}) {
         return { Id: id.repeat(64), Config: { Labels: { 'com.docker.compose.project': 'happier-test', 'com.docker.compose.service': 'worker' } },
@@ -46,6 +46,53 @@ describe('Compose exact native resource lifetime', () => {
         expect(await h.control.lifecycle.stop()).toEqual({ status: 'stopped' });
         expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped', endpoint: null });
         expect(h.requests.every(args => !args.includes('--file'))).toBe(true);
+    });
+    it('retains unobserved recovery until the incumbent can be observed and stopped', async () => {
+        const neverStarted = fixture();
+        neverStarted.fail();
+        expect(await neverStarted.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+        expect(await neverStarted.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(await neverStarted.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+        expect(neverStarted.requests.some(args => args.includes('stop'))).toBe(false);
+        neverStarted.recover();
+        expect(await neverStarted.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(neverStarted.requests).toContainEqual(['stop', 'a'.repeat(64)]);
+        neverStarted.setRows([container('a', 'exited')]);
+        expect(await neverStarted.control.lifecycle.stop()).toEqual({ status: 'stopped' });
+        const captured = fixture();
+        expect(await captured.control.lifecycle.inspect()).toMatchObject({ phase: 'running' });
+        captured.fail();
+        expect(await captured.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(await captured.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+    });
+    it('clears only a proved-empty admission that never launched when observation is lost', async () => {
+        const h = fixture();
+        h.setRows([]);
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped' });
+        h.fail();
+        expect(await h.control.lifecycle.stop()).toEqual({ status: 'stopped' });
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped' });
+        const started = fixture();
+        started.setRows([]);
+        await started.control.lifecycle.inspect();
+        started.control.lifecycle.markStarted?.();
+        started.fail();
+        expect(await started.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+    });
+    it('discovers an incumbent during Stop before treating a fresh capture as empty', async () => {
+        const h = fixture();
+        expect(await h.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(h.requests).toContainEqual(['stop', 'a'.repeat(64)]);
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'running' });
+    });
+    it('withdraws an empty witness when a subsequent nonempty listing cannot be decoded', async () => {
+        const h = fixture();
+        h.setRows([]);
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped' });
+        h.setRows([container('invalid', 'running')]);
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+        h.fail();
+        expect(await h.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
     });
     it('retires only proved-stopped IDs before replacement and observes optional published endpoints', async () => {
         const h = fixture();

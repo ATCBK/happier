@@ -3,10 +3,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
@@ -46,8 +45,8 @@ const { useMachineTerminalSession } = await import('./useMachineTerminalSession'
 const wrapper: React.ComponentType<React.PropsWithChildren> = ({ children }) => <AppPaneProvider>{children}</AppPaneProvider>;
 async function setup() {
     const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://project-approval-continuity.test',
-        serverIdentityId: 'srv_project-approval-continuity', accountId: 'bob' });
-    harness.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })] });
+        serverIdentityId: 'srv_project-approval-continuity', accountId: 'bob', currentAccount: true });
+    await installOwnMachineApprovalReplayBoundary({ harness, serverId, accountId: 'bob', machineId: 'machine' });
     await harness.requireUiApproval(serverId, 'machines.terminal.open');
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const scope = storage.getState().profileScope;

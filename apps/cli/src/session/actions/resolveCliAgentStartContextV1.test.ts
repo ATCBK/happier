@@ -68,6 +68,18 @@ describe('host agent-start snapshots', () => {
       status: 'unavailable', reason: 'catalog-loading',
     } })).toBeNull();
   });
+  it('distinguishes an incomplete Role source from absent caller identity without exposing content', () => {
+    const reasons: unknown[] = [];
+    const recordActionStartDiagnostic = (event: unknown) => reasons.push(event);
+    expect(resolveCliAgentStartContextV1({ ...input, recordActionStartDiagnostic,
+      roleSourceInventory: { status: 'partial', entries: input.roleSourceInventory.entries,
+        diagnostics: [{ source: 'artifact', reason: 'unavailable' }] },
+    })).toBeNull();
+    expect(reasons).toEqual([{ phase: 'agent_start_context', refusalReason: 'role_source_incomplete' }]);
+    reasons.length = 0;
+    expect(resolveCliAgentStartContextV1({ ...input, recordActionStartDiagnostic, backendTarget: null })).toBeNull();
+    expect(reasons).toEqual([{ phase: 'agent_start_context', refusalReason: 'caller_agent_unavailable' }]);
+  });
   it('reads allow-lists from their separate Account setting on each fresh host snapshot', () => {
     const settings = accountSettingsParse({ sessionAgentStartAllowListsV1: { allowedAgentTargetKeys: [] } });
     const context = resolveCliAgentStartContextV1({ ...input, settings });

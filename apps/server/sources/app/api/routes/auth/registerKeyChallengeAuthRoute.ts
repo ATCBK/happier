@@ -11,17 +11,10 @@ import { enforceLoginEligibility } from "@/app/auth/enforceLoginEligibility";
 import type { LoginEligibilityResult } from "@/app/auth/loginEligibilityResult";
 import { type Fastify } from "../../types";
 import { readAuthFeatureEnv, readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
-import {
-    AUTH_TOKEN_KIND_AUTHORITIES,
-    AUTH_KEY_CHALLENGE_V2_ERROR_CODES,
-    createKeyChallengeV2SigningInput,
-    KeyChallengeAuthRequestSchema,
-    KeyChallengeV2IssueRequestSchema,
-    KeyChallengeV2IssueResponseSchema,
-    createExpectedAccountKeyChallengeSigningInputV1,
-    isKeyChallengeV2AuthRequest,
-    resolveEffectiveDefaultAccountEncryptionMode,
-} from "@happier-dev/protocol";
+import { AUTH_TOKEN_KIND_AUTHORITIES } from '@happier-dev/protocol/auth/authToken';
+import { AUTH_KEY_CHALLENGE_V2_ERROR_CODES } from '@happier-dev/protocol/auth/errors';
+import { createKeyChallengeV2SigningInput, KeyChallengeAuthRequestSchema, KeyChallengeV2IssueRequestSchema, KeyChallengeV2IssueResponseSchema, createExpectedAccountKeyChallengeSigningInputV1, isKeyChallengeV2AuthRequest } from '@happier-dev/protocol/auth/keyChallenge';
+import { resolveEffectiveDefaultAccountEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 import { shouldDenyPublicSignupProvisioningAction } from "@/app/integrations/publicUrl/publicSignupProvisioningPolicy";
 import {
     admitAccountContentKey,
@@ -638,13 +631,13 @@ function registerKeyChallengeAuthRoutesForPurpose(
         }
         const user = existingAccount ?? freshAccount!;
         if (contentKeyBinding && existingAccount) {
-            const admission = await admitAccountContentKey(db, {
+            const admission = await inTx(tx => admitAccountContentKey(tx, {
                 accountId: user.id,
                 contentPublicKey:
                     contentKeyBinding.contentPublicKey,
                 contentPublicKeySignature:
                     contentKeyBinding.contentPublicKeySignature,
-            });
+            }));
             if (admission.status === "key_mismatch") {
                 return reply.code(409).send({
                     error: "content_public_key_mismatch",

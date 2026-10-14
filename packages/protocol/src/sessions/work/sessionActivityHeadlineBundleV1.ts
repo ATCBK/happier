@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionAgentActivityHeadlineV1Schema } from './agentActivity/agentActivityHeadlineV1.js';
 import { SessionWorkflowActivityHeadlineV1Schema } from './workflow/sessionWorkflowActivityHeadlineV1.js';
@@ -20,6 +20,5 @@ export const SessionActivityHeadlineBundleV1Schema = z
   .object({
     workflow: SessionWorkflowActivityHeadlineV1Schema,
     agentActivity: SessionAgentActivityHeadlineV1Schema,
-  })
-  .strip();
+  });
 export type SessionActivityHeadlineBundleV1 = z.infer<typeof SessionActivityHeadlineBundleV1Schema>;

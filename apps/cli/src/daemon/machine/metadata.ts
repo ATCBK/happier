@@ -35,7 +35,7 @@ export async function readCurrentManagedChildMachineMetadata(input: Readonly<{
 type CurrentDaemonMachineMetadataFields = Pick<
   MachineMetadata,
   'host' | 'platform' | 'happyCliVersion' | 'homeDir' | 'happyHomeDir' | 'happyLibDir'
-> & Partial<Pick<MachineMetadata, 'cliUpdate' | 'agentInventory'>> & Readonly<{
+> & Partial<Pick<MachineMetadata, 'arch' | 'cliUpdate' | 'agentInventory'>> & Readonly<{
   /** Undefined preserves the last admitted fact; null removes a retired fact. */
   devcontainerChild?: MachineMetadata['devcontainerChild'] | null;
 }>;
@@ -63,6 +63,7 @@ export function refreshMachineMetadataForCurrentDaemon(
   if (
     current.host === next.host
     && current.platform === next.platform
+    && current.arch === next.arch
     && current.happyCliVersion === next.happyCliVersion
     && current.homeDir === next.homeDir
     && current.happyHomeDir === next.happyHomeDir
@@ -81,6 +82,7 @@ export function refreshMachineMetadataForCurrentDaemon(
 const initialDaemonMetadata = refreshMachineMetadataForCurrentDaemon({}, {
   host: '',
   platform: readLocalHostIdentity().platform,
+  arch: os.arch(),
   happyCliVersion: packageJson.version,
   homeDir: os.homedir(),
   happyHomeDir: configuration.happyHomeDir,

@@ -4,6 +4,7 @@ import { Pressable, type View as RNView } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { SelectionList } from '@/components/ui/selectionList';
 import { useMachineSelectionListModel } from './machineSelection/useMachineSelectionListModel';
+import { foldOfflineWorkers } from './machineSelection/foldOfflineWorkers';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -314,6 +315,8 @@ export function MachineSelector({
 }
 
 function MachineSelectorList(props: MachineSelectorProps) {
+    const { theme } = useUnistyles();
+    const [offlineOpen, setOfflineOpen] = React.useState(false);
     const groupServerId = props.serverId ?? getAppliedActiveServerSnapshot().serverId;
     const { binding } = useServerCredentialAccountScopeBinding(groupServerId);
     const scope = binding?.isCurrent() ? binding.scope : null;
@@ -349,6 +352,18 @@ function MachineSelectorList(props: MachineSelectorProps) {
         includeSelectedUnavailableMachineId: props.includeSelectedUnavailableMachine ? props.selectedMachine?.id : null,
         searchPlaceholder: props.searchPlaceholder, emptyStateLabel: props.noItemsMessage, sectionTitles,
     });
+    const rootStep = React.useMemo(() => {
+        const offlineIds = new Set(model.offlineOnlyMachineIdsByServerId[groupServerId] ?? []);
+        return { ...model.rootStep, sections: foldOfflineWorkers(model.rootStep.sections,
+            option => option.disabled === true && offlineIds.has(option.id), {
+                label: count => t('projectWorkers.offlineMachines', { count }),
+                detail: t('projectWorkers.offlineWorkersDetail'),
+                open: offlineOpen,
+                onToggle: () => setOfflineOpen(open => !open),
+                icon: <Icon name="wifi-slash" size={18} color={theme.colors.text.secondary} />,
+                accessory: <Icon name={offlineOpen ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.tertiary} />,
+            }) };
+    }, [groupServerId, model.rootStep, model.offlineOnlyMachineIdsByServerId, offlineOpen, theme]);
     return <SelectionList testID={props.testIdPrefix ? `${props.testIdPrefix}-list` : 'machine-selector-list'}
-        rootStep={model.rootStep} selectedOptionId={model.selectedOptionId} onSelect={() => {}} onRequestClose={() => {}} />;
+        rootStep={rootStep} selectedOptionId={model.selectedOptionId} onSelect={() => {}} onRequestClose={() => {}} />;
 }

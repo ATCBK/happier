@@ -491,7 +491,7 @@ export type WorkflowAuthoringActionInputById = {
         } | {
             kind: 'move_block';
             blockId: string;
-            direction: 'in' | 'out' | 'up' | 'down';
+            direction: 'out' | 'in' | 'up' | 'down';
         } | {
             kind: 'set_step_prompt';
             blockId: string;
@@ -547,13 +547,18 @@ export type WorkflowAuthoringActionInputById = {
         } | {
             kind: 'rename';
             name: string;
+        } | {
+            kind: 'rename_result_field';
+            blockId: string;
+            from: string;
+            to: string;
         })[] | undefined;
         settings?: {
             description?: string | undefined;
             projectTarget?: {
-                machineId: string;
+                machineId: unknown;
                 directory: string;
-                workspaceRefId?: string | undefined;
+                workspaceRefId?: unknown;
             } | null | undefined;
             executionTarget?: 'session' | 'detached_run' | undefined;
             triggers?: {
@@ -699,6 +704,18 @@ export type WorkflowAuthoringActionInputById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -724,9 +741,9 @@ export type WorkflowAuthoringActionInputById = {
                     enabled: boolean;
                 }[];
                 project: {
-                    machineId: string;
+                    machineId: unknown;
                     directory: string;
-                    workspaceRefId?: string | undefined;
+                    workspaceRefId?: unknown;
                 } | null;
                 inputs: Record<string, unknown>;
             } | undefined;
@@ -761,7 +778,7 @@ export type WorkflowAuthoringActionInputById = {
         draftId: string;
     };
     readonly "workflow.run.review.draft.set": {
-        runId: string;
+        runId: unknown;
         expectedContentRevision: string;
         value: unknown;
         scope: {
@@ -804,9 +821,7 @@ export type WorkflowAuthoringActionResultById = {
             };
             draftId: string;
             name: string;
-            definition: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            definition: JsonValue;
             blockLabels: {
                 id: string;
                 label: string;
@@ -962,6 +977,18 @@ export type WorkflowAuthoringActionResultById = {
                                 machineId: string;
                                 runId: string;
                                 sessionId?: string | undefined;
+                                observation?: {
+                                    kind: 'review_walkthrough';
+                                    comparisonId: string;
+                                    resultId?: string | undefined;
+                                    afterRevision?: number | undefined;
+                                } | {
+                                    comparisonId: string;
+                                    kind: 'scm_diff_summary';
+                                    output: 'summary' | 'walkthrough' | 'commitPlan';
+                                    resultId?: string | undefined;
+                                    afterRevision?: number | undefined;
+                                } | undefined;
                             } | {
                                 kind: 'workflow_run';
                                 runId: string;
@@ -991,9 +1018,7 @@ export type WorkflowAuthoringActionResultById = {
                         directory: string;
                         workspaceRefId?: string | undefined;
                     } | null;
-                    inputs: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null>;
+                    inputs: Record<string, JsonValue>;
                 };
             };
             validationIssues: {

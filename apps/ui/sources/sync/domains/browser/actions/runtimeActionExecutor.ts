@@ -320,7 +320,8 @@ async function executeBrowserAutomationAction(
         return browserRuntimeActionDisabledResult('browser_view_unavailable');
     }
     if (view && isDaemonAuthoritativeBrowserView(view)) {
-        if (!input.executeOnMachine || !args.context.defaultMachineId) {
+        const machineTarget = args.context.externalActionTarget;
+        if (!input.executeOnMachine || machineTarget?.kind !== 'machine' || !machineTarget.machineId.trim()) {
             return browserRuntimeActionDisabledResult('browser_automation_unavailable');
         }
         return await input.executeOnMachine(args);

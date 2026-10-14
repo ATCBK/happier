@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PLUGIN_HOSTED_WEB_ACCOUNT_DATA_BRIDGE_KIND_V1 } from '../../data/hostedWebAccountDataBridgeV1.js';
 import { PluginUiFallbackRefV1Schema } from './actions.js';
@@ -8,22 +8,22 @@ import { PluginHostedWebSecurityPolicyV1Schema } from './hostedWebSecurity.js';
 import { PluginUiDisplayV1Schema } from './tokens.js';
 
 export const PluginHostedWebServiceRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('staticAssets'),
-    assetRootId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    assetRootId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('sessionEndpoint'),
-    endpointIdPath: z.string().trim().min(1),
-  }).strict(),
+    endpointIdPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
 ]));
 export type PluginHostedWebServiceRefV1 = z.infer<typeof PluginHostedWebServiceRefV1Schema>;
 
-export const PluginHostedWebEntryV1Schema = lazyZodSchema(() => z.object({
-  path: z.string().trim().min(1).optional(),
-  query: z.record(z.string(), z.string()).optional(),
+export const PluginHostedWebEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  path: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  query: z.optional(z.record(z.string(), z.string())),
   routeMode: z.enum(['hostOrigin', 'pathFallback']),
-}).strict());
+}));
 export type PluginHostedWebEntryV1 = z.infer<typeof PluginHostedWebEntryV1Schema>;
 
 /**
@@ -63,31 +63,31 @@ export const PluginHostedWebBridgeMessageKindV1Schema = lazyZodSchema(() => z.en
 ]));
 export type PluginHostedWebBridgeMessageKindV1 = z.infer<typeof PluginHostedWebBridgeMessageKindV1Schema>;
 
-export const PluginHostedWebBridgePolicyV1Schema = lazyZodSchema(() => z.object({
-  allowedMessages: z.array(PluginHostedWebBridgeMessageKindV1Schema).default([]),
-}).strict());
+export const PluginHostedWebBridgePolicyV1Schema = lazyZodSchema(() => z.strictObject({
+  allowedMessages: z._default(z.array(PluginHostedWebBridgeMessageKindV1Schema), []),
+}));
 export type PluginHostedWebBridgePolicyV1 = z.infer<typeof PluginHostedWebBridgePolicyV1Schema>;
 
-export const PluginHostedWebSandboxPolicyV1Schema = lazyZodSchema(() => z.object({
-  scripts: z.boolean().default(false),
-  sameOrigin: z.boolean().default(false),
-  popups: z.boolean().default(false),
-  topNavigation: z.boolean().default(false),
-  mixedContent: z.boolean().default(false),
-}).strict());
+export const PluginHostedWebSandboxPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+  scripts: z._default(z.boolean(), false),
+  sameOrigin: z._default(z.boolean(), false),
+  popups: z._default(z.boolean(), false),
+  topNavigation: z._default(z.boolean(), false),
+  mixedContent: z._default(z.boolean(), false),
+}));
 export type PluginHostedWebSandboxPolicyV1 = z.infer<typeof PluginHostedWebSandboxPolicyV1Schema>;
 
-export const PluginHostedWebContributionV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1),
+export const PluginHostedWebContributionV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
   service: PluginHostedWebServiceRefV1Schema,
   entry: PluginHostedWebEntryV1Schema,
   bridge: PluginHostedWebBridgePolicyV1Schema,
   display: PluginUiDisplayV1Schema,
   sandbox: PluginHostedWebSandboxPolicyV1Schema,
   security: PluginHostedWebSecurityPolicyV1Schema,
-  compatibility: PluginUiCompatibilityV1Schema.optional(),
+  compatibility: z.optional(PluginUiCompatibilityV1Schema),
   fallback: PluginUiFallbackRefV1Schema,
-}).strict());
+}));
 export type PluginHostedWebContributionV1 = z.infer<typeof PluginHostedWebContributionV1Schema>;
 export type PluginHostedWebContribution = z.infer<typeof PluginHostedWebContributionV1Schema>;
 export type PluginHostedWebContributionInput = z.input<typeof PluginHostedWebContributionV1Schema>;

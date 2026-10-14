@@ -1115,7 +1115,7 @@ describe('executeContributedAction', () => {
     expect(target).not.toHaveBeenCalled();
   });
 
-  it('returns the target execution origin only after rereading it at settlement', async () => {
+  it.each(['materialization', 'source'] as const)('returns the %s target execution origin only after rereading it at settlement', async (kind) => {
     const externalAction = createAction('/unused/daemon.mjs', 'publish');
     const action: ResolvedActionContribution = {
       ...externalAction,
@@ -1129,17 +1129,19 @@ describe('executeContributedAction', () => {
         contributionSurfaces: ['plugin'],
       },
     };
+    const executionOrigin = Object.freeze({
+      serverIdentityId: 'srv_action_origin_fixture',
+      ...(kind === 'materialization' ? { materializationRef: Object.freeze({
+        pluginId: 'acme.target',
+        machineId: 'machine-target',
+        materializationId: 'materialization-target-current',
+      }) } : { sourceRef: Object.freeze({
+        pluginId: 'acme.target', machineId: 'machine-target',
+        sourceCustody: { kind: 'development' as const, registeredRootId: 'target-source-root' },
+      }) }),
+    });
     const resolveCurrentPluginExecutionOrigin = vi.fn(async (pluginId: string) => (
-      pluginId === 'acme.target'
-        ? Object.freeze({
-          serverIdentityId: 'srv_action_origin_fixture',
-          materializationRef: Object.freeze({
-            pluginId: 'acme.target',
-            machineId: 'machine-target',
-            materializationId: 'materialization-target-current',
-          }),
-        })
-        : null
+      pluginId === 'acme.target' ? executionOrigin : null
     ));
     const target = vi.fn(async () => ({ accepted: true }));
     const targetActionInvocations = createTargetActionInvocationRegistry({
@@ -1177,14 +1179,7 @@ describe('executeContributedAction', () => {
       result: {
         ok: true,
         result: { accepted: true },
-        executionOrigin: {
-          serverIdentityId: 'srv_action_origin_fixture',
-          materializationRef: {
-            pluginId: 'acme.target',
-            machineId: 'machine-target',
-            materializationId: 'materialization-target-current',
-          },
-        },
+        executionOrigin,
       },
     });
     expect(target).toHaveBeenCalledTimes(1);

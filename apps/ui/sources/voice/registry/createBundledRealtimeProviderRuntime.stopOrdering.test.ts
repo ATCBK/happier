@@ -8,7 +8,7 @@ import { rejectRefusedMicrophone, requestMicrophonePermission } from '@/utils/pl
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
-const audio = vi.hoisted(() => ({ setAudioModeAsync: vi.fn(async () => undefined) }));
+const audio = vi.hoisted(() => ({ setAudioModeAsync: vi.fn(async (_mode: unknown) => undefined) }));
 vi.mock('expo-audio', () => ({ AudioModule: audio }));
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();

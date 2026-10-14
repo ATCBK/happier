@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Pinned Chrome-for-Testing (CfT) product source descriptor (BRW-7 / FP-BRW-SOURCE-1).
@@ -38,45 +38,39 @@ export const ChromiumForTestingPlatformSchema = lazyZodSchema(() => z.enum([
 ]));
 export type ChromiumForTestingPlatform = z.infer<typeof ChromiumForTestingPlatformSchema>;
 
-const CfTVersionSchema = lazyZodSchema(() => z.string().trim().regex(/^[0-9]+(?:\.[0-9]+){3}$/, 'CfT version must be an exact x.y.z.w build'));
+const CfTVersionSchema = lazyZodSchema(() => z.string().check(z.trim(), z.regex(/^[0-9]+(?:\.[0-9]+){3}$/, 'CfT version must be an exact x.y.z.w build')));
 
 const Sha256DigestSchema = lazyZodSchema(() => z
-  .string()
-  .trim()
-  .regex(/^sha256:[0-9a-f]{64}$/, 'Integrity digest must be a lowercase sha256:<hex64> string'));
+  .string().check(z.trim(), z.regex(/^sha256:[0-9a-f]{64}$/, 'Integrity digest must be a lowercase sha256:<hex64> string')));
 
-export const ChromiumForTestingPlatformAssetSchema = lazyZodSchema(() => z
-  .object({
+export const ChromiumForTestingPlatformAssetSchema = lazyZodSchema(() => z.strictObject({
     /** Exact platform build when upstream did not publish this platform at the default version. */
-    pinnedVersion: CfTVersionSchema.optional(),
+    pinnedVersion: z.optional(CfTVersionSchema),
     /** Exact, immutable archive URL for the pinned CfT build on this platform. */
-    archiveUrl: z.string().trim().url(),
+    archiveUrl: z.string().check(z.trim(), z.url()),
     /**
      * Pinned sha256 of the hosted archive bytes, verified locally before unpack. `null` marks the
      * external-artifact remainder: the source resolver fails closed for that platform until the
      * real digest of the pinned build is recorded here.
      */
-    integrityDigest: Sha256DigestSchema.nullable(),
+    integrityDigest: z.nullable(Sha256DigestSchema),
     /** Relative path of the chrome executable from the archive root. */
-    executableSubpath: z.string().trim().min(1).refine((value) => {
+    executableSubpath: z.string().check(z.trim(), z.minLength(1), z.refine((value) => {
       if (value.startsWith('/') || value.startsWith('\\')) return false;
       return !value.split(/[\\/]+/).some((segment) => segment === '' || segment === '.' || segment === '..');
-    }, 'Executable subpath must be a relative, traversal-free path'),
-  })
-  .strict());
+    }, 'Executable subpath must be a relative, traversal-free path')),
+  }));
 export type ChromiumForTestingPlatformAsset = z.infer<typeof ChromiumForTestingPlatformAssetSchema>;
 
-export const ChromiumForTestingProductSourceV1Schema = lazyZodSchema(() => z
-  .object({
+export const ChromiumForTestingProductSourceV1Schema = lazyZodSchema(() => z.strictObject({
     /** Stable managed-tools key; also the managed install dir under `<happyHomeDir>/tools/<key>`. */
     key: z.literal('browser-chromium'),
     /** Exact pinned CfT build (immutable version, never "latest"). */
     pinnedVersion: CfTVersionSchema,
     channel: z.enum(['stable', 'beta', 'dev', 'canary']),
-    license: z.string().trim().min(1),
+    license: z.string().check(z.trim(), z.minLength(1)),
     assetsByPlatform: z.record(ChromiumForTestingPlatformSchema, ChromiumForTestingPlatformAssetSchema),
-  })
-  .strict());
+  }));
 export type ChromiumForTestingProductSourceV1 = z.infer<typeof ChromiumForTestingProductSourceV1Schema>;
 
 /**

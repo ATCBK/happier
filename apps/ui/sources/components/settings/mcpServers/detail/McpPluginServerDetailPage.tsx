@@ -9,6 +9,8 @@ import { t } from '@/text';
 
 import { usePluginMcpServerItems } from '../collection/usePluginMcpServerItems';
 import { McpServerMark } from '../identity/McpServerMark';
+import type { McpSavedSecretAvailability } from '../status/mcpServerStatus';
+import { resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import {
   McpServerBanner,
   McpServerMachinesAndDetails,
@@ -16,7 +18,7 @@ import {
   useMcpServerDetail,
 } from './McpServerDetailBody';
 
-const NO_SECRETS: ReadonlySet<string> = new Set();
+const NO_SECRETS: McpSavedSecretAvailability = { resolveReference: ref => resolveSavedSecretReference(null, [], ref) };
 
 /**
  * A server a plugin declares (T8): the same page as a catalog server, without Configuration or Remove.

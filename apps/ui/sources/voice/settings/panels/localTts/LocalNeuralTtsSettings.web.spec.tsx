@@ -47,9 +47,9 @@ beforeEach(async () => {
         voice: { providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'tts-machine' } },
     }, machines: [createMachineFixture({ id: 'tts-machine', activeAt: Date.now() })],
     features: createRootLayoutFeaturesResponse({ features: {
-        voice: { enabled: true }, execution: { runs: { enabled: true } },
-        machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
-    }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+        voice: { enabled: true },
+        machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
+    }, capabilities: { machines: { ...createRootLayoutFeaturesResponse().capabilities.machines, liveStream: { serverRouted: { disabledReason: null, caps: {
         maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
         maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
         maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
@@ -153,6 +153,9 @@ describe('LocalNeuralTtsSettings (web)', () => {
         const retired = await render('retired');
         expect(retired.props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']);
         expect(retired.props.selectedId).toBe('');
-        expect(retired.props.itemTrigger.detailFormatter()).toBe(t('common.unavailable'));
+        const firstItem = retired.props.items[0];
+        const detailFormatter = retired.props.itemTrigger?.detailFormatter;
+        if (!firstItem || !detailFormatter) throw new Error('Voice selection detail missing');
+        expect(detailFormatter(firstItem)).toBe(t('common.unavailable'));
     });
 });

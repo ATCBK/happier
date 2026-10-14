@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import semver from 'semver';
 
 import { PluginDiagnosticTextV1Schema } from '../daemon/pluginContributionIntrospection.js';
@@ -13,21 +13,20 @@ import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js"
 import { PluginUpdatePolicyV1Schema } from './pluginUpdatePolicyV1.js';
 import { REGISTRY_FORMAT_KINDS_V1, RegistryFormatV1Schema } from '../registries/registrySourcesV1.js';
 
-const NonEmptyText = z.string().trim().min(1);
-const Identifier = z.string().trim().min(1).regex(/^[a-z0-9][a-z0-9._-]*$/);
-const OpaqueId = z.string().trim().min(1).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-const HttpsUrl = z.string().trim().url().refine((value) => {
+const NonEmptyText = z.string().check(z.trim(), z.minLength(1));
+const Identifier = z.string().check(z.trim(), z.minLength(1), z.regex(/^[a-z0-9][a-z0-9._-]*$/));
+const OpaqueId = z.string().check(z.trim(), z.minLength(1), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/));
+const HttpsUrl = z.string().check(z.trim(), z.url(), z.refine((value) => {
   const parsed = new URL(value);
   return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.hash;
-}, 'Expected a credential-free HTTPS URL');
-const ManifestDigest = z.string().trim().regex(/^sha256:[a-f0-9]{64}$/);
-const NpmIntegrity = z.string().trim().regex(/^sha512-[A-Za-z0-9+/]{86}==$/, 'Expected a complete SHA-512 SRI value');
-const ExactNpmVersion = z.string().trim().min(1)
-  .refine((value) => semver.valid(value) === value, 'Expected an exact canonical npm semver version');
-const MarketplaceDiagnosticV1Schema = lazyZodSchema(() => z.object({
+}, 'Expected a credential-free HTTPS URL'));
+const ManifestDigest = z.string().check(z.trim(), z.regex(/^sha256:[a-f0-9]{64}$/));
+const NpmIntegrity = z.string().check(z.trim(), z.regex(/^sha512-[A-Za-z0-9+/]{86}==$/, 'Expected a complete SHA-512 SRI value'));
+const ExactNpmVersion = z.string().check(z.trim(), z.minLength(1), z.refine((value) => semver.valid(value) === value, 'Expected an exact canonical npm semver version'));
+const MarketplaceDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
   code: Identifier,
   message: PluginDiagnosticTextV1Schema,
-}).strict());
+}));
 
 export const MarketplaceIndexSourceKindV1Schema = lazyZodSchema(() => z.enum(['curated', 'user', 'community-npm']));
 export type MarketplaceIndexSourceKindV1 = z.infer<typeof MarketplaceIndexSourceKindV1Schema>;
@@ -43,7 +42,7 @@ export type MarketplaceReviewStatusV1 = z.infer<typeof MarketplaceReviewStatusV1
  */
 const ListingDisplayShapeV1 = {
   title: NonEmptyText,
-  description: z.string().trim().nullable(),
+  description: z.nullable(z.string().check(z.trim())),
 };
 const ListingSummaryShapeV1 = {
   contributions: z.array(OpaqueId),
@@ -52,40 +51,40 @@ const ListingSummaryShapeV1 = {
   executableRealms: z.array(z.enum(['daemon', 'client', 'hosted-web'])),
 };
 
-export const MarketplaceIndexEntryV1Schema = lazyZodSchema(() => z.object({
+export const MarketplaceIndexEntryV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
-  publisher: z.object({ id: Identifier, displayName: NonEmptyText }).strict(),
-  display: z.object(ListingDisplayShapeV1).strict(),
-  distribution: z.object({
+  publisher: z.strictObject({ id: Identifier, displayName: NonEmptyText }),
+  display: z.strictObject(ListingDisplayShapeV1),
+  distribution: z.strictObject({
     kind: z.literal('npm'),
     registryOrigin: NpmRegistryOriginV1Schema,
-    packageName: z.string().trim().min(1).max(214).regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/),
+    packageName: z.string().check(z.trim(), z.minLength(1), z.maxLength(214), z.regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/)),
     version: ExactNpmVersion,
     integrity: NpmIntegrity,
-    registryProfileId: OpaqueId.nullable().optional(),
-  }).strict(),
+    registryProfileId: z.optional(z.nullable(OpaqueId)),
+  }),
   manifestDigest: ManifestDigest,
-  compatibility: z.object({
-    happier: PluginEnginesV2Schema.unwrap().shape.happier.unwrap().optional(),
+  compatibility: z.strictObject({
+    happier: z.optional(PluginEnginesV2Schema._zod.def.innerType.shape.happier._zod.def.innerType),
     platforms: z.array(z.enum(['darwin', 'linux', 'windows', 'web', 'ios', 'android'])),
-  }).strict(),
-  summary: z.object(ListingSummaryShapeV1).strict(),
-  review: z.object({
+  }),
+  summary: z.strictObject(ListingSummaryShapeV1),
+  review: z.strictObject({
     status: MarketplaceReviewStatusV1Schema,
-    reviewedAt: z.string().datetime().nullable(),
-    reason: z.string().trim().min(1).nullable().optional(),
-  }).strict(),
+    reviewedAt: z.nullable(z.string().check(z.iso.datetime())),
+    reason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  }),
   categories: z.array(Identifier),
   media: z.array(HttpsUrl),
   /** The listing's declared update policy; see {@link PluginUpdatePolicyV1Schema}. */
   updatePolicy: PluginUpdatePolicyV1Schema,
-  links: z.object({
-    homepage: HttpsUrl.nullable().optional(),
-    repository: HttpsUrl.nullable().optional(),
-    support: HttpsUrl.nullable().optional(),
-    universal: HttpsUrl.nullable().optional(),
-  }).strict(),
-}).strict());
+  links: z.strictObject({
+    homepage: z.optional(z.nullable(HttpsUrl)),
+    repository: z.optional(z.nullable(HttpsUrl)),
+    support: z.optional(z.nullable(HttpsUrl)),
+    universal: z.optional(z.nullable(HttpsUrl)),
+  }),
+}));
 export type MarketplaceIndexEntryV1 = z.infer<typeof MarketplaceIndexEntryV1Schema>;
 
 /**
@@ -93,13 +92,13 @@ export type MarketplaceIndexEntryV1 = z.infer<typeof MarketplaceIndexEntryV1Sche
  * npm owns the selected package coordinate and SRI; compatibility remains in
  * its existing generated projection rather than being copied here.
  */
-export const MarketplaceNpmDiscoveryProjectionV1Schema = lazyZodSchema(() => z.object({
+export const MarketplaceNpmDiscoveryProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   pluginId: asProtocolZod(PluginIdSchema),
   manifestDigest: ManifestDigest,
-  display: z.object(ListingDisplayShapeV1).strict(),
-  summary: z.object(ListingSummaryShapeV1).strict(),
-}).strict());
+  display: z.strictObject(ListingDisplayShapeV1),
+  summary: z.strictObject(ListingSummaryShapeV1),
+}));
 export type MarketplaceNpmDiscoveryProjectionV1 = z.infer<typeof MarketplaceNpmDiscoveryProjectionV1Schema>;
 
 /**
@@ -222,28 +221,27 @@ export function deriveMarketplaceNpmCompatibilityPlatformsV1(
   return platformOrder.filter((platform) => supported.has(platform));
 }
 
-export const HappierPickV1Schema = lazyZodSchema(() => z.object({
+export const HappierPickV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['skill', 'mcpServer', 'agent']), format: RegistryFormatV1Schema,
-  sourceUrl: HttpsUrl, itemId: z.string(), path: z.string().optional(),
-}).strict().superRefine((pick, context) => {
+  sourceUrl: HttpsUrl, itemId: z.string(), path: z.optional(z.string()),
+}).check(z.superRefine((pick, context) => {
   if (pick.format === 'happier-catalog' || !REGISTRY_FORMAT_KINDS_V1[pick.format].includes(pick.kind)) {
     context.addIssue({ code: 'custom', path: ['format'], message: 'Pick must point into a registry for its kind' });
   }
-}));
+})));
 export type HappierPickV1 = z.infer<typeof HappierPickV1Schema>;
 
-export const MarketplaceIndexSourceSnapshotV1Schema = lazyZodSchema(() => z.object({
-  source: z.object({ id: z.union([OpaqueId, z.string().refine(value => parseQualifiedPluginContributionKey(value) !== null,
-    'Expected a canonical qualified plugin contribution key')]), title: NonEmptyText, kind: MarketplaceIndexSourceKindV1Schema, sourceUrl: HttpsUrl }).strict(),
-  freshness: z.object({
+export const MarketplaceIndexSourceSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ id: z.union([OpaqueId, z.string().check(z.refine(value => parseQualifiedPluginContributionKey(value) !== null, 'Expected a canonical qualified plugin contribution key'))]), title: NonEmptyText, kind: MarketplaceIndexSourceKindV1Schema, sourceUrl: HttpsUrl }),
+  freshness: z.strictObject({
     state: z.enum(['fresh', 'stale', 'stale-offline', 'unavailable', 'auth-unavailable', 'corrupt']),
-    fetchedAtMs: z.number().int().nonnegative().nullable(),
-    staleSinceMs: z.number().int().nonnegative().optional(),
-  }).strict(),
+    fetchedAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    staleSinceMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }),
   entries: z.array(MarketplaceIndexEntryV1Schema),
-  picks: z.array(HappierPickV1Schema).default([]),
+  picks: z._default(z.array(HappierPickV1Schema), []),
   diagnostics: z.array(MarketplaceDiagnosticV1Schema),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.source.kind !== 'curated' && value.picks.length > 0) {
     context.addIssue({ code: 'custom', path: ['picks'], message: 'Only curated catalogs may carry picks' });
   }
@@ -253,7 +251,7 @@ export const MarketplaceIndexSourceSnapshotV1Schema = lazyZodSchema(() => z.obje
       : entry.review.status !== 'unreviewed';
     if (invalid) context.addIssue({ code: 'custom', path: ['entries', index, 'review', 'status'], message: 'Review status/update policy is not valid for this marketplace source kind' });
   });
-}));
+})));
 export type MarketplaceIndexSourceSnapshotV1 = z.infer<typeof MarketplaceIndexSourceSnapshotV1Schema>;
 
 /**
@@ -263,11 +261,11 @@ export type MarketplaceIndexSourceSnapshotV1 = z.infer<typeof MarketplaceIndexSo
  * source-kind review refinement keep the canonical writer's validation.
  * Unknown presentation never reaches cached snapshots or exact-install facts.
  */
-const MarketplaceIndexSourceSnapshotReaderV1Schema = lazyZodSchema(() => MarketplaceIndexSourceSnapshotV1Schema.safeExtend({
-  entries: z.array(MarketplaceIndexEntryV1Schema.extend({
-    display: MarketplaceIndexEntryV1Schema.shape.display.strip(),
-    summary: MarketplaceIndexEntryV1Schema.shape.summary.strip(),
-    links: MarketplaceIndexEntryV1Schema.shape.links.strip(),
+const MarketplaceIndexSourceSnapshotReaderV1Schema = lazyZodSchema(() => z.safeExtend(MarketplaceIndexSourceSnapshotV1Schema, {
+  entries: z.array(z.extend(MarketplaceIndexEntryV1Schema, {
+    display: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(MarketplaceIndexEntryV1Schema.shape.display),
+    summary: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(MarketplaceIndexEntryV1Schema.shape.summary),
+    links: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(MarketplaceIndexEntryV1Schema.shape.links),
   })),
 }));
 
@@ -286,23 +284,23 @@ export const MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1 = 100;
  * the full Install and Trust review, so `install` is the constant
  * `full-review` rather than an allow/refuse decision.
  */
-export const MarketplaceIndexAdmissionV1Schema = lazyZodSchema(() => z.object({
+export const MarketplaceIndexAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
   install: z.literal('full-review'),
   mutatesInstalledTrust: z.literal(false),
   disablesInstalledCode: z.literal(false),
   directNpmRequiresFullReview: z.literal(true),
-}).strict());
+}));
 export type MarketplaceIndexAdmissionV1 = z.infer<typeof MarketplaceIndexAdmissionV1Schema>;
 
-export const MarketplaceIndexItemV1Schema = lazyZodSchema(() => MarketplaceIndexEntryV1Schema.extend({
+export const MarketplaceIndexItemV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MarketplaceIndexEntryV1Schema, {
   source: MarketplaceIndexSourceSnapshotV1Schema.shape.source,
   freshness: MarketplaceIndexSourceSnapshotV1Schema.shape.freshness,
   admission: MarketplaceIndexAdmissionV1Schema,
-  artifactAccess: z.object({
+  artifactAccess: z.strictObject({
     state: z.enum(['public', 'available', 'auth-unavailable', 'offline', 'source-removed', 'unverified-profile']),
-    registryProfileId: OpaqueId.nullable(),
-  }).strict(),
-}).strict());
+    registryProfileId: z.nullable(OpaqueId),
+  }),
+})));
 export type MarketplaceIndexItemV1 = z.infer<typeof MarketplaceIndexItemV1Schema>;
 
 /**
@@ -373,21 +371,21 @@ export function decideMarketplaceListingInstallV1(item: MarketplaceIndexItemV1):
  * sign in again. Registry authentication is always an explicit selection on
  * the installing Home, never inferred from anyone else's credentials.
  */
-export const MarketplaceRegistryProfileRequirementV1Schema = lazyZodSchema(() => z.object({
+export const MarketplaceRegistryProfileRequirementV1Schema = lazyZodSchema(() => z.strictObject({
   registryOrigin: NpmRegistryOriginV1Schema,
   packageName: MarketplaceIndexEntryV1Schema.shape.distribution.shape.packageName,
   /**
    * This Home's profile for that registry, when one exists — it may only need
    * signing in again. `null` when no profile on this Home is known to serve it.
    */
-  registryProfileId: OpaqueId.nullable(),
-}).strict());
+  registryProfileId: z.nullable(OpaqueId),
+}));
 export type MarketplaceRegistryProfileRequirementV1 = z.infer<typeof MarketplaceRegistryProfileRequirementV1Schema>;
 
 /** The change-owner result that asks the present user for that registry selection. */
-export const MarketplaceRegistryProfileRequiredResultV1Schema = lazyZodSchema(() => MarketplaceRegistryProfileRequirementV1Schema.extend({
+export const MarketplaceRegistryProfileRequiredResultV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MarketplaceRegistryProfileRequirementV1Schema, {
   kind: z.literal('registryProfileRequired'),
-}).strict());
+})));
 export type MarketplaceRegistryProfileRequiredResultV1 = z.infer<typeof MarketplaceRegistryProfileRequiredResultV1Schema>;
 
 /**
@@ -464,15 +462,15 @@ export function readMarketplaceListingRegistryProfileRequirementV1(
   });
 }
 
-export const MarketplaceIndexQueryResultV1Schema = lazyZodSchema(() => z.object({
-  revision: z.number().int().nonnegative().safe(),
-  items: z.array(MarketplaceIndexItemV1Schema).max(MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1),
-  nextCursor: z.string().trim().min(1).nullable(),
-  sources: z.array(z.object({
+export const MarketplaceIndexQueryResultV1Schema = lazyZodSchema(() => z.strictObject({
+  revision: z.number().check(z.int(), z.nonnegative(), z.int()),
+  items: z.array(MarketplaceIndexItemV1Schema).check(z.maxLength(MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1)),
+  nextCursor: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  sources: z.array(z.strictObject({
     source: MarketplaceIndexSourceSnapshotV1Schema.shape.source,
     freshness: MarketplaceIndexSourceSnapshotV1Schema.shape.freshness,
     diagnostics: z.array(MarketplaceDiagnosticV1Schema),
-  }).strict()),
+  })),
   diagnostics: z.array(MarketplaceDiagnosticV1Schema),
-}).strict());
+}));
 export type MarketplaceIndexQueryResultV1 = z.infer<typeof MarketplaceIndexQueryResultV1Schema>;

@@ -803,6 +803,17 @@ function createNativeAgentTerminalHostScope(params: Readonly<{
             assertOwnedHandle(handle);
             return await params.owner.interruptTurn(handle);
         },
+        ...(params.owner.subscribeExit ? {
+            async subscribeExit(handle, listener) {
+                assertScopeAvailable();
+                assertOwnedHandle(handle);
+                return await params.owner.subscribeExit!(handle, result => {
+                    try { assertScopeAvailable(); assertOwnedHandle(handle); }
+                    catch { return; }
+                    listener(result);
+                });
+            },
+        } : {}),
         async evaluateLiveness(handle) {
             assertScopeAvailable();
             assertOwnedHandle(handle);
@@ -882,6 +893,13 @@ function createPublicNativeAgentSessionTerminalHostService(
                 async () => await owner.interruptTurn(handle),
             );
         },
+        ...(owner.subscribeExit ? {
+            async subscribeExit(handle, listener) {
+                return await invokeNativeAgentSessionPublicService(
+                    async () => await owner.subscribeExit!(handle, listener),
+                );
+            },
+        } : {}),
         async evaluateLiveness(handle) {
             return await invokeNativeAgentSessionPublicService(
                 async () => await owner.evaluateLiveness(handle),
@@ -1127,6 +1145,16 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
         });
     };
     const mcp: AgentSessionHostServices['mcp'] = Object.freeze({
+        ...(params.owners.mcp.resolveToolNaming ? {
+            resolveToolNaming: async (request, options) => {
+                assertSessionScopeAvailable('mcp');
+                const signal = combineSessionOperationSignal(params.signal, options?.signal);
+                const result = await params.owners.mcp.resolveToolNaming!(request, { signal });
+                assertSessionScopeAvailable('mcp');
+                signal.throwIfAborted();
+                return result;
+            },
+        } satisfies Pick<AgentSessionHostServices['mcp'], 'resolveToolNaming'> : {}),
         async resolveServers(options?: Readonly<{ signal?: AbortSignal }>) {
             assertSessionScopeAvailable('mcp');
             const signal = combineSessionOperationSignal(params.signal, options?.signal);
@@ -2373,6 +2401,8 @@ export function createNativeAgentSessionOperations(
         `${turnId.length}:${turnId}${callId}`;
     let activeTurnAdmissionWitness:
         NativeAgentNewTurnAdmissionWitness | null = null;
+    // Diagnostic timing only; custody and event admission remain with the invariant.
+    let firstAssistantTextTiming: Readonly<{ turnId: string; localId: string; startedAt: number }> | null = null;
     let nativeTurnOrdinal = 0;
     let runtimeEndedIssue: SessionRuntimeIssueV1 | null = null;
     let configuration = initialConfiguration;
@@ -2754,6 +2784,19 @@ export function createNativeAgentSessionOperations(
         }
         if (observation.status === 'ignored') return;
         const event = observation.event;
+        if (firstAssistantTextTiming
+            && isForegroundTurnRuntimeTranscriptEvent(event)
+            && event.turnId === firstAssistantTextTiming.turnId
+            && ((event.kind === 'message-delta' && event.channel === 'assistant')
+                || (event.kind === 'transcript-message-committed' && event.role === 'assistant'))
+            && event.text.length > 0) {
+            logger.infoFile('[NativeAgentSession] Turn phase', {
+                phase: 'first_assistant_text', eventKind: event.kind, sessionId: expectedSessionId,
+                turnId: event.turnId, localId: firstAssistantTextTiming.localId,
+                durationMs: Math.round(performance.now() - firstAssistantTextTiming.startedAt),
+            });
+            firstAssistantTextTiming = null;
+        }
         if (event.kind === 'available-commands') {
             const details = normalizeAvailableCommands(event.commands);
             providerNativeCommandNames = new Set(details.map((detail) => detail.command));
@@ -2999,7 +3042,25 @@ export function createNativeAgentSessionOperations(
     };
     let subscription: ReturnType<AgentSessionRuntime['watch']> | null = null;
     const ensureSubscription = (): void => {
-        subscription ??= session.watch(observeNativeEvent);
+        if (subscription) return;
+        let current = true;
+        const watch = session.watch((event) => {
+            if (current && !disposeStarted) observeNativeEvent(event);
+        });
+        subscription = {
+            dispose() {
+                current = false;
+                try {
+                    // SDK cleanup may reject asynchronously; fence immediately
+                    // and contain that failure without delaying runtime retirement.
+                    void Promise.resolve(watch.dispose()).catch(() => {
+                        logger.debug('[NativeAgentSession] failed to dispose native event watch (non-fatal)');
+                    });
+                } catch {
+                    logger.debug('[NativeAgentSession] failed to dispose native event watch (non-fatal)');
+                }
+            },
+        };
     };
     const readPendingNewTurnId = (): string | null => {
         const pendingTurnIds = new Set(
@@ -3621,11 +3682,17 @@ export function createNativeAgentSessionOperations(
         readActiveTurnAdmissionWitness,
         subscribeRuntimeEvents(handler) {
             if (disposeStarted) return () => undefined;
+            const refreshCurrentSnapshot = listeners.size === 0 && subscription !== null;
             listeners.add(handler);
+            if (refreshCurrentSnapshot) {
+                subscription?.dispose();
+                subscription = null;
+            }
             ensureSubscription();
             return () => listeners.delete(handler);
         },
         async sendTurnPrompt(prompt: string, meta?: RuntimeTurnPromptMeta): Promise<void> {
+            const preparationStartedAt = performance.now();
             const fallbackTurnId = meta?.turnId
                 || `native-turn-${runtimeIncarnationId}-${++nativeTurnOrdinal}`;
             const correlation = resolveNativeInputCorrelation(meta, 'newTurn', fallbackTurnId, expectedSessionId);
@@ -3714,6 +3781,14 @@ export function createNativeAgentSessionOperations(
             activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(
                 correlation,
             );
+            const sendStartedAt = performance.now();
+            firstAssistantTextTiming = { turnId: correlation.turnId, localId: correlation.inputId,
+                startedAt: sendStartedAt };
+            logger.infoFile('[NativeAgentSession] Turn phase', {
+                phase: 'send_entered', sessionId: expectedSessionId,
+                turnId: correlation.turnId, localId: correlation.inputId,
+                durationMs: Math.round(sendStartedAt - preparationStartedAt),
+            });
             let result: Awaited<ReturnType<AgentSessionRuntime['send']>>;
             try {
                 result = await session.send({
@@ -3733,6 +3808,11 @@ export function createNativeAgentSessionOperations(
                                 ),
                         }
                         : {}),
+                });
+                logger.infoFile('[NativeAgentSession] Turn phase', {
+                    phase: 'send_returned', sessionId: expectedSessionId,
+                    turnId: correlation.turnId, localId: correlation.inputId, status: result.status,
+                    durationMs: Math.round(performance.now() - sendStartedAt),
                 });
             } catch (error) {
                 if (!acceptedInputIds.has(correlation.inputId) && !uncertainInputIds.has(correlation.inputId)) {
@@ -3941,6 +4021,11 @@ export function createNativeAgentSessionOperations(
                 },
             }
             : {}),
+        ...(typeof session.observeTerminalExecution === 'function' ? {
+            async observeTerminalExecution(input: Parameters<NonNullable<AgentSessionRuntime['observeTerminalExecution']>>[0]) {
+                await session.observeTerminalExecution!(input);
+            },
+        } : {}),
         readSessionIdentity() {
             return { sessionId: invariant.read().providerSessionId };
         },
@@ -4355,6 +4440,18 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
         createSessionRuntime: async (openIntent, hostRuntimeParams) => {
             const invokedAtMs = Date.now();
             const sessionId = hostRuntimeParams.session.sessionId;
+            const openStartedAt = performance.now();
+            let openPhaseStartedAt = openStartedAt;
+            const recordOpenPhase = (phase: string): void => {
+                const now = performance.now();
+                logger.infoFile('[NativeAgentSession] Open phase', {
+                    phase, sessionId, intent: openIntent.kind,
+                    durationMs: Math.round(now - openPhaseStartedAt),
+                    elapsedMs: Math.round(now - openStartedAt),
+                });
+                openPhaseStartedAt = now;
+            };
+            recordOpenPhase('entered');
             const cwd = hostRuntimeParams.directory;
             if (!sessionId || !cwd) {
                 throw new Error(`Agent runtime '${identity.agentId}' requires a session id and working directory`);
@@ -4447,9 +4544,11 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 const resolvedLateEnvironment = resolveLateEnvironment
                     ? await resolveLateEnvironment({ sessionId })
                     : null;
+                recordOpenPhase('late_environment');
                 // Foreground late admission publishes the canonical authority. Claim it
                 // before resolving any startup contribution through the runner source.
                 await params.prepareRuntimeSource?.({ sessionId, signal });
+                recordOpenPhase('runtime_source');
                 assertGenerationCurrent();
                 if (canApplyNativeStartup
                     && openIntent.startupInstructions === undefined && hostRuntimeParams.resolveFreshSessionSystemPrompt) {
@@ -4463,6 +4562,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         instructions: text.trim().normalize('NFC'),
                     }) : null);
                 }
+                recordOpenPhase('startup_prompt_plan');
                 openInputs = buildNativeAgentSessionOpenInputs(
                     identity.agentId,
                     params.sessionInput,
@@ -5135,6 +5235,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     ]),
                 ]);
             }
+            recordOpenPhase('host_services');
             const operationServices = await params.createInvocationServices?.({
                 correlationId: sessionId,
                 cwd,
@@ -5287,6 +5388,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 return cleanupRuntimeScopePromise;
             };
             let runtime: AgentRuntime | undefined = params.runtime;
+            recordOpenPhase('invocation_services');
             const nativeHome = await resolveNativeAgentSessionNativeHomeService({
                 agent: params.agent,
                 sourceEnvironment: openInputs.launchEnvironment.values,
@@ -5417,6 +5519,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         : {}),
                 }),
             });
+            recordOpenPhase('native_context');
             const persistedRollbackTurns = resumeId && sessionCapabilities.conversationRollback === true
                 ? await hostRuntimeParams.session.readSessionTurnsProjection()
                     .then((projection) => projection?.turns.flatMap((turn) => (
@@ -5436,7 +5539,9 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     )) ?? [])
                     .catch(() => [])
                 : [];
+            recordOpenPhase('resume_projection');
             const mcpServers = await resolveAgentSessionMcpLaunchConfigs(hostRuntimeParams.mcpServers, openInputs.configuration, signal);
+            recordOpenPhase('mcp_launch');
             const buildOpenRequest = (): AgentSessionOpenRequest =>
                 nativeForkSource
                     ? Object.freeze({
@@ -5447,6 +5552,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         ...openInputs,
                         ...(mcpServers ? { mcpServers } : {}),
                         ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: hostRuntimeParams.mcpServersStrictMode } : {}),
                         ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     })
                     : resumeId
@@ -5462,6 +5568,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         ...(startupInstructions ? { startupInstructions } : {}),
                         ...(mcpServers ? { mcpServers } : {}),
                         ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: hostRuntimeParams.mcpServersStrictMode } : {}),
                         ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     })
                     : Object.freeze({
@@ -5472,6 +5579,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         ...(startupInstructions ? { startupInstructions } : {}),
                         ...(mcpServers ? { mcpServers } : {}),
                         ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: hostRuntimeParams.mcpServersStrictMode } : {}),
                         ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     });
             let sessions: NonNullable<AgentRuntime['sessions']> | undefined;
@@ -5523,6 +5631,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 }
                 assertGenerationCurrent();
                 runtime ??= await params.createRuntime!({ signal });
+                recordOpenPhase('runtime_factory');
                 assertGenerationCurrent();
                 sessions = runtime.sessions;
                 if (!sessions) {
@@ -5639,12 +5748,14 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 });
                 assertGenerationCurrent();
                 try {
+                    recordOpenPhase('open_preparation');
                     session = await openNativeAgentSessionUntilAbort(
                         () => {
                             if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
                             return sessionFactory.open(openRequest, context);
                         }, signal,
                     );
+                    recordOpenPhase('factory_open');
                 } catch (error) {
                     if (!startupInstructions || !isPluginError(error)
                         || error.code !== 'agent_session_startup_instructions_unsupported') throw error;
@@ -5654,12 +5765,14 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     openRequest = buildOpenRequest();
                     assertGenerationCurrent();
                     await params.attestSessionOpen?.({ phase: 'prepare', request: openRequest, providerSessionId, signal });
+                    recordOpenPhase('startup_fallback_preparation');
                     session = await openNativeAgentSessionUntilAbort(
                         () => {
                             if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
                             return sessionFactory.open(openRequest, context);
                         }, signal,
                     );
+                    recordOpenPhase('factory_open_fallback');
                 }
                 await params.attestSessionOpen?.({
                     phase: 'commit',
@@ -5667,6 +5780,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     providerSessionId,
                     signal,
                 });
+                recordOpenPhase('open_attestation');
             } catch (error) {
                 let boundaryError = sanitizeBoundaryError(error);
                 ownedAbortController.abort(boundaryError);
@@ -6217,6 +6331,9 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                             return await terminalRuntime.launch!({
                                 ...request,
                                 preparedLaunchPlan: presentation.plan,
+                                ...(runtime.observeTerminalExecution
+                                    ? { observeTerminalExecution: input => runtime.observeTerminalExecution!(input) }
+                                    : {}),
                             });
                         },
                     },

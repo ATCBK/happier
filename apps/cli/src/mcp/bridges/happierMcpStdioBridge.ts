@@ -12,6 +12,7 @@
  * This is host MCP bridge infrastructure, not provider runtime behavior.
  */
 
+import '../../configureZodLocale';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -21,23 +22,28 @@ import { forwardHappierBridgeTool } from './registerHappierBridgeTools';
 import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
 import { callMcpToolWithResolvedTimeout } from '@/mcp/mcpToolCallRequestOptions';
 import { isActionEnabledByEnv } from '@/settings/actionsSettings';
+import { isMcpToolNameAlias, projectMcpToolNames } from '@/mcp/runtime/projectMcpToolNames';
 import { runMcpStdioBridgeLifecycle } from '@/mcp/runtime/runMcpStdioBridgeLifecycle';
 
-function parseArgs(argv: string[]): { url: string | null } {
+function parseArgs(argv: string[]): { url: string | null; toolNameMaxLength?: number } {
   let url: string | null = null;
+  let toolNameMaxLength: number | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--url' && i + 1 < argv.length) {
       url = argv[i + 1];
       i++;
+    } else if (a === '--tool-name-max-length') {
+      toolNameMaxLength = Number(argv[++i]);
+      projectMcpToolNames([], toolNameMaxLength);
     }
   }
-  return { url };
+  return { url, ...(toolNameMaxLength === undefined ? {} : { toolNameMaxLength }) };
 }
 
 async function main() {
   // Resolve target HTTP MCP URL
-  const { url: urlFromArgs } = parseArgs(process.argv.slice(2));
+  const { url: urlFromArgs, toolNameMaxLength } = parseArgs(process.argv.slice(2));
   const baseUrl = urlFromArgs || process.env.HAPPIER_HTTP_MCP_URL || '';
 
   if (!baseUrl) {
@@ -86,12 +92,28 @@ async function main() {
   // Initialize the stdio transport without waiting for two serial loopback
   // requests. Discovery and execution still go to the exact upstream runtime.
   server.server.registerCapabilities({ tools: { listChanged: false } });
-  server.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return await (await ensureHttpClient()).listTools();
+  server.server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+    const result = await (await ensureHttpClient()).listTools(request.params, { signal: extra.signal });
+    const names = projectMcpToolNames(result.tools.map(tool => tool.name), toolNameMaxLength);
+    return { ...result, tools: result.tools.map((tool, index) => ({ ...tool, name: names[index]!.projectedName })) };
   });
   server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    let originalName = request.params.name;
+    if (toolNameMaxLength !== undefined && isMcpToolNameAlias(originalName)) {
+      const client = await ensureHttpClient();
+      const originalNames: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await client.listTools(cursor === undefined ? {} : { cursor }, { signal: extra.signal });
+        originalNames.push(...page.tools.map(tool => tool.name));
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      const match = projectMcpToolNames(originalNames, toolNameMaxLength).find(tool => tool.projectedName === request.params.name);
+      if (!match) throw new Error('MCP transport tool is no longer advertised');
+      originalName = match.originalName;
+    }
     return await forwardHappierBridgeTool(
-      request.params.name,
+      originalName,
       request.params.arguments,
       extra,
       async (name, args, options) => {

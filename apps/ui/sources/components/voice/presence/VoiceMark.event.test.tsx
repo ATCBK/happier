@@ -45,7 +45,9 @@ afterEach(async () => {
 type Dot = readonly number[];
 
 function canvas(): VoiceMarkCanvasProps {
-    return screen!.find((node) => node.props?.to?.planetA !== undefined && node.props?.from?.planetA !== undefined).props;
+    const props = screen!.find((node) => node.props?.to?.planetA !== undefined && node.props?.from?.planetA !== undefined).props;
+    return { to: props.to, from: props.from, morph: props.morph, pose: props.pose,
+        energy: props.energy, flow: props.flow, gather: props.gather, leave: props.leave };
 }
 
 function frame(props = canvas()): Dot[] {

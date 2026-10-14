@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedAccountServiceKeySchema } from '../connect/connectedServiceBindings.js';
 import {
@@ -6,7 +6,7 @@ import {
 } from '../connect/qualifiedConnectedAccountPersistence.js';
 import { ConnectedServiceCredentialRevisionV1Schema } from '../connect/connectedServiceSchemas.js';
 
-const BoundedIdentitySchema = z.string().trim().min(1).max(256);
+const BoundedIdentitySchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 /** Runner consumes endpoint-native services without importing Account secrets.
  * Non-native selections remain unavailable until Lane 10 supplies a scoped
@@ -24,32 +24,32 @@ export function classifyRunnerConnectedServiceSelectionV1(
 }
 
 const RunnerConnectedServiceSelectionV1Schema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('profile'),
     profileId: BoundedIdentitySchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('group'),
     groupId: BoundedIdentitySchema,
-    generation: z.number().int().nonnegative(),
-  }).strict(),
+    generation: z.number().check(z.int(), z.nonnegative()),
+  }),
 ]);
 
-export const RunnerConnectedServiceReviewBindingV1Schema = z.object({
+export const RunnerConnectedServiceReviewBindingV1Schema = z.strictObject({
   serviceKey: ConnectedAccountServiceKeySchema,
   selection: RunnerConnectedServiceSelectionV1Schema,
-  account: z.unknown().transform((value, context) => {
+  account: z.pipe(z.unknown(), z.transform((value, context) => {
     const parsed = QualifiedConnectedAccountRefSchema.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: parsed.error.issues[0]?.message ?? 'Invalid Connected Account ref' });
+      context.issues.push({ code: 'custom', message: parsed.error.issues[0]?.message ?? 'Invalid Connected Account ref', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
+  })),
   credentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-  configurationRevision: BoundedIdentitySchema.nullable(),
+  configurationRevision: z.nullable(BoundedIdentitySchema),
   authenticationModeId: BoundedIdentitySchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (
     value.account.service.pluginId !== value.serviceKey.split('/')[0]
     || value.account.service.localId !== value.serviceKey.split('/')[1]
@@ -61,15 +61,15 @@ export const RunnerConnectedServiceReviewBindingV1Schema = z.object({
       message: 'Runner Connected Service selection identity does not match its resolved account',
     });
   }
-});
+}));
 export type RunnerConnectedServiceReviewBindingV1 = z.infer<
   typeof RunnerConnectedServiceReviewBindingV1Schema
 >;
 
-export const RunnerConnectedServiceReviewBindingsV1Schema = z.object({
+export const RunnerConnectedServiceReviewBindingsV1Schema = z.strictObject({
   v: z.literal(1),
-  bindings: z.array(RunnerConnectedServiceReviewBindingV1Schema).max(64),
-}).strict().superRefine((value, context) => {
+  bindings: z.array(RunnerConnectedServiceReviewBindingV1Schema).check(z.maxLength(64)),
+}).check(z.superRefine((value, context) => {
   const serviceKeys = new Set<string>();
   value.bindings.forEach((binding, index) => {
     if (serviceKeys.has(binding.serviceKey)) {
@@ -81,7 +81,7 @@ export const RunnerConnectedServiceReviewBindingsV1Schema = z.object({
     }
     serviceKeys.add(binding.serviceKey);
   });
-});
+}));
 export type RunnerConnectedServiceReviewBindingsV1 = z.infer<
   typeof RunnerConnectedServiceReviewBindingsV1Schema
 >;

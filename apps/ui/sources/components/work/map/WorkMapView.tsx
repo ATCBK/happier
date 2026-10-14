@@ -36,7 +36,7 @@ function projectWorkTheme(theme: Theme): HappierWorkTheme {
         base: projectPluginUiTheme(theme),
         palette: projectPluginUiHostPalette(theme),
         colors: projectWorkColors(theme),
-        spacing: Object.freeze({ xsmall: theme.margins.xs, small: theme.margins.sm }),
+        spacing: Object.freeze({ xsmall: theme.space.s4, small: theme.space.s8 }),
         radii: Object.freeze({ control: theme.borderRadius.md, inset: theme.borderRadius.lg, card: theme.borderRadius.xl }),
     });
     hostWorkThemes.set(theme, projected);

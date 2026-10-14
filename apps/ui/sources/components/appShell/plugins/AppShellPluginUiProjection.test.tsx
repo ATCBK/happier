@@ -319,6 +319,7 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
     pluginId: string;
     replicaMachineIds?: readonly string[];
     selectOrigin?: boolean;
+    materializationEnabled?: boolean;
     artifacts?: readonly AppScopeArtifactFixture[];
     accountId?: string;
 }>): PluginMachineMaterializationExecutionOriginV1 {
@@ -374,7 +375,7 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
         portableRelease: true,
         archiveDigestSha256: APP_SCOPE_ARCHIVE_DIGEST,
         uiArtifacts: artifacts,
-        enabled: true,
+        enabled: input.materializationEnabled ?? true,
         trustState: 'trusted',
         observedAt: 1,
     };
@@ -2075,6 +2076,23 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect(getProjectedEntry('acme.same')).toMatchObject({
             projectionStatus: 'ready', executable: true,
             projectedDescriptorCandidates: [expect.objectContaining({ title: 'Admitted account' })],
+        });
+    });
+
+    it('retains static Connected Account identity while execution origin admission is withdrawn', async () => {
+        const pluginId = 'happier.channel.email';
+        storageState.machines = [createLiveMachine('machine-a')];
+        installSelectedAppScopePluginFixture({ machineId: 'machine-a', pluginId, materializationEnabled: false });
+        projectionDescribeSpy.mockResolvedValue({ supported: true, projection: projectionWithConnectedAccount({
+            serviceId: 'email-imap-smtp', pluginId, title: 'Email IMAP + SMTP',
+        }) });
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        await renderScreen(<AppShellPluginUiProjectionProvider><ProjectionProbe /></AppShellPluginUiProjectionProvider>);
+        await flushHookEffects({ cycles: 8 });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
+        expect(getProjectedEntry(pluginId)).toMatchObject({
+            projectedTitle: 'Email IMAP + SMTP', projectionStatus: 'ready', executable: false, supportsToken: false,
+            projectedDescriptor: expect.objectContaining({ title: 'Email IMAP + SMTP' }),
         });
     });
 

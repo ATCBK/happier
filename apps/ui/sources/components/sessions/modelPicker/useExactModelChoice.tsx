@@ -159,43 +159,65 @@ export function useExactModelChoice(
     ],
   );
 
+  // The open dialog follows the owners it reads (the projection settling, an approval waiting or
+  // failing) through the modal's own update, so it never shows what was true when it opened.
+  const live = React.useMemo(
+    () => ({
+      nativeModels,
+      providerGroups,
+      providerProjectionAuthoritative,
+      currentSelectionRecovery,
+      hiddenNativeModelKeys,
+      selected: params.selected,
+      effectiveLabel: params.selected?.modelId ?? params.fallbackLabel,
+      experimentalConfirmation: confirmExperimentalModel,
+    }),
+    [
+      confirmExperimentalModel,
+      currentSelectionRecovery,
+      hiddenNativeModelKeys,
+      nativeModels,
+      params.fallbackLabel,
+      params.selected,
+      providerGroups,
+      providerProjectionAuthoritative,
+    ],
+  );
+  const openDialog = React.useRef<Readonly<{
+    id: string;
+    agentTargetKey: string;
+    onSelect: (selection: ProviderBoundModelRef | null) => void;
+  }> | null>(null);
+  React.useEffect(() => {
+    const dialog = openDialog.current;
+    if (dialog) {
+      Modal.update(dialog.id, { agentTargetKey: dialog.agentTargetKey, onSelect: dialog.onSelect, ...live });
+    }
+  }, [live]);
   const open = React.useCallback(
     (onSelect: (selection: ProviderBoundModelRef | null) => void) => {
-      if (!params.agentTargetKey) return;
-      Modal.show({
+      const agentTargetKey = params.agentTargetKey;
+      if (!agentTargetKey) return;
+      const selectAndRelease = (selection: ProviderBoundModelRef | null) => {
+        openDialog.current = null;
+        onSelect(selection);
+      };
+      const id = Modal.show({
         component: ExactModelChoiceModal,
-        props: {
-          agentTargetKey: params.agentTargetKey,
-          nativeModels,
-          providerGroups,
-          providerProjectionAuthoritative,
-          currentSelectionRecovery,
-          hiddenNativeModelKeys,
-          selected: params.selected,
-          effectiveLabel: params.selected?.modelId ?? params.fallbackLabel,
-          experimentalConfirmation: confirmExperimentalModel,
-          onSelect,
-        },
+        props: { agentTargetKey, onSelect: selectAndRelease, ...live },
         chrome: {
           kind: 'card',
           title: params.title,
           dimensions: { size: 'lg' },
         },
         closeOnBackdrop: true,
+        onRequestClose: () => {
+          openDialog.current = null;
+        },
       });
+      openDialog.current = id ? { id, agentTargetKey, onSelect: selectAndRelease } : null;
     },
-    [
-      confirmExperimentalModel,
-      currentSelectionRecovery,
-      hiddenNativeModelKeys,
-      nativeModels,
-      params.agentTargetKey,
-      params.fallbackLabel,
-      params.selected,
-      params.title,
-      providerGroups,
-      providerProjectionAuthoritative,
-    ],
+    [live, params.agentTargetKey, params.title],
   );
 
   return {

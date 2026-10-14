@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { createPartialStorageModuleMock, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from './codeDiffTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

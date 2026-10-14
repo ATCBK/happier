@@ -1,4 +1,4 @@
-import type { MachineAccessRoleV1 } from "@happier-dev/protocol";
+import type { MachineAccessRoleV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";

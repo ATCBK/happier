@@ -9,7 +9,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { config } from '@/config';
@@ -24,7 +24,7 @@ interface JsonViewerProps {
 
 function JsonViewer({ title, data, defaultExpanded = false }: JsonViewerProps) {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     
     const handleCopy = async () => {
         const copied = await setClipboardStringSafe(JSON.stringify(data, null, 2));

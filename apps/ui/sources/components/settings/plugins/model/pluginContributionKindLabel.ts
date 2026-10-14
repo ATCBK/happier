@@ -100,6 +100,7 @@ function shelfKeyFor(kind: PluginContributionKind): PluginKindShelfKey | null {
       return 'composer';
     case 'managedDependencies':
     case 'accountCollections':
+    case 'registrySources':
     case 'atmospherePictures':
     case 'dragSources':
     case 'dropTargets':

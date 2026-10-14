@@ -22,6 +22,7 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/pr
 import * as persistence from '@/persistence';
 import type { HappyMcpSessionClient } from '../startHappyServer';
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
+import type { McpRequestAuthPort } from './mcpRequestAuth';
 
 // The daemon catalog is an IPC boundary. Runtime, bridge, selectors and
 // materialization remain real, including the local HTTP listener lifecycle.
@@ -60,6 +61,24 @@ function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | nul
 }
 
 describe('resolveRunnerMcpServers catalog admission', () => {
+  it.each(['zero-rules', 'another-machine', 'another-agent'] as const)('materializes a Session include with %s while keeping unsupported Agent refusal', async scenario => {
+    const captured = snapshot([server('included')]);
+    if (captured.mcpServerCatalog?.status !== 'ready') throw new Error('Missing catalog');
+    captured.mcpServerCatalog.catalog.bindings = scenario === 'zero-rules' ? [] : [{
+      ...captured.mcpServerCatalog.catalog.bindings[0]!,
+      ...(scenario === 'another-machine' ? { target: { t: 'machine', machineId: 'other' } as const } : { agentId: 'gemini' }),
+    }];
+    const input = { session: session(), credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/repo', agentId: 'codex', agentAcceptsUserMcp: true,
+      sessionMetadata: { mcpSelectionV1: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['included'], forceExcludeServerIds: [] } },
+      includeHappierMcpServer: false as const };
+    const result = await resolveRunnerMcpServers(input);
+    try { expect(Object.keys(result.mcpServers)).toEqual(['included']); }
+    finally { result.happierMcpServer.stop(); }
+    const unsupported = await resolveRunnerMcpServers({ ...input, agentAcceptsUserMcp: false });
+    try { expect(unsupported.mcpServers).toEqual({}); }
+    finally { unsupported.happierMcpServer.stop(); }
+  });
   it.each([false, true])('keeps reach independent from machine cwd/env overrides (Everywhere On=%s)', async enabled => {
     const root = await mkdtemp(join(tmpdir(), 'happier-mcp-machine-config-'));
     const captured = snapshot([{ ...server('local'), stdio: { command: 'echo', args: ['base'], cwd: { t: 'session' } },
@@ -155,6 +174,21 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       expect(closed).toEqual([opened[0]!.materializationId]);
     } finally { resolved?.happierMcpServer.stop(); await rm(root, { recursive: true, force: true }); }
   });
+  it('refuses unregistered Run OAuth occurrences before capability open even in non-strict mode', async () => {
+    const captured = snapshot([{ id: 'oauth', name: 'oauth', transport: 'http', remote: {
+      url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' },
+    }, env: {}, createdAt: 1, updatedAt: 1 }]);
+    const open = vi.fn<McpRequestAuthPort['open']>();
+    await expect(resolveRunnerMcpServers({
+      session: { ...session(), getMcpRequestAuthPort: () => ({ open, close: async () => {} }) }, credentials,
+      accountSettings: accountSettingsParse({ mcpServersStrictMode: false }), accountSettingsSnapshot: {
+        ...captured, settings: accountSettingsParse({ mcpServersStrictMode: false }),
+      }, machineId: 'machine-1', directory: '/repo', includeHappierMcpServer: false,
+      executionRun: { runId: 'unregistered-run', workDepth: 0, cwd: '/repo', signal: new AbortController().signal,
+        isCurrent: () => true, readActiveTurnAdmissionWitness: () => null, readCurrentRunOccurrence: () => null },
+    })).rejects.toThrow('mcp_request_auth_not_active');
+    expect(open).not.toHaveBeenCalled();
+  });
   it('materializes selected user servers without a built-in bridge for extension delivery and releases their files', async () => {
     vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
     const captured = snapshot([
@@ -194,17 +228,24 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       { ...server('linear'), env: { LINEAR_API_KEY: { t: 'literal' as const, v: '${LINEAR_API_KEY}' } } },
       server('docs'),
     ]), settings: accountSettingsParse({ mcpServersStrictMode: false }) };
-    const enqueueSessionEventCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
+    if (captured.mcpServerCatalog?.status !== 'ready') throw new Error('Missing catalog');
+    captured.mcpServerCatalog.catalog.bindings = captured.mcpServerCatalog.catalog.bindings.filter(rule => rule.serverId !== 'linear');
+    const enqueueSessionEventCommitted = vi.fn<NonNullable<HappyMcpSessionClient['enqueueSessionEventCommitted']>>(async () => ({ persisted: true, delivered: true }));
     vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
     const resolved = await resolveRunnerMcpServers({
       session: { ...session(), enqueueSessionEventCommitted }, credentials,
       accountSettings: captured.settings, accountSettingsSnapshot: captured,
       machineId: 'machine-1', directory: '/tmp/repo', env: {},
+      agentId: 'codex', agentAcceptsUserMcp: true,
+      sessionMetadata: { mcpSelectionV1: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['linear'], forceExcludeServerIds: [] } },
       includeHappierMcpServer,
     });
     try {
       expect(resolved.mcpServers.linear).toBeUndefined();
       expect(resolved.mcpServers.docs).toBeDefined();
+      expect(readSessionCapabilityNoticeV1(enqueueSessionEventCommitted.mock.calls[0]?.[0])).toMatchObject({
+        items: [{ kind: 'mcp_server', itemId: 'linear', code: 'missing_value_ref' }],
+      });
       expect(enqueueSessionEventCommitted.mock.calls).toEqual([[expect.objectContaining({
         type: 'message', message: expect.stringContaining('linear'),
         capabilityNoticeV1: { v: 1, items: [{

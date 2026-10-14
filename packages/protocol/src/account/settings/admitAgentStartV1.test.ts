@@ -7,27 +7,27 @@ import { buildBackendTargetKeyV2 } from '../../backends/targets/backendTargetRef
 import { accountSettingsParse } from './accountSettings.js';
 import { SessionSpawnNewInputV2Schema } from '../../sessions/creation/sessionSpawnNewInputV2.js';
 import { ExecutionRunStartRequestBaseSchema } from '../../execution/runs/startRequest.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionIndexedIdentifierMaxLengthV1 } from '../../sessions/idsV1.js';
 
 // Pinned predecessor schema: ../0.2 @17ba05df68, accountSettings.ts:94–126.
 // This is an old-reader contract vector, never a production policy decision.
-const predecessorPolicySchema = z.object({
-  v: z.literal(1).default(1),
-  allowCustomDirectory: z.boolean().default(true),
-  allowCrossMachine: z.boolean().default(true),
-  allowBackendTargetOverride: z.boolean().default(true),
-  allowModelOverride: z.boolean().default(true),
-  allowPermissionModeOverride: z.boolean().default(true),
-  allowAgentModeOverride: z.boolean().default(true),
-  allowConfigOptionOverrides: z.boolean().default(true),
-  allowProfileOverride: z.boolean().default(true),
-  allowEnvironmentVariables: z.boolean().default(true),
-  allowConnectedServicesOverride: z.boolean().default(true),
-  allowMcpSelectionOverride: z.boolean().default(true),
-  allowTranscriptStorageOverride: z.boolean().default(true),
-  permissionCeiling: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo']).nullable().default(null),
-}).strict();
+const predecessorPolicySchema = z.strictObject({
+  v: z._default(z.literal(1), 1),
+  allowCustomDirectory: z._default(z.boolean(), true),
+  allowCrossMachine: z._default(z.boolean(), true),
+  allowBackendTargetOverride: z._default(z.boolean(), true),
+  allowModelOverride: z._default(z.boolean(), true),
+  allowPermissionModeOverride: z._default(z.boolean(), true),
+  allowAgentModeOverride: z._default(z.boolean(), true),
+  allowConfigOptionOverrides: z._default(z.boolean(), true),
+  allowProfileOverride: z._default(z.boolean(), true),
+  allowEnvironmentVariables: z._default(z.boolean(), true),
+  allowConnectedServicesOverride: z._default(z.boolean(), true),
+  allowMcpSelectionOverride: z._default(z.boolean(), true),
+  allowTranscriptStorageOverride: z._default(z.boolean(), true),
+  permissionCeiling: z._default(z.nullable(z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo'])), null),
+});
 
 const target: AgentExecutionTargetV1 = { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const otherTarget: AgentExecutionTargetV1 = { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
@@ -43,6 +43,30 @@ const leaf = (facts: AgentStartFactsV1 = {}): MaterializedWorkflowLeafV1 => ({ b
 const spawn = (facts: AgentStartFactsV1 = {}): AgentStartRequestV1 => ({ kind: 'spawn_new', facts });
 
 describe('admitAgentStartV1', () => {
+  it('admits a Workflow Run without an Agent leaf while enforcing its real placement, ceiling and depth', () => {
+    const context = { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } };
+    const request = { kind: 'workflow_run', facts: { machineId: 'machine', directory: '/workspace', permissionMode: 'default' } } as const;
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, context))
+      .toEqual({ ok: true, stamped: { workDepth: 1 } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, { ...context,
+      allowLists: { v: 1, allowedRoleIds: [], allowedAgentTargetKeys: [] } }))
+      .toEqual({ ok: true, stamped: { workDepth: 1 } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+      { ...request, targetSessionId: 'unrelated' }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'subtree_denied' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, { ...context,
+      caller: { kind: 'session', sessionId: 'lead', starterDepth: 4, turnDepth: 4 } }))
+      .toMatchObject({ ok: false, refusal: { code: 'work_depth_exceeded' } });
+    expect(admitAgentStartV1({ ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowCustomDirectory: false },
+      { ...request, facts: { ...request.facts, directory: '/different' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'policy_denied_field', field: 'directory' } });
+    expect(admitAgentStartV1({ ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowCrossMachine: false },
+      { ...request, facts: { ...request.facts, machineId: 'different' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'policy_denied_field', field: 'executionTarget.machineId' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+      { ...request, facts: { ...request.facts, permissionMode: 'yolo' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'permission_exceeds_ceiling' } });
+  });
   it('applies the released MCP override policy to the whole capability selection', () => {
     const policy = { ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowMcpSelectionOverride: false };
     const capabilitySelection = {
@@ -330,8 +354,8 @@ describe('admitAgentStartV1', () => {
   });
 
   it('fails closed on unresolved choices even under unrestricted policy', () => {
-    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn({ machineId: { kind: 'unresolved' } }), baseline)).toMatchObject({ ok: false, refusal: { code: 'target_unavailable' } });
-    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn(), { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } })).toMatchObject({ ok: false, refusal: { code: 'target_unavailable' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn({ machineId: { kind: 'unresolved' } }), baseline)).toMatchObject({ ok: false, refusal: { code: 'target_unavailable', reason: 'selection_unavailable' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn(), { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } })).toMatchObject({ ok: false, refusal: { code: 'target_unavailable', reason: 'selection_unavailable' } });
   });
 
   it('derives engine overrides from every actual execution target, not just facts', () => {

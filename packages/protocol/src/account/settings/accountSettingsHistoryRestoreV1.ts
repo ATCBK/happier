@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import * as z from 'zod/mini';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { removeTransferredProfileSourcesV1 } from '../../profiles/read.js';
 import { SavedSecretSchema } from '../../profiles/backendProfileSchema.js';
@@ -84,7 +86,7 @@ function invalid(reason: AccountSettingsHistoryRestoreInvalidReasonV1):
 
 /** Only an exact recognized source item is covered by a transfer identity. */
 export function readAccountSettingsHistorySavedSecretIdV1(value: unknown): string | null {
-  const parsed = SavedSecretSchema.strict().safeParse(value);
+  const parsed = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(SavedSecretSchema)).safeParse(value);
   return parsed.success && sameStrictJsonValue(parsed.data, value) ? parsed.data.id : null;
 }
 

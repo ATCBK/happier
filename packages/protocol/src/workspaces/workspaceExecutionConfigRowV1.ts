@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { computeCanonicalDomainSeparatedHexDigest } from '../crypto/canonicalDigest.js';
@@ -8,7 +8,7 @@ import { WorkspaceExecutionConfigAddressV1Schema, WorkspaceExecutionSettingsV1Sc
 export const WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 = '/v1/projects/execution/config' as const;
 export const WORKSPACE_EXECUTION_CONFIG_KV_PREFIX_V1 = '@happier/account/workspace-execution-config/v1/' as const;
 export const WORKSPACE_EXECUTION_CONFIG_ACCOUNT_SCOPED_BLOB_KIND_V1 = 'workspace_execution_config' as const;
-export const WorkspaceExecutionConfigRowIdV1Schema = lazyZodSchema(() => z.string().regex(/^[a-f0-9]{64}$/));
+export const WorkspaceExecutionConfigRowIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[a-f0-9]{64}$/)));
 
 /** Qualified identity contains neither checkout roots nor Machine paths. */
 export function buildWorkspaceExecutionConfigRowIdV1(input: WorkspaceExecutionConfigAddressV1): string {
@@ -25,13 +25,13 @@ export function parseWorkspaceExecutionConfigPhysicalKeyV1(key: string): string 
 }
 
 /** Clients check this binding after opening opaque E2EE content. */
-export const WorkspaceExecutionConfigPrivatePayloadV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceExecutionConfigPrivatePayloadV1Schema = lazyZodSchema(() => z.strictObject({
   rowId: WorkspaceExecutionConfigRowIdV1Schema, value: WorkspaceExecutionSettingsV1Schema,
-}).strict());
+}));
 export const StoredWorkspaceExecutionConfigPrivatePayloadV1Schema = createStoredReadSchema(WorkspaceExecutionConfigPrivatePayloadV1Schema);
 export const WorkspaceExecutionConfigContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: WorkspaceExecutionSettingsV1Schema }).strict(),
-  z.object({ t: z.literal('encrypted'), c: z.string().min(1) }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: WorkspaceExecutionSettingsV1Schema }),
+  z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]));
 export type WorkspaceExecutionConfigContentV1 = z.infer<typeof WorkspaceExecutionConfigContentV1Schema>;
 export const StoredWorkspaceExecutionConfigContentV1Schema = createStoredReadSchema(WorkspaceExecutionConfigContentV1Schema);
@@ -44,29 +44,29 @@ export function assertWorkspaceExecutionConfigContentForModeV1(input: unknown, m
   return content;
 }
 
-const RevisionSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-export const WorkspaceExecutionConfigRowV1Schema = lazyZodSchema(() => z.object({
-  rowId: WorkspaceExecutionConfigRowIdV1Schema, revision: RevisionSchema, content: StoredWorkspaceExecutionConfigContentV1Schema.nullable(),
-}).strict());
+const RevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+export const WorkspaceExecutionConfigRowV1Schema = lazyZodSchema(() => z.strictObject({
+  rowId: WorkspaceExecutionConfigRowIdV1Schema, revision: RevisionSchema, content: z.nullable(StoredWorkspaceExecutionConfigContentV1Schema),
+}));
 export type WorkspaceExecutionConfigRowV1 = z.infer<typeof WorkspaceExecutionConfigRowV1Schema>;
-export const WorkspaceExecutionConfigReadRequestV1Schema = lazyZodSchema(() => z.object({ address: WorkspaceExecutionConfigAddressV1Schema }).strict());
+export const WorkspaceExecutionConfigReadRequestV1Schema = lazyZodSchema(() => z.strictObject({ address: WorkspaceExecutionConfigAddressV1Schema }));
 export const WorkspaceExecutionConfigReadResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('present'), revision: RevisionSchema, content: StoredWorkspaceExecutionConfigContentV1Schema }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
-  z.object({ status: z.literal('deleted'), revision: RevisionSchema }).strict(),
+  z.strictObject({ status: z.literal('present'), revision: RevisionSchema, content: StoredWorkspaceExecutionConfigContentV1Schema }),
+  z.strictObject({ status: z.literal('absent') }),
+  z.strictObject({ status: z.literal('deleted'), revision: RevisionSchema }),
 ]));
 export type WorkspaceExecutionConfigReadResponseV1 = z.infer<typeof WorkspaceExecutionConfigReadResponseV1Schema>;
-export const WorkspaceExecutionConfigMutationRequestV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceExecutionConfigMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   address: WorkspaceExecutionConfigAddressV1Schema,
-  expectedRevision: z.union([RevisionSchema, z.literal('absent')]), content: WorkspaceExecutionConfigContentV1Schema.nullable(),
-}).strict());
+  expectedRevision: z.union([RevisionSchema, z.literal('absent')]), content: z.nullable(WorkspaceExecutionConfigContentV1Schema),
+}));
 export const WorkspaceExecutionConfigMutationResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('updated'), revision: RevisionSchema, cursor: RevisionSchema }).strict(),
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER) }).strict(),
+  z.strictObject({ status: z.literal('updated'), revision: RevisionSchema, cursor: RevisionSchema }),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1), z.maximum(Number.MAX_SAFE_INTEGER)) }),
 ]));
 export type WorkspaceExecutionConfigMutationResponseV1 = z.infer<typeof WorkspaceExecutionConfigMutationResponseV1Schema>;
-export const WorkspaceExecutionConfigListResponseV1Schema = lazyZodSchema(() => z.object({ rows: z.array(WorkspaceExecutionConfigRowV1Schema) }).strict());
-export const WorkspaceExecutionConfigStorageUnavailableV1Schema = lazyZodSchema(() => z.object({ error: z.literal('workspace_execution_config_storage_unavailable') }).strict());
-export const WorkspaceExecutionConfigChangeHintV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceExecutionConfigListResponseV1Schema = lazyZodSchema(() => z.strictObject({ rows: z.array(WorkspaceExecutionConfigRowV1Schema) }));
+export const WorkspaceExecutionConfigStorageUnavailableV1Schema = lazyZodSchema(() => z.strictObject({ error: z.literal('workspace_execution_config_storage_unavailable') }));
+export const WorkspaceExecutionConfigChangeHintV1Schema = lazyZodSchema(() => z.strictObject({
   workspaceExecutionConfig: z.literal(true), rowId: WorkspaceExecutionConfigRowIdV1Schema, revision: RevisionSchema,
-}).strict());
+}));

@@ -10,7 +10,7 @@ import {
     type OutboundIdentityNetworkPolicy,
 } from "@/app/net/outboundIdentityNetworkPolicy";
 import type { OidcAuthProviderInstanceConfig } from "@/app/auth/providers/oidc/oidcProviderConfig";
-import { isLoopbackHostname } from "@happier-dev/protocol";
+import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 
 type CachedDiscovery = Readonly<{
     instanceId: string;

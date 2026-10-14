@@ -245,7 +245,7 @@ describe('SelectableMenuResults (React Native Web Pressable)', () => {
             });
 
             expect(container.querySelector('[data-testid="dropdown-option-layout:scroll-frame"]')).not.toBeNull();
-            expect(registerItemLayout).toHaveBeenCalledWith('0');
+            expect(registerItemLayout).toHaveBeenCalledWith('layout');
             expect(layoutHandler).toHaveBeenCalledWith({ nativeEvent: { layout: { y: 24, height: 40 } } });
             expect(consoleErrorSpy.mock.calls.some((args) => args.some((arg) => String(arg).includes('Unknown event handler property `onLayout`')))).toBe(false);
         } finally {

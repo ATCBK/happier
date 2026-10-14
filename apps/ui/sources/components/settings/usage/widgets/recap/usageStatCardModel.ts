@@ -24,6 +24,10 @@ export type UsageStatCardStat = Readonly<{
     | 'maximumConcurrency'
     | 'linkedOutcomes'
     | 'cacheShare'
+    | 'cacheReadTokens'
+    | 'cacheWriteTokens'
+    | 'observedPeak'
+    | 'highlightOutcomes'
     | 'nightActivity'
     | 'coachFindings'
     | 'dollars';
@@ -47,8 +51,10 @@ export type UsageStatCardModel = Readonly<{
   manifest: readonly UsageRecapField[];
   unavailable: readonly UsageRecapField[];
   headline: Readonly<{ value: string; unit: string }> | null;
-  /** Agent mix when selected, else model mix; names only when Names was selected. */
+  /** Existing single-mix renderer adapter; derived from the first canonical group. */
   mix: readonly UsageStatCardMixRow[];
+  /** Distinct selected populations; render each group, never blend their shares. */
+  mixGroups: readonly Readonly<{ kind: 'agentMix' | 'modelMix'; rows: readonly UsageStatCardMixRow[] }>[];
   stats: readonly UsageStatCardStat[];
   /** Day activity for art that draws the rhythm (Skyline, Terminal); counts only. */
   days: readonly number[];
@@ -132,6 +138,10 @@ export function buildUsageStatCardModel(
       value: formatCount(facts.work.linkedOutcomes),
       label: t('usage.board.recap.statLinkedOutcomes'),
     });
+  if (facts.cache) {
+    stats.push({ id: 'cacheReadTokens', value: formatTokenCount(facts.cache.readTokens), label: t('usage.tokenMix.cacheRead') });
+    stats.push({ id: 'cacheWriteTokens', value: formatTokenCount(facts.cache.writeTokens), label: t('usage.tokenMix.cacheWrite') });
+  }
   if (facts.cache && facts.tokens && facts.tokens.total > 0) {
     stats.push({
       id: 'cacheShare',
@@ -152,6 +162,11 @@ export function buildUsageStatCardModel(
       value: formatCount(facts.coach.findings.length),
       label: t('usage.board.recap.statCoach'),
     });
+  for (const highlight of facts.highlights ?? []) {
+    if (highlight.kind === 'observed_peak') stats.push({ id: 'observedPeak', value: formatTokenCount(highlight.tokens),
+      label: t('usage.banner.peakTokens') });
+    else stats.push({ id: 'highlightOutcomes', value: formatCount(highlight.count), label: t('usage.board.recap.statLinkedOutcomes') });
+  }
   if (facts.dollars) {
     // Each money truth stays its own kind; nothing is summed or repriced here.
     for (const kind of MONEY_ORDER) {
@@ -171,7 +186,8 @@ export function buildUsageStatCardModel(
       }
     }
   }
-  const mixSource = facts.agentMix ?? facts.modelMix;
+  const mixGroups = (['agentMix', 'modelMix'] as const).flatMap(kind => facts[kind]
+    ? [{ kind, rows: mixRows(facts[kind], selected.has('names')) }] : []);
   const days = facts.rhythm?.calendarDays.map((day) => day.eventCount) ?? [];
   return {
     style: result.style,
@@ -184,7 +200,8 @@ export function buildUsageStatCardModel(
           unit: t('usage.board.recap.tokensUnit'),
         }
       : null,
-    mix: mixSource ? mixRows(mixSource, selected.has('names')) : [],
+    mix: mixGroups[0]?.rows ?? [],
+    mixGroups,
     stats,
     days,
     period: result.period,

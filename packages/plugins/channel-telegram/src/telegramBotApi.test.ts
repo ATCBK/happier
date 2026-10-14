@@ -463,7 +463,7 @@ describe('Telegram Bot API adapter', () => {
     await expect(oversizedRateLimitedApi.getChat({ chatId: '123' })).resolves.toEqual({
       kind: 'notReady',
       reason: 'rateLimited',
-      retryAfterMs: 86_400_000,
+      retryAfterMs: 86_401_000,
       diagnostic: 'Too Many Requests',
     });
     await expect(oversizedRateLimitedApi.sendMessage({
@@ -473,7 +473,7 @@ describe('Telegram Bot API adapter', () => {
     })).resolves.toEqual({
       kind: 'notSent',
       retry: 'after',
-      retryAfterMs: 86_400_000,
+      retryAfterMs: 86_401_000,
       diagnostic: 'Too Many Requests',
     });
     await expect(unknownApi.sendMessage({ chatId: '123', text: 'reply', suppressLinkPreview: true })).resolves.toEqual({

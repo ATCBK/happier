@@ -6,7 +6,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { createRecipientContractDigestV1, normalizeRecipientContractV1, VoiceProviderContributionSchema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol';
+import { createRecipientContractDigestV1, normalizeRecipientContractV1, VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -198,8 +199,8 @@ async function setup(settings: Settings = settingsParse({}), connectedPurposes: 
   account.purposes!.writes.length = 0;
 }
 function storedRef() {
-  const resource = account?.resources.find(resource => resource.entry.name === 'Acme key');
-  if (!resource) throw new Error('Expected acknowledged SavedSecret Resource');
+  const resource = account?.resources.find(resource => 'name' in resource.entry && resource.entry.name === 'Acme key');
+  if (!resource || !('ref' in resource.entry)) throw new Error('Expected acknowledged SavedSecret Resource');
   return resource.entry.ref;
 }
 function binding() { return account?.persistedSettings.voiceSettingsV1.credentialBindings[0]; }
@@ -229,7 +230,8 @@ async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew
   if (id === 'useSavedSecret') {
     const ref = selectedSecretRef ?? storedRef();
     await vi.waitFor(() => expect(screen.tree.findByTestId(`saved-secret:${ref}`)).not.toBeNull());
-    pickerProps = screen.tree.findAllByType(SavedSecretPickerModal)[0]?.props;
+    // React Test Renderer exposes props as an untyped SDK bag at this component boundary.
+    pickerProps = screen.tree.findAllByType(SavedSecretPickerModal)[0]?.props as React.ComponentProps<typeof SavedSecretPickerModal> | undefined;
     await screen.tree.pressByTestIdAsync(`saved-secret:${ref}`);
   } else if (reviewing) {
     await vi.waitFor(() => expect(boundary.confirm.mock.calls.length).toBeGreaterThan(confirmationsBefore));
@@ -316,6 +318,7 @@ describe('VoiceCredentialItem', () => {
     await gesture(screen);
     await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(binding()).toMatchObject({ credentialSource: { kind: 'connectedAccount' } });
+    if (!account) throw new Error('Expected the restored credential Account');
     expect(account.purposes!.value.bindings).toEqual([connectedPurpose]);
     expect(account.resources).toHaveLength(2);
   });

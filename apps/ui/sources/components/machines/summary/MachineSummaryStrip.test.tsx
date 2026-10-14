@@ -36,6 +36,7 @@ describe('MachineSummaryStrip', () => {
             style="numbers" metrics={['cpu', 'memory']} layout="under" />);
         expect(screen.findByTestId('strip')).not.toBeNull();
         expect(screen.getTextContent()).not.toContain('0%');
+        expect(screen.getTextContent()).toContain('–');
     });
 
     it('labels ring-tile memory and disk amounts with their free-space units', async () => {

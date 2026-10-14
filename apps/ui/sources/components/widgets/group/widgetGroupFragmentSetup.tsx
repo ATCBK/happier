@@ -164,8 +164,10 @@ export function buildWidgetGroupFragmentEntry(
       renderPreview: ({ draft }) => input.renderGroupPreview(fragment, draft),
       // The group is its own frame: until its inputs are chosen, the same frame with each widget waiting.
       renderWaitingPreview: ({ draft, waiting }) => input.renderGroupPreview(fragment, draft, waiting),
+      // One answer the widgets follow is worth naming ("following happier"); several are already on
+      // screen above the line, and naming only the first would read as the group's one value.
       describeOutcome: ({ values }) => t('widgetFrame.groupAddsFollowing', {
-        name: fragment.name, count: fragment.childCount, value: values[0] ?? null,
+        name: fragment.name, count: fragment.childCount, value: values.length === 1 ? values[0]! : null,
       }),
       submit: (draft) => input.add(fragment, draft),
     };

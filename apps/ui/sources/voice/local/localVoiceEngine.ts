@@ -1432,7 +1432,7 @@ export async function toggleLocalVoiceTurn(
   }
 }
 
-export async function stopLocalVoiceSession(): Promise<void> {
+export async function stopLocalVoiceSession(reason?: 'continued_elsewhere'): Promise<void> {
   // A Voice Home carrier may still be resolving before capture starts. Fence
   // that work before reading the machine so a late completion cannot revive
   // the microphone after Stop (including a same-session retry).
@@ -1459,7 +1459,7 @@ export async function stopLocalVoiceSession(): Promise<void> {
     noteTtsStopped();
     let captureCleanupError: unknown = null;
     // Capture the admitted run before native cleanup yields across a Home/Account switch.
-    const agentStop = voiceAgentSessions.stop(activeSessionId).catch(() => {});
+    const agentStop = voiceAgentSessions.stop(activeSessionId, reason).catch(() => {});
 
     if (activeTurnAbortController && activeTurnAbortSessionId === activeSessionId) {
       try {

@@ -6,6 +6,7 @@ import { db } from "@/storage/db";
 import { userRoutes } from "./userRoutes";
 import { createAppCloseTracker } from "../../testkit/appLifecycle";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { UsersSearchResponseSchema } from "@happier-dev/protocol";
 
 const { trackApp, closeTrackedApps } = createAppCloseTracker();
 
@@ -385,6 +386,43 @@ describe("Friends + GitHub gating (integration)", () => {
         const body = res.json() as { users: Array<{ id: string }> };
         expect(body.users.map((user) => user.id).sort()).toEqual([friend.id, teammate.id].sort());
         expect(body.users.map((user) => user.id)).not.toContain(outsider.id);
+        await app.close();
+    });
+
+    it("finds freshly named Team colleagues without usernames and pages their canonical names", async () => {
+        applyFriendsRouteEnv(harness, { HAPPIER_FEATURE_SOCIAL_FRIENDS__ENABLED: "0" });
+        const app = createTestApp();
+        await userRoutes(app as any);
+        await app.ready();
+        const actor = await db.account.create({ data: { publicKey: "pk-name-search-actor" } });
+        const team = await db.team.create({ data: { name: "Design" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "member" } });
+        const colleagues = await Promise.all(Array.from({ length: 11 }, async (_, index) => {
+            const account = await db.account.create({ data: {
+                publicKey: `pk-name-search-${index}`, name: "Previous name", firstName: "Stale", lastName: "Identity",
+            } });
+            await db.teamMembership.create({ data: { teamId: team.id, accountId: account.id, role: "member" } });
+            return await db.account.update({ where: { id: account.id }, data: { name: "Noah Patel" } });
+        }));
+        const outsider = await db.account.create({ data: { publicKey: "pk-name-search-outsider", name: "Noah Outside" } });
+        const search = async (query: string, cursor?: string) => {
+            const response = await app.inject({ method: "GET", headers: { "x-test-user-id": actor.id },
+                url: `/v1/user/search?${new URLSearchParams({ query, purpose: "collaboration", ...(cursor ? { cursor } : {}) })}` });
+            expect(response.statusCode).toBe(200);
+            // The registered route serializes its real DB output into the exact UI consumer schema.
+            return UsersSearchResponseSchema.parse(response.json());
+        };
+        const first = await search("noah");
+        expect(first.users).toHaveLength(10);
+        expect(first.nextCursor).toEqual(expect.any(String));
+        const second = await search("noah", first.nextCursor!);
+        expect(second.users).toHaveLength(1);
+        expect(second.nextCursor).toBeNull();
+        const people = [...first.users, ...second.users];
+        expect(new Set(people.map((user) => user.id))).toEqual(new Set(colleagues.map((account) => account.id)));
+        expect(people.every((user) => user.name === "Noah Patel")).toBe(true);
+        expect(people.some((user) => user.id === outsider.id)).toBe(false);
+        expect((await search("Stale")).users).toEqual([]);
         await app.close();
     });
 

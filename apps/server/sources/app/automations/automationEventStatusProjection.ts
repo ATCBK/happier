@@ -1,12 +1,7 @@
-import {
-    AutomationEventSourceStatusV1Schema,
-    AutomationEventSourceCatalogStatusSchema,
-    automationEventSourceCatalogScopeKeyV1,
-    type AutomationEventSourceCatalogScopeKeyV1,
-    type AutomationEventSourceStatusV1,
-    type AutomationEventSourceCatalogStatus,
-    type PluginMachineMaterializationRefV1,
-} from "@happier-dev/protocol";
+import { AutomationEventSourceStatusV1Schema, type AutomationEventSourceStatusV1 } from '@happier-dev/protocol/automations/automationEventSourceStatusV1';
+import { AutomationEventSourceCatalogStatusSchema, type AutomationEventSourceCatalogStatus } from '@happier-dev/protocol/automations/automationTriggerProjectionV1';
+import { automationEventSourceCatalogScopeKeyV1, type AutomationEventSourceCatalogScopeKeyV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
+import { type PluginMachineMaterializationRefV1 } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
 
 import { db } from "@/storage/db";
 

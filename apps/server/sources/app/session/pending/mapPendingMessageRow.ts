@@ -1,11 +1,7 @@
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
-import {
-    normalizePendingDeliveryStatusV1,
-    PendingRequestedActionV1Schema,
-    type PendingDeliveryStatusV1,
-    type PendingRequestedActionV1,
-    type SessionMessageAccountActorV1,
-} from "@happier-dev/protocol";
+import { normalizePendingDeliveryStatusV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 export type PendingMessageRow = {
     localId: string;
@@ -48,7 +44,7 @@ export type PendingMessageRowRaw = {
 export function mapPendingMessageRow(row: PendingMessageRowRaw, accountActor: SessionMessageAccountActorV1 | null = null): PendingMessageRow {
     const parsedRequestedAction = row.requestedAction == null
         ? PendingRequestedActionV1Schema.safeParse({ v: 1, kind: "enqueue" })
-        : PendingRequestedActionV1Schema.safeParse(row.requestedAction);
+        : PendingRequestedActionV1StoredSchema.safeParse(row.requestedAction);
     const requestedActionMalformed = !parsedRequestedAction.success;
     const deliveryState = typeof row.deliveryState === "string" && row.deliveryState.length > 0 ? row.deliveryState : null;
     const deliveryBlockedReason =

@@ -1,4 +1,4 @@
-import type { StoredJsonContentEnvelope } from "@happier-dev/protocol";
+import type { StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 
 import { encodeSensitiveContentForAtRestStorage } from "@/app/encryption/sensitiveContentAtRestStorage";
 

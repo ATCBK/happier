@@ -184,7 +184,7 @@ export function RealtimeProviderFields(props: Readonly<{
     const setting = settingRef(field.path);
     const binding = setting?.storage;
     const encoded = value !== null && typeof value === 'object' ? JSON.stringify(value) : value;
-    const parsed = binding?.scope === 'account' && binding.kind === 'owner' ? binding.parse(encoded) : null;
+    const parsed = binding?.scope === 'account' && 'kind' in binding && binding.kind === 'owner' ? binding.parse(encoded) : null;
     if (!setting || !parsed?.success || !updateRealtimeProviderConfig(latest.owner, latest.config, field.pathSegments, value)) {
       Modal.alert(t('common.error'), tLoose('settingsVoice.realtimeProviders.invalidValue'));
       return false;
@@ -246,8 +246,8 @@ export function RealtimeProviderFields(props: Readonly<{
       const format = (number: number) => `${typeof field.fractionDigits === 'number' ? number.toFixed(field.fractionDigits) : number}${typeof field.valueSuffix === 'string' ? field.valueSuffix : ''}`;
       return <Item key={key} testID={fieldTestId(field)} title={translate(title)} subtitle={translate(subtitle)}
         subtitleLines={0} showChevron={false} accessoryLayout="adaptive" rightElementOutsidePressable
-        rightElement={<View style={{ gap: 4, minWidth: 180, flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        rightElement={<View style={{ gap: theme.space.s4, minWidth: 180, flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s8 }}>
             <Text style={{ ...Typography.default(), fontVariant: ['tabular-nums'], color: theme.colors.text.secondary }}>{format(value)}</Text>
             {value !== defaultValue ? <RoundButton testID={`${fieldTestId(field)}.default`} title={t('common.default')} size="small" display="inverted"
               onPress={() => { if (field.nullable === true) write(field, null, props.providerId); else commitNumber(field, current, ''); }} /> : null}

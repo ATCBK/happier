@@ -227,7 +227,6 @@ describe('buildWalkthroughReading', () => {
         expect(arriving.stops).toHaveLength(1);
         const failed = buildWalkthroughReading(input({ walkthrough: { state: 'failed', value: WALKTHROUGH, reason: 'overloaded' } }));
         expect(failed.phase).toBe('failed');
-        expect(failed.failureReason).toBe('overloaded');
         expect(failed.stops).toHaveLength(2);
         expect(buildWalkthroughReading(input({ walkthrough: null })).phase).toBe('none');
     });

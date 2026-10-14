@@ -7,12 +7,17 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { t } from '@/text';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Modal } from '@/modal';
+import { ValueRefEditorModal, getValueRefEditorModalTitle } from '@/components/ui/forms/valueRefs/ValueRefEditorModal';
+import { createMcpServerRecovery } from './mcpServerRecovery';
 
 import { McpServerConfigurationSection, type McpConfigurationSaveState } from '../McpServerConfigureForm';
-import { mcpServerMissingKeyNames } from '../status/mcpServerStatus';
+import { mcpServerMissingKeyNames, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
 import { mcpServerDisplayName } from '../collection/mcpServerCollectionModel';
 import { McpServerMark } from '../identity/McpServerMark';
 import { McpServerMachineDifferences } from './McpServerMachineDifferences';
+import { McpSignInSection } from '../signIn/McpSignInSection';
 import {
   McpServerBanner,
   McpServerMachinesAndDetails,
@@ -30,6 +35,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
     draftServer: McpServerCatalogEntryV1;
     catalogRevision: number | 'absent' | null;
     secrets: SavedSecret[];
+    secretAvailability: McpSavedSecretAvailability;
     scope: AccountSettingsScope | null | undefined;
     /** A Configuration value was committed (blur, a type or secret chosen): save it now. */
     onCommitConfiguration: () => void;
@@ -42,18 +48,29 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
   }>,
 ) {
   const { server } = props;
-  const savedSecretIds = React.useMemo(
-    () => new Set(props.secrets.map((secret) => secret.id)),
-    [props.secrets],
-  );
+  const { secretAvailability } = props;
+  const router = useRouter();
+  const recovery = React.useMemo(() => createMcpServerRecovery({
+    server: props.draftServer,
+    missingKeys: mcpServerMissingKeyNames(props.draftServer, secretAvailability),
+    isMissingReference: ref => secretAvailability.resolveReference(ref).status !== 'ready',
+    scopeServerId: props.scope?.serverId,
+    onChangeServer: props.onChangeServer,
+    onCommit: props.onCommitConfiguration,
+    openRoute: route => router.push(route as never),
+    openEditor: editor => Modal.show({ component: ValueRefEditorModal,
+      props: { ...editor, lockKey: true, secrets: props.secrets, scope: props.scope },
+      chrome: { kind: 'card', title: getValueRefEditorModalTitle(editor.kind), dimensions: { size: 'lg' } }, closeOnBackdrop: true }),
+  }), [props.draftServer, props.onChangeServer, props.onCommitConfiguration, props.scope, props.secrets, router, secretAvailability]);
   const detail = useMcpServerDetail(
     server,
     props.catalogRevision,
-    savedSecretIds,
+    secretAvailability,
+    recovery,
   );
   const missingKeys = React.useMemo(
-    () => mcpServerMissingKeyNames(server, savedSecretIds),
-    [savedSecretIds, server],
+    () => mcpServerMissingKeyNames(server, secretAvailability),
+    [secretAvailability, server],
   );
   const name = mcpServerDisplayName(server);
   const list = detail.tools.list;
@@ -106,6 +123,9 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       />
       {props.approvalNotice}
       <McpServerBanner detail={detail} name={name} toolCount={toolCount} />
+      {detail.signIn.view ? (
+        <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} onUseApiKey={recovery.useApiKey} />
+      ) : null}
       <McpServerWhereAndTools detail={detail} />
       <McpServerConfigurationSection
         title={t('capabilities.mcp.detail.configurationTitle')}
@@ -122,6 +142,9 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       <McpServerMachineDifferences
         server={props.draftServer}
         machineName={detail.names.machineName}
+        machines={detail.placeMachines}
+        secrets={props.secrets}
+        scope={props.scope}
         onChangeServer={props.onChangeServer}
         onCommit={props.onCommitConfiguration}
       />

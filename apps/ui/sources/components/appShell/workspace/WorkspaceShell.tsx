@@ -18,12 +18,16 @@ import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback'
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { DestinationInstanceHost } from './DestinationInstanceHost';
 import { useOptionalWorkspaceNavigation, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import type { WorkspaceGroup } from './workspaceState';
 import { createWorkspaceSplit, WORKSPACE_VIEW_MINIMUM } from './workspaceSplit';
 import { WorkspaceGroupTabs } from './titleBar/WorkspaceGroupTabs';
+import { executeWorkspaceUiAction } from './workspaceActionRuntime';
 import { resolveWorkspaceTopRowGroupIds, WorkspaceBarGeometryContext } from './titleBar/workspaceBarGeometry';
 // The body selector shares Expo's already-loaded context, not a second lazy graph.
 import { WorkspaceDestinationBody as DestinationBody } from './WorkspaceDestinationBody';
@@ -83,9 +87,23 @@ function WorkspaceCanvas(props: Readonly<{
                     if (group) workspace.activateTab(group.id, group.activeTabId);
                 }
                 break;
-            case 'closeLeaf':
-                for (const tabId of workspace.state.groups[action.leafId]?.tabIds ?? []) workspace.closeTab(action.leafId, tabId);
+            case 'closeLeaf': {
+                const lifetime = captureActiveServerAccountScopeCurrentness();
+                const group = workspace.state.groups[action.leafId];
+                if (!group) break;
+                // Closing a pane explicitly closes pinned members too; Close All keeps them.
+                fireAndForget((async () => {
+                    for (const tabId of group.tabIds) {
+                        if (!lifetime.isCurrent()) return;
+                        const result = await executeWorkspaceUiAction({ actionId: 'workspace.tabs.close', input: { tabId } }, href => {
+                            const navigation = workspace.navigationForTab(group.activeTabId);
+                            (navigation.pushRetainingCurrent ?? navigation.push)(href);
+                        });
+                        if (!result.ok || ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return;
+                    }
+                })(), { tag: 'Workspace.pane.close' });
                 break;
+            }
             case 'toggleMaximizeLeaf':
                 workspace.dispatch({ type: 'toggleMaximize', groupId: action.leafId });
                 break;

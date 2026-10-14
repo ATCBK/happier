@@ -1,8 +1,4 @@
-import {
-    normalizeSessionFollowFrontierV1,
-    projectSessionFollowFrontierFromSourceV1,
-    type SessionFollowFrontierV1,
-} from "@happier-dev/protocol";
+import { normalizeSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 
 /**
  * Persistence adapter between Session relation columns and Protocol's

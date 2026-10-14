@@ -1,11 +1,9 @@
-import type {
-    ReviewCommentListRequestV1,
-    ReviewCommentV1,
-} from "@happier-dev/protocol";
+import type { ReviewCommentListRequestV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import type { ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 
 import { ReviewCommentOperationError } from "./errors";
-import { normalizeReviewCommentListFilters, matchesReviewCommentListFilters, compareReviewCommentListOrder, canonicalReviewCommentListFilters, type ReviewCommentCanonicalFilters, type ReviewCommentQueryRecordV1 } from "@happier-dev/protocol";
-export { normalizeReviewCommentListFilters, matchesReviewCommentListFilters, compareReviewCommentListOrder, canonicalReviewCommentListFilters } from "@happier-dev/protocol";
+import { normalizeReviewCommentListFilters, matchesReviewCommentListFilters, compareReviewCommentListOrder, canonicalReviewCommentListFilters, type ReviewCommentCanonicalFilters, type ReviewCommentQueryRecordV1 } from '@happier-dev/protocol/reviews/comments/queries';
+export { normalizeReviewCommentListFilters, matchesReviewCommentListFilters, compareReviewCommentListOrder, canonicalReviewCommentListFilters } from '@happier-dev/protocol/reviews/comments/queries';
 
 type ReviewCommentListPosition = Readonly<{
     updatedAt: number;

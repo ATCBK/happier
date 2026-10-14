@@ -181,10 +181,18 @@ export class ConnectedServiceRuntimeRegistry {
     return this.withRegisteredBindings(target);
   }
 
-  public readAppliedSessionBindings(input: Readonly<{ runnerPid: number; sessionId: string; agentId: string }>): Readonly<
+  public readAppliedSessionBindings(input: Readonly<{ runnerPid: number; sessionId: string; agentId: string }>,
+    runtimeIdentity?: Readonly<{ pid: number; sessionRunnerPid?: number; happySessionId?: string }>,
+  ): Readonly<
     { status: 'unavailable' } | { status: 'applied'; connectedServices: ConnectedServiceBindingsV2 }
   > {
-    const target = this.getByPid(input.runnerPid);
+    if (runtimeIdentity && (runtimeIdentity.happySessionId !== input.sessionId
+      || (input.runnerPid !== runtimeIdentity.pid && input.runnerPid !== runtimeIdentity.sessionRunnerPid))) {
+      return { status: 'unavailable' };
+    }
+    // Wrapper launchers retain the registry target; accepted runner identity
+    // comes from the daemon's canonical tracked Session, never from a new alias table.
+    const target = this.getByPid(runtimeIdentity?.pid ?? input.runnerPid);
     if (!target || target.sessionId !== input.sessionId || target.agentId !== input.agentId) return { status: 'unavailable' };
     const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(target.connectedServicesBindingsRaw);
     if (!parsed.success) return { status: 'unavailable' };

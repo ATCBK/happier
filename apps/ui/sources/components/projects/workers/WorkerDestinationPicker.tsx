@@ -8,6 +8,7 @@ import type {
 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
 import { useMachineSelectionListModel, type ServerScopedMachinePoolSelection } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
+import { foldOfflineWorkers } from '@/components/sessions/new/components/machineSelection/foldOfflineWorkers';
 import { useMachinePoolGroups } from '@/components/sessions/new/hooks/machines/useMachinePoolGroups';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { useNewSessionActiveServerSource } from '@/components/sessions/new/hooks/serverTarget/useNewSessionActiveServerSource';
@@ -66,50 +67,6 @@ export type WorkerDestinationPickerProps = Readonly<{
   trailingSections?: ReadonlyArray<SelectionListSectionDescriptor>;
   footer?: React.ReactNode;
 }>;
-
-type OfflineFoldCopy = Readonly<{
-  label: (count: number) => string;
-  detail: string;
-  open: boolean;
-  onToggle: () => void;
-  icon: React.ReactNode;
-  /** The disclosure mark at the row's end (it points where the list will go). */
-  accessory: React.ReactNode;
-}>;
-
-/**
- * Offline workers say the same thing, so several of them fold into one quiet row that lists them in
- * place when asked. A lone offline worker keeps its own name, and a worker that is unavailable for
- * any other reason (too small, not accepting) stays in place with that reason.
- */
-export function foldOfflineWorkers(
-  sections: ReadonlyArray<SelectionListSectionDescriptor>,
-  isOffline: (option: SelectionListOption) => boolean,
-  copy: OfflineFoldCopy,
-): SelectionListSectionDescriptor[] {
-  return sections.map((section) => {
-    if (section.kind !== 'static') return section;
-    const folded = section.options.filter(isOffline);
-    if (folded.length < 2) return section;
-    const foldedIds = new Set(folded.map((option) => option.id));
-    const fold: SelectionListOption = {
-      id: `offline:${section.id}`,
-      label: copy.label(folded.length),
-      subtitle: copy.detail,
-      icon: copy.icon,
-      rightAccessory: copy.accessory,
-      onSelect: copy.onToggle,
-    };
-    return {
-      ...section,
-      options: [
-        ...section.options.filter((option) => !foldedIds.has(option.id)),
-        fold,
-        ...(copy.open ? folded : []),
-      ],
-    };
-  });
-}
 
 function selectedOptionId(
   selected: ProjectExecutionChoiceV1 | null,

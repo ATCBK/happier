@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ImageRefSchema } from '../common/imageRef.js';
 import { ProfileBadgeSchema } from '../common/profileBadge.js';
 import { AccountRecipientEnvelopeReadinessSchema } from '../account/encryptionMode.js';
@@ -11,25 +11,25 @@ export type RelationshipStatus = z.infer<typeof RelationshipStatusSchema>;
 
 const UserProfileFieldsSchema = lazyZodSchema(() => z.object({
   id: z.string(),
-  name: z.string().nullable().optional(),
+  name: z.optional(z.nullable(z.string())),
   firstName: z.string(),
-  lastName: z.string().nullable(),
-  avatar: ImageRefSchema.nullable(),
+  lastName: z.nullable(z.string()),
+  avatar: z.nullable(ImageRefSchema),
   username: z.string(),
-  bio: z.string().nullable(),
-  badges: z.array(ProfileBadgeSchema).optional().default([]),
+  bio: z.nullable(z.string()),
+  badges: z._default(z.optional(z.array(ProfileBadgeSchema)), []),
   status: RelationshipStatusSchema,
   // Keyless accounts (enterprise/plaintext mode) may not have an E2EE signing public key.
-  publicKey: z.string().nullable(),
+  publicKey: z.nullable(z.string()),
   // Optional for backward compatibility with older servers.
-  contentPublicKey: z.string().nullable().optional(),
-  contentPublicKeySig: z.string().nullable().optional(),
+  contentPublicKey: z.optional(z.nullable(z.string())),
+  contentPublicKeySig: z.optional(z.nullable(z.string())),
 }));
 
-export const UserProfileSchema = lazyZodSchema(() => UserProfileFieldsSchema.transform(profile => ({
+export const UserProfileSchema = lazyZodSchema(() => z.pipe(UserProfileFieldsSchema, z.transform(profile => ({
   ...profile,
   name: readAccountNameFromLegacyProfileV1(profile),
-})));
+}))));
 
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
@@ -38,9 +38,9 @@ export type UserResponse = z.infer<typeof UserResponseSchema>;
 
 /** Authenticated exact-user projection consumed by trusted direct-grant hosts. */
 export const UserRecipientEnvelopeResponseSchema = lazyZodSchema(() => z.object({
-  user: UserProfileFieldsSchema.extend({
+  user: z.pipe(z.extend(UserProfileFieldsSchema, {
     recipientEnvelopeReadiness: AccountRecipientEnvelopeReadinessSchema,
-  }).transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })),
+  }), z.transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) }))),
 }));
 export type UserRecipientEnvelopeResponse = z.infer<typeof UserRecipientEnvelopeResponseSchema>;
 
@@ -51,19 +51,19 @@ export type FriendsResponse = z.infer<typeof FriendsResponseSchema>;
  * Username discovery is a keyset-paged directory. The continuation is opaque
  * and query-bound by the server; clients only carry it back unchanged.
  */
-export const UsersSearchQueryV1Schema = lazyZodSchema(() => z.object({
+export const UsersSearchQueryV1Schema = lazyZodSchema(() => z.strictObject({
   query: z.string(),
-  cursor: z.string().min(1).max(KEYSET_CURSOR_MAX_LENGTH_V1).optional(),
+  cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(KEYSET_CURSOR_MAX_LENGTH_V1))),
   /** Narrow the directory to Accounts the caller may name in a collaboration grant. */
-  purpose: z.literal('collaboration').optional(),
-}).strict());
+  purpose: z.optional(z.literal('collaboration')),
+}));
 export type UsersSearchQueryV1 = z.infer<typeof UsersSearchQueryV1Schema>;
 
 export const UsersSearchResponseSchema = lazyZodSchema(() => z.object({
   users: z.array(UserProfileSchema),
   // Optional while current clients can still meet a released Home. Absence is
   // the released bounded result and therefore has no continuation.
-  nextCursor: z.string().min(1).max(KEYSET_CURSOR_MAX_LENGTH_V1).nullable().optional(),
+  nextCursor: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(KEYSET_CURSOR_MAX_LENGTH_V1)))),
 }));
 export type UsersSearchResponse = z.infer<typeof UsersSearchResponseSchema>;
 
@@ -72,8 +72,8 @@ export const RelationshipUpdatedEventSchema = lazyZodSchema(() => z.object({
   toUserId: z.string(),
   status: RelationshipStatusSchema,
   action: z.enum(['created', 'updated', 'deleted']),
-  fromUser: UserProfileSchema.optional(),
-  toUser: UserProfileSchema.optional(),
+  fromUser: z.optional(UserProfileSchema),
+  toUser: z.optional(UserProfileSchema),
   timestamp: z.number(),
 }));
 

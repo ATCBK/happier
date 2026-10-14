@@ -2,6 +2,7 @@ import type { WorkspaceActionId } from '@happier-dev/protocol';
 import { workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import type { Href } from 'expo-router';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -32,7 +33,7 @@ export async function invokeWorkspaceAction(request: Parameters<MountedWorkspace
 }
 
 /** Human menus and shortcuts enter Action policy before reaching the admitted mounted transport. */
-export async function executeWorkspaceUiAction(request: Parameters<MountedWorkspaceAction>[0], openApproval: (href: string) => void): Promise<ActionExecuteResult> {
+export async function executeWorkspaceUiAction(request: Parameters<MountedWorkspaceAction>[0], openApproval: (href: Href) => void): Promise<ActionExecuteResult> {
     const lifetime = captureActiveServerAccountScopeCurrentness();
     const scope = getActiveServerAccountScope();
     try {

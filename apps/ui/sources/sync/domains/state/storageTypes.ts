@@ -241,12 +241,15 @@ export const MachineMetadataSchema = StoredMachinePublishedMetadataV1Schema;
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>;
 
-export type MachineLockedReason =
-    | 'encryption_material_unavailable'
-    | 'decryption_failed'
-    | 'content_unreadable'
-    | 'recipient_key_pending'
-    | 'recipient_access_refused';
+export const MachineLockedReasonSchema = z.enum([
+    'encryption_material_unavailable',
+    'decryption_failed',
+    'content_unreadable',
+    'recipient_key_pending',
+    'recipient_access_refused',
+]);
+
+export type MachineLockedReason = z.infer<typeof MachineLockedReasonSchema>;
 
 export type MachineAvailability =
     | Readonly<{ kind: 'available' }>

@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { UsageCoachPreferencesV1 } from '../account/settings/usageCoachPreferencesV1.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getUsageQueryKey, normalizeUsageQuery, resolveUsageQueryPeriod, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsCoverageSchema, UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageQueryAccountingSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
@@ -24,24 +24,24 @@ export type { UsagePlanInsights } from './usagePlanInsights.js';
 export const UsageQuerySourceStatusSchema = lazyZodSchema(() => z.enum([
   'available', 'stale', 'not_loaded', 'pending', 'error', 'unsupported', 'unknown', 'partial',
 ]));
-export const UsageQuerySourceStateSchema = lazyZodSchema(() => z.object({
-  source: z.string().trim().min(1),
+export const UsageQuerySourceStateSchema = lazyZodSchema(() => z.strictObject({
+  source: z.string().check(z.trim(), z.minLength(1)),
   status: UsageQuerySourceStatusSchema,
-  asOfMs: z.number().int().nonnegative().optional(),
-  errorCode: z.string().trim().min(1).optional(),
-}).strict());
+  asOfMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  errorCode: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type UsageQuerySourceState = z.infer<typeof UsageQuerySourceStateSchema>;
 
 /** Pool membership is an Account projection, separate from unique B account/window facts. */
-export const UsageQueryPoolSnapshotSchema = lazyZodSchema(() => z.object({
+export const UsageQueryPoolSnapshotSchema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupRefSchema,
-  memberAccountIds: z.array(z.string().trim().min(1)),
-  activeAccountId: z.string().trim().min(1).nullable(),
-  selection: UsageQuerySourceStateSchema.omit({ source: true }).extend({
-    machineId: z.string().trim().min(1).optional(),
-    value: ConnectedServicePoolSelectionGetResponseV1Schema.optional(),
-  }).strict(),
-}).strict().superRefine((pool, context) => {
+  memberAccountIds: z.array(z.string().check(z.trim(), z.minLength(1))),
+  activeAccountId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  selection: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(UsageQuerySourceStateSchema, { source: true }), {
+    machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    value: z.optional(ConnectedServicePoolSelectionGetResponseV1Schema),
+  })),
+}).check(z.superRefine((pool, context) => {
   const value = pool.selection.value;
   if (value && !['available', 'stale'].includes(pool.selection.status)) {
     context.addIssue({ code: 'custom', path: ['selection'], message: 'Unavailable selector cannot disclose retained decisions' });
@@ -49,35 +49,34 @@ export const UsageQueryPoolSnapshotSchema = lazyZodSchema(() => z.object({
   if (value && 'group' in value && !sameStrictJsonValue(value.group, pool.group)) {
     context.addIssue({ code: 'custom', path: ['selection'], message: 'Selector must identify its qualified pool' });
   }
-}));
+})));
 export type UsageQueryPoolSnapshot = z.infer<typeof UsageQueryPoolSnapshotSchema>;
 export type UsagePoolSourceSnapshot = Readonly<{ query: UsageQuery; value: readonly UsageQueryPoolSnapshot[] }>;
 
-// Opened machine labels belong to the authorized client projection, not accounting storage or its server response.
-const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
-  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
-    displayLocation: z.string().trim().min(1).optional(),
-  }).strict()) }).strict().optional(),
-}));
+function readBoundedAccountingPeriod(value: UsageAnalyticsQueryResponse | undefined) {
+  const range = value?.coverage?.range;
+  return range?.startMs !== undefined && range.endMs !== undefined
+    ? { startMs: range.startMs, endMs: range.endMs } : undefined;
+}
 
-export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
-  key: z.string().min(1),
+export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.minLength(1)),
   requestedQuery: UsageQuerySchema,
   shownQuery: UsageQuerySchema,
-  accounting: UsageQueryAccountingSchema.optional(),
-  costFactTotals: z.array(UsageCostFactTotalSchema).optional(),
-  quota: z.array(ConnectedServiceQuotaGetResultV1Schema).optional(),
-  pools: z.array(UsageQueryPoolSnapshotSchema).optional(),
-  planInsights: UsagePlanInsightsSchema.optional(),
-  comparison: z.object({ query: UsageQuerySchema, accounting: UsageQueryAccountingSchema.optional(),
-    costFactTotals: z.array(UsageCostFactTotalSchema).optional(),
-    source: UsageQuerySourceStateSchema }).strict().optional(),
-  work: UsageWorkProjectionSchema.optional(),
-  howYouWork: UsageHowYouWorkSchema.optional(),
-  coach: UsageCoachEvaluationSchema.optional(),
+  accounting: z.optional(UsageQueryAccountingSchema),
+  costFactTotals: z.optional(z.array(UsageCostFactTotalSchema)),
+  quota: z.optional(z.array(ConnectedServiceQuotaGetResultV1Schema)),
+  pools: z.optional(z.array(UsageQueryPoolSnapshotSchema)),
+  planInsights: z.optional(UsagePlanInsightsSchema),
+  comparison: z.optional(z.strictObject({ query: UsageQuerySchema, accounting: z.optional(UsageQueryAccountingSchema),
+    costFactTotals: z.optional(z.array(UsageCostFactTotalSchema)),
+    source: UsageQuerySourceStateSchema })),
+  work: z.optional(UsageWorkProjectionSchema),
+  howYouWork: z.optional(UsageHowYouWorkSchema),
+  coach: z.optional(UsageCoachEvaluationSchema),
   sources: z.array(UsageQuerySourceStateSchema),
   pending: z.boolean(),
-}).strict().superRefine((slice, context) => {
+}).check(z.superRefine((slice, context) => {
   if (slice.key !== getUsageQueryKey(slice.requestedQuery)) {
     context.addIssue({ code: 'custom', path: ['key'], message: 'Result key must identify the requested query' });
   }
@@ -94,9 +93,13 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
     slice.comparison.costFactTotals, projectUsageCostFactTotals(slice.comparison.accounting.costFacts ?? [])))) {
     context.addIssue({ code: 'custom', path: ['comparison', 'costFactTotals'], message: 'Comparison money totals must preserve their admitted accounting and source provenance' });
   }
+  // Retained private evidence can have an older read window during progression.
+  // Accounting comparisons and calendar facts belong to the witnessed A window.
+  const accountingPeriod = 'relative' in slice.shownQuery.period
+    ? readBoundedAccountingPeriod(slice.accounting) ?? slice.coach?.period ?? slice.accounting?.coverage?.range
+    : slice.shownQuery.period;
   if (slice.comparison) {
-    const expected = resolveUsageComparisonQuery(slice.requestedQuery, 'relative' in slice.requestedQuery.period
-      ? slice.coach?.period ?? slice.accounting?.coverage?.range : slice.requestedQuery.period);
+    const expected = resolveUsageComparisonQuery(slice.requestedQuery, accountingPeriod);
     if (!expected || getUsageQueryKey(slice.comparison.query) !== getUsageQueryKey(expected)) {
       context.addIssue({ code: 'custom', path: ['comparison', 'query'], message: 'Comparison must identify the exact preceding range' });
     }
@@ -113,10 +116,10 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
   }
   const week = slice.planInsights?.recordedWeek;
   const witnessedPeriod = 'relative' in slice.shownQuery.period
-    ? slice.coach?.period ?? slice.accounting?.coverage?.range
+    ? slice.coach?.period ?? accountingPeriod
     : slice.shownQuery.period;
   if (week?.status === 'available' && (!slice.accounting?.activity
-    || week.startMs !== witnessedPeriod?.startMs || week.endMs !== witnessedPeriod?.endMs
+    || week.startMs !== accountingPeriod?.startMs || week.endMs !== accountingPeriod?.endMs
     || week.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes)) {
     context.addIssue({ code: 'custom', path: ['planInsights', 'recordedWeek'], message: 'Recorded week must preserve admitted accounting period and calendar' });
   }
@@ -142,19 +145,19 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
     && !slice.sources.some(source => source.source === 'how_you_work' && ['available', 'partial', 'stale', 'pending'].includes(source.status))) {
     context.addIssue({ code: 'custom', path: ['coach'], message: 'Unavailable detail cannot disclose private Coach evidence' });
   }
-}));
+})));
 export type UsageQueryResultSlice = z.infer<typeof UsageQueryResultSliceSchema>;
 
-export const UsageQueryBatchResultSchema = lazyZodSchema(() => z.object({
+export const UsageQueryBatchResultSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   results: z.array(UsageQueryResultSliceSchema),
-}).strict().superRefine((batch, context) => {
+}).check(z.superRefine((batch, context) => {
   const keys = new Set<string>();
   batch.results.forEach((slice, index) => {
     if (keys.has(slice.key)) context.addIssue({ code: 'custom', path: ['results', index, 'key'], message: 'Duplicate query slice' });
     keys.add(slice.key);
   });
-}));
+})));
 export type UsageQueryBatchResult = z.infer<typeof UsageQueryBatchResultSchema>;
 
 /** Reuse semantically unchanged validated slices from the caller's same-authority prior value. */
@@ -273,7 +276,7 @@ export function resolveUsagePageAggregation(input: Readonly<{
   const projectSourceLocations = (value: UsageAnalyticsQueryResponse) => !value.coverage ? value : { ...value,
     coverage: { ...value.coverage, sources: value.coverage.sources.map(candidate => {
       // Retained snapshots can carry old labels. Re-admit only accounting fields before applying current authorization.
-      const source = UsageAnalyticsSourceCoverageSchema.strip().parse(candidate);
+      const source = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(UsageAnalyticsSourceCoverageSchema)).parse(candidate);
       const displayLocation = source.machineId ? sourceLocations.get(source.machineId) : undefined;
       return { ...source, ...(displayLocation === undefined ? {} : { displayLocation }) };
     }) } };
@@ -291,8 +294,11 @@ export function resolveUsagePageAggregation(input: Readonly<{
     const pools = poolsByQuery.get(key);
     const snapshot = projectPrices(retainAccountingOnReadFailure(observed, prior?.accounting,
       prior?.sources.find(source => source.source === 'accounting')?.asOfMs));
-    const period = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
+    const readPeriod = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
       : 'relative' in query.period ? snapshot?.value?.coverage?.range ?? query.period : query.period);
+    // A failed refresh retains the prior accounting window as well as its
+    // values; it cannot compare those values against a later requested range.
+    const period = 'relative' in query.period ? readBoundedAccountingPeriod(snapshot?.value) ?? readPeriod : readPeriod;
     const comparisonQuery = resolveUsageComparisonQuery(query, period);
     const previousComparison = comparisonQuery && prior?.comparison
       && getUsageQueryKey(prior.comparison.query) === getUsageQueryKey(comparisonQuery) ? prior.comparison : undefined;
@@ -342,7 +348,9 @@ export function resolveUsagePageAggregation(input: Readonly<{
       pricingOverrides: input.pricingOverrides,
       preferences: input.coachPreferences,
     });
-    const retainedCoach = input.coachPreferences === null ? undefined : retainedDetail?.coach;
+    // Source-only initial progress has no observed Coach evidence to retain.
+    // It must not replace the first accounting-backed evaluation while detail loads.
+    const retainedCoach = input.coachPreferences === null || retainedDetail?.coach?.asOfMs === null ? undefined : retainedDetail?.coach;
     const retainedEvaluations = retainedCoach?.evaluations.map(evaluation => {
       const configured = coach?.evaluations.find(row => row.detectorId === evaluation.detectorId);
       // Retention must not revive evidence that the current evaluator's configuration refuses.
@@ -394,7 +402,7 @@ export function resolveUsagePageAggregation(input: Readonly<{
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,
         ...(comparisonSnapshot?.value === undefined ? {} : { accounting: projectSourceLocations(comparisonSnapshot.value), costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
-      ...(snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
+      ...(!query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
         contributions: snapshot.value.contributions,
         evidence: workEvidence,
         branchEvidence,

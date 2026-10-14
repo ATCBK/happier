@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { resolveGitAdminPath } from '../checkoutIdentity.js';
 
 const pending = new Map<string, Promise<void>>();
 async function repositoryKey(cwd: string): Promise<string> {
@@ -10,9 +11,8 @@ async function repositoryKey(cwd: string): Promise<string> {
             let common = dotGit;
             try {
                 const text = await readFile(dotGit, 'utf8');
-                if (text.startsWith('gitdir:')) {
-                    const path = text.slice(7).trim();
-                    const admin = isAbsolute(path) ? path : resolve(current, path);
+                const admin = resolveGitAdminPath(current, text.trim());
+                if (admin) {
                     const relativeCommon = (await readFile(join(admin, 'commondir'), 'utf8')).trim();
                     common = resolve(admin, relativeCommon);
                 }

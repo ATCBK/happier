@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Pressable, KeyboardTypeOptions, Platform } from 'react-native';
 import { BaseModal } from './BaseModal';
 import { PromptModalConfig } from '../types';
-import { Typography } from '@/constants/Typography';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -14,28 +14,27 @@ interface WebPromptModalProps {
     onClose: () => void;
     onConfirm: (value: string | null) => void;
     showBackdrop?: boolean;
+    /** False while the dialog leaves; the host unmounts it once the exit has played. */
+    visible?: boolean;
     zIndexBase?: number;
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
     content: {
-        paddingHorizontal: 16,
-        paddingTop: 20,
-        paddingBottom: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s20,
+        paddingBottom: theme.space.s16,
         alignItems: 'center'
     },
     title: {
-        fontSize: 17,
         textAlign: 'center',
         color: theme.colors.text.primary,
-        marginBottom: 4
+        marginBottom: theme.space.s4
     },
     message: {
-        fontSize: 13,
         textAlign: 'center',
         color: theme.colors.text.primary,
-        marginTop: 4,
-        lineHeight: 18
+        marginTop: theme.space.s4
     },
     input: {
         width: '100%',
@@ -43,9 +42,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 8,
-        paddingHorizontal: 10,
-        marginTop: 16,
-        fontSize: 14,
+        paddingHorizontal: theme.space.s10,
+        marginTop: theme.space.s16,
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.input.background
     },
@@ -56,7 +54,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     button: {
         flex: 1,
-        paddingVertical: 11,
+        paddingVertical: theme.space.s10,
         alignItems: 'center',
         justifyContent: 'center'
     },
@@ -68,15 +66,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.border.default
     },
     buttonText: {
-        fontSize: 17,
         color: theme.colors.text.primary
-    },
-    cancelText: {
-        fontWeight: '400'
     }
 }));
 
-export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true, zIndexBase }: WebPromptModalProps) {
+export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true, visible = true, zIndexBase }: WebPromptModalProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const [inputValue, setInputValue] = useState(config.defaultValue || '');
@@ -122,7 +116,7 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
 
     return (
         <BaseModal
-            visible={true}
+            visible={visible}
             onClose={handleCancel}
             accessibilityLabel={config.accessibilityLabel ?? config.title}
             focusReturnRef={config.focusReturnRef}
@@ -130,20 +124,20 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
             showBackdrop={showBackdrop}
             zIndexBase={zIndexBase}
         >
-            <ModalCardFrame dimensions={{ width: 270, maxHeightRatio: 0.48 }}>
+            <ModalCardFrame dimensions={{ width: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow, maxHeightRatio: 0.48 }}>
                 <View style={styles.content}>
-                    <Text style={[styles.title, Typography.default('semiBold')]}>
+                    <Text variant="heading" style={styles.title}>
                         {config.title}
                     </Text>
                     {config.message && (
-                        <Text style={[styles.message, Typography.default()]}>
+                        <Text variant="body" style={styles.message}>
                             {config.message}
                         </Text>
                     )}
                     <TextInput
                         ref={inputRef}
                         testID="web-prompt-input"
-                        style={[styles.input, Typography.default()]}
+                        variant="label" emphasis="regular" style={styles.input}
                         value={inputValue}
                         onChangeText={setInputValue}
                         placeholder={config.placeholder}
@@ -169,11 +163,7 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
                         accessibilityLabel={config.cancelText || t('common.cancel')}
                         onPress={handleCancel}
                     >
-                        <Text style={[
-                            styles.buttonText,
-                            styles.cancelText,
-                            Typography.default()
-                        ]}>
+                        <Text variant="label" emphasis="regular" style={styles.buttonText}>
                             {config.cancelText || t('common.cancel')}
                         </Text>
                     </Pressable>
@@ -189,10 +179,7 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
                         onPressIn={handleConfirm}
                         onPress={handleConfirm}
                     >
-                        <Text style={[
-                            styles.buttonText,
-                            Typography.default('semiBold')
-                        ]}>
+                        <Text variant="label" emphasis="semiBold" style={styles.buttonText}>
                             {config.confirmText || t('common.ok')}
                         </Text>
                     </Pressable>

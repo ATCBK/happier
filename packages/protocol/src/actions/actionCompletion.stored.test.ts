@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { reviewWalkthroughCompletion } from './specs/executionRunCompletion.js';
 import {
   ActionCompletionContractV1Schema,
@@ -32,7 +32,7 @@ it('resumes the canonical narrator launch with annotated retained observation bu
 it('resumes a retained completion projection while preserving opaque authored output and correspondence', async () => {
   const declaration: ActionCompletionDeclaration = { awaits: 'execution_runs',
     launched: () => ({ runs: [{ key: 'worker', runId: 'run' }], failed: [] }),
-    terminalOutputSchema: z.object({ ok: z.literal(true), payload: z.unknown() }).strict(),
+    terminalOutputSchema: z.strictObject({ ok: z.literal(true), payload: z.unknown() }),
     terminal: output => ({ ok: true, payload: output }) };
   const completion = freezeActionCompletionContractV1(declaration);
   const output = { pluginOwned: { constructor: 'data', retired: 'declared opaque JSON' } };

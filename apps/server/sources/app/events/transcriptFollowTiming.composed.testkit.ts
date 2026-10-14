@@ -6,13 +6,13 @@ import tweetnacl from 'tweetnacl';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { createExternalActionDaemonDispatchResponse, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
-    parseExternalActionResponseEnvelopeV1, getActionSpec,
-    type ActionExecutorDeps, type ExternalActionDaemonDispatchRequest } from '@happier-dev/protocol/actions';
+import { createExternalActionDaemonDispatchResponse, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, parseExternalActionResponseEnvelopeV1, type ExternalActionDaemonDispatchRequest } from '@happier-dev/protocol/actions/externalActionApi';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { createMachineDataEncryptionKeyV1 } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { decodeBase64 } from 'privacy-kit';
 import { startHttpRequestRecordingProxy } from '../../../../../packages/tests/src/testkit/httpRequestRecordingProxy';
 

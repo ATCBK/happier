@@ -1,4 +1,5 @@
 import type { Theme } from '@/theme';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 
 export type CodeEditorSyntaxTheme = Readonly<{
     defaultColor: string;
@@ -72,6 +73,16 @@ export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Part
     };
 }
 
+/**
+ * Monaco reads theme colors as hex only and paints anything else solid red (`Color.fromHex` falls back to
+ * red), so the ink tokens (`rgba(...)` hairlines and meta ink) are converted here, at its one boundary.
+ */
+function toMonacoHex(value: string): string | null {
+    if (/^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(value)) return value.toLowerCase();
+    const hexa = parseThemeColor(value)?.hexa().toLowerCase();
+    return hexa === undefined ? null : hexa.endsWith('ff') ? hexa.slice(0, 7) : hexa;
+}
+
 export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): MonacoThemeData {
     const syntax = editorTheme.syntax;
     return {
@@ -88,7 +99,7 @@ export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): Monaco
             { token: 'function', foreground: withoutHash(syntax.functionColor) },
             { token: 'delimiter', foreground: withoutHash(syntax.defaultColor) },
         ],
-        colors: {
+        colors: Object.fromEntries(Object.entries({
             'editor.background': editorTheme.backgroundColor,
             'editor.foreground': syntax.defaultColor,
             'editorGutter.background': editorTheme.backgroundColor,
@@ -106,6 +117,6 @@ export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): Monaco
             'input.background': editorTheme.backgroundColor,
             'input.foreground': editorTheme.textColor,
             'input.border': editorTheme.dividerColor,
-        },
+        }).flatMap(([id, value]) => { const hex = toMonacoHex(value); return hex ? [[id, hex]] : []; })),
     };
 }

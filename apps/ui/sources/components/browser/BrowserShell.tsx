@@ -69,7 +69,7 @@ import {
 } from './toolbar';
 import { useBrowserToolbarOverflowItems } from './toolbar/useBrowserToolbarOverflowItems';
 import { useBrowserPluginActions } from './useBrowserPluginActions';
-import { BROWSER_CHROME_WIDTH, resolveBrowserChromeControlMetrics, useBrowserChromeDensity } from './browserChromeDensity';
+import { BROWSER_CHROME_WIDTH, BROWSER_PAGE_BASIS, resolveBrowserChromeControlMetrics, useBrowserChromeDensity } from './browserChromeDensity';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { BrowserStatusBar } from './BrowserStatusBar';
 import { BrowserToolbar } from './BrowserToolbar';
@@ -100,9 +100,16 @@ import { getPreferredLanguage } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     // No box of its own: the pane or the Details column owns separation, the page is the hero.
+    //
+    // The short-pane rule (one column, page first, nothing overlaps): the chrome rows (address bar,
+    // diagnostics header, bottom bar) keep their height; the page, the diagnostics body and every
+    // plugin panel are the flexible regions and yield TOGETHER, each in proportion to its size, so
+    // none is starved to zero; each clips or scrolls inside its own box. Plugin panels render inside
+    // this column (`panels`), above the bottom bar, so no sibling can be painted over Browser chrome.
     root: {
         flex: 1,
         minHeight: 0,
+        overflow: 'hidden',
         backgroundColor: theme.colors.surface.base,
     },
     // One quiet row that recedes (lab `browser` Q): plain navigation glyphs, the address capsule with
@@ -112,9 +119,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'nowrap',
-        gap: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s6,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -126,21 +133,27 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
         flexBasis: BROWSER_CHROME_WIDTH.addressFloor,
         minWidth: 0,
-        marginHorizontal: 4,
+        marginHorizontal: theme.space.s4,
     },
+    // The page and its in-page controls. Its basis is the share the diagnostics drawer leaves it, so
+    // on a short pane it yields alongside the drawer body and the plugin panels instead of being the
+    // only region that gives way; it grows into whatever room is left and clips its own content.
     viewHost: {
-        flex: 1,
+        flexGrow: 1,
+        flexShrink: 1,
+        flexBasis: BROWSER_PAGE_BASIS,
         minHeight: 0,
+        overflow: 'hidden',
     },
     // Phone (lab `browser` Qp): the host capsule alone at the top, no rule under it — the page begins
     // where the capsule's breathing room ends.
     phoneTopBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 6,
-        paddingBottom: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s8,
         backgroundColor: theme.colors.surface.base,
     },
     phoneAddressSlot: {
@@ -154,7 +167,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minHeight: 48,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -299,6 +312,12 @@ export function BrowserShell(props: Readonly<{
     navigationEffect?: BrowserControlCommandEffect | null;
     supplementalDiagnostics?: BrowserDiagnosticsPanelProjection | null;
     searchUrlTemplate?: string;
+    /**
+     * Panels that belong to this column (the host's plugin `browserPanel` placements). They render
+     * beneath the diagnostics drawer and above the status and bottom bars, and share the column's
+     * short-pane yielding with the page and the drawer body.
+     */
+    panels?: React.ReactNode;
     nowMs?: () => number;
     testID?: string;
 }>): React.ReactElement {
@@ -660,7 +679,7 @@ export function BrowserShell(props: Readonly<{
                     {overflowMenu}
                 </View>
             )}
-            <View style={stylesheet.viewHost}>
+            <View testID={`${testID}-page-region`} style={stylesheet.viewHost}>
                 <BrowserLoadProgressBar
                     testID={`${testID}-load-progress`}
                     progress={activeView?.loadingProgress ?? null}
@@ -771,6 +790,7 @@ export function BrowserShell(props: Readonly<{
                     testID={`${testID}-diagnostics`}
                 />
             ) : null}
+            {props.panels}
             <BrowserStatusBar
                 testID={`${testID}-status`}
                 view={activeView}

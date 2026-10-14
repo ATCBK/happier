@@ -1,4 +1,4 @@
-import type { input as ZodInput, ZodTypeAny } from 'zod';
+import type { input as ZodInput, ZodMiniType as ZodTypeAny } from 'zod/mini';
 
 import type { SessionAuthoringContextKind } from './contextKinds.js';
 

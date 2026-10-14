@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 
 import { createAccountScopedCryptoMaterialSnapshotV1, deriveAccountMachineKeyFromRecoverySecret, type AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.js';
@@ -21,13 +21,13 @@ import { AccessibleMachineAccessStoredReadV1Schema } from './machineAccessV1.js'
 
 /** Known policy fields inside opened Machine metadata, not another content carrier. */
 export const MachineStoredMetadataPolicyFieldsV1Schema = lazyZodSchema(() => z.object({
-  finitePolicyV1: MachineFinitePolicyV1StoredSchema.optional(),
+  finitePolicyV1: z.optional(MachineFinitePolicyV1StoredSchema),
 }));
 
-const MachinePlainStoredContentEnvelopeSchema = lazyZodSchema(() => z.object({
+const MachinePlainStoredContentEnvelopeSchema = lazyZodSchema(() => z.strictObject({
   t: z.literal('plain'),
   v: z.json(),
-}).strict());
+}));
 const MachinePlainStoredContentReadSchema = createStoredReadSchema(MachinePlainStoredContentEnvelopeSchema);
 
 function encodeMachinePlainEnvelope(value: unknown): string {

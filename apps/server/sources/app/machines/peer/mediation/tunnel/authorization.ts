@@ -1,19 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import {
-    PEER_MEDIATION_RECEIPTS,
-    PEER_TCP_TUNNEL_RELAY_AUTHORIZATION_AUDIENCE_V1,
-    PeerTcpTunnelRelayAuthorizationPayloadV2Schema,
-    createPeerTcpTunnelRelayAuthorizationSigningInputV2,
-    isLiteralLoopbackHostname,
-    type PeerTcpTunnelDestinationV1,
-    type PeerTcpTunnelRelayAuthorizationFlowKindV1,
-    type PeerTcpTunnelRelayAuthorizationPayloadV2,
-    type PeerTcpTunnelRelayAuthorizationV2,
-    type ProviderBrokerRelayApplicationBindingV1,
-    type TcpTunnelGrantScopeV1,
-    type VoiceMediaGrantScopeV1,
-} from "@happier-dev/protocol";
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { PEER_TCP_TUNNEL_RELAY_AUTHORIZATION_AUDIENCE_V1, PeerTcpTunnelRelayAuthorizationPayloadV2Schema, createPeerTcpTunnelRelayAuthorizationSigningInputV2, type PeerTcpTunnelRelayAuthorizationFlowKindV1, type PeerTcpTunnelRelayAuthorizationPayloadV2, type PeerTcpTunnelRelayAuthorizationV2, type ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
+import { isLiteralLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
+import { type PeerTcpTunnelDestinationV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v1';
+import { type TcpTunnelGrantScopeV1, type VoiceMediaGrantScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantScopesV1';
 import tweetnacl from "tweetnacl";
 
 export type MintPeerTcpTunnelRelayAuthorizationV2Result =

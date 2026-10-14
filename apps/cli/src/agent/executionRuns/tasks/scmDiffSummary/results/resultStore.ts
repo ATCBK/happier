@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, normalizeScmDiffSummaryModelOutput, ScmReviewExplanationTargetsSchema, ScmReviewExplanationRequesterSchema, ScmDiffSummaryModelOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
@@ -8,6 +8,7 @@ import { ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditSchema, ScmWalkthro
 import { ScmCommitPlanAcceptanceSchema, ScmCommitPlanApplicationSchema, isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
 import type { ScmDiffSummaryGenerateOutput, ScmDiffSummaryModelOutput, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs, ScmDiffSummaryResult, ScmDiffSummaryResultEdit, ScmDiffSummaryResultResponse, ScmDiffSummaryResultFailure, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryGeneratorSelection, ScmDiffSummarySavedResultItem, ScmCommitPlanAcceptance, ScmCommitPlanApplication } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
+import { prepareCapturedScmComparisonInvestigation } from '@/scm/comparisons/captureScmComparison';
 import { reviewFindingCitationsSchema, publishReviewFindingCitations, publishFindingCitationMarkdown, validatePublishedFindingCitationMarkdown,
   type ReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 import { withJsonOwnerFileLock } from '@/utils/fs/jsonOwnerFileLock';
@@ -42,6 +43,7 @@ export type ScmDiffSummaryResultStore = Readonly<{
   list(options?: Readonly<{ admitScope?: (scope: Readonly<{ cwd: string; sessionId?: string; sourceSessionId?: string }>) => Promise<boolean> }>): Promise<Readonly<{ results: readonly ScmDiffSummarySavedResultItem[]; count: number; bytes: number }>>;
   create(input: Readonly<{ cwd: string; sessionId?: string; output: ScmDiffSummaryGenerateOutput; generator?: ScmDiffSummaryGeneratorSelection }>): Promise<ScmDiffSummaryResult>;
   read(scope: ScmDiffSummaryResultScope): Promise<ScmDiffSummaryResultResponse>;
+  prepareInvestigation(scope: ScmDiffSummaryResultScope): Promise<Readonly<{ beforeDirectory: string; afterDirectory: string }>>;
   readStoredScope(scope: ScmDiffSummaryResultScope): Promise<Readonly<{ cwd: string; sessionId?: string; sourceSessionId?: string; reviewFindingCitations?: ReviewFindingCitations }> | null>;
   edit(input: ScmDiffSummaryResultScope & Readonly<{ expectedRevision: number; edit: ScmDiffSummaryResultEdit }>): Promise<ScmDiffSummaryResultResponse>;
   undo(input: ScmDiffSummaryResultScope & Readonly<{ expectedRevision: number }>): Promise<ScmDiffSummaryResultResponse>;
@@ -253,6 +255,13 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
       results.sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.resultId.localeCompare(right.resultId));
       return { results, count: results.length, bytes: results.reduce((sum, item) => sum + item.bytes, 0) };
     },
+    async prepareInvestigation(scope) {
+      return locked(scope, async stored => {
+        if (!stored?.result.output.comparison) throw Object.assign(new Error('Saved investigation evidence is unavailable'), { code: 'DIFF_UNAVAILABLE' });
+        return prepareCapturedScmComparisonInvestigation({ cwd: stored.cwd, comparisonId: stored.result.output.comparison.id,
+          ...(stored.sessionId ? { sessionId: stored.sessionId } : {}), directory: `${path(scope.resultId)}.investigation` });
+      });
+    },
     async create({ cwd, sessionId, output, generator }) {
       if (!output.comparison) throw new Error('Saved results require captured comparison evidence');
       const resultId = randomUUID();
@@ -400,6 +409,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         if (!stored) return failure('result_not_found', 'Saved result is unavailable.');
         const stale = conflict(stored, input.expectedRevision); if (stale) return stale;
         if (isScmCommitPlanApplicationLocked(stored.result.application)) return failure('application_locked', 'Resolve the accepted commit application before deleting its result.', stored.result.revision);
+        await rm(`${path(input.resultId)}.investigation`, { recursive: true, force: true });
         await removeProtectedLocalStateFile(path(input.resultId));
         return { success: true, resultId: input.resultId, comparisonId: stored.result.output.comparison!.id };
       });
@@ -619,6 +629,7 @@ export const scmDiffSummaryResultStore: ScmDiffSummaryResultStore = {
   admitGeneration: (input, generate) => currentStore().admitGeneration(input, generate),
   list: (options) => currentStore().list(options),
   create: (input) => currentStore().create(input), read: (input) => currentStore().read(input),
+  prepareInvestigation: (input) => currentStore().prepareInvestigation(input),
   readStoredScope: (input) => currentStore().readStoredScope(input), edit: (input) => currentStore().edit(input),
   undo: (input) => currentStore().undo(input), delete: (input) => currentStore().delete(input),
   beginInput: (input) => currentStore().beginInput(input), beginRefinement: (input) => currentStore().beginRefinement(input),

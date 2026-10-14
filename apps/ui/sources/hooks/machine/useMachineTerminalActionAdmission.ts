@@ -19,12 +19,14 @@ import { buildProjectTerminalKey, resolveProjectTerminalScope } from '@/componen
 import { resolveSessionTerminalIdentity } from '@/components/sessions/terminal/sessionTerminalMode';
 import { awaitPendingMachineTerminalCreation, trackPendingMachineTerminalCreation } from '@/sync/ops/machineTerminal';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 /** The mounted controller consumes the original Action result, never replays an approved open. */
 export type MachineTerminalAdmissionResult = Extract<DaemonTerminalEnsureResponse, { ok: true }>
     | Readonly<{ ok: false; errorCode: string; error: string }>;
 export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey: string; workspace?: WorkspaceAddressV1;
     serverId?: string | null; machineId?: string | null; scopeId?: string; memberId?: string }>) {
+    const router = useRouter();
     const workspace = React.useMemo(() => input.workspace, [input.workspace?.serverId, input.workspace?.machineId,
         input.workspace?.workspaceId, input.workspace?.rootPath]);
     const lifetime = React.useMemo(() => workspace ? captureActiveServerAccountScopeLifetime() : null,
@@ -82,6 +84,9 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
         if (!capturedAuthority.accountLifetime.isCurrent()) return fail('terminal_access_denied');
         const machineId = workspace?.machineId ?? input.machineId;
         if (!machineId) return fail('terminal_missing_machine_target');
+        // Starting a process gives this destination durable member/approval
+        // custody. A later preview must not replace its pane and terminal key.
+        router.retainCurrent();
         const actionId = restart ? 'machines.terminal.restart' as const : 'machines.terminal.open' as const;
         const payload = { ...request, ...(workspace ? { workspace } : {}), serverId: capturedAuthority.serverId, machineId };
         const requestId = randomUUID();
@@ -105,8 +110,8 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
         const retained = member?.pendingActionApproval;
         // A view returning to an existing member discovers its actual process
         // through the requester's current daemon census, not a cached PTY id.
-        // Pending Artifact custody and explicit restart always take their own path.
-        if (member && !retained && !restart && input.scopeId) {
+        const readExistingTerminal = async (): Promise<MachineTerminalAdmissionResult | null> => {
+            if (!member || !input.scopeId) return null;
             const session = parseSessionPaneScopeId(input.scopeId)?.address;
             const project = workspace ? resolveProjectTerminalScope(input.scopeId, workspace) : null;
             const memberKey = project ? buildProjectTerminalKey(project.scope, project.workspace, member.id)
@@ -115,7 +120,7 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
                 && areServerProfileIdentifiersEquivalent(session.serverId, capturedAuthority.serverId)))) {
                 const census = await execute('machines.terminal.list', { serverId: capturedAuthority.serverId, machineId,
                     ...(project ? { workspace: project.workspace } : {}) }, {
-                    surface: 'ui', source: 'ui_button', authority: 'present_user', serverId: capturedAuthority.serverId,
+                    surface: 'ui', authority: 'present_user', serverId: capturedAuthority.serverId,
                     expectedAccountId: capturedAuthority.accountId, signal,
                 });
                 if (!capturedAuthority.accountLifetime.isCurrent() || signal.aborted) return fail('terminal_access_denied');
@@ -136,6 +141,12 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
                     if (existing) return { ok: true, terminalId: existing.terminalId, reused: true };
                 }
             }
+            return null;
+        };
+        // Pending Artifact custody and explicit restart always take their own path.
+        if (member && !retained && !restart) {
+            const existing = await readExistingTerminal();
+            if (existing) return existing;
         }
         const settleAssociation = (artifactId: string) => {
             if (input.scopeId && input.memberId) setSessionTerminalPendingActionApproval(input.scopeId, input.memberId, null, artifactId);
@@ -158,7 +169,15 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
                         actionId: retained.actionId, scope: capturedAuthority.accountLifetime.scope, signal,
                         expectedInput: original.actionArgs, expectedRequestId: original.executionOriginV1.requestId,
                         expectedExecutionOrigin: original.executionOriginV1,
-                        onSucceeded: value => { settleAssociation(retained.artifactId); callbacks.onApprovalSucceeded(value); },
+                        onSucceeded: async value => {
+                            settleAssociation(retained.artifactId);
+                            // A settled retained Artifact proves the original effect,
+                            // not that its PTY is still present when a view returns.
+                            const receipt = DaemonTerminalEnsureResponseSchema.safeParse(value);
+                            const result = original.status === 'executed' && !restart && receipt.success && receipt.data.ok
+                                ? await readExistingTerminal() ?? fail('terminal_not_found') : value;
+                            callbacks.onApprovalSucceeded(result);
+                        },
                         onFailed: code => { settleAssociation(retained.artifactId); callbacks.onApprovalFailed(code); } });
                     if (original.status === 'executed') await continuation.onExecuted(artifact);
                     else if (original.status === 'canceled' || original.status === 'failed' || original.status === 'rejected') continuation.onTerminal?.(original.status, artifact);
@@ -218,7 +237,7 @@ export function useMachineTerminalActionAdmission(input: Readonly<{ terminalKey:
                 }, { serverId: capturedAuthority.serverId, accountId: capturedAuthority.accountId });
             },
         });
-    }, [approval.requestApproval, capture, execute, workspace, lifetime, input.machineId, input.scopeId, input.memberId]);
+    }, [approval.requestApproval, capture, execute, workspace, lifetime, input.machineId, input.scopeId, input.memberId, router]);
     return { admit, capture, approvalId: approval.approvalId, approvalPending: approval.approvalPending, approvalServerId: serverId,
         get lifetime() { return lifetime ?? accountContext.current?.accountLifetime ?? null; } };
 }

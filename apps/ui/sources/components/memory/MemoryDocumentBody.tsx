@@ -1,4 +1,5 @@
 import { HappierDisclosure, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierMemoryFactRow, type HappierMemoryFactRowHost } from '@happier-dev/plugin-ui/components';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import {
@@ -6,7 +7,6 @@ import {
   type MemoryFactV1,
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
-import { View } from 'react-native';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -702,7 +702,6 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     ) => void;
   }>,
 ) {
-  const styles = stylesheet;
   const { fact, onEdit, onForget, onOpenSession } = props;
   const [highlighting, setHighlighting] = React.useState(props.arrived);
   React.useEffect(() => {
@@ -738,8 +737,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     .join(' · ');
   // The Session a fact came from is a link at the end of its line (lab `c-mem`), when this client
   // can name it and the host can open it; otherwise its name is plain text.
-  const sourceLink = source && sourceName && onOpenSession ? () => onOpenSession(source) : null;
-  const meta = sourceLink || !sourceName ? facts : `${facts} · ${sourceName}`;
+  const sourceLink = source && sourceName && onOpenSession ? () => onOpenSession(source) : undefined;
   const actions = React.useMemo((): ItemAction[] => {
     const list: ItemAction[] = [];
     if (props.writable) {
@@ -764,31 +762,16 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     return list;
   }, [fact, onEdit, onForget, props.disabled, props.writable]);
   return (
-    <View>
-    {highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
-    <Item
+    <HappierMemoryFactRow
       testID={props.testID}
-      mode="info"
-      title={fact.text}
-      titleLines={props.archived ? undefined : 2}
-      titleStyle={props.archived || expired ? styles.retired : undefined}
-      subtitle={sourceLink && sourceName ? (
-        <Text numberOfLines={1} style={styles.factMeta}>
-          {`${meta} · `}
-          <Text
-            testID={`${props.testID}.source`}
-            accessibilityRole="link"
-            accessibilityLabel={t('memoryContext.memory.openSource')}
-            style={styles.factSource}
-            onPress={sourceLink}
-          >
-            {sourceName}
-          </Text>
-        </Text>
-      ) : meta}
-      subtitleLines={1}
-      showChevron={false}
-      rightElement={
+      text={fact.text}
+      metadata={facts}
+      source={sourceName ? { label: sourceName, accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
+      archived={props.archived}
+      expired={expired}
+      host={memoryFactHost}
+      arrival={highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
+      actions={
         actions.length > 0 ? (
           <ItemRowActions
             title={fact.text}
@@ -799,9 +782,23 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
         ) : undefined
       }
     />
-    </View>
   );
 });
+
+const memoryFactHost: HappierMemoryFactRowHost = {
+  Row: function MemoryFactItem(props) {
+    return <Item testID={props.testID} mode="info" title={props.text}
+      titleLines={props.archived ? undefined : 2}
+      titleStyle={props.retired ? stylesheet.retired : undefined}
+      subtitle={props.subtitle} subtitleLines={1} showChevron={false} rightElement={props.actions} />;
+  },
+  Metadata: function MemoryFactMetadata(props) {
+    return <Text {...props} numberOfLines={1} style={stylesheet.factMeta} />;
+  },
+  Source: function MemoryFactSource(props) {
+    return <Text {...props} style={stylesheet.factSource} />;
+  },
+};
 
 const stylesheet = StyleSheet.create((theme) => ({
   summary: {
@@ -843,7 +840,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
   },
   topicField: {
-    marginTop: 8,
+    marginTop: theme.space.s8,
   },
   arrival: {
     position: 'absolute',

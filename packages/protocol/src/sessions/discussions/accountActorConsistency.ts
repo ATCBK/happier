@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Shared wire invariant for stored and executor-opened Discussion messages. */
 export function refineDiscussionAccountActor(
@@ -6,7 +6,7 @@ export function refineDiscussionAccountActor(
     authorAccountId: string | null;
     accountActor: Readonly<{ accountId: string }> | null;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (value.accountActor !== null && value.accountActor.accountId !== value.authorAccountId) {
     context.addIssue({

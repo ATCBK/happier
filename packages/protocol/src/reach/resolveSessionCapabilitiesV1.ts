@@ -2,7 +2,7 @@ import type { McpServersSettingsV1, McpServerCatalogEntryV1, McpPluginItemV1 } f
 import { resolveMcpServerConfigForContextV1 } from '../mcp/servers/resolveMcpServerConfigForContextV1.js';
 import { SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
 import type { SkillRuleV1 } from './reachRuleV1.js';
-import { resolveReachV1, isReachPortableV1, type ReachContextV1, type ReachDecisionV1 } from './resolveReachV1.js';
+import { resolveReachV1, type ReachContextV1, type ReachDecisionV1 } from './resolveReachV1.js';
 import { applySessionSelectionV1, SessionSkillSelectionV1Schema, type SessionCapabilitySelectionV1, type CapabilitySelectionReasonV1 } from './sessionCapabilitySelectionV1.js';
 
 export type CapabilityItemStateV1 = Readonly<{ kind: 'mcp_server' | 'skill'; id: string; name: string; title?: string;
@@ -26,7 +26,8 @@ export function resolveSessionCapabilitiesV1(input: Readonly<{ context: ReachCon
   return { mcp: { strictMode: input.mcp?.strictMode ?? false, items: mcpItems.map(({ config: server, rules, source }) => {
     const reach = resolveReachV1(rules, input.context);
     const forceIncluded = mcpIncludes.has(server.id), forceExcluded = mcpExcludes.has(server.id);
-    const selectable = input.agentAcceptsUserMcp && (reach.decidedBy !== null || isReachPortableV1(rules.filter(rule => rule.agentId === undefined || rule.agentId === input.context.agentId)));
+    // Rules choose defaults, never admission. Materialization remains the machine owner's responsibility.
+    const selectable = input.agentAcceptsUserMcp;
     const applied = applySessionSelectionV1({ reach, selectable, forceIncluded, forceExcluded, managedEnabled: mcpSelection.managedServersEnabled });
     return { kind: 'mcp_server', id: server.id, name: server.name, ...(server.title ? { title: server.title } : {}),
       ...applied, ...(!input.agentAcceptsUserMcp ? { selected: false, reason: 'agent_unsupported' as const } : {}), selectable,

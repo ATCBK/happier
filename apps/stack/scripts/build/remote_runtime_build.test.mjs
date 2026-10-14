@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildRuntimeArtifactComponentsAtPlacement, withAdmittedRuntimeBuildPlacement } from './remote_runtime_build.mjs';
-import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
 import { renderNativeExecutionProjection } from '../utils/dev_targets/native_execution_projection.mjs';
 import { readHappierTempDirOwner } from '@happier-dev/cli-common/tempDirs';
 import { reapHistoricalTempRoots } from '../utils/dev_targets/historical_temp_roots.mjs';
@@ -142,7 +142,11 @@ for await (const line of input) {
           await cp(transfer.remotePath, transfer.localPath);
           if (outcome === 'download-failure') throw new Error('download ENOSPC');
         },
-        runCommand: async ({ commandArgs }) => ({ code: spawnSync(process.execPath, commandArgs.slice(1)).status }),
+        // The transport runs relative source-loader paths from the target
+        // repository, not the public test runner's package working directory.
+        runCommand: async ({ commandArgs }) => ({ code: spawnSync(process.execPath, commandArgs.slice(1), {
+          cwd: fileURLToPath(new URL('../../../../', import.meta.url)),
+        }).status }),
       },
     });
     if (outcome === 'download-failure') await assert.rejects(run, /download ENOSPC/);
@@ -170,9 +174,8 @@ test('runtime publication resolves explicit local placement and memory admission
     runtimePlacement: { build: { mode, ...(mode === 'prefer-target' ? { targets: ['remote-worker'] } : {}) } },
   };
   await writeFile(join(stackBaseDir, 'dev-targets.json'), JSON.stringify(config));
-  const fixture = await installNativeAdmissionFixture({ root });
+  const fixture = await installNativeAdmissionFixture({ root, prepareDependencies: true });
   const fixtureRepo = join(root, 'native-owner');
-  await symlink(fileURLToPath(new URL('../../../../node_modules', import.meta.url)), join(fixtureRepo, 'node_modules'), 'dir');
   await mkdir(join(fixtureRepo, 'packages/cli-common'), { recursive: true });
   await symlink(fileURLToPath(new URL('../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url)), join(fixtureRepo, 'packages/cli-common/registerSourceRuntime.mjs'));
   await writeFile(join(stackBaseDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot: fixtureRepo }));
@@ -204,9 +207,8 @@ test('runtime publication resolves explicit local placement and memory admission
       // Keep the real native queue, resource policy and admitted worker. Only
       // the physical worker's OS memory observation is isolated by the fixture.
       const child = spawn(fixture.launcher, args, { ...options, cwd: fixtureRepo,
-        env: { ...options.env, PATH: binDir + ':' + process.env.PATH, FIXTURE_MEMORY: memory, FIXTURE_PROBES: probes,
-          HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
-          HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
+        env: { ...buildNativeAdmissionFixtureEnv(options.env), PATH: binDir + ':' + process.env.PATH,
+          FIXTURE_MEMORY: memory, FIXTURE_PROBES: probes },
       });
       child.stdout.on('data', chunk => { readinessOutput += String(chunk); });
       child.stderr.on('data', chunk => { if (String(chunk).includes('waiting for heavyweight admission')) waiting(); });
@@ -230,9 +232,8 @@ test('runtime publication resolves explicit local placement and memory admission
 test('explicit local runtime placement reuses its real admitted worker ancestor instead of queueing behind itself', { skip: process.platform !== 'linux' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'runtime-nested-admission-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const fixture = await installNativeAdmissionFixture({ root });
+  const fixture = await installNativeAdmissionFixture({ root, prepareDependencies: true });
   const repoDir = join(root, 'native-owner');
-  await symlink(fileURLToPath(new URL('../../../../node_modules', import.meta.url)), join(repoDir, 'node_modules'), 'dir');
   await mkdir(join(repoDir, 'packages/cli-common'), { recursive: true });
   await symlink(fileURLToPath(new URL('../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url)), join(repoDir, 'packages/cli-common/registerSourceRuntime.mjs'));
   await symlink(fileURLToPath(new URL('../utils/dev_targets/native_runtime_control.mjs', import.meta.url)),
@@ -289,10 +290,9 @@ console.log('INHERITED_ADMISSION=' + JSON.stringify(result));
   // Isolate only the physical worker's memory/process-enumeration boundary.
   // The real shell admission creates/authenticates the ancestor envelope.
   const child = spawn(fixture.launcher, ['--heavyweight-admission', '--class=runtime-build', '--machine=placed-worker',
-    '--', process.execPath, parentEntry], { cwd: repoDir, env: { ...process.env,
+    '--', process.execPath, parentEntry], { cwd: repoDir, env: { ...buildNativeAdmissionFixtureEnv(),
       PATH: binDir + ':' + process.env.PATH, FIXTURE_MEMORY: memory, HAPPIER_STACK_REPO_DIR: repoDir,
-      HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
-      HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
+      HAPPIER_DEV_TARGET_EXECUTION: '1',
     }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '';
   const completion = new Promise(resolve => child.once('close', code => resolve(code)));

@@ -39,7 +39,7 @@ const clipboard = vi.hoisted(() => ({ write: vi.fn(async (_text: string) => {}) 
 // System clipboard only; Copy retains the real UI, Action policy, scope check and byte decoder.
 vi.mock('expo-clipboard', () => ({ setStringAsync: clipboard.write }));
 
-const foreignDisclosure = vi.hoisted(() => vi.fn(async () => true));
+const foreignDisclosure = vi.hoisted(() => vi.fn(async (_title: string, _body: string) => true));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ spies: { confirm: foreignDisclosure } }).module;
@@ -85,7 +85,7 @@ function answerOwnMachineActions(homeId: string, accountId: string, serverIdenti
     }));
     homes.answer(homeId, '/v1/machines', { body: machines });
     for (const machine of machines) homes.answer(homeId, `GET /v1/machines/${machine.id}`, { body: { machine } });
-    for (const actionId of ['projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const) {
+    for (const actionId of ['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect'] as const) {
         homes.answer(homeId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
             const machine = machines.find(candidate => candidate.id === request.machineId);
@@ -101,8 +101,10 @@ function answerOwnMachineActions(homeId: string, accountId: string, serverIdenti
             const admitted = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(body);
             const request = admitted.success ? admitted.data.envelope : ExternalActionRequestEnvelopeV1Schema.parse(body);
             return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: request.requestId,
-                execution: response && typeof response === 'object' && 'ok' in response
-                    ? response : { ok: true, result: response },
+                execution: actionId === 'projects.inspect'
+                    ? { ok: true, result: rpcResponses.get(`${request.target?.kind === 'machine' ? request.target.machineId : 'source'}:${getActionSpec(actionId).bindings!.rpcMethod}`) ?? response }
+                    : response && typeof response === 'object' && 'ok' in response
+                        ? response : { ok: true, result: response },
             }) };
         } });
     }
@@ -171,6 +173,29 @@ beforeEach(async () => {
 afterEach(async () => { restoreHttpReplyDecoder?.(); restoreHttpReplyDecoder = undefined; await homes.reset(); });
 
 describe('Project finite delivery through the default UI Action host', () => {
+    it('confirms project setup with the catalog human summary, never the agent specification', async () => {
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1 },
+        } } } });
+        foreignDisclosure.mockResolvedValueOnce(false);
+        const actionId = 'projects.prepare';
+        const spec = getActionSpec(actionId);
+        const result = await createDefaultActionExecutor().execute(actionId, {
+            workspace: { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' },
+            phase: 'setup',
+        }, { serverId, surface: 'ui', authority: 'present_user' });
+
+        expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        expect(foreignDisclosure).toHaveBeenCalledOnce();
+        const [title, body] = foreignDisclosure.mock.calls[0] ?? [];
+        expect(title).toBe(spec.title);
+        expect(body).toBe(spec.inputHints?.description);
+        expect(body).not.toBe(spec.description);
+        expect(body).not.toContain(actionId);
+        expect(body).not.toMatch(/waiver/i);
+        expect(homes.requestsFor(`/v1/actions/${actionId}`)).toHaveLength(0);
+    });
+
     it.each(['invalid_json', 'mismatched', 'mismatched_refusal', 'outcome_unknown', 'pre_open_refusal'] as const)('keeps original Open custody after HTTP settlement: %s', async settlement => {
         const [{ createProjectOpenController }, { createSessionDraftRepository }, { createSessionDraftCipher },
             { captureLazyActionAccountContext }] = await Promise.all([
@@ -401,6 +426,7 @@ describe('Project finite delivery through the default UI Action host', () => {
     }));
 
     it('opens the real required setup approval from the reviewed This time control and releases a rejected decision', async () => {
+        await homes.requireUiApproval(requesterHomeId, 'projects.prepare');
         const { useProjectScriptsController } = await import('@/components/projects/projectSetup/useProjectScriptsController');
         const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
@@ -432,12 +458,13 @@ describe('Project finite delivery through the default UI Action host', () => {
         const { captureLazyActionAccountContext } = await import('./actionAccountContext');
         const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
         const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
-        if (actionId === 'projects.script.run' || actionId === 'projects.compute.exec') await homes.requireUiApproval(requesterHomeId, actionId);
+        await homes.requireUiApproval(requesterHomeId, actionId);
         const account = await captureLazyActionAccountContext(serverId);
         // A fresh root arriving at Home applies the real policy again. Local
         // replay must not send that second root for an already approved effect.
         homes.answer(requesterHomeId, '/v1/actions/projects.prepare', { select: async body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            if (!('input' in request.envelope)) throw new Error('Expected inline finite Action input');
             const execution = await createDefaultActionExecutor().execute('projects.prepare', request.envelope.input,
                 { surface: 'ui', serverId, actionRequestId: request.envelope.requestId });
             return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.prepare', requestId: request.envelope.requestId, execution }) };
@@ -460,7 +487,9 @@ describe('Project finite delivery through the default UI Action host', () => {
             if (!result.ok) throw new Error(result.errorCode);
             const created = ActionApprovalRequestCreatedResultSchema.parse(result.result);
             const artifact = await account.fetchArtifact(created.artifactId);
-            const proposal = ApprovalRequestV2Schema.parse(JSON.parse(artifact!.body!));
+            if (typeof artifact?.body !== 'string') throw new Error('Expected inline approval Artifact body');
+            const proposal = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
+            const prepareAdmissions = ownFiniteRelayRequests('projects.prepare').length;
             expect(await decideApprovalAsInbox(serverId, created.artifactId, 'approve'))
                 .toMatchObject({ ok: false, errorCode: 'fixture_machine_refusal' });
             expect(proposal.executionOriginV1).toMatchObject({ serverIdentityId: account.serverIdentityId, machineId: 'source' });
@@ -470,11 +499,12 @@ describe('Project finite delivery through the default UI Action host', () => {
             expect(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input)).toMatchObject({ target: { kind: 'machine', machineId: 'source' },
                 input: { artifactId: created.artifactId, serverIdentityId: account.serverIdentityId, originServerId: proposal.executionOriginV1.serverId } });
             expect(getActionSpec('approval.request.decide').inputSchema.safeParse(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input).input).success).toBe(true);
-            expect(ownFiniteRelayRequests('projects.prepare')).toEqual([]);
+            expect(ownFiniteRelayRequests('projects.prepare')).toHaveLength(prepareAdmissions);
         } finally { account.dispose(); }
     });
 
     it('refuses an approved Stop when current Home discovery no longer binds its exact Machine', async () => {
+        await homes.requireUiApproval(requesterHomeId, 'action.operations.cancel');
         const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
         const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
         const requested = await createDefaultActionExecutor().execute('action.operations.cancel', {

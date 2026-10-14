@@ -32,6 +32,9 @@ import type { SettingsAnalyticsSource } from '@/track/settingsAnalytics/types';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { BUILT_IN_SETTINGS_DECLARATIONS_V1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 
 async function persistAccountSettingsOnce(
   expectedSettingsScope: AccountSettingsScope | null,
@@ -72,9 +75,18 @@ function useAccountSettingsMutationSnapshot(): Readonly<{
 
 export type SettingsWrite = SettingsWriteDelta | ((current: Settings) => SettingsWriteDelta | null);
 
+// Only a whole-value binding names the public intent from its storage key. Compound,
+// secret and operational owners retain their own ingress rather than guessing an intent.
+const directAccountSettingDeclarations = BUILT_IN_SETTINGS_DECLARATIONS_V1.filter(declaration => {
+  const binding = declaration.storage;
+  return binding?.scope === 'account' && binding.key && !binding.kind && !binding.path && !binding.owner
+    && binding.access === 'read_write' && !declaration.sensitive;
+});
+
 export function useApplySettings(): (change: SettingsWrite) => void {
   const expectedSettingsScope = useAccountSettingsScope();
-  return React.useCallback((change: SettingsWrite) => {
+  const writeSetting = useSettingActionWriter();
+  return React.useCallback(async (change: SettingsWrite) => {
     let delta: SettingsWriteDelta;
     if (typeof change === 'function') {
       const current = getStorage().getState();
@@ -86,11 +98,25 @@ export function useApplySettings(): (change: SettingsWrite) => void {
     } else {
       delta = change;
     }
-    getSyncSingleton().applySettings(delta, {
-      expectedSettingsScope,
-      source: 'ui' satisfies SettingsAnalyticsSource,
+    const incumbentDelta = { ...delta };
+    const declaredWrites = (Object.keys(delta) as Array<keyof SettingsWriteDelta>).flatMap(key => {
+      // Equivalent declaration aliases share this same whole-value intent.
+      const declaration = directAccountSettingDeclarations.find(candidate => candidate.storage?.key === key);
+      if (!declaration) return [];
+      delete incumbentDelta[key];
+      const stored = delta[key];
+      const value = declaration.storage?.invertBoolean && typeof stored === 'boolean' ? !stored : stored;
+      const parsed = SettingsDeclarationValueV1Schema.safeParse(value);
+      return parsed.success ? [{ declaration, value: parsed.data }] : [];
     });
-  }, [expectedSettingsScope]);
+    if (Object.keys(incumbentDelta).length > 0) {
+      getSyncSingleton().applySettings(incumbentDelta, {
+        expectedSettingsScope,
+        source: 'ui' satisfies SettingsAnalyticsSource,
+      });
+    }
+    for (const { declaration, value } of declaredWrites) await writeSetting(declaration, value);
+  }, [expectedSettingsScope, writeSetting]);
 }
 
 /** Voice editors submit their change, not a stale replacement of the Account-owned profile. */
@@ -159,12 +185,15 @@ export function useApplyProfileSave(options?: ProfileActionExecutionOptions): (i
   expectedRevision?: number | 'absent';
   legacyCloneSource?: ProfileLegacyCloneSourceV1;
   builtinNames?: readonly string[];
+  /** Library skills added to sessions with this Profile; sent only when the caller changed them. */
+  skillSeeds?: readonly string[];
 }>) => Promise<ProfileOperationResult> {
   const execute = useProfileActionExecute(options);
   return React.useCallback(async input => PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.save'].parse(
     await execute({ actionId: 'launch_profiles.save', input: { id: input.profile.id, profile: input.profile,
       expectedRevision: input.expectedRevision ?? input.profile.profileRecordRevision ?? 'absent',
       ...(input.secretBindings ? { secretBindings: { ...input.secretBindings } } : {}),
+      ...(input.skillSeeds ? { skillSeeds: [...input.skillSeeds] } : {}),
       ...(input.legacyCloneSource ? { legacyCloneSource: input.legacyCloneSource } : {}),
       ...(input.profile.revision ? { expectedArtifactRevision: input.profile.revision } : {}),
     } })), [execute]);
@@ -173,7 +202,7 @@ export function useApplyProfileSave(options?: ProfileActionExecutionOptions): (i
 /** One thin mounted ingress; Profile decisions remain in the admitted domain owner. */
 export function useProfileActionExecute(options?: ProfileActionExecutionOptions) {
   const scope = useAccountSettingsScope();
-  const { execute } = useMountedActionExecution(scope, options);
+  const { execute } = useMountedActionExecution(scope, { ...options, openOnRequest: options?.onApprovalPending === undefined });
   return React.useCallback(async (request: ProfileActionRequestV1): Promise<unknown> => {
     const result = await execute(request.actionId, request.input);
     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode, result });

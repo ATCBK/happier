@@ -610,7 +610,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     ]);
     const canStopSession = sessionActionTarget.isActive && sessionActionTarget.canStop;
     const canArchiveSession = sessionActionTarget.canArchive;
-    const canDeleteSession = sessionActionTarget.canDelete;
     const visibleSessionActionIds = React.useMemo(
         () => contentUnavailable
             ? new Set<string>()
@@ -960,12 +959,22 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         headerMachineLabel ? { key: 'machine', text: headerMachineLabel } : null,
         headerPath ? { key: 'path', text: headerPath } : null,
     ].filter((fact): fact is { key: string; text: string } => fact !== null);
-    const headerMenuActions = canRenameSession
-        ? [{ id: 'rename', testID: 'session-info-rename', title: t('sessionInfo.renameSession'), onSelect: handleRenameSession }]
-        : [];
     const showStop = sessionStatus.isConnected && canStopSession && stopInfoItemProps;
     const showArchive = canArchiveSession && archiveInfoItemProps;
-    const showDelete = canDeleteSession && deleteInfoItemProps;
+    const showDelete = visibleSessionActionIds.has(SESSION_ACTION_DELETE_ID) && deleteInfoItemProps;
+    const headerMenuActions = [
+        ...(canRenameSession
+            ? [{ id: 'rename', testID: 'session-info-rename', title: t('sessionInfo.renameSession'), onSelect: handleRenameSession }]
+            : []),
+        ...(showDelete ? [{
+            id: 'delete',
+            testID: 'session-info-delete',
+            title: showDelete.title,
+            destructive: true,
+            loading: deletingSession,
+            onSelect: handleDeleteSession,
+        }] : []),
+    ];
     const showOrganize = Boolean(readStateInfoItem || attentionStandingInfoItem
         || (!isArchivedSession && sessionSettingsKey && pinInfoItemProps)
         || (sessionSettingsKey && tagsInfoItemProps)

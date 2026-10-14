@@ -21,7 +21,6 @@ import { COMPANION_WEB_POINTER_BINDING } from '@/components/companion/interactio
 import { NativeFloatingFrame } from '@/components/companion/interaction/NativeFloatingFrame';
 import { SessionComputerScreenPane } from '@/components/computer/SessionComputerScreenPane';
 import { SessionRightPanelBrowserView } from '@/components/sessions/panes/browser/SessionRightPanelBrowserView';
-import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { layout } from '@/components/ui/layout/layout';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { VOICE_MOTION } from '@/components/voice/light/voiceLightTokens';
@@ -47,6 +46,7 @@ import type { SessionViewerSource } from './sessionViewerPresentation';
 import {
   resolveSessionViewerWatchingLabel,
   useSessionViewerMachine,
+  useSessionViewerMachineId,
 } from './useSessionViewerMachine';
 import {
   DEFAULT_WIDTH_SHARE,
@@ -359,7 +359,7 @@ function MountedSessionViewerHost(
           onRectChange={onRectChange}
           onModeChange={onModeChange}
           accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name)}
-          resizeLabel={t('computerUse.viewer.resizeView')}
+          resizeLabel={t('computerUse.presentation.resizeView')}
           pointer={
             Platform.OS === 'web' ? COMPANION_WEB_POINTER_BINDING : undefined
           }
@@ -426,9 +426,9 @@ export function SessionViewerBody(
     inputPassthrough?: boolean;
   }>,
 ): React.ReactElement | null {
-  // Computer use targets the Session's own machine (the same rule the Watch opener applies).
-  const sessionMachineId =
-    useSessionMachineTarget(props.sessionId, props.serverId)?.machineId ?? null;
+  // Computer use targets the Session's own machine (the same rule the Watch opener applies), named
+  // even while it is unreachable so the Computer viewer can say so.
+  const sessionMachineId = useSessionViewerMachineId(props.sessionId, props.serverId);
   const machineId = props.machineId ?? sessionMachineId;
   if (props.source === 'computer') {
     if (!machineId) return null;

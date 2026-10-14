@@ -89,6 +89,18 @@ MCP servers. Plugin browsing contains published discovery facts; install review,
 machine credential profiles and installation remain daemon-owned. Exact plugin
 revalidation selects the reviewed version, not the current latest version.
 
+Agent browsing also selects plugin listings whose canonical contribution summary
+includes `agents`, from npm and Happier catalogs. Existing plugin-only Account or
+plugin-declared catalogs gain this kind in the effective source projection;
+stored source kinds remain unchanged. These rows and detail payloads keep their
+plugin identity and pinned version, so their install handoff uses `plugins.install`
+and the daemon's existing Install & Trust review. Curated Agent browsing combines
+ACP pointers with these plugin picks. Npm continuation follows the upstream search
+page, even when some packages are filtered out; its unfiltered total is omitted
+from Agent pages. The daemon's marketplace source projection accepts Agent-only
+catalogs for this install handoff and retains the Account's enablement, token
+reference and npm credential-profile binding.
+
 ### Curated picks and homepage suggestions
 
 The curated marketplace snapshot carries optional registry pointers in `picks`;
@@ -167,7 +179,16 @@ It carries registry provenance into the Account ACP definition and retains the
 person's definition identity, environment edits and session defaults on update.
 The same platform-fit owner handles mapped launches and registry previews;
 unknown platform facts remain unknown, and bzip2 archives remain unsupported by
-the current extractor. Managed uv remains later capabilities-program work.
+the current extractor. uv packages use the host-managed uv owner through the
+existing install job and first-use path; their Python and tool state does not
+depend on a system uv installation.
+
+List summaries carry `agentDistribution`: the selected npm/uv kind, or binary
+platforms with extraction support. The reader derives this small presentation
+projection through the existing distribution-selection and platform-fit owners;
+it includes no download URLs, commands or environment values. Add-agent rows use
+it before details are opened, so unsupported targets and archive types can show
+Can't run here without another fetch. Missing Machine facts still show unknown.
 
 The upstream endpoint publishes a current index. A read at a reviewed version
 refuses an entry whose version has changed; it cannot silently substitute the
@@ -194,6 +215,8 @@ normalization but delegates skill/content decisions to the current owner. It
 drops `configuredSources`; there is no alternate registry list or daemon install
 path behind that compatibility input. Prompt-asset native export is a separate
 filesystem operation, not another registry decision-maker.
+In 0.3 development the same adapter is available to Agent and MCP callers,
+with approval by default and user-changeable surface waivers.
 Its outer Action result also owns external-links settlement: a conflicting or
 unavailable row write returns a failure with the already-acknowledged Artifact
 and native export effects. A host's successful export receipt plus a failed row
@@ -208,8 +231,16 @@ typed `unchecked` results and never overwrite the item's last successful state.
 
 `registries.updates.check` is the one manual Action. The UI delegates it through
 the captured originating-Account Machine Action transport. The CLI and daemon
-compose the same checker with the skills tracker; later kind owners supply their
-trackers to that coordinator. Plugins retain their existing update policy.
+compose the same checker with Skills, MCP and Agent trackers. Agent observations
+update only `origin.upstream` through the ACP catalog CAS: they preserve launch
+pins, environment edits and session defaults, and duplicate observations write
+nothing. A registry Agent update remains an explicitly approved
+`agents.acp.backends.installFromRegistry` Action. Plugins retain their existing
+update policy.
+The registry Action declarations admit original Account roots so this transport
+can reach the daemon while retaining Account placement, strict inputs and the
+existing approval policy. Expected upstream failures return per-item `unchecked`
+reasons; a headerless rate limit has no reset time and requires manual Retry.
 
 An unchanged pending skill update is still eligible for its explicit automatic
 policy, including when that policy was enabled after the last check. The same

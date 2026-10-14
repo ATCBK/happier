@@ -3,7 +3,7 @@ import {
 } from '@happier-dev/plugin-sdk/sessions/external';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type { AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
-import { resolveCodexExternalTranscriptFiles, searchCodexExternalTranscript } from './transcriptSource.js';
+import { resolveCodexExternalTranscriptFiles, searchCodexExternalTranscript, parseCodexContentSearchProgress, CodexContentSearchYield } from './transcriptSource.js';
 import { raceWithTimeout } from '@happier-dev/plugin-sdk/async';
 import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/sessions/external';
 import { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield } from '@happier-dev/plugin-sdk/sessions/file-stores';
@@ -1016,12 +1016,16 @@ export async function listCodexSessionCandidates(input: Readonly<{
   searchTerm?: string;
   searchMode?: 'fast' | 'full';
   searchTarget?: 'metadata' | 'content';
+  scanDeadlineAtMs?: number;
   ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
   resultBudget?: Readonly<{ fits(page: CodexCandidateListPage): boolean }>;
   /** Include internal threads (approval reviewers, spawned sub-agents). Absent: top-level sessions only. */
   includeThreads?: boolean;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexCandidateListPage> {
-  const contentSearchControl = input.searchTarget === 'content' ? createExternalSessionContentSearchControl(input) : undefined;
+  const contentSearchControl = input.searchTarget === 'content' ? createExternalSessionContentSearchControl({
+    signal: input.signal,
+    deadlineAtMs: input.scanDeadlineAtMs ?? input.deadlineAtMs,
+  }) : undefined;
   const params = contentSearchControl
     ? { ...input, contentSearchControl, onProgress: contentSearchControl.checkWork }
     : input;
@@ -1052,6 +1056,8 @@ export async function listCodexSessionCandidates(input: Readonly<{
     : createInitialCodexExternalSessionIndexCursor();
   if (!cursor) throw new CodexExternalSessionCandidateSourceChangedError();
   if (params.cursor && (cursor.search?.term !== search.term || (cursor.search?.target ?? 'metadata') !== search.target)) throw new CodexExternalSessionCandidateSourceChangedError();
+  let contentProgress = cursor.contentProgress === undefined ? undefined : parseCodexContentSearchProgress(cursor.contentProgress) ?? undefined;
+  if (cursor.contentProgress !== undefined && (!contentProgress || search.target !== 'content')) throw new CodexExternalSessionCandidateSourceChangedError();
   if (search.target === 'content' && !params.ripgrep) return { candidates: [], nextCursor: null, contentCoverage: 'unsupported' };
   try {
     const rolloutOrdering = await listRolloutCandidateOrdering({
@@ -1177,7 +1183,9 @@ export async function listCodexSessionCandidates(input: Readonly<{
           throwIfCodexExternalSessionInvocationStopped(params);
           const built = await buildCodexMergedOrderingPage([row], params);
           for (const candidate of built) {
-            const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: candidate.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep, files: filesById.get(candidate.remoteSessionId) ?? [] });
+            if (contentProgress && contentProgress.remoteSessionId !== candidate.remoteSessionId) throw new CodexExternalSessionCandidateSourceChangedError();
+            const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: candidate.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep, files: filesById.get(candidate.remoteSessionId) ?? [], progress: contentProgress });
+            contentProgress = undefined;
             contentPartial ||= result.partial || result.unsearchable;
             if (result.match) candidates.push({ ...candidate, match: result.match });
             else if (result.unsearchable) candidates.push(candidate);
@@ -1186,6 +1194,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
           longestRowMs = Math.max(longestRowMs, Date.now() - startedAtMs);
         } catch (error) {
           if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
+          if (error instanceof CodexContentSearchYield) contentProgress = error.progress;
           break;
         }
       }
@@ -1200,7 +1209,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
     const result: CodexCandidateListPage = {
       candidates,
       nextCursor: page.hasMore
-        ? encodeCodexExternalSessionIndexCursor({ ...page.cursor, search })
+        ? encodeCodexExternalSessionIndexCursor({ ...page.cursor, search, ...(contentProgress ? { contentProgress } : {}) })
         : null,
       ...(searchIncomplete ? { searchIncomplete: true } : {}),
       ...(search.target === 'content' ? { contentCoverage: contentPartial ? 'partial' as const : 'complete' as const } : {}),
@@ -1242,7 +1251,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
     if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
     const result: CodexCandidateListPage = {
       candidates: [],
-      nextCursor: encodeCodexExternalSessionIndexCursor({ ...cursor, search }),
+      nextCursor: encodeCodexExternalSessionIndexCursor({ ...cursor, search, ...(contentProgress ? { contentProgress } : {}) }),
       contentCoverage: 'partial',
       searchIncomplete: true,
     };

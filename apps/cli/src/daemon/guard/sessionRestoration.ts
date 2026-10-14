@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import type { PendingInactiveSessionActivationRejected } from '../sessions/activatePendingInactiveSession';
 import type { TrackedSession } from '../types';
 import type { ActivityLog } from './activityLog';
 
@@ -8,6 +8,7 @@ import type { ActivityLog } from './activityLog';
 export function createGuardSessionRestoration(input: Readonly<{
   activity: Pick<ActivityLog, 'list' | 'append' | 'markUndone'>;
   nowMs?: () => number;
+  readCustodianTarget?: () => (Omit<RequesterWorkAttributionV1, 'accountId'> & Readonly<{ custodianAccountId: string }>) | null;
 }>) {
   const now = input.nowMs ?? Date.now;
   const readStopped = async (sessionId: string, attribution: RequesterWorkAttributionV1) => {
@@ -23,13 +24,19 @@ export function createGuardSessionRestoration(input: Readonly<{
       const receipt = await readStopped(tracked.happySessionId, tracked.requesterWorkAttributionV1);
       if (receipt) await input.activity.markUndone({ id: randomUUID(), ref: receipt.id, at: now(), attribution: tracked.requesterWorkAttributionV1 });
     },
-    async onActivationRejected(event: Readonly<{ sessionId: string; reason: string;
-      attribution: RequesterWorkAttributionV1; failure?: SpawnFailureV1 }>): Promise<void> {
-      const receipt = await readStopped(event.sessionId, event.attribution);
+    async onActivationRejected(event: PendingInactiveSessionActivationRejected): Promise<void> {
+      const target = event.requester ? null : input.readCustodianTarget?.();
+      // Machine custody is private admission context, not a work-attribution field.
+      const attribution = event.requester ?? (target ? {
+        serverId: target.serverId, accountId: target.custodianAccountId,
+        machineId: target.machineId, installationId: target.installationId,
+      } : null);
+      if (!attribution) return;
+      const receipt = await readStopped(event.sessionId, attribution);
       if (!receipt) return;
       const failure = event.failure ?? { reason: 'other' as const };
       await input.activity.append({ v: 1, id: randomUUID(), at: now(), kind: 'start_failed', rule: receipt.rule,
-        subject: receipt.subject, attribution: event.attribution, outcome: 'failed', ref: receipt.id,
+        subject: receipt.subject, attribution, outcome: 'failed', ref: receipt.id,
         note: `Could not resume: ${event.reason}`, failure,
         nextStep: failure.reason === 'no_ptys' ? 'close_idle_terminals' : 'review_processes',
         ...(receipt.wayBack ? { wayBack: receipt.wayBack } : {}) });

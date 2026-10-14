@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import retained from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-path.json';
+import retainedFrontmatter from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-frontmatter.json';
+import { PromptBundleBodyV1Schema, readSkillBundleContentV1, validatePromptBundleBodyV1AgainstSchemaId } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -54,6 +60,88 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it.each(['linux', 'win32'] as const)('reads the predecessor bundle through the catalog and authenticated daemon Session delivery on %s', async platform => {
+    const f = await fixture();
+    const retainedArtifact = { ...bundle('library', 'retained'), header: retained.header, body: JSON.stringify(retained.body) };
+    const healthy = bundle('healthy', 'healthy');
+    const legacy = retainedFrontmatter.cases.find(item => item.id === 'unquoted-colon')!;
+    const legacyArtifact = { ...bundle('legacy', legacy.expectedName), header: legacy.header, body: JSON.stringify(legacy.body) };
+    const artifacts: SkillArtifactStore = { list: async () => ({ items: [retainedArtifact, healthy, legacyArtifact], coverage: 'complete' }),
+      read: async id => id === 'library' ? retainedArtifact : id === 'legacy' ? legacyArtifact : healthy };
+    const input = { ...f.input, accountSnapshot: { ...f.input.accountSnapshot!, promptLibraryCatalog: { status: 'ready' as const,
+      rows: [{ revision: 1, record: { key: 'skill-rules' as const, value: { v: 1 as const, rules: ['library', 'healthy', 'legacy'].map(skillId => ({
+        id: `everywhere-${skillId}`, skillId, target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1,
+      })) } } }], tombstones: [], diagnostics: [] } } };
+    const opened = readSkillBundleContentV1(retainedArtifact);
+    expect(opened?.frontmatter.name).toBe('retained');
+    expect(validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: 'skills.skill_md_v1', body: PromptBundleBodyV1Schema.parse(retained.body) }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_path', path: 'refs/CON.txt' });
+    expect(await readSkillLibraryCatalog(artifacts)).toContainEqual({ id: 'library', name: 'retained' });
+    expect(await readSkillLibraryCatalog(artifacts)).toContainEqual({ id: 'legacy', name: legacy.expectedName });
+    const store = createSkillStore({ happyHomeDir: join(f.home, 'retained-store'), platform }); stores.push(store);
+    const app = createDaemonControlApp({ getChildren: () => [], machineId: 'machine',
+      stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'retained-test', skillStore: store });
+    const url = await app.listen({ port: 0, host: '127.0.0.1' });
+    const target = { httpPort: Number(new URL(url).port), controlToken: 'retained-test' };
+    try {
+      const result = await resolveRunnerSkills(input, { artifacts,
+        ensureSessionDir: content => ensureSkillSessionDirHttp(content, { target }) });
+      if (platform === 'win32') {
+        expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'healthy', name: 'healthy' }),
+          expect.objectContaining({ skillId: 'legacy', name: legacy.expectedName })]);
+        expect(await readFile(join(result.delivery!.skillsRoot, 'healthy', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
+        expect(result.plan.items.find(item => item.skillId === 'library')).toMatchObject({ state: 'unavailable', reason: 'materialize_failed' });
+        expect(result.failureDetails).toEqual([{ skillId: 'library', detail: 'invalid_path' }]);
+      } else {
+        expect(result.delivery?.items).toEqual(expect.arrayContaining([{ skillId: 'library', name: 'retained', digest: opened!.digest },
+          expect.objectContaining({ skillId: 'healthy', name: 'healthy' }),
+          expect.objectContaining({ skillId: 'legacy', name: legacy.expectedName })]));
+        expect(await readFile(join(result.delivery!.skillsRoot, 'retained', 'refs', 'CON.txt'), 'utf8')).toBe('Retained supporting bytes');
+        expect(AgentRuntimeDaemonSessionOpenRequestV1Schema.parse({ kind: 'create', sessionId: 'session', cwd: f.directory,
+          skills: result.delivery }).skills).toEqual(result.delivery);
+      }
+      expect(await readFile(join(result.delivery!.skillsRoot, legacy.expectedName, 'SKILL.md'), 'utf8')).toBe(legacy.input.skillMarkdown);
+    } finally { await app.close(); }
+  });
+  it.each(['body', 'base64', 'header'] as const)('keeps a malformed stored %s out of the shared name catalog while a valid neighbour remains deliverable', async fault => {
+    const f = await fixture();
+    const good = bundle('library', 'sample');
+    const bad = fault === 'header' ? { ...bundle('bad', 'bad'), header: { ...good.header, title: '' } }
+      : { ...bundle('bad', 'bad'), body: fault === 'body' ? '{malformed' : JSON.stringify({ ...retained.body,
+        entries: retained.body.entries.map(entry => entry.path === 'SKILL.md' ? { ...entry, contentBase64: '!' } : entry) }) };
+    const artifacts: SkillArtifactStore = { list: async () => ({ items: [bad, good], coverage: 'complete' }),
+      read: async id => id === 'bad' ? bad : good };
+    expect(await readSkillLibraryCatalog(artifacts)).toContainEqual({ id: 'library', name: 'sample' });
+    expect(await readSkillLibraryCatalog(artifacts)).not.toContainEqual(expect.objectContaining({ id: 'bad' }));
+    const result = await resolveRunnerSkills({ ...f.input, sessionMetadata: {
+      skillSelectionV1: { v: 1, forceIncludeSkillIds: ['bad'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+    } }, { artifacts, ensureSessionDir: value => f.store.ensureSkillSessionDir(value) });
+    expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library' })]);
+    expect(result.plan.items.find(item => item.skillId === 'bad')).toMatchObject({ state: 'unavailable', reason: 'content_unreadable' });
+  });
+  it('uses the same realpath preparation as MCP for linked workspace roots without matching a sibling prefix', async () => {
+    const { input, artifacts, store, home, directory } = await fixture();
+    const linked = join(home, 'linked');
+    await symlink(directory, linked, process.platform === 'win32' ? 'junction' : 'dir');
+    const skills = { items: [{ skillId: 'library', name: 'sample' }], rules: [{ id: 'folder', skillId: 'library',
+      target: { t: 'workspace' as const, machineId: 'machine', workspaceRoot: linked }, enabled: true, createdAt: 1, updatedAt: 1 }] };
+    const accountSnapshot = { ...input.accountSnapshot!, promptLibraryCatalog: { status: 'ready' as const,
+      rows: [{ revision: 2 as const, record: { key: 'skill-rules' as const, value: { v: 1 as const, rules: skills.rules } } }], tombstones: [], diagnostics: [] } };
+    const { resolveSessionCapabilitiesForDirectory } = await import('@/mcp/servers/resolveSessionCapabilitiesForDirectory');
+    const mcp = { v: 1 as const, strictMode: false, servers: [{ id: 'server', name: 'server', transport: 'http' as const,
+      remote: { url: 'https://example.test/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 }],
+      bindings: skills.rules.map(rule => ({ ...rule, serverId: 'server' })) };
+    const preview = resolveSessionCapabilitiesForDirectory({ settings: mcp, skills, machineId: 'machine', directory, agentAcceptsUserMcp: true });
+    expect(preview.mcp.items[0]).toMatchObject({ selected: true, reason: 'rule_on' });
+    expect(preview.skills.items[0]).toMatchObject({ selected: true, reason: 'rule_on' });
+    const resolved = await resolveRunnerSkills({ ...input, accountSnapshot }, { artifacts, ensureSessionDir: value => store.ensureSkillSessionDir(value) });
+    expect(resolved.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library' })]);
+    const sibling = `${directory}2`; await mkdir(sibling);
+    const adjacent = await resolveRunnerSkills({ ...input, directory: sibling, accountSnapshot }, { artifacts, ensureSessionDir: value => store.ensureSkillSessionDir(value) });
+    expect(adjacent.delivery?.items).toEqual([]);
+    expect(skills.rules[0]!.target.workspaceRoot).toBe(linked);
+  });
   it('consumes P2 selection and daemon materialization while reading only selected bodies', async () => {
     const { input, artifacts, store, readIds } = await fixture();
     const result = await resolveRunnerSkills(input, { artifacts, ensureSessionDir: value => store.ensureSkillSessionDir(value) });

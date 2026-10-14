@@ -1,25 +1,8 @@
 import type { Fastify } from "@/app/api/types";
-import {
-    PluginAvailabilityActionHttpPathsV1,
-    PluginAvailabilityIntentReadActionInputV1Schema,
-    PluginAvailabilityIntentsListActionInputV1Schema,
-    PluginAvailabilityIntentSetActionInputV1Schema,
-    PluginAvailabilityCollectionWritersClaimActionInputV1Schema,
-    PluginAvailabilityMaterializationsReadActionInputV1Schema,
-    PluginAvailabilityMaterializationsReportActionInputV1Schema,
-    PluginAvailabilityPackageAssetPublishActionInputV1Schema,
-    PluginAvailabilityPackageAssetReadActionInputV1Schema,
-    PluginAvailabilityPackageAssetRemoveActionInputV1Schema,
-    PluginAvailabilityReleaseReadActionInputV1Schema,
-    PluginAvailabilityReleasePublishActionInputV1Schema,
-    PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema,
-    PluginAvailabilityUiArtifactPublishActionInputV1Schema,
-    PluginAvailabilityUiArtifactReadActionInputV1Schema,
-    PluginAvailabilityUiArtifactRemoveActionInputV1Schema,
-} from "@happier-dev/protocol";
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema, PluginAvailabilityIntentsListActionInputV1Schema, PluginAvailabilityIntentSetActionInputV1Schema, PluginAvailabilityCollectionWritersClaimActionInputV1Schema, PluginAvailabilityMaterializationsReadActionInputV1Schema, PluginAvailabilityMaterializationsReportActionInputV1Schema, PluginAvailabilityPackageAssetPublishActionInputV1Schema, PluginAvailabilityPackageAssetReadActionInputV1Schema, PluginAvailabilityPackageAssetRemoveActionInputV1Schema, PluginAvailabilityReleaseReadActionInputV1Schema, PluginAvailabilityReleasePublishActionInputV1Schema, PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema, PluginAvailabilityUiArtifactPublishActionInputV1Schema, PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactRemoveActionInputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import type { FastifyReply } from "fastify";
-import type { z } from "zod";
-import { EPHEMERAL_HOSTED_WEB_ASSET_DELIVERY_HEADERS_V1 } from "@happier-dev/protocol/plugins/ui";
+import type { z } from "zod/mini";
+import { EPHEMERAL_HOSTED_WEB_ASSET_DELIVERY_HEADERS_V1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
 
 import {
     PluginInstallationPublisherProofError,
@@ -48,7 +31,7 @@ function requestUserId(request: Readonly<{ userId?: unknown }>): string {
     );
 }
 
-function parseOperationInput<TSchema extends z.ZodType>(
+function parseOperationInput<TSchema extends z.ZodMiniType>(
     schema: TSchema,
     input: unknown,
 ): z.infer<TSchema> {

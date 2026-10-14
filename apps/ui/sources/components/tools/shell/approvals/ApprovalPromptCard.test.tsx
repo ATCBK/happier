@@ -3,6 +3,7 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestSchema, ApprovalRequestV2Schema, ARTIFACT_PLAIN_DATA_KEY_MARKER, API_TOKEN_FULL_GRANT_V1, StrictJsonValueSchema, buildApprovalRequestArtifactHeaderV1, computeExternalActionRequestEnvelopeDigestV1, encodePlainArtifactStoredContent, signExternalActionApprovalInputV1, type ApprovalRequest, type ApprovalRequestV1, type ApprovalRequestV2 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
@@ -232,7 +233,7 @@ describe('ApprovalPromptCard', () => {
         webLocks = installWebLockManagerMock();
         await home.reset();
         homeId = await home.addHome({ name: 'Home A', serverUrl: 'https://approval-home-a.example',
-            serverIdentityId: 'srv_stable-home-a', accountId: 'account-1' });
+            serverIdentityId: 'srv_stable-home-a', accountId: 'account-1', currentAccount: true });
         // Replay first admits the exact daemon's custody from its Home's genuine machine census.
         home.answer(homeId, 'GET /v1/machines', { body: [{
             ...createPlainMachineRowFixture({ id: 'machine-exact', accountId: 'account-1' }),
@@ -385,25 +386,37 @@ describe('ApprovalPromptCard', () => {
     });
 
     it('routes a V2 durable approval through this device profile for the same stable Home', async () => {
+        home.answer(homeId, '/v1/actions/approval.request.decide', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(envelope.target).toEqual({ kind: 'machine', machineId: 'machine-exact' });
+            expect(envelope.input).toEqual({ artifactId: 'approval-1', decision: 'approve',
+                serverIdentityId: 'srv_stable-home-a', originServerId: 'local-A' });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+                requestId: envelope.requestId, execution: { ok: true, result: { status: 'executed' } } }) };
+        } });
         const screen = await renderCard(daemonApprovalRequest());
         await screen.pressByTestIdAsync('approval-prompt-approve');
-        await vi.waitFor(() => expect(daemonRpc).toHaveBeenCalledTimes(1));
-        expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: homeId, machineId: 'machine-exact', method: RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
-            payload: { artifactId: 'approval-1' },
-        }));
+        await vi.waitFor(() => expect(home.requestsFor('/v1/actions/approval.request.decide')).toHaveLength(1));
+        expect(home.requestsFor('/v1/actions/approval.request.decide')[0]?.serverId).toBe(homeId);
+        expect(daemonRpc).not.toHaveBeenCalled();
         expect(readApproval()).toMatchObject({ status: 'approved', decision: { kind: 'approve' } });
         expect(home.artifacts(headerHomeId).list()).toEqual([]);
     });
 
     it('does not locally replay a V2 approval when the exact daemon reports approval_stale', async () => {
-        daemonRpc.mockResolvedValue({ ok: false, errorCode: 'approval_stale', error: 'approval_stale' });
+        home.answer(homeId, '/v1/actions/approval.request.decide', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(envelope.target).toEqual({ kind: 'machine', machineId: 'machine-exact' });
+            expect(envelope.input).toEqual({ artifactId: 'approval-1', decision: 'approve',
+                serverIdentityId: 'srv_stable-home-a', originServerId: 'local-A' });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+                requestId: envelope.requestId, execution: { ok: false, errorCode: 'approval_stale', error: 'approval_stale' } }) };
+        } });
         const screen = await renderCard(daemonApprovalRequest());
         await screen.pressByTestIdAsync('approval-prompt-approve');
-        await vi.waitFor(() => expect(daemonRpc).toHaveBeenCalledTimes(1));
-        expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: homeId, machineId: 'machine-exact', payload: { artifactId: 'approval-1' },
-        }));
+        await vi.waitFor(() => expect(home.requestsFor('/v1/actions/approval.request.decide')).toHaveLength(1));
+        expect(home.requestsFor('/v1/actions/approval.request.decide')[0]?.serverId).toBe(homeId);
+        expect(daemonRpc).not.toHaveBeenCalled();
         expect(home.requests.filter(request => request.path.includes('/sessions/'))).toEqual([]);
         const { Modal } = await import('@/modal');
         expect(Modal.alert).toHaveBeenCalledWith('common.error', 'approvals.staleFailure');

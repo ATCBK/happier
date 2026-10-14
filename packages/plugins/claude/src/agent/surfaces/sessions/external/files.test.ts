@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -177,8 +177,8 @@ describe('Claude JSONL session file resolution', () => {
             matches: [expect.objectContaining({ projectId: 'project-a' })],
         });
     });
-    it('refuses an in-root symlink retarget of the projects root while preserving a symlinked config root', async () => {
-        const root = await mkdtemp(join(tmpdir(), 'happier-claude-projects-retarget-'));
+    it('resolves a linked projects root through both physical and symlinked config homes', async () => {
+        const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-claude-projects-retarget-')));
         roots.push(root);
         const configDir = join(root, '.claude');
         const retargetedDir = join(configDir, 'projects-retargeted');
@@ -188,42 +188,40 @@ describe('Claude JSONL session file resolution', () => {
         const aliasConfigDir = join(root, 'alias-claude');
         await symlink(configDir, aliasConfigDir);
 
-        // The retarget stays physically inside the config root, so containment
-        // alone would admit it; the symlinked child itself is the defect.
         await expect(resolveClaudeJsonlSessionFile({
             source: { kind: 'claudeConfig', configDir, projectId: 'project-a' },
             env: {},
             remoteSessionId: 'retargeted',
-        })).resolves.toBeNull();
+        })).resolves.toMatchObject({ filePath: join(retargetedDir, 'project-a', 'retargeted.jsonl') });
         await expect(resolveClaudeJsonlSessionFile({
             source: { kind: 'claudeConfig', configDir },
             env: {},
             remoteSessionId: 'retargeted',
-        })).resolves.toBeNull();
+        })).resolves.toMatchObject({ filePath: join(retargetedDir, 'project-a', 'retargeted.jsonl') });
         await expect(findClaudeJsonlSessionsById({
             source: { kind: 'claudeConfig', configDir },
             env: {},
             remoteSessionId: 'retargeted',
-        })).resolves.toMatchObject({ matches: [] });
+        })).resolves.toMatchObject({ matches: [expect.objectContaining({ projectId: 'project-a' })] });
 
-        // The same request through a symlinked top-level config root is the
-        // same retarget, so it is refused the same way.
         await expect(resolveClaudeJsonlSessionFile({
             source: { kind: 'claudeConfig', configDir: aliasConfigDir, projectId: 'project-a' },
             env: {},
             remoteSessionId: 'retargeted',
-        })).resolves.toBeNull();
+        })).resolves.toMatchObject({ filePath: join(retargetedDir, 'project-a', 'retargeted.jsonl') });
     });
 
-    it('refuses a qualified lookup whose project directory symlinks a real file tree outside the admitted root', async () => {
+    it.each(['inside', 'outside'])('refuses a qualified project-directory symlink %s the physical projects root', async (location) => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-symlink-project-dir-'));
         roots.push(root);
         const configDir = join(root, '.claude');
         const projectsDir = join(configDir, 'projects');
-        const outsideProjectDir = join(root, 'outside', 'project-a');
+        const outsideProjectDir = location === 'inside'
+            ? join(projectsDir, 'project-b')
+            : join(root, 'outside', 'project-a');
         await mkdir(projectsDir, { recursive: true });
         await mkdir(outsideProjectDir, { recursive: true });
-        // A real, non-symlinked regular file: only physical containment can refuse it.
+        // The file is regular; exact lookup must reject the project alias itself.
         await writeFile(join(outsideProjectDir, 'escaped.jsonl'), '{"type":"user"}\n', 'utf8');
         await symlink(outsideProjectDir, join(projectsDir, 'project-a'));
 
@@ -239,7 +237,7 @@ describe('Claude JSONL session file resolution', () => {
         })).resolves.toMatchObject({ matches: [] });
     });
 
-    it('rejects a projects-root symlink that escapes the admitted config root across paged and exact selection', async () => {
+    it('rejects project-directory escapes beneath a shared projects root across paged and exact selection', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-symlink-projects-root-'));
         roots.push(root);
         const configDir = join(root, '.claude');
@@ -252,7 +250,10 @@ describe('Claude JSONL session file resolution', () => {
             'utf8',
         );
         await mkdir(configDir, { recursive: true });
-        await symlink(outsideProjectsDir, join(configDir, 'projects'));
+        const sharedProjectsDir = join(root, 'shared-projects');
+        await mkdir(sharedProjectsDir);
+        await symlink(sharedProjectsDir, join(configDir, 'projects'), 'dir');
+        await symlink(join(outsideProjectsDir, 'project-a'), join(sharedProjectsDir, 'project-a'), 'dir');
 
         await expect(pageClaudeJsonlSessionFiles({
             source: { kind: 'claudeConfig', configDir },

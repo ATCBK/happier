@@ -12,6 +12,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import {
   HAPPIER_PRESS_FEEDBACK_V1,
+  HAPPIER_FRESHNESS_LINE_METRICS,
   HappierDisclosureChevron,
   HappierPressable,
 } from '@happier-dev/plugin-ui/presentation';
@@ -27,6 +28,7 @@ import {
   UsageCoverageLine,
   readUsageCoverageGaps,
   usageCoverageLineMode,
+  usagePartialHistoryLabel,
   usageSourceTitle,
   UsageBodyReading,
 } from '../usageBodyKit';
@@ -43,15 +45,20 @@ type PlanAccountReadKind = 'failed' | 'pending' | 'partial';
 function planAccountReadKind(account: UsagePlanAccount): PlanAccountReadKind | null {
   const status = account.state.status;
   if (status === 'error') return 'failed';
-  if (status === 'pending' || status === 'not_loaded') return 'pending';
-  if (account.read?.current && status !== 'stale') return null;
+  if (status === 'pending') return 'pending';
+  if (account.read?.current && account.observedAtMs !== null && status !== 'stale') return null;
   return 'partial';
+}
+
+/** The same outstanding-account count for a plan headline and its read-state line. */
+export function readPendingPlanAccountCount(accounts: readonly UsagePlanAccount[]): number {
+  return accounts.filter(account => planAccountReadKind(account) === 'pending').length;
 }
 
 /**
  * A plan body's accounts usually share one read: four columns each saying "Partial … Retry" say one
  * thing four times. This folds every affected account into one statement: a failure leads, "Still
- * reading" only while all of them are, and the account names only when not every account is affected.
+ * reading" while any is unanswered, and partial coverage only after all accounts answer.
  */
 export function readPlanAccountsStatement(
   accounts: readonly UsagePlanAccount[],
@@ -63,8 +70,9 @@ export function readPlanAccountsStatement(
   });
   if (affected.length === 0) return null;
   const kind: PlanAccountReadKind = affected.some((entry) => entry.kind === 'failed') ? 'failed'
-    : affected.every((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
-  const sources = affected.length === accounts.length && accounts.length > 1
+    : affected.some((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
+  const sources = kind === 'pending' ? t('connectedServices.purposeTargets.poolAccounts', { count: readPendingPlanAccountCount(accounts) })
+    : affected.length === accounts.length && accounts.length > 1
     ? usageSourceTitle('quota')
     : affected.map((entry) => nameOf(entry.account).title).join(', ');
   const times = affected
@@ -72,11 +80,35 @@ export function readPlanAccountsStatement(
     .filter((time): time is number => typeof time === 'number');
   return {
     kind,
-    reason: t(kind === 'failed' ? 'usage.board.page.coverageFailed'
-      : kind === 'pending' ? 'usage.board.page.coveragePending' : 'usage.board.page.coveragePartial', { sources }),
+    reason: kind === 'partial' ? usagePartialHistoryLabel()
+      : t(kind === 'failed' ? 'usage.board.page.coverageFailed' : 'usage.board.page.coveragePending', { sources }),
     asOf: times.length ? Math.min(...times) : null,
     accounts: affected.length,
   };
+}
+
+export type UsageReadingShape = React.ComponentProps<typeof UsageBodyReading>['shape'];
+
+/**
+ * The accounts a quota read already knows to expect: each has its own pending source before it
+ * answers, so a list body can hold its rows' room from the first frame.
+ */
+export function readUsageKnownQuotaAccountCount(slice: Pick<UsageQueryResultSlice, 'sources'>): number {
+  return slice.sources.filter(source => source.source.startsWith('quota:')).length;
+}
+
+/**
+ * The Usage page names partial and pending reads once in its header and Sources, so a body keeps only
+ * failures. A pending read of a body with nothing else to draw holds the body's room with the first-load
+ * skeleton instead: the header never sits over a blank card.
+ */
+export function planAccountStatesMode(
+  kind: PlanAccountReadKind,
+  pageHasDetail: boolean,
+  replacesContent: boolean,
+): 'line' | 'reading' | 'hidden' {
+  if (usageCoverageLineMode([{ status: kind === 'failed' ? 'error' : kind }], pageHasDetail) !== 'hidden') return 'line';
+  return kind === 'pending' && replacesContent ? 'reading' : 'hidden';
 }
 
 /**
@@ -90,14 +122,26 @@ export function UsagePlanAccountStates(props: Readonly<{
   slice: UsageQueryResultSlice;
   testID: string;
   onRetry(): void | Promise<unknown>;
+  /** True when nothing else is drawn in the body: a pending read then holds the body's room. */
+  replacesContent?: boolean;
+  /** The shape the body's skeleton holds while it reads (a list of meters), when it is known. */
+  readingShape?: UsageReadingShape;
+  /** The headline already names this pending read; hold the footer's room quietly. */
+  pendingInHeadline?: boolean;
 }>) {
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
+  if (statement?.kind === 'pending' && props.pendingInHeadline) {
+    // Holds the room the settled coverage line takes. The Usage page names coverage once in its header and
+    // draws no such line when settled, so it holds none (else the body would shrink by the line at settle).
+    return pageHasDetail ? null : <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />;
+  }
   if (!statement) {
     return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
   }
-  // The Usage page names partial and pending reads once in its header and Sources; a body keeps failures.
-  if (usageCoverageLineMode([{ status: statement.kind === 'failed' ? 'error' : statement.kind }], pageHasDetail) === 'hidden') return null;
+  const mode = planAccountStatesMode(statement.kind, pageHasDetail, props.replacesContent === true);
+  if (mode === 'reading') return <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+  if (mode === 'hidden') return null;
   const pending = statement.kind === 'pending';
   return <SurfaceFreshnessLine testID={props.testID} asOf={statement.asOf} reason={statement.reason} busy={pending}
     tone={statement.kind === 'failed' ? 'warning' : 'neutral'}
@@ -264,6 +308,8 @@ export function UsagePlansNothingRead(
     slice?: UsageQueryResultSlice;
     /** False when other witnessed facts remain beside this allowance notice. */
     replacesContent?: boolean;
+    /** The shape the body's skeleton holds while it reads, when it is known. */
+    readingShape?: UsageReadingShape;
     /** Unsupported secondary insights share one quiet statement, without another empty card. */
     missing?: readonly string[];
     onRetry?: () => void | Promise<unknown>;
@@ -290,11 +336,12 @@ export function UsagePlansNothingRead(
       testID={`${props.testID}.coverage`}
     />
   );
-  // On the Usage page the header says once what is still being read; the body holds its room with the
-  // first-load skeleton (lab kitstates "Loading · first time"), never a spinner or a repeated sentence.
-  // On the Usage page the header says once what is still being read; the body holds its room.
-  if (outstanding && pageHasDetail) return <UsageBodyReading testID={`${props.testID}.loading`} />;
-  if (outstanding) return coverage;
+  // The body holds its room with the first-load skeleton (lab kitstates "Loading · first time"), never a
+  // blank card under a header. Once the Usage page's own detail has arrived its header says what is still
+  // being read; before that (and on Home, a Board) the quiet line under the skeleton says it.
+  const reading = <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+  if (outstanding && pageHasDetail) return reading;
+  if (outstanding) return <>{reading}{coverage}</>;
   return (
     <View style={styles.nothingRead}>
       <UsageBodyInsufficient

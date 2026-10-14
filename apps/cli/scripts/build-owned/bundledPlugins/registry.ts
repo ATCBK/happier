@@ -9,10 +9,8 @@ import {
 import type {
   BundledFirstPartyAgentRegistrationIdentity,
   BundledPluginPackage,
-  PromptAssetContributionSource,
 } from './projectionFacts.ts';
 
-export const PLUGIN_PROMPT_ASSET_EXPORT_NAME = 'PLUGIN_PROMPT_ASSET_DESCRIPTORS';
 
 export function bundledPluginManifestAssetRelativePath(pluginPackageId: string): string {
   return `assets/bundled-plugin-manifests/${pluginPackageId}.json`;
@@ -158,23 +156,4 @@ export function renderCliBundledPluginEntriesTs(params: Readonly<{
     },
   );
   return renderCliBundledAgentRegistrationBindingsTs(registrations);
-}
-
-export function renderCliPromptAssetPluginDescriptorsTs(
-  sources: readonly PromptAssetContributionSource[],
-): string {
-  const lines: string[] = [];
-  lines.push('/**');
-  lines.push(' * GENERATED FILE CONTRACT (A.16y.4-agent-runtime-codegen-and-prompt-assets-cleanup)');
-  lines.push(' *');
-  lines.push(' * This file is emitted by:');
-  lines.push(' * - `apps/cli/scripts/build-owned/generateBundledPluginEntries.ts`');
-  lines.push(' */');
-  lines.push('');
-  lines.push('import type { PluginPromptAssetAdapterDescriptor } from \'../pluginPromptAssetAdapterDescriptor\';');
-  lines.push('');
-  lines.push('export const BUNDLED_FIRST_PARTY_PLUGIN_PROMPT_ASSET_DESCRIPTORS: readonly PluginPromptAssetAdapterDescriptor[] = Object.freeze(');
-  lines.push(`${renderJsonLiteral(sources.flatMap((source) => source.descriptors))});`);
-  lines.push('');
-  return lines.join('\n');
 }

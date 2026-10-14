@@ -1,5 +1,5 @@
 import type { Fastify } from '@/app/api/types';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     WORKSPACE_EXECUTION_CONFIG_ROUTE_V1,
     WorkspaceExecutionConfigReadRequestV1Schema,
@@ -14,7 +14,7 @@ import { inTx } from '@/storage/inTx';
 import { listWorkspaceExecutionConfigRowsInTx, mutateWorkspaceExecutionConfigRowInTx, readWorkspaceExecutionConfigRowInTx } from './workspaceExecutionConfigRowService';
 
 const failureResponses = {
-    400: z.object({ error: z.literal('invalid-params') }).strict(),
+    400: z.strictObject({ error: z.literal('invalid-params') }),
     503: asServerProtocolZod(WorkspaceExecutionConfigStorageUnavailableV1Schema),
 };
 const unavailable = { error: 'workspace_execution_config_storage_unavailable' as const };

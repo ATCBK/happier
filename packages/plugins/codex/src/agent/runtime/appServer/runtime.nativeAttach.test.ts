@@ -4,6 +4,7 @@ import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/ru
 import { createCodexNativeAppServerSessionRuntime } from './native.js';
 import { startCodexAppServerRuntime } from './runtime.js';
 import { withCodexNativeAttachFixture as withFixture } from './runtime.nativeAttach.test-support.js';
+import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 
 describe('native Codex attachment preparation', () => {
   it.each(['assistant', 'reasoning'] as const)('clears an existing %s draft with an empty normalized final without manufacturing empty output', async (channel) => {
@@ -141,6 +142,14 @@ describe('native Codex attachment preparation', () => {
     });
   });
 
+  it.skipIf(process.platform === 'win32')('publishes native App Server mode on an ordinary fresh open', async () => {
+    await withFixture(async ({ openConfiguredSession }) => {
+      const session = await openConfiguredSession();
+      expect(RuntimeDescriptorV1Schema.parse(session.runtimeDescriptorV1)).toMatchObject({
+        v: 1, agentId: 'codex', agent: { backendMode: 'appServer' },
+      });
+    });
+  });
   it.each([
     { initialProviderBinding: { v: 1 as const, modelProvider: 'ollama', config: {} } },
     { processEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId: 'openai-codex', profileId: 'fixture' }]) } },

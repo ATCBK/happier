@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS, RUNNER_EXECUTION_RUN_SNAPSHOT_RESULTS } from './executionRunSnapshotProtocol';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { ManagedExecutableRefSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
 import { AgentSessionTeamProviderBindingV1Schema } from '@happier-dev/protocol/providers/sessions/agentSessionProviderBindingV1';
@@ -147,8 +148,10 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.object({
   context: z.object({
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
     sessionId: asHostProtocolZod(SessionIdSchema),
+    executionRunSnapshotId: z.uuid().optional(),
   }).strict(),
   operation: z.discriminatedUnion('kind', [
+    ...RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS,
     McpRequestAuthOpenV1Schema,
     McpRequestAuthCloseV1Schema,
     ...RUNNER_AGENT_DAEMON_FACET_OPERATION_SCHEMAS,
@@ -309,6 +312,7 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
     z.object({
       ok: z.literal(true),
       result: z.union([
+        ...RUNNER_EXECUTION_RUN_SNAPSHOT_RESULTS,
         McpRequestAuthResultV1Schema,
         McpRequestAuthClosedV1Schema,
         z.object({

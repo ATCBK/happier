@@ -11,6 +11,35 @@ import { renderWindowsScheduledTaskWrapperPs1 } from '../../service/windows.js';
 import { discoverHappierServices } from './discoverHappierServices.js';
 
 describe('discoverHappierServices', () => {
+    it('lists daemon, relay and stack services through the scoped Scheduler JSON boundary', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-runtime-scoped-task-list-'));
+        const labels = ['happier-daemon.default', 'happier-server.default', 'dev.happier.stack.qa'];
+        try {
+            const commands: string[] = [];
+            const inventory = await discoverHappierServices({ platform: 'win32', roots: [{ path: root, scope: 'user' }], commands: { run: ({ cmd, args }) => {
+                commands.push(`${cmd} ${args.join(' ')}`);
+                if (cmd === 'powershell.exe') return JSON.stringify(labels.map((label) => `\\Happier\\${label}`));
+                if (args.includes('/XML')) return `<Task><Arguments>-File "C:\\Users\\tester\\.happier\\services\\${String(args[args.indexOf('/TN') + 1]).split('\\').pop()}.ps1"</Arguments></Task>`;
+                return '';
+            } } });
+            expect(inventory.services.map((service) => service.label).sort()).toEqual([...labels].sort());
+            expect(commands.some((command) => command.startsWith('schtasks /Query /FO CSV'))).toBe(false);
+            expect(commands.some((command) => command.includes('.GetFolder("\\Happier")'))).toBe(true);
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it.each(['', ' \r\n', 'not-json'])('rejects unproven Scheduler JSON output %j', async (stdout) => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-runtime-unproven-task-list-'));
+        try {
+            await expect(discoverHappierServices({ platform: 'win32', roots: [{ path: root, scope: 'user' }], commands: { run: () => ({ status: 0, stdout, stderr: '' }) } }))
+                .rejects.toMatchObject({ code: 'service_inventory_unavailable' });
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
     it.each(['exit', 'error', 'throw', 'stderr'] as const)('keeps unavailable launchd observations unknown for %s', async (failure) => {
         const root = await mkdtemp(join(tmpdir(), 'happier-runtime-launchd-status-'));
         const label = 'com.happier.cli.daemon.company';
@@ -51,7 +80,7 @@ describe('discoverHappierServices', () => {
             const unrelated = platform === 'darwin' ? 'other.plist' : platform === 'win32' ? 'other.ps1' : 'other.service';
             await writeFile(join(root, unrelated), 'unrelated');
             const denied = Object.assign(new Error('Access denied'), { code: 'EACCES' });
-            const params = { platform, roots: [{ path: root, scope: 'user' as const }], fs: { readFile: (async () => { throw denied; }) as typeof readFile }, commands: { run: () => '' } };
+            const params = { platform, roots: [{ path: root, scope: 'user' as const }], fs: { readFile: (async () => { throw denied; }) as typeof readFile }, commands: { run: () => platform === 'win32' ? '[]' : '' } };
             await expect(discoverHappierServices(params)).resolves.toEqual({ services: [] });
             await writeFile(join(root, fileName), 'known definition');
             await expect(discoverHappierServices(params)).rejects.toMatchObject({ code: 'service_inventory_unavailable', message: expect.stringContaining(fileName) });
@@ -69,7 +98,7 @@ describe('discoverHappierServices', () => {
         try {
             const definitionPath = `C:\\Users\\tester\\.happier\\services\\${label}.ps1`;
             const inventory = await discoverHappierServices({ platform: 'win32', roots: [{ path: join(root, 'missing'), scope: 'user' }], commands: { run: ({ args }) => {
-                if (args.includes('CSV')) return `"\\Happier\\${label}","N/A"\r\n`;
+                if (args.some((arg) => arg.includes('.GetFolder("\\Happier")'))) return JSON.stringify([`\\Happier\\${label}`]);
                 if (args.includes('/XML')) return `<Task><Arguments>-File "${definitionPath}"</Arguments></Task>`;
                 return `TaskName: \\Happier\\${label}\r\nStatus: Ready\r\n`;
             } } });
@@ -84,7 +113,7 @@ describe('discoverHappierServices', () => {
         try {
             const path = join(root, 'happier-daemon.default.ps1');
             await writeFile(path, renderWindowsScheduledTaskWrapperPs1({ workingDirectory: root, programArgs: ['happier.exe', 'daemon', 'start-sync'], env: { HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service' }, stdoutPath: join(root, 'out.log'), stderrPath: join(root, 'err.log') }));
-            const inventory = await discoverHappierServices({ platform: 'win32', roots: [{ path: root, scope: 'user' }], commands: { run: ({ args }) => ({ stdout: '', stderr: args.includes('CSV') ? '' : 'Task not found', status: args.includes('CSV') ? 0 : 1 }) } });
+            const inventory = await discoverHappierServices({ platform: 'win32', roots: [{ path: root, scope: 'user' }], commands: { run: ({ args }) => ({ stdout: args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : '', stderr: '', status: args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? 0 : 1 }) } });
             expect(inventory.services).toEqual([expect.objectContaining({ definitionPath: path, installed: true, running: null, enabled: null })]);
         } finally {
             await rm(root, { recursive: true, force: true });
@@ -111,7 +140,7 @@ describe('discoverHappierServices', () => {
             let listings = 0;
             let disappears = false;
             const params = { platform: 'win32' as const, roots: [{ path: root, scope: 'user' as const }], commands: { run: ({ args }: { args: readonly string[] }) => {
-                if (args.includes('CSV')) return ++listings > 1 && disappears ? '' : '"\\Happier\\happier-daemon.company","N/A"\r\n';
+                if (args.some((arg) => arg.includes('.GetFolder("\\Happier")'))) return ++listings > 1 && disappears ? '[]' : JSON.stringify(['\\Happier\\happier-daemon.company']);
                 throw new Error('OS inspection denied');
             } } };
             await expect(discoverHappierServices(params)).rejects.toMatchObject({ code: 'service_inventory_unavailable', message: expect.stringContaining('happier-daemon.company') });
@@ -154,6 +183,7 @@ describe('discoverHappierServices', () => {
                 roots: [{ path: userRoot, scope: 'user' }],
                 commands: {
                     run: ({ cmd, args }) => {
+                        if (cmd === 'powershell.exe') return '[]';
                         if (cmd !== 'schtasks') return null;
                         if (args.includes('/Query')) {
                             return 'TaskName: \\Happier\\happier-daemon.dev.cloud\r\nStatus: Running\r\n';
@@ -413,7 +443,7 @@ describe('discoverHappierServices', () => {
             const inventory = await discoverHappierServices({
                 platform: params.platform,
                 roots: [{ path: serviceRoot, scope: 'user' }],
-                commands: { run: () => '' },
+                commands: { run: ({ cmd }) => cmd === 'powershell.exe' ? '[]' : '' },
             });
 
             expect(inventory.services).toEqual([
@@ -552,7 +582,7 @@ describe('discoverHappierServices', () => {
                 platform: 'win32',
                 roots: [{ path: tasks, scope: 'user' }],
                 commands: {
-                    run: ({ cmd, args }) => cmd === 'schtasks'
+                    run: ({ cmd, args }) => cmd === 'powershell.exe' ? '[]' : cmd === 'schtasks'
                         ? `Status: Ready\r\nScheduled Task State: ${args.some((arg) => arg.endsWith('happier-daemon.off')) ? 'Disabled' : 'Enabled'}\r\n`
                         : null,
                 },

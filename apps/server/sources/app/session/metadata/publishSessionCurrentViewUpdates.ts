@@ -1,7 +1,4 @@
-import {
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    SessionMetadataRecipientProjectionV1Schema,
-} from "@happier-dev/protocol";
+import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionMetadataRecipientProjectionV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
     buildSessionMetadataRecipientUpdate,

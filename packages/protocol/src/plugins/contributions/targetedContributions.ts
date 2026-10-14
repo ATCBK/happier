@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PluginActionDangerLevelV2Schema,
@@ -38,56 +38,56 @@ function utf8Length(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function boundedOperationMap<TValue extends z.core.SomeType>(valueSchema: TValue): z.ZodType<Record<string, z.infer<TValue>>> {
-  return z.record(PluginContributionOperationRoleV1Schema, valueSchema).superRefine((operations, ctx) => {
+function boundedOperationMap<TValue extends z.core.SomeType>(valueSchema: TValue): z.ZodMiniType<Record<string, z.infer<TValue>>> {
+  return z.record(PluginContributionOperationRoleV1Schema, valueSchema).check(z.superRefine((operations, ctx) => {
     const count = Object.keys(operations).length;
     if (count > TARGETED_CONTRIBUTION_MAX_ROLES_PER_PROTOCOL) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `Targeted contribution operation maps may contain at most ${TARGETED_CONTRIBUTION_MAX_ROLES_PER_PROTOCOL} roles.`,
       });
     }
-  });
+  }));
 }
 
-function boundedSurfaceMap<TValue extends z.ZodTypeAny>(valueSchema: TValue): z.ZodType<Record<string, z.infer<TValue>>> {
-  return z.record(asProtocolZod(PluginContributionLocalIdSchema), valueSchema).superRefine((surfaces, ctx) => {
+function boundedSurfaceMap<TValue extends z.ZodMiniType>(valueSchema: TValue): z.ZodMiniType<Record<string, z.infer<TValue>>> {
+  return z.record(asProtocolZod(PluginContributionLocalIdSchema), valueSchema).check(z.superRefine((surfaces, ctx) => {
     const count = Object.keys(surfaces).length;
     if (count < 1 || count > TARGETED_CONTRIBUTION_MAX_ROLES_PER_PROTOCOL) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `Targeted contribution surface maps must contain 1 to ${TARGETED_CONTRIBUTION_MAX_ROLES_PER_PROTOCOL} roles.`,
       });
     }
-  });
+  }));
 }
 
-const TargetedContributionProtocolVersionSchema = lazyZodSchema(() => z.number().int().positive().safe());
+const TargetedContributionProtocolVersionSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.int()));
 
-export const PluginTargetedContributionProtocolV1Schema = lazyZodSchema(() => z.object({
+export const PluginTargetedContributionProtocolV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionProtocolIdV1Schema),
   version: TargetedContributionProtocolVersionSchema,
-}).strict());
+}));
 export type PluginTargetedContributionProtocolV1 = z.infer<typeof PluginTargetedContributionProtocolV1Schema>;
 
 export const PluginTargetedContributionOperationInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('contributorDefined') }).strict(),
-  z.object({ kind: z.literal('protocolDefined'), schema: PluginJsonSchemaV2Schema }).strict(),
+  z.strictObject({ kind: z.literal('contributorDefined') }),
+  z.strictObject({ kind: z.literal('protocolDefined'), schema: PluginJsonSchemaV2Schema }),
 ]));
 export type PluginTargetedContributionOperationInputV1 = z.infer<typeof PluginTargetedContributionOperationInputV1Schema>;
 
-export const PluginTargetedContributionOperationRequirementsV1Schema = lazyZodSchema(() => z.object({
-  surfaces: z.array(PluginActionSurfaceV2Schema).min(1),
+export const PluginTargetedContributionOperationRequirementsV1Schema = lazyZodSchema(() => z.strictObject({
+  surfaces: z.array(PluginActionSurfaceV2Schema).check(z.minLength(1)),
   dangerLevel: PluginActionDangerLevelV2Schema,
-}).strict());
+}));
 export type PluginTargetedContributionOperationRequirementsV1 = z.infer<typeof PluginTargetedContributionOperationRequirementsV1Schema>;
 
-export const PluginTargetedContributionOperationV1Schema = lazyZodSchema(() => z.object({
+export const PluginTargetedContributionOperationV1Schema = lazyZodSchema(() => z.strictObject({
   required: z.boolean(),
   input: PluginTargetedContributionOperationInputV1Schema,
   resultSchema: PluginJsonSchemaV2Schema,
   action: PluginTargetedContributionOperationRequirementsV1Schema,
-}).strict());
+}));
 export type PluginTargetedContributionOperationV1 = z.infer<typeof PluginTargetedContributionOperationV1Schema>;
 
 /** The manifest and mounted-UI projection share this one Surface presentation vocabulary. */
@@ -97,31 +97,31 @@ export type PluginTargetedContributionSurfacePresentationV1 =
   PluginUiTargetedContributionSurfacePresentationV1;
 
 /** Target-owned embedded surface contract; renderer selection remains with `ui.renderers`. */
-export const PluginTargetedContributionSurfaceV1Schema = lazyZodSchema(() => z.object({
+export const PluginTargetedContributionSurfaceV1Schema = lazyZodSchema(() => z.strictObject({
   required: z.boolean(),
   inputSchema: PluginJsonSchemaV2Schema,
   presentation: PluginTargetedContributionSurfacePresentationV1Schema,
-}).strict());
+}));
 export type PluginTargetedContributionSurfaceV1 = z.infer<typeof PluginTargetedContributionSurfaceV1Schema>;
 
-export const PluginContributionPointProtocolV1Schema = lazyZodSchema(() => z.object({
+export const PluginContributionPointProtocolV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionProtocolIdV1Schema),
   version: TargetedContributionProtocolVersionSchema,
-  descriptor: PluginJsonSchemaV2Schema.optional(),
+  descriptor: z.optional(PluginJsonSchemaV2Schema),
   operations: boundedOperationMap(PluginTargetedContributionOperationV1Schema),
-  surfaces: boundedSurfaceMap(PluginTargetedContributionSurfaceV1Schema).optional(),
-}).strict().superRefine((protocol, ctx) => {
+  surfaces: z.optional(boundedSurfaceMap(PluginTargetedContributionSurfaceV1Schema)),
+}).check(z.superRefine((protocol, ctx) => {
   if (
     protocol.descriptor === undefined
     && Object.keys(protocol.operations).length === 0
     && Object.keys(protocol.surfaces ?? {}).length === 0
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'A contribution protocol must declare a descriptor, operation, or Surface role.',
     });
   }
-}));
+})));
 export type PluginContributionPointProtocolV1 = z.infer<typeof PluginContributionPointProtocolV1Schema>;
 
 /**
@@ -198,55 +198,51 @@ export function rehydratePluginContributionPointSemanticsV1(
   });
 }
 
-export const PluginContributionPointV1Schema = lazyZodSchema(() => z.object({
+export const PluginContributionPointV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
-  maxContributionsPerContributor: z.number().int().positive().safe()
-    .max(TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_POINT)
-    .optional(),
-  protocols: z.array(PluginContributionPointProtocolV1Schema)
-    .min(1)
-    .max(PLUGIN_UI_TARGETED_CONTRIBUTION_PROTOCOLS_MAX_V1),
-}).strict().superRefine((point, ctx) => {
+  maxContributionsPerContributor: z.optional(z.number().check(z.int(), z.positive(), z.int(), z.maximum(TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_POINT))),
+  protocols: z.array(PluginContributionPointProtocolV1Schema).check(z.minLength(1), z.maxLength(PLUGIN_UI_TARGETED_CONTRIBUTION_PROTOCOLS_MAX_V1)),
+}).check(z.superRefine((point, ctx) => {
   const seen = new Set<string>();
   point.protocols.forEach((protocol, index) => {
     const key = `${protocol.id}/${protocol.version}`;
     if (seen.has(key)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['protocols', index],
         message: 'Duplicate targeted contribution protocol identity.',
       });
     }
     seen.add(key);
   });
-}));
+})));
 export type PluginContributionPointV1 = z.infer<typeof PluginContributionPointV1Schema>;
 
-export const PluginTargetedContributionTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginTargetedContributionTargetV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   pointId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginTargetedContributionTargetV1 = z.infer<typeof PluginTargetedContributionTargetV1Schema>;
 
-export const PluginTargetedContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginTargetedContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   target: PluginTargetedContributionTargetV1Schema,
   protocol: PluginTargetedContributionProtocolV1Schema,
-  descriptor: PluginJsonValueV2Schema.optional(),
+  descriptor: z.optional(PluginJsonValueV2Schema),
   operations: boundedOperationMap(asProtocolZod(PluginContributionLocalIdSchema)),
-  surfaces: boundedSurfaceMap(PluginUiRendererChainBindingV1Schema).optional(),
-}).strict().superRefine((contribution, ctx) => {
+  surfaces: z.optional(boundedSurfaceMap(PluginUiRendererChainBindingV1Schema)),
+}).check(z.superRefine((contribution, ctx) => {
   if (
     contribution.descriptor === undefined
     && Object.keys(contribution.operations).length === 0
     && Object.keys(contribution.surfaces ?? {}).length === 0
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'A targeted contribution must bind a descriptor, operation, or Surface role.',
     });
   }
-}));
+})));
 export type PluginTargetedContributionV1 = z.infer<typeof PluginTargetedContributionV1Schema>;
 
 /**
@@ -258,18 +254,18 @@ export function validateTargetedContributionEnvelopeBoundsV1(
     pluginContributionPoints: readonly PluginContributionPointV1[];
     targetedPluginContributions: readonly PluginTargetedContributionV1[];
   }>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   if (value.pluginContributionPoints.length > TARGETED_CONTRIBUTION_MAX_POINTS_PER_PLUGIN) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['pluginContributionPoints'],
       message: `At most ${TARGETED_CONTRIBUTION_MAX_POINTS_PER_PLUGIN} targeted contribution points are allowed.`,
     });
   }
   if (value.targetedPluginContributions.length > TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_PLUGIN) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['targetedPluginContributions'],
       message: `At most ${TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_PLUGIN} targeted contributions are allowed.`,
     });
@@ -280,7 +276,7 @@ export function validateTargetedContributionEnvelopeBoundsV1(
     if (contribution.descriptor !== undefined
       && utf8Length(JSON.stringify(contribution.descriptor)) > TARGETED_CONTRIBUTION_MAX_DESCRIPTOR_BYTES) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['targetedPluginContributions', index, 'descriptor'],
         message: `A targeted contribution descriptor may not exceed ${TARGETED_CONTRIBUTION_MAX_DESCRIPTOR_BYTES} bytes.`,
       });
@@ -291,7 +287,7 @@ export function validateTargetedContributionEnvelopeBoundsV1(
     contributionsByPoint.set(pointKey, count);
     if (count > TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_POINT) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['targetedPluginContributions', index],
         message: `At most ${TARGETED_CONTRIBUTION_MAX_CONTRIBUTIONS_PER_POINT} targeted contributions may bind one target point.`,
       });
@@ -299,7 +295,7 @@ export function validateTargetedContributionEnvelopeBoundsV1(
   });
   if (targets.size > TARGETED_CONTRIBUTION_MAX_TARGET_PLUGINS_PER_CONTRIBUTOR) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['targetedPluginContributions'],
       message: `At most ${TARGETED_CONTRIBUTION_MAX_TARGET_PLUGINS_PER_CONTRIBUTOR} target plugins may be named.`,
     });

@@ -11,6 +11,13 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
+// react-test-renderer has no DOM portal container; keep the real shell and guest
+// logic while representing only ReactDOM's cross-document mount boundary.
+vi.mock('react-dom', async importOriginal => ({
+    ...await importOriginal<typeof import('react-dom')>(),
+    createPortal: (children: React.ReactNode) => children,
+}));
+
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
 
 const platform = Platform.OS;
@@ -28,16 +35,32 @@ const previewUrl = 'https://artifact-1.preview.example.test/a/artifact-1';
 const preview = { url: previewUrl, bundle: artifactHtmlBundleFromBodyV1('<h1>Report</h1>') };
 const props = { artifactId: 'artifact-1', headerVersion: 1, bodyVersion: 1, body: '<h1>Report</h1>', name: 'Report' };
 
+async function loadPreviewGuest(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await flushHookEffects();
+    const shell = screen.findHostByTestId('artifact:htmlPreview-navigation-shell');
+    if (!shell) throw new Error('Artifact navigation shell did not mount');
+    await act(async () => { shell.props.onLoad({ currentTarget: { contentDocument: { body: {} } } }); });
+    const guest = screen.findHostByTestId('artifact:htmlPreview');
+    if (!guest) throw new Error('Artifact guest did not mount');
+    return guest;
+}
+
 describe('ArtifactHtmlBody', () => {
     it('uses the saved Artifact network policy rather than a viewer preference or implicit open default', async () => {
         setPlatform('web');
-        for (const network of ['open', 'none'] as const) {
+        const policies = [
+            { requestedCapabilities: { network: 'open' as const }, connect: 'data: https:' },
+            { requestedCapabilities: { network: 'none' as const }, connect: 'data:' },
+            { requestedCapabilities: { networkOrigins: ['https://api.example.test'] }, connect: 'data: https://api.example.test' },
+        ];
+        for (const { requestedCapabilities, connect } of policies) {
             const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={async () => ({ ...preview,
-                bundle: { ...preview.bundle, requestedCapabilities: { network } },
+                bundle: { ...preview.bundle, requestedCapabilities },
             })} />);
-            await flushHookEffects();
-            const frame = screen.tree.root.findByType('iframe');
-            expect(frame.props.srcDoc).toContain(network === 'open' ? 'connect-src data: https:;' : 'connect-src data:;');
+            const frame = await loadPreviewGuest(screen);
+            expect(screen.findHostByTestId('artifact:htmlPreview-navigation-shell')!.props.srcDoc).toContain("connect-src 'self'");
+            expect(frame.props.srcDoc).toContain(`connect-src ${connect};`);
+            expect(frame.props.srcDoc).not.toContain("connect-src 'self'");
             await screen.unmount();
         }
     });
@@ -45,8 +68,7 @@ describe('ArtifactHtmlBody', () => {
         setPlatform('web');
         vi.stubGlobal('window', { location: { origin: 'https://app.example.test' } });
         const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={async () => preview} />);
-        await flushHookEffects();
-        const frame = screen.tree.root.findByType('iframe');
+        const frame = await loadPreviewGuest(screen);
         expect(frame.props).toMatchObject({ sandbox: 'allow-scripts',
             referrerPolicy: 'no-referrer', title: 'Report' });
         expect(frame.props.src).toBeUndefined();
@@ -56,8 +78,7 @@ describe('ArtifactHtmlBody', () => {
         expect(screen.findByTestId('artifact:htmlPreviewFailed')).not.toBeNull();
         expect(screen.tree.root.findAllByType('iframe')).toHaveLength(0);
         await screen.pressByTestIdAsync('artifact:htmlPreviewRetry');
-        await flushHookEffects();
-        expect(screen.tree.root.findByType('iframe').props.srcDoc).toContain('<h1>Report</h1>');
+        expect((await loadPreviewGuest(screen)).props.srcDoc).toContain('<h1>Report</h1>');
     });
 
     it('refuses app-origin, inline, and credential-bearing preview URLs visibly', async () => {
@@ -85,11 +106,11 @@ describe('ArtifactHtmlBody', () => {
         const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={readPreview} />);
         nextUrl = Promise.resolve(preview);
         await screen.update(<ArtifactHtmlBody {...props} body="<h1>New report</h1>" readPreview={readPreview} />);
-        await flushHookEffects();
+        await loadPreviewGuest(screen);
         expect(signals[0]!.aborted).toBe(true);
         pending.resolve({ ...preview, url: 'https://old.preview.example.test/a/artifact-1' });
         await flushHookEffects();
-        expect(screen.tree.root.findByType('iframe').props.srcDoc).toContain('<h1>Report</h1>');
+        expect(screen.findHostByTestId('artifact:htmlPreview')!.props.srcDoc).toContain('<h1>Report</h1>');
         const revision = createDeferred<ArtifactHtmlPreview>();
         nextUrl = revision.promise;
         await screen.update(<ArtifactHtmlBody {...props} bodyVersion={2} readPreview={readPreview} />);
@@ -98,10 +119,10 @@ describe('ArtifactHtmlBody', () => {
         nextUrl = Promise.resolve({ url: 'https://artifact-2.preview.example.test/a/artifact-2', bundle: artifactHtmlBundleFromBodyV1('<h1>Second</h1>') });
         await screen.update(<ArtifactHtmlBody {...props} artifactId="artifact-2" readPreview={readPreview} />);
         revision.reject(new Error('Obsolete read failed'));
-        await flushHookEffects();
+        const secondFrame = await loadPreviewGuest(screen);
         expect(signals[2]!.aborted).toBe(true);
         expect(screen.findByTestId('artifact:htmlPreviewFailed')).toBeNull();
-        expect(screen.tree.root.findByType('iframe').props.srcDoc).toContain('<h1>Second</h1>');
+        expect(secondFrame.props.srcDoc).toContain('<h1>Second</h1>');
         await screen.unmount();
         expect(signals[3]!.aborted).toBe(true);
     });
@@ -112,8 +133,7 @@ describe('ArtifactHtmlBody', () => {
         const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={async () => ({
             url: previewUrl, bundle: artifactHtmlBundleFromBodyV1(html),
         })} />);
-        await flushHookEffects();
-        const frame = screen.tree.root.findByType('iframe');
+        const frame = await loadPreviewGuest(screen);
         expect(frame.props.srcDoc).toContain(html);
         expect(new TextEncoder().encode(frame.props.srcDoc).byteLength).toBeGreaterThan(2 * 1024 * 1024);
         expect(frame.props.src).toBeUndefined();
@@ -123,12 +143,11 @@ describe('ArtifactHtmlBody', () => {
         setPlatform('web');
         const readPreview = async (id: string) => ({ url: `https://${id}.preview.example.test/a/${id}`, bundle: artifactHtmlBundleFromBodyV1(`<h1>${id}</h1>`) });
         const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={readPreview} />);
-        await flushHookEffects();
-        const oldFrameFailure = screen.tree.root.findByType('iframe').props.onError;
+        const oldFrameFailure = (await loadPreviewGuest(screen)).props.onError;
         await screen.update(<ArtifactHtmlBody {...props} artifactId="artifact-2" readPreview={readPreview} />);
-        await flushHookEffects();
+        const nextFrame = await loadPreviewGuest(screen);
         await act(async () => { oldFrameFailure(); });
         expect(screen.findByTestId('artifact:htmlPreviewFailed')).toBeNull();
-        expect(screen.tree.root.findByType('iframe').props.srcDoc).toContain('<h1>artifact-2</h1>');
+        expect(nextFrame.props.srcDoc).toContain('<h1>artifact-2</h1>');
     });
 });

@@ -1,4 +1,4 @@
-import { startHappyServer, type HappyMcpSessionClient } from '@/mcp/startHappyServer'
+import type { HappyMcpSessionClient } from '@/mcp/startHappyServer'
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand'
 import type { McpServerConfig } from '@/agent'
 import type { StoredCredentials } from '@/persistence'
@@ -87,6 +87,7 @@ export async function createHappierMcpBridge(
   happierMcpServer: {
     url: string
     supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[]
+    readToolNames: (signal?: AbortSignal) => Promise<readonly string[]>
     stop: () => void
   }
   mcpServers: Record<string, McpServerConfig>
@@ -112,10 +113,12 @@ export async function createHappierMcpBridgeWithOptions(
   happierMcpServer: {
     url: string
     supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[]
+    readToolNames: (signal?: AbortSignal) => Promise<readonly string[]>
     stop: () => void
   }
   mcpServers: Record<string, McpServerConfig>
 }> {
+  const { startHappyServer } = await import('@/mcp/startHappyServer')
   const happierMcpServer = await startHappyServer(session, {
     sessionCredentials: opts.sessionCredentials ?? opts.credentials ?? null,
     credentials: opts.credentials ?? null,

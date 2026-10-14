@@ -106,8 +106,9 @@ function normalizeActionSearchQuery(query: string): NormalizedActionSearchQuery 
 function actionSearchScore(
   spec: SearchableActionDefinition,
   query: NormalizedActionSearchQuery,
+  searchText?: string,
 ): number {
-  const haystack = actionSearchText(spec);
+  const haystack = searchText ?? actionSearchText(spec);
   if (!query.text) return 1;
 
   let score = 0;
@@ -163,8 +164,24 @@ export function serializeActionSpec(
   spec: ActionSpec,
   params?: ActionCatalogSurfaceParams,
 ): SerializedActionSpec {
+  return projectSerializedActionOutput(serializeActionSpecMetadata(spec, params), spec, params);
+}
+
+function projectSerializedActionOutput(
+  metadata: SerializedActionSpec,
+  spec: ActionSpec,
+  params?: ActionCatalogSurfaceParams,
+): SerializedActionSpec {
   const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
   const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7' });
+  return { ...metadata, ...(outputSchema ? { outputSchema } : {}) };
+}
+
+function serializeActionSpecMetadata(
+  spec: ActionSpec,
+  params?: ActionCatalogSurfaceParams,
+): SerializedActionSpec {
+  const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
   return {
     id: spec.id,
     title: spec.title,
@@ -182,7 +199,6 @@ export function serializeActionSpec(
     ...(spec.toolExposure ? { toolExposure: spec.toolExposure } : {}),
     ...(spec.prompting ? { prompting: spec.prompting } : {}),
     ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
-    ...(outputSchema ? { outputSchema } : {}),
     ...(spec.execution ? { execution: spec.execution } : {}),
     ...(spec.sideEffectClass ? { sideEffectClass: spec.sideEffectClass } : {}),
     ...(spec.operation ? { operation: spec.operation } : {}),
@@ -320,10 +336,10 @@ export function searchSerializedActionSpecs(
   specs: readonly ActionSpec[],
   params?: Readonly<{ query?: string | null; limit?: number | null }>,
 ): readonly SerializedActionSpec[] {
-  return searchActionDefinitionSummaryCandidates(
-    specs.map((spec) => ({ definition: spec, project: () => serializeActionSpec(spec) })),
-    params,
-  );
+  return searchActionDefinitionSummaryCandidates(specs.map(spec => {
+    const definition = serializeActionSpecMetadata(spec);
+    return { definition, project: () => projectSerializedActionOutput(definition, spec) };
+  }), params);
 }
 
 function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1): ActionDefinitionSummaryV1 {
@@ -356,8 +372,9 @@ function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1): Actio
 }
 
 type ActionDefinitionSearchCandidate = Readonly<{
-  definition: SearchableActionDefinition;
-  project: () => ActionDefinitionSummaryV1;
+  definition: ActionDefinitionSummaryV1;
+  searchText?: string;
+  project?: () => ActionDefinitionSummaryV1;
 }>;
 
 function searchActionDefinitionSummaryCandidates(
@@ -371,7 +388,7 @@ function searchActionDefinitionSummaryCandidates(
   return candidates
     .map((candidate) => ({
       candidate,
-      score: actionSearchScore(candidate.definition, normalizedQuery),
+      score: actionSearchScore(candidate.definition, normalizedQuery, candidate.searchText),
     }))
     .filter((entry) => (query ? entry.score > 0 : true))
     .sort((left, right) => {
@@ -379,7 +396,7 @@ function searchActionDefinitionSummaryCandidates(
       return left.candidate.definition.title.localeCompare(right.candidate.definition.title);
     })
     .slice(0, limit)
-    .map((entry) => entry.candidate.project());
+    .map((entry) => entry.candidate.project?.() ?? entry.candidate.definition);
 }
 
 export function searchActionDefinitionSummaries(
@@ -387,7 +404,7 @@ export function searchActionDefinitionSummaries(
   params?: Readonly<{ query?: string | null; limit?: number | null }>,
 ): readonly ActionDefinitionSummaryV1[] {
   return searchActionDefinitionSummaryCandidates(
-    definitions.map((definition) => ({ definition, project: () => definition })),
+    definitions.map((definition) => ({ definition })),
     params,
   );
 }
@@ -400,22 +417,34 @@ export function listActionSpecsForCatalogSurface(params: Readonly<{
   return listActionSpecs().filter((spec) => (!params.surface || isActionSpecSurfacedOn(spec, params.surface)) && isActionEnabled(spec.id as ActionId));
 }
 
-const defaultHostActionSearchSummaries = new WeakMap<ActionSpec, SerializedActionSpec>();
-const apiHostActionSearchSummaries = new WeakMap<ActionSpec, SerializedActionSpec>();
+type HostActionSearchSummary = Readonly<{
+  definition: SerializedActionSpec;
+  searchText: string;
+  project: () => SerializedActionSpec;
+}>;
+
+const defaultHostActionSearchSummaries = new WeakMap<ActionSpec, HostActionSearchSummary>();
+const apiHostActionSearchSummaries = new WeakMap<ActionSpec, HostActionSearchSummary>();
 
 function getHostActionSearchSummary(
   spec: ActionSpec,
   params: ActionCatalogSurfaceParams,
-): SerializedActionSpec {
+): HostActionSearchSummary {
   const summaries = params.surface === 'api'
     ? apiHostActionSearchSummaries
     : defaultHostActionSearchSummaries;
   const cached = summaries.get(spec);
   if (cached) return cached;
 
-  const definition = Object.freeze(serializeActionSpec(spec, params));
-  summaries.set(spec, definition);
-  return definition;
+  const definition = Object.freeze(serializeActionSpecMetadata(spec, params));
+  let projected: SerializedActionSpec | undefined;
+  const summary = { definition, searchText: actionSearchText(definition),
+    // Output projection can be expensive. Ranking needs only metadata; retain
+    // the existing immutable result cache once this row is actually selected.
+    project: () => projected ??= Object.freeze(projectSerializedActionOutput(definition, spec, params)),
+  };
+  summaries.set(spec, summary);
+  return summary;
 }
 
 export function searchSerializedActionSpecsForSurface(params: Readonly<{
@@ -425,22 +454,23 @@ export function searchSerializedActionSpecsForSurface(params: Readonly<{
   isActionEnabled?: (id: ActionId) => boolean;
   additionalDefinitions?: readonly ActionDefinitionSummaryV1[];
 }>): readonly SerializedActionSpec[] {
-  const hostSpecs = listActionSpecsForCatalogSurface(params);
-  const hostIds = new Set<string>(hostSpecs.map((spec) => spec.id));
+  const query = normalizeActionSearchQuery(params.query ?? '');
+  const hostDefinitions = listActionSpecsForCatalogSurface(params)
+    .map((spec) => getHostActionSearchSummary(spec, params))
+    // Search the immutable cached summary so repeated request-current filters
+    // do not rebuild the same host projection or its normalized search text.
+    .filter((summary) => !query.text
+      || actionSearchScore(summary.definition, query, summary.searchText) > 0);
+  const hostIds = new Set(hostDefinitions.map((summary) => summary.definition.id));
   const additionalDefinitions = (params.additionalDefinitions ?? [])
     .filter((definition) => (
       !hostIds.has(definition.id)
       && (!params.surface || definition.surfaces[params.surface] === true)
-    ));
+    ))
+    .map(actionDefinitionToSummary);
   return searchActionDefinitionSummaryCandidates([
-    ...hostSpecs.map((spec) => ({
-      definition: { ...spec, inputHints: resolveActionCatalogSurfaceProjection(spec, params.surface).inputHints },
-      project: () => getHostActionSearchSummary(spec, params),
-    })),
-    ...additionalDefinitions.map((definition) => ({
-      definition,
-      project: () => actionDefinitionToSummary(definition),
-    })),
+    ...hostDefinitions,
+    ...additionalDefinitions.map((definition) => ({ definition })),
   ], {
     query: params.query,
     limit: params.limit,

@@ -23,7 +23,6 @@ export type MachinePresetsActionInputById = {
     };
     readonly "machines.presets.create": {
         homeId: string;
-        id: string;
         owner: {
             kind: 'account';
             accountId: string;
@@ -31,10 +30,7 @@ export type MachinePresetsActionInputById = {
             kind: 'team';
             teamId: string;
         };
-        controller: {
-            machineId: string;
-            installationId: string;
-        };
+        id: string;
         name: string;
         recipe: {
             provider: {
@@ -60,6 +56,10 @@ export type MachinePresetsActionInputById = {
                     accountId: string;
                 };
             }[] | undefined;
+        };
+        controller: {
+            machineId: string;
+            installationId: string;
         };
         environment?: {
             toolchain?: {

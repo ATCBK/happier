@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PluginSourceKindV1Schema = lazyZodSchema(() => z.enum(['bundled', 'path', 'marketplace', 'package', 'archive']));
 export type PluginSourceKindV1 = z.infer<typeof PluginSourceKindV1Schema>;
@@ -28,21 +28,21 @@ export function isRegistryCustodiedPluginSourceKind(kind: PluginSourceKindV1): b
   return kind === 'marketplace' || kind === 'package' || kind === 'archive';
 }
 
-export const PluginSourceSpecV1Schema = lazyZodSchema(() => z.object({
+export const PluginSourceSpecV1Schema = lazyZodSchema(() => z.looseObject({
   kind: PluginSourceKindV1Schema,
-  locator: z.string().trim().min(1),
+  locator: z.string().check(z.trim(), z.minLength(1)),
   trustPolicy: PluginSourceTrustPolicyV1Schema,
   installPolicy: PluginSourceInstallPolicyV1Schema,
-  resolvedVersion: z.string().trim().min(1).optional(),
-  installedAt: z.number().int().nonnegative().optional(),
-  devWatch: z.boolean().optional(),
-}).passthrough().superRefine((source, context) => {
+  resolvedVersion: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  installedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  devWatch: z.optional(z.boolean()),
+}).check(z.superRefine((source, context) => {
   if ('resolvedDigest' in source) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['resolvedDigest'],
       message: 'Plugin source provenance must not carry a raw resolved digest',
     });
   }
-}));
+})));
 export type PluginSourceSpecV1 = z.infer<typeof PluginSourceSpecV1Schema>;

@@ -1,10 +1,6 @@
-import {
-    encodeSessionOwnerMetadataEnvelopeV1,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    type SessionMetadataInactiveModelIntentOwnerPatchV1,
-} from "@happier-dev/protocol";
+import { encodeSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1, type SessionMetadataInactiveModelIntentOwnerPatchV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
-import type { SessionTeamCredentialBindingIntentListV1 } from "@happier-dev/protocol/teams";
+import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import type { SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";

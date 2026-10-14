@@ -3,9 +3,10 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
-import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { createProcessTreeStopper, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { logger } from '@/ui/logger';
 import { createTerminalLaunchSpec, discardFailedTerminalLaunch } from './launchSpec';
+import { isNativeProcessExited } from '../../../scripts/native_process_exit.cjs';
 
 /** The terminal owner always supplies explicit argv and options at its OS boundary. */
 export type TerminalSpawnProcess = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -18,7 +19,7 @@ export type BorrowedTerminalProcessIdentity = Readonly<{
 export type BorrowedTerminalProcess = Readonly<{
   /** The native-spawn receipt admits the launcher; unknown process generation is not custody. */
   launcherIdentity: BorrowedTerminalProcessIdentity | null;
-  whenExited: Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>;
+  whenExited: Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null; nativeExited?: true }>>;
   terminate(): Promise<void>;
   signal(signal: 'SIGINT' | 'SIGKILL'): Promise<void>;
 }>;
@@ -75,7 +76,12 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
     resolveStartup = resolve;
     rejectStartup = reject;
   });
+  let stopProcess: ReturnType<typeof createProcessTreeStopper> | undefined;
   let exited = false;
+  let nativeExited = false;
+  const channelClosed = child.connected
+    ? new Promise<void>(resolve => { child.once('disconnect', resolve); })
+    : Promise.resolve();
   const cancelStartup = () => {
     if (startupSettled) return;
     try { child.disconnect(); }
@@ -87,6 +93,7 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
   };
   params.signal?.addEventListener('abort', cancelStartup, { once: true });
   child.on('message', (message) => {
+    if (isNativeProcessExited(message)) nativeExited = true;
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     if (message.type === 'terminal-native-spawned' && !startupSettled) {
       startupSettled = true;
@@ -97,7 +104,7 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
       });
     }
   });
-  const whenExited = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((resolve, reject) => {
+  const whenExited = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null; nativeExited?: true }>>((resolve, reject) => {
     child.once('error', (error) => {
       exited = true;
       if (!startupSettled) {
@@ -112,7 +119,11 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
         startupSettled = true;
         rejectStartup?.(new Error('Borrowed terminal process exited before startup completed'));
       }
-      resolve({ code, signal });
+      // The private IPC channel can still be delivering the child's qualified
+      // closure proof when the wrapper exits. Terminal output EOF is not custody.
+      void Promise.all([channelClosed, Promise.resolve(stopProcess?.currentAttempt).catch(() => undefined)]).then(() => {
+        resolve({ code, signal, ...(nativeExited ? { nativeExited: true as const } : {}) });
+      });
     });
   }).finally(launch.discard);
   void whenExited.catch(() => undefined);
@@ -130,7 +141,8 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
 
   const terminateProcess = params.terminateProcess
     ?? (async (target: ChildProcess) => await terminateProcessTree(target));
-  let termination: Promise<void> | null = null;
+  const ownedStopProcess = createProcessTreeStopper(() => terminateProcess(child));
+  stopProcess = ownedStopProcess;
   const processInstanceFingerprint = typeof child.pid === 'number'
     ? readProcessInstanceFingerprintSync(child.pid)
     : null;
@@ -145,16 +157,6 @@ export async function launchBorrowedTerminalProcess(params: Readonly<{
         child.send({ type: 'terminal-native-signal', signal }, (error) => error ? reject(error) : resolve());
       });
     },
-    terminate: () => {
-      if (!termination) {
-        const attempt = Promise.resolve().then(() => terminateProcess(child));
-        const guardedAttempt = attempt.catch((error) => {
-          if (termination === guardedAttempt) termination = null;
-          throw error;
-        });
-        termination = guardedAttempt;
-      }
-      return termination;
-    },
+    terminate: ownedStopProcess.stop,
   });
 }

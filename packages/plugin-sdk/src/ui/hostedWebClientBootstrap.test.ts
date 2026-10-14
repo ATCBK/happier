@@ -231,10 +231,13 @@ describe('hosted-web UI client bootstrap', () => {
         } } });
         expect(installHostedWebPluginUiHostApiClientBootstrap(harness.realm, { callerPresentation: true })).toBe(true);
         await vi.waitFor(() => expect(properties.get('--happier-plugin-color-text')).toBe('#f0f0f0'));
+        // Unstyled caller HTML inherits the theme's text colour rather than the browser's black.
+        expect(properties.get('color')).toBe('#f0f0f0');
         await vi.waitFor(() => expect(subscriptionId).not.toBe(''));
         expect(sent).toContainEqual(expect.objectContaining({ kind: 'heightChanged', payload: { height: 137 } }));
         push('hostApi', { wireVersion: 1, identity, kind: 'subscription', subscriptionId, event: { surface: { ...surface, theme: { ...surface.theme, colors: { ...surface.theme.colors, text: '#123456' } } }, activity: { active: true } } });
         expect(properties.get('--happier-plugin-color-text')).toBe('#123456');
+        expect(properties.get('color')).toBe('#123456');
         height = 211; resized();
         expect(sent).toContainEqual(expect.objectContaining({ kind: 'heightChanged', payload: { height: 211 } }));
         const preventNativeNavigation = vi.fn();

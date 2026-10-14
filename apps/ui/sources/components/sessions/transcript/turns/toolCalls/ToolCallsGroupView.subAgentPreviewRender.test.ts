@@ -82,6 +82,10 @@ vi.mock('@/hooks/session/useEnsureSidechainsLoaded', () => ({
     },
 }));
 
+// Collect the real host graph after boundary installation, before a test's
+// React lifetime and body timeout begin. The root testkit no longer warms it.
+const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
+
 function makeRunningReviewSubAgentMessage(): ToolCallMessage {
     return createToolCallMessageFixture({
         id: 'tool-msg-1',
@@ -130,7 +134,6 @@ describe('ToolCallsGroupView (subagent preview rendering)', () => {
     it('does not load preview sidechains when tool navigation is disabled', async () => {
         ensureSidechainsLoadedCalls.length = 0;
         collapsedPreviewCount = 1;
-        const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
 
         await renderScreen(React.createElement(ToolCallsGroupView, {
             id: 'toolCalls:read-only',
@@ -161,7 +164,6 @@ describe('ToolCallsGroupView (subagent preview rendering)', () => {
         renderedMessageViews.length = 0;
         ensureSidechainsLoadedCalls.length = 0;
         collapsedPreviewCount = 1;
-        const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(React.createElement(ToolCallsGroupView, {
@@ -186,7 +188,6 @@ describe('ToolCallsGroupView (subagent preview rendering)', () => {
     it('falls back to ToolTimelineRow for collapsed running review subagents before transcript content arrives', async () => {
         renderedMessageViews.length = 0;
         collapsedPreviewCount = 1;
-        const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(React.createElement(ToolCallsGroupView, {

@@ -51,7 +51,7 @@ describe('prompt entry action failure and cancellation', () => {
     it('keeps the Artifact and personal references when the Home rejects deletion', async () => {
         const { fixture, catalog } = await createFailureFixture('DELETE');
         const originalFolders = structuredClone(catalog.read('folders'));
-        const hook = await renderHook(() => usePromptLibraryEntryActions('doc'));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
         let removed: boolean | undefined;
         await act(async () => { removed = await hook.getCurrent().remove('doc-1'); });
         expect(removed).toBe(false);
@@ -63,7 +63,7 @@ describe('prompt entry action failure and cancellation', () => {
 
     it('stays on the editor and retains the original when the Home rejects creation of a copy', async () => {
         const { fixture, catalog } = await createFailureFixture('POST');
-        const hook = await renderHook(() => usePromptLibraryEntryActions('doc'));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
         await act(async () => { await hook.getCurrent().duplicate('doc-1'); });
         expect(fixture.boundary.list().map(row => row.id)).toEqual(['doc-1']);
         expect(catalog.requests).toEqual([]);
@@ -74,7 +74,7 @@ describe('prompt entry action failure and cancellation', () => {
     it('does not delete or alert when the person cancels confirmation', async () => {
         const { fixture, catalog } = await createFailureFixture('DELETE');
         modalConfirm.mockResolvedValueOnce(false);
-        const hook = await renderHook(() => usePromptLibraryEntryActions('doc'));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
         let removed: boolean | undefined;
         await act(async () => { removed = await hook.getCurrent().remove('doc-1'); });
         expect(removed).toBe(false);

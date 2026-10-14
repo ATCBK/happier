@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 
 import {
@@ -315,7 +316,7 @@ export const MAX_NON_TERMINAL_EVENT_CONVERSATION_RUNS_PER_ACCOUNT = 10_000;
 
 const UTF8_ENCODER = new TextEncoder();
 
-const PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
+const PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u));
 
 export type AutomationEventFilterPayloadSchemaValidationIssueV1 =
   | Readonly<{ code: 'filter_invalid' }>
@@ -655,15 +656,15 @@ export function validateAutomationEventFilterAgainstPayloadSchemaV1(params: Read
  * columns; this payload owns only provider-private source/filter facts that
  * admission must evaluate before it creates a Run.
  */
-export const AutomationEventTriggerDefinitionStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventTriggerDefinitionStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sourceInstanceId: AutomationEventSourceInstanceIdV1Schema,
-  webhookRoutingSourceInstanceId: AutomationEventSourceInstanceIdV1Schema.optional(),
+  webhookRoutingSourceInstanceId: zMini.optional(AutomationEventSourceInstanceIdV1Schema),
   sourceConfig: asProtocolZod(AutomationEventSourceConfigV1Schema),
   displayLabel: AutomationEventSourceDisplayLabelV1Schema,
-  filter: AutomationEventFilterV1Schema.nullable(),
-  maximumObservationAgeMs: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-}).strict());
+  filter: zMini.nullable(AutomationEventFilterV1Schema),
+  maximumObservationAgeMs: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+}));
 export type AutomationEventTriggerDefinitionStoredPayloadV1 = z.infer<
   typeof AutomationEventTriggerDefinitionStoredPayloadV1Schema
 >;
@@ -729,19 +730,19 @@ export function isAutomationEventObservationFreshV1(input: Readonly<{
 }
 
 export const AutomationEventTriggerObservationTransportV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('checkpointedPull'),
-    watcherMaterializationRef: PluginMachineMaterializationRefV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    watcherMaterializationRef: zMini.nullable(PluginMachineMaterializationRefV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('socket'),
     watcherMaterializationRef: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('durablePush'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     observationStartsAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA,
-  }).strict(),
+  }),
 ]));
 export type AutomationEventTriggerObservationTransportV1 = z.infer<
   typeof AutomationEventTriggerObservationTransportV1Schema
@@ -753,10 +754,10 @@ export type AutomationEventTriggerObservationTransportV1 = z.infer<
  * compiled its payload validator. This is an opaque release witness, never a
  * schema or semantic Event payload projection.
  */
-export const AutomationEventDeclarationReleaseV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventDeclarationReleaseV1Schema = lazyZodSchema(() => z.strictObject({
   release: PluginReleaseRefV1Schema,
   archiveDigestSha256: PluginUiArtifactDigestV1Schema,
-}).strict());
+}));
 export type AutomationEventDeclarationReleaseV1 = z.infer<
   typeof AutomationEventDeclarationReleaseV1Schema
 >;
@@ -775,7 +776,7 @@ export function isSameAutomationEventDeclarationReleaseV1(
  * It carries the existing mode-tagged stored envelope to one authenticated,
  * exact materialization; it is not a public Action result or SDK surface.
  */
-export const AutomationEventStoredDefinitionProjectionV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventStoredDefinitionProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
@@ -785,7 +786,7 @@ export const AutomationEventStoredDefinitionProjectionV1Schema = lazyZodSchema((
   observationTransport: AutomationEventSourceObservationTransportV1Schema,
   storedDefinitionEnvelope: AutomationStoredContentEnvelopeV1Schema,
   payloadSchema: PluginJsonSchemaV2Schema,
-}).strict());
+}));
 export type AutomationEventStoredDefinitionProjectionV1 = z.infer<
   typeof AutomationEventStoredDefinitionProjectionV1Schema
 >;
@@ -796,38 +797,37 @@ export type AutomationEventStoredDefinitionProjectionV1 = z.infer<
  * host-owned and happens only after canonical Account crypto validation.
  */
 export const AutomationEventStoredDefinitionsReadResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('page'),
     revision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
     eventDeclarationRelease: AutomationEventDeclarationReleaseV1Schema,
     // Opaque host-private scope evidence. The public source-list Action never
     // exposes it; the adopted-definition owner uses it to invalidate a local
     // cursor when the generic endpoint target changes without a catalog edit.
-    scope: PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA.optional(),
-    definitions: z.array(AutomationEventStoredDefinitionProjectionV1Schema)
-      .max(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE),
-    nextCursor: OPAQUE_CURSOR_SCHEMA.nullable(),
-  }).strict(),
-  z.object({
+    scope: z.optional(PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA),
+    definitions: z.array(AutomationEventStoredDefinitionProjectionV1Schema).check(z.maxLength(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE)),
+    nextCursor: zMini.nullable(OPAQUE_CURSOR_SCHEMA),
+  }),
+  z.strictObject({
     kind: z.literal('unchanged'),
     revision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
     eventDeclarationRelease: AutomationEventDeclarationReleaseV1Schema,
-    scope: PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA.optional(),
-    checkpointRetirements: AutomationEventCheckpointRetirementsV1Schema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('cursorStale'), currentRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA }).strict(),
-]).superRefine((value, context) => {
+    scope: z.optional(PRIVATE_STORED_DEFINITION_SCOPE_SCHEMA),
+    checkpointRetirements: zMini.optional(AutomationEventCheckpointRetirementsV1Schema),
+  }),
+  z.strictObject({ kind: z.literal('cursorStale'), currentRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA }),
+]).check(z.superRefine((value, context) => {
   if (value.kind !== 'page') return;
   value.definitions.forEach((definition, index) => {
     if (definition.eventRef.pluginId !== value.eventDeclarationRelease.release.pluginId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['definitions', index, 'eventRef', 'pluginId'],
         message: 'Every stored Event definition must belong to its declaration release plugin.',
       });
     }
   });
-}));
+})));
 export type AutomationEventStoredDefinitionsReadResultV1 = z.infer<
   typeof AutomationEventStoredDefinitionsReadResultV1Schema
 >;
@@ -838,8 +838,7 @@ export type AutomationEventStoredDefinitionsReadResultV1 = z.infer<
  * evidence through this schema so the ciphertext-blind server applies one
  * cipher-domain and framing rule.
  */
-const AutomationAdmitEncryptedTriggerEvidenceEnvelopeV1Schema = ENCRYPTED_STORED_CONTENT_SCHEMA.superRefine(
-  (value, context) => {
+const AutomationAdmitEncryptedTriggerEvidenceEnvelopeV1Schema = ENCRYPTED_STORED_CONTENT_SCHEMA.check(zMini.superRefine((value, context) => {
     addAutomationStoredEnvelopeUtf8LimitIssue(
       value,
       context,
@@ -850,17 +849,16 @@ const AutomationAdmitEncryptedTriggerEvidenceEnvelopeV1Schema = ENCRYPTED_STORED
       ciphertext: value.c,
     })) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['c'],
         message: 'Encrypted admission evidence must use the trigger-evidence cipher kind',
       });
     }
-  },
-);
+  }));
 
 export const AutomationEventAdmitEncryptedDefinitionOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('matched') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('matched') }),
+  z.strictObject({
     kind: z.literal('skipped'),
     reason: z.enum([
       'filtered',
@@ -869,10 +867,10 @@ export const AutomationEventAdmitEncryptedDefinitionOutcomeV1Schema = lazyZodSch
       'definitionRetired',
       'occurrenceRejected',
     ]),
-  }).strict(),
+  }),
 ]));
 
-export const AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
@@ -887,7 +885,7 @@ export const AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema = lazyZodSc
   triggerEvidenceEnvelope: AutomationAdmitEncryptedTriggerEvidenceEnvelopeV1Schema,
   occurrenceEvidenceEqualityTag: AutomationOccurrenceEvidenceEqualityTagV1Schema,
   outcome: AutomationEventAdmitEncryptedDefinitionOutcomeV1Schema,
-}).strict());
+}));
 export type AutomationEventAdmitEncryptedDefinitionEvidenceV1 = z.infer<
   typeof AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema
 >;
@@ -897,47 +895,46 @@ export type AutomationEventAdmitEncryptedDefinitionEvidenceV1 = z.infer<
  * admission keeps its semantic input; encrypted admission carries only this
  * sealed, revision-bound outcome package.
  */
-export const AutomationEventAdmitPlainHostEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitPlainHostEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     t: z.literal('plain'),
     accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
-    webhookInvocationReference: PluginWebhookInvocationReferenceV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    webhookInvocationReference: zMini.optional(PluginWebhookInvocationReferenceV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.accountCurrentness.mode !== 'plain') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['accountCurrentness', 'mode'],
         message: 'Plain Event evidence requires plain Account currentness',
       });
     }
-  }));
+  })));
 
-export const AutomationEventAdmitEncryptedHostEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitEncryptedHostEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     t: z.literal('encrypted'),
     accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
     adoptedRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
     eventRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
     eventDeclarationRelease: AutomationEventDeclarationReleaseV1Schema,
-    definitions: z.array(AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema)
-      .min(1),
-    webhookInvocationReference: PluginWebhookInvocationReferenceV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    definitions: z.array(AutomationEventAdmitEncryptedDefinitionEvidenceV1Schema).check(z.minLength(1)),
+    webhookInvocationReference: zMini.optional(PluginWebhookInvocationReferenceV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.accountCurrentness.mode !== 'e2ee') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['accountCurrentness', 'mode'],
         message: 'Encrypted Event evidence requires E2EE Account currentness',
       });
     }
     if (value.eventDeclarationRelease.release.pluginId !== value.eventRef.pluginId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['eventDeclarationRelease', 'release', 'pluginId'],
         message: 'Event declaration release must match the Event plugin.',
       });
     }
-  }));
+  })));
 export type AutomationEventAdmitPlainHostEvidenceV1 = z.infer<
   typeof AutomationEventAdmitPlainHostEvidenceV1Schema
 >;
@@ -958,28 +955,27 @@ export type AutomationEventAdmitHostEvidenceV1 = z.infer<
  * handoff payload. The target daemon compares this inner binding with the
  * server-routed claim before it can invoke the target plugin's Action.
  */
-export const AutomationReplyHandoffCorrespondenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationReplyHandoffCorrespondenceV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: asProtocolZod(HostIdentifierV1Schema),
   automationId: asProtocolZod(AutomationIdV1Schema),
   runId: asProtocolZod(HostIdentifierV1Schema),
   handoffId: asProtocolZod(HostIdentifierV1Schema),
-}).strict());
+}));
 export type AutomationReplyHandoffCorrespondenceV1 = z.infer<
   typeof AutomationReplyHandoffCorrespondenceV1Schema
 >;
 
-const AutomationRunOnlyCorrespondenceV1Schema = lazyZodSchema(() => z.object({
+const AutomationRunOnlyCorrespondenceV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: asProtocolZod(HostIdentifierV1Schema),
   automationId: asProtocolZod(AutomationIdV1Schema),
   runId: asProtocolZod(HostIdentifierV1Schema),
-}).strict());
+}));
 export const AutomationRunResultCorrespondenceV1Schema = defineStoredReadProjection(z.union([
   AutomationReplyHandoffCorrespondenceV1Schema,
   AutomationRunOnlyCorrespondenceV1Schema,
 ]), () => z.union([
   createStoredReadSchema(AutomationReplyHandoffCorrespondenceV1Schema),
-  z.preprocess((value) => value !== null && typeof value === 'object' && 'handoffId' in value ? null : value,
-    createStoredReadSchema(AutomationRunOnlyCorrespondenceV1Schema)),
+  z.pipe(z.transform((value) => value !== null && typeof value === 'object' && 'handoffId' in value ? null : value), createStoredReadSchema(AutomationRunOnlyCorrespondenceV1Schema)),
 ]));
 export type AutomationRunResultCorrespondenceV1 = z.infer<
   typeof AutomationRunResultCorrespondenceV1Schema
@@ -991,58 +987,58 @@ export type AutomationRunResultCorrespondenceV1 = z.infer<
  * authenticated target/envelope mode; the server later resolves the actual
  * Run through this occurrence identity before releasing the handoff.
  */
-export const AutomationConversationReplyContextCorrespondenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationReplyContextCorrespondenceV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   occurrenceKey: AutomationOccurrenceKeyV1Schema,
-}).strict());
+}));
 export type AutomationConversationReplyContextCorrespondenceV1 = z.infer<
   typeof AutomationConversationReplyContextCorrespondenceV1Schema
 >;
 
-export const AutomationRunResultStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AutomationRunResultStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   correspondence: AutomationRunResultCorrespondenceV1Schema,
   result: AutomationRunResultV1Schema,
-}).strict());
+}));
 export type AutomationRunResultStoredPayloadV1 = z.infer<
   typeof AutomationRunResultStoredPayloadV1Schema
 >;
 
-export const AutomationConversationReplyContextStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationReplyContextStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   correspondence: AutomationConversationReplyContextCorrespondenceV1Schema,
   // The receiving daemon adds the server-owned Run/handoff ids only after it
   // has verified this occurrence correspondence against its claim.
   opaqueContext: asProtocolZod(AutomationEventReplyContextV1Schema),
-}).strict());
+}));
 export type AutomationConversationReplyContextStoredPayloadV1 = z.infer<
   typeof AutomationConversationReplyContextStoredPayloadV1Schema
 >;
 
-const AutomationLegacyRunResultEnvelopeV1Schema = lazyZodSchema(() => z.object({
+const AutomationLegacyRunResultEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   t: z.literal('legacySummaryCiphertext'),
   c: z.string(),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(createCanonicalJsonSigningInput(value)).byteLength > MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Legacy Automation summary exceeds its UTF-8 byte limit' });
+    context.addIssue({ code: "custom", message: 'Legacy Automation summary exceeds its UTF-8 byte limit' });
   }
-}));
+})));
 
 export const AutomationRunResultStoredV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   AutomationLegacyRunResultEnvelopeV1Schema,
-  z.object({ t: z.literal('plain'), v: AutomationRunResultStoredPayloadV1Schema }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: AutomationRunResultStoredPayloadV1Schema }),
   ENCRYPTED_STORED_CONTENT_SCHEMA,
 ]));
 export type AutomationRunResultStoredV1 = z.infer<typeof AutomationRunResultStoredV1Schema>;
 
 export const AutomationConversationReplyContextStoredV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: AutomationConversationReplyContextStoredPayloadV1Schema }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: AutomationConversationReplyContextStoredPayloadV1Schema }),
   ENCRYPTED_STORED_CONTENT_SCHEMA,
-]).superRefine((value, context) => {
+]).check(z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(createCanonicalJsonSigningInput(value)).byteLength > MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stored Conversation reply context exceeds its UTF-8 byte limit' });
+    context.addIssue({ code: "custom", message: 'Stored Conversation reply context exceeds its UTF-8 byte limit' });
   }
-}));
+})));
 export type AutomationConversationReplyContextStoredV1 = z.infer<
   typeof AutomationConversationReplyContextStoredV1Schema
 >;
@@ -1052,10 +1048,10 @@ export type AutomationConversationReplyContextStoredV1 = z.infer<
  * final-result target. It intentionally names no Run or handoff: those ids do
  * not exist until the canonical occurrence writer commits.
  */
-export const AutomationConversationAdmitReplyHandoffV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationAdmitReplyHandoffV1Schema = lazyZodSchema(() => z.strictObject({
   actionRef: AutomationResultDeliveryActionRefV1Schema,
   replyContextEnvelope: AutomationConversationReplyContextStoredV1Schema,
-}).strict());
+}));
 export type AutomationConversationAdmitReplyHandoffV1 = z.infer<
   typeof AutomationConversationAdmitReplyHandoffV1Schema
 >;
@@ -1139,13 +1135,13 @@ export type AutomationReplyHandoffStoredContentOpenFailureV1 =
 export const AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1 =
   'daemon.automations.replyHandoff.dispatch' as const;
 
-export const AutomationReplyHandoffTargetV1Schema = lazyZodSchema(() => z.object({
+export const AutomationReplyHandoffTargetV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: asProtocolZod(HostIdentifierV1Schema),
   machineId: asProtocolZod(HostIdentifierV1Schema),
   machineInstallationId: asProtocolZod(HostIdentifierV1Schema),
   materializationId: PluginMachineMaterializationIdV1Schema,
   actionRef: AutomationResultDeliveryActionRefV1Schema,
-}).strict());
+}));
 export type AutomationReplyHandoffTargetV1 = z.infer<
   typeof AutomationReplyHandoffTargetV1Schema
 >;
@@ -1157,7 +1153,7 @@ export type AutomationReplyHandoffTargetV1 = z.infer<
  */
 export const AutomationReplyHandoffResultEnvelopeTransportV1Schema = lazyZodSchema(() => z.union([
   AutomationRunResultStoredV1Schema,
-  z.object({ t: z.literal('plain'), v: z.unknown() }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: z.unknown() }),
 ]));
 export type AutomationReplyHandoffResultEnvelopeTransportV1 = z.infer<
   typeof AutomationReplyHandoffResultEnvelopeTransportV1Schema
@@ -1168,7 +1164,7 @@ export type AutomationReplyHandoffResultEnvelopeTransportV1 = z.infer<
  * bounded outer tagged shape: the server validates/routs bytes but does not
  * inspect plaintext payloads or decrypt ciphertext.
  */
-export const AutomationReplyHandoffClaimV1Schema = lazyZodSchema(() => z.object({
+export const AutomationReplyHandoffClaimV1Schema = lazyZodSchema(() => z.strictObject({
   handoffId: asProtocolZod(HostIdentifierV1Schema),
   runId: asProtocolZod(HostIdentifierV1Schema),
   automationId: asProtocolZod(AutomationIdV1Schema),
@@ -1177,34 +1173,34 @@ export const AutomationReplyHandoffClaimV1Schema = lazyZodSchema(() => z.object(
   accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
   // Absent is the released one-shot producer; current servers always publish
   // the explicit recipe discriminator.
-  recipeKind: z.enum(['legacy', 'workflow-v2']).optional(),
+  recipeKind: z.optional(z.enum(['legacy', 'workflow-v2'])),
   resultEnvelope: AutomationReplyHandoffResultEnvelopeTransportV1Schema,
   replyContextEnvelope: AutomationStoredContentEnvelopeV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.cause.kind !== 'conversation') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['cause', 'kind'],
       message: 'Automation reply handoff requires a Conversation Run cause',
     });
   } else if (value.cause.occurrenceKey !== value.occurrenceKey) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['cause', 'occurrenceKey'],
       message: 'Automation reply handoff cause must match its Run occurrence',
     });
   }
-}));
+})));
 export type AutomationReplyHandoffClaimV1 = z.infer<
   typeof AutomationReplyHandoffClaimV1Schema
 >;
 
-export const AutomationReplyHandoffDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationReplyHandoffDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('automation.replyHandoff.dispatch'),
   target: AutomationReplyHandoffTargetV1Schema,
   handoff: AutomationReplyHandoffClaimV1Schema,
-}).strict());
+}));
 export type AutomationReplyHandoffDispatchRequestV1 = z.infer<
   typeof AutomationReplyHandoffDispatchRequestV1Schema
 >;
@@ -1216,27 +1212,27 @@ export type AutomationReplyHandoffDispatchRequestV1 = z.infer<
  * settles the frozen handoff from this typed projection alone.
  */
 export const AutomationReplyHandoffSettlementV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('accepted') }).strict(),
-  z.object({ kind: z.literal('suppressed') }).strict(),
+  z.strictObject({ kind: z.literal('accepted') }),
+  z.strictObject({ kind: z.literal('suppressed') }),
   /** Claimed Account or Run authority moved before the daemon could act. */
-  z.object({ kind: z.literal('staleClaim') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('staleClaim') }),
+  z.strictObject({
     kind: z.literal('retry'),
-    retryAfterMs: NONNEGATIVE_SAFE_INTEGER_SCHEMA.max(MAX_AUTOMATION_SOURCE_RETRY_AFTER_MS),
-  }).strict(),
-  z.object({ kind: z.literal('blocked') }).strict(),
+    retryAfterMs: NONNEGATIVE_SAFE_INTEGER_SCHEMA.check(zMini.maximum(MAX_AUTOMATION_SOURCE_RETRY_AFTER_MS)),
+  }),
+  z.strictObject({ kind: z.literal('blocked') }),
 ]));
 export type AutomationReplyHandoffSettlementV1 = z.infer<
   typeof AutomationReplyHandoffSettlementV1Schema
 >;
 
 export const AutomationReplyHandoffDispatchResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('settled'),
     settlement: AutomationReplyHandoffSettlementV1Schema,
     accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('unavailable'),
     code: z.enum([
       'invalidRequest',
@@ -1247,7 +1243,7 @@ export const AutomationReplyHandoffDispatchResultV1Schema = lazyZodSchema(() => 
       'cancelled',
       'contractInvalid',
     ]),
-  }).strict(),
+  }),
 ]));
 export type AutomationReplyHandoffDispatchResultV1 = z.infer<
   typeof AutomationReplyHandoffDispatchResultV1Schema
@@ -1257,20 +1253,20 @@ import { AutomationEventSourceStatusV1Schema } from './automationEventSourceStat
 export { AutomationEventSourceStatusV1Schema } from './automationEventSourceStatusV1.js';
 export type { AutomationEventSourceStatusV1 } from './automationEventSourceStatusV1.js';
 
-export const AutomationEventSourceCatalogStatusV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventSourceCatalogStatusV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: asProtocolZod(HostIdentifierV1Schema),
-  eventPluginId: z.string().min(1).max(256),
+  eventPluginId: z.string().check(z.minLength(1), z.maxLength(256)),
   reporterMaterializationRef: PluginMachineMaterializationRefV1Schema,
   reporterSourceCustody: PluginSourceCustodyV1Schema,
   scopeKey: AutomationEventSourceCatalogScopeKeyV1Schema,
   observedRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
-  adoptedRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA.nullable(),
+  adoptedRevision: zMini.nullable(UNSIGNED_DECIMAL_BIGINT_SCHEMA),
   state: AutomationEventSourceCatalogStatusStateV1Schema,
-  scanStartedAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-  nextRetryAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
+  scanStartedAt: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+  nextRetryAt: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
   reportedAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA,
   revision: NONNEGATIVE_SAFE_INTEGER_SCHEMA,
-}).strict());
+}));
 export type AutomationEventSourceCatalogStatusV1 = z.infer<typeof AutomationEventSourceCatalogStatusV1Schema>;
 
 /**
@@ -1284,21 +1280,21 @@ export const AutomationConversationActionHttpPathsV1 = Object.freeze({
   'automation.conversation.admit': '/v1/automations/conversation/admit',
 } as const satisfies Readonly<Record<AutomationConversationActionIdV1, string>>);
 
-export const AutomationConversationActionHttpCallerV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationActionHttpCallerV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
   materialization: PluginMachineMaterializationRefV1Schema,
-  occurrenceId: z.string().trim().min(1).max(512),
+  occurrenceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
   sourceCustody: PluginSourceCustodyV1Schema,
-}).strict().superRefine((caller, context) => {
+}).check(z.superRefine((caller, context) => {
   if (caller.pluginId !== caller.materialization.pluginId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['materialization', 'pluginId'],
       message: 'Caller pluginId must match the stamped materialization pluginId',
     });
   }
-}));
+})));
 export type AutomationConversationActionHttpCallerV1 = z.infer<
   typeof AutomationConversationActionHttpCallerV1Schema
 >;
@@ -1314,7 +1310,7 @@ export type AutomationConversationActionHttpCallerV1 = z.infer<
  * server stores/routs only the outer envelope and resolves actual Run/handoff
  * facts later through the unique occurrence owner.
  */
-export const AutomationConversationAdmitEncryptedHostEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationAdmitEncryptedHostEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   t: z.literal('encrypted'),
   accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
@@ -1328,28 +1324,28 @@ export const AutomationConversationAdmitEncryptedHostEvidenceV1Schema = lazyZodS
   /** Sealed `AutomationRunConversationTriggerEvidenceV1` frozen into the recipe. */
   executionTriggerEvidenceEnvelope: AutomationAdmitEncryptedTriggerEvidenceEnvelopeV1Schema,
   occurrenceEvidenceEqualityTag: AutomationOccurrenceEvidenceEqualityTagV1Schema,
-  replyHandoff: AutomationConversationAdmitReplyHandoffV1Schema.optional(),
+  replyHandoff: z.optional(AutomationConversationAdmitReplyHandoffV1Schema),
   // The selected repository/PR stays inside both sealed evidence envelopes.
-  scopedTrigger: AutomationConversationScopedTriggerEvidenceV1Schema.omit({ pullRequest: true }).optional(),
-}).strict().superRefine((value, context) => {
+  scopedTrigger: zMini.optional(zMini.omit(AutomationConversationScopedTriggerEvidenceV1Schema, { pullRequest: true })),
+}).check(z.superRefine((value, context) => {
   if (value.accountCurrentness.mode !== 'e2ee') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['accountCurrentness', 'mode'],
       message: 'Encrypted Conversation evidence requires E2EE Account currentness',
     });
   }
-}));
+})));
 export type AutomationConversationAdmitEncryptedHostEvidenceV1 = z.infer<
   typeof AutomationConversationAdmitEncryptedHostEvidenceV1Schema
 >;
 
-export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AutomationConversationActionHttpCallerV1Schema,
   input: AutomationConversationAdmitInputV1Schema,
-  replyHandoff: AutomationConversationAdmitReplyHandoffV1Schema.optional(),
-}).strict().superRefine((request, context) => {
+  replyHandoff: z.optional(AutomationConversationAdmitReplyHandoffV1Schema),
+}).check(z.superRefine((request, context) => {
   // Any plugin may admit a Conversation and receive its own reply. The frozen
   // delivery target must stay inside the admitting plugin: naming another
   // plugin's contribution would misroute a user's reply out of its owner.
@@ -1358,7 +1354,7 @@ export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema
     resultDelivery: request.input.resultDelivery,
   })) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['input', 'resultDelivery', 'actionRef', 'pluginId'],
       message: 'Result delivery must target the admitting plugin\'s own Action contribution',
     });
@@ -1366,7 +1362,7 @@ export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema
   if (request.input.resultDelivery.kind === 'none') {
     if (request.replyHandoff !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['replyHandoff'],
         message: 'A reply handoff is only valid for final-result delivery',
       });
@@ -1375,7 +1371,7 @@ export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema
   }
   if (request.replyHandoff === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['replyHandoff'],
       message: 'Final-result delivery requires a host-sealed reply handoff',
     });
@@ -1386,12 +1382,12 @@ export const AutomationConversationAdmitPlainHttpRequestV1Schema = lazyZodSchema
     || request.replyHandoff.actionRef.localId !== request.input.resultDelivery.actionRef.localId
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['replyHandoff', 'actionRef'],
       message: 'Reply handoff action must match final-result delivery',
     });
   }
-}));
+})));
 export type AutomationConversationAdmitPlainHttpRequestV1 = z.infer<
   typeof AutomationConversationAdmitPlainHttpRequestV1Schema
 >;
@@ -1401,20 +1397,20 @@ export type AutomationConversationAdmitPlainHttpRequestV1 = z.infer<
  * an encrypted Account's admission host can produce, so no plugin sender,
  * message text, or reply context can enter the server path.
  */
-export const AutomationConversationAdmitEncryptedHttpRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationAdmitEncryptedHttpRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AutomationConversationActionHttpCallerV1Schema,
   hostEvidence: AutomationConversationAdmitEncryptedHostEvidenceV1Schema,
-}).strict().superRefine((request, context) => {
+}).check(z.superRefine((request, context) => {
   const handoff = request.hostEvidence.replyHandoff;
   if (handoff !== undefined && handoff.actionRef.pluginId !== request.caller.pluginId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['hostEvidence', 'replyHandoff', 'actionRef', 'pluginId'],
       message: 'Reply handoff must target the admitting plugin\'s own Action contribution',
     });
   }
-}));
+})));
 export type AutomationConversationAdmitEncryptedHttpRequestV1 = z.infer<
   typeof AutomationConversationAdmitEncryptedHttpRequestV1Schema
 >;
@@ -1425,20 +1421,20 @@ export const AutomationConversationAdmitHttpRequestV1Schema = lazyZodSchema(() =
 ]));
 
 export const AutomationConversationActionHttpRequestSchemasV1 = Object.freeze({
-  'automation.conversation.targets.list': z.object({
+  'automation.conversation.targets.list': z.strictObject({
     v: z.literal(1),
     caller: AutomationConversationActionHttpCallerV1Schema,
     input: AutomationConversationTargetsListInputV1Schema,
-  }).strict(),
-  'automation.conversation.target.verify': z.object({
+  }),
+  'automation.conversation.target.verify': z.strictObject({
     v: z.literal(1),
     caller: AutomationConversationActionHttpCallerV1Schema,
-    input: AutomationConversationTargetVerifyInputV1Schema.omit({ scopedTrigger: true }).extend({
-      scopedTrigger: AutomationConversationScopedTriggerRefV1Schema.omit({ pullRequest: true }).optional(),
-    }).strict(),
-  }).strict(),
+    input: lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(zMini.omit(AutomationConversationTargetVerifyInputV1Schema, { scopedTrigger: true }), {
+      scopedTrigger: lazyZodSchema(() => zMini.optional(zMini.omit(AutomationConversationScopedTriggerRefV1Schema, { pullRequest: true }))),
+    }))),
+  }),
   'automation.conversation.admit': AutomationConversationAdmitHttpRequestV1Schema,
-} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodMiniType>>);
 export type AutomationConversationTargetsListHttpRequestV1 = z.infer<
   typeof AutomationConversationActionHttpRequestSchemasV1['automation.conversation.targets.list']
 >;
@@ -1470,23 +1466,23 @@ export const AutomationEventActionHttpPathsV1 = Object.freeze({
   'automation.event.source.status.report': '/v1/automations/events/source-status/report',
 } as const satisfies Readonly<Record<AutomationEventActionIdV1, string>>);
 
-export const AutomationEventActionHttpCallerV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventActionHttpCallerV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
-  contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema).optional(),
+  contributionLocalId: zMini.optional(asProtocolZod(PluginContributionLocalIdSchema)),
   materialization: PluginMachineMaterializationRefV1Schema,
   // The host derives this from the admitted process-local plugin occurrence;
   // plugin Action input never supplies caller provenance.
-  occurrenceId: z.string().trim().min(1).max(512),
+  occurrenceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
   sourceCustody: PluginSourceCustodyV1Schema,
-}).strict().superRefine((caller, context) => {
+}).check(z.superRefine((caller, context) => {
   if (caller.pluginId !== caller.materialization.pluginId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['materialization', 'pluginId'],
       message: 'Caller pluginId must match the stamped materialization pluginId',
     });
   }
-}));
+})));
 export type AutomationEventActionHttpCallerV1 = z.infer<typeof AutomationEventActionHttpCallerV1Schema>;
 
 /**
@@ -1496,7 +1492,7 @@ export type AutomationEventActionHttpCallerV1 = z.infer<typeof AutomationEventAc
 export const AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1 =
   '/v1/automations/events/stored-definitions/read';
 
-export const AutomationEventStoredDefinitionsReadHttpRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventStoredDefinitionsReadHttpRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AutomationEventActionHttpCallerV1Schema,
   input: AutomationEventSourcesListInputV1Schema,
@@ -1504,29 +1500,29 @@ export const AutomationEventStoredDefinitionsReadHttpRequestV1Schema = lazyZodSc
   // invocation. This stays outside the plugin Action input and lets the
   // stored-definition owner reject a retargeted or expired delivery before it
   // discloses an endpoint-local source projection.
-  webhookInvocationReference: PluginWebhookInvocationReferenceV1Schema.optional(),
-}).strict());
+  webhookInvocationReference: zMini.optional(PluginWebhookInvocationReferenceV1Schema),
+}));
 export type AutomationEventStoredDefinitionsReadHttpRequestV1 = z.infer<
   typeof AutomationEventStoredDefinitionsReadHttpRequestV1Schema
 >;
 
-export const AutomationEventAdmitPlainHttpRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitPlainHttpRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AutomationEventActionHttpCallerV1Schema,
   input: AutomationEventAdmitHttpInputV1Schema,
   hostEvidence: AutomationEventAdmitPlainHostEvidenceV1Schema,
-}).strict());
+}));
 
 /**
  * The E2EE arm deliberately has no `input`.  This is the one signed body E2
  * receives from E3 and forwards unchanged, so no plugin payload, source
  * identity, schema, or plaintext template can enter the server path.
  */
-export const AutomationEventAdmitEncryptedHttpRequestV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitEncryptedHttpRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AutomationEventActionHttpCallerV1Schema,
   hostEvidence: AutomationEventAdmitEncryptedHostEvidenceV1Schema,
-}).strict());
+}));
 
 export const AutomationEventAdmitHttpRequestV1Schema = lazyZodSchema(() => z.union([
   AutomationEventAdmitPlainHttpRequestV1Schema,
@@ -1543,18 +1539,18 @@ export type AutomationEventAdmitHttpRequestV1 = z.infer<
 >;
 
 export const AutomationEventActionHttpRequestSchemasV1 = Object.freeze({
-  'automation.event.sources.list': z.object({
+  'automation.event.sources.list': z.strictObject({
     v: z.literal(1),
     caller: AutomationEventActionHttpCallerV1Schema,
     input: AutomationEventSourcesListInputV1Schema,
-  }).strict(),
+  }),
   'automation.event.admit': AutomationEventAdmitHttpRequestV1Schema,
-  'automation.event.source.status.report': z.object({
+  'automation.event.source.status.report': z.strictObject({
     v: z.literal(1),
     caller: AutomationEventActionHttpCallerV1Schema,
     input: AutomationEventSourceStatusReportV1Schema,
-  }).strict(),
-} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodTypeAny>>);
+  }),
+} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodMiniType>>);
 
 /**
  * The one normalized host request shape for each Event action. E2 transport

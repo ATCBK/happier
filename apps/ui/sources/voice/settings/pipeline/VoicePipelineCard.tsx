@@ -249,11 +249,11 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
         paddingTop: 14,
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
         paddingLeft: 18,
-        paddingRight: 16,
+        paddingRight: theme.space.s16,
     },
     headerHovered: {
         backgroundColor: theme.colors.surface.pressedOverlay,
@@ -269,10 +269,10 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     statusLine: {
-        marginTop: 2,
+        marginTop: theme.space.s2,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     statusText: {
         ...Typography.default(),
@@ -283,8 +283,8 @@ const styles = StyleSheet.create((theme) => ({
     flow: {
         flexDirection: 'row',
         alignItems: 'stretch',
-        paddingHorizontal: 10,
-        paddingBottom: 10,
+        paddingHorizontal: theme.space.s10,
+        paddingBottom: theme.space.s10,
     },
     arrow: {
         width: 28,
@@ -296,8 +296,8 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
         borderRadius: 12,
         paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 4,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s4,
         // A step is one more tint layer inside the card's tint: a breath darker on light and a small
         // lift on dark (DESIGN.md: dark is layered, not inverted). `inset` is the navigation plane,
         // which sits below the page on dark and made the steps read sunken.
@@ -313,16 +313,14 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: 10.5,
     },
     role: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     // A name that wraps keeps its mark on the first line; the mark's box is one title line tall.
     engine: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
         minWidth: 0,
     },
     mark: {
@@ -340,7 +338,7 @@ const styles = StyleSheet.create((theme) => ({
     where: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     whereGlyph: {
@@ -355,13 +353,13 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     readiness: {
-        marginTop: 6,
-        gap: 8,
+        marginTop: theme.space.s6,
+        gap: theme.space.s8,
     },
     readinessLine: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 7,
+        gap: theme.space.s6,
     },
     readinessText: {
         ...Typography.default(),
@@ -398,17 +396,16 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 12,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
+        gap: theme.space.s12,
+        paddingVertical: theme.space.s12,
+        paddingHorizontal: theme.space.s16,
     },
     rowDivider: {
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.subtle,
     },
     rowRole: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         lineHeight: 20,
         width: 48,
         color: theme.colors.text.secondary,
@@ -416,7 +413,7 @@ const styles = StyleSheet.create((theme) => ({
     rowBody: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     rowWhere: {
         ...Typography.default(),
@@ -427,9 +424,9 @@ const styles = StyleSheet.create((theme) => ({
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 10,
-        paddingBottom: 12,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s10,
+        paddingBottom: theme.space.s12,
         paddingHorizontal: 18,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,

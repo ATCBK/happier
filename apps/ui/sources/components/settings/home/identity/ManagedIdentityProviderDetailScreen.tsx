@@ -8,7 +8,7 @@ import { SettingAnchor, SettingSection } from '@/components/settings/shell/Setti
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import {
     resolveTestedSignInConnectionStatus,
     signInConnectionStatusLabel,
@@ -103,7 +103,7 @@ const DetailContent = React.memo(function DetailContent(props: Readonly<{
             }));
         }
     }, [mountedRef, props.context.scope.accountId, props.context.scope.serverId, props.providerId, refresh]);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const copyCallbackUrl = React.useCallback(async (url: string) => {
         if (!await setClipboardStringSafe(url)) {
             await Modal.alertAsync(t('common.error'), t('items.failedToCopyToClipboard'));

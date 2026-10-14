@@ -1,17 +1,6 @@
-import {
-    PrimaryTurnStatusV1Schema,
-    SessionTurnFactsV1Schema,
-    type SessionTurnFactsV1,
-    SessionTurnMutationActionV1Schema,
-    SessionTurnMutationDecisionV1Schema,
-    SessionTurnRollbackStateV1Schema,
-    SessionTurnTranscriptAnchorsV1Schema,
-    sanitizeSessionRuntimeIssueV1,
-    type SessionRuntimeIssueV1,
-    type SessionTurnMutationReceiptV1,
-    type SessionTurnTranscriptAnchorsV1,
-    type SessionTurnV1,
-} from "@happier-dev/protocol";
+import { PrimaryTurnStatusV1Schema, sanitizeSessionRuntimeIssueV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionTurnFactsV1Schema, type SessionTurnFactsV1, SessionTurnMutationActionV1Schema, SessionTurnMutationDecisionV1Schema, SessionTurnRollbackStateV1Schema, SessionTurnTranscriptAnchorsV1Schema, type SessionTurnMutationReceiptV1, type SessionTurnTranscriptAnchorsV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { type SessionTurnV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 type StoredBigInt = bigint | number | null | undefined;
 

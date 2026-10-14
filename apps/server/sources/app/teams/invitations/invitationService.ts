@@ -1,15 +1,4 @@
-import {
-    deriveTeamInvitationStateV1,
-    decodeTeamInvitationsCursorV1,
-    encodeTeamInvitationsCursorV1,
-    maskTeamInvitationRecipientEmail,
-    teamInvitationsQueryKeyV1,
-    type TeamInvitationAdmissibleRoleV1,
-    type TeamInvitationPreviewResultV1,
-    type TeamInvitationPreviewV1,
-    type TeamInvitationRowV1,
-    type TeamInvitationStateV1,
-} from "@happier-dev/protocol/teams";
+import { deriveTeamInvitationStateV1, decodeTeamInvitationsCursorV1, encodeTeamInvitationsCursorV1, maskTeamInvitationRecipientEmail, teamInvitationsQueryKeyV1, type TeamInvitationAdmissibleRoleV1, type TeamInvitationPreviewResultV1, type TeamInvitationPreviewV1, type TeamInvitationRowV1, type TeamInvitationStateV1 } from '@happier-dev/protocol/teams/invitation';
 import { createHash } from "node:crypto";
 import type { Tx } from "@/storage/inTx";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";

@@ -64,7 +64,7 @@ export const SourceControlRemoteActionsRail = React.memo((props: SourceControlRe
             }}
         >
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.secondary,  }}>
                     {t('files.sourceControlOperations.title')}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
@@ -78,7 +78,7 @@ export const SourceControlRemoteActionsRail = React.memo((props: SourceControlRe
                 </View>
             </View>
             {props.hint ? (
-                <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ ...Typography.variant('micro'), color: props.theme.colors.text.secondary,  }}>
                     {props.hint}
                 </Text>
             ) : null}

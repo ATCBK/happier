@@ -36,6 +36,27 @@ describe('one typed field decides how a fixed choice is drawn, for every form', 
       expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
     } finally { view.unmount(); }
   });
+  it('reads a declared "all" answer without an empty-options notice when nothing is there to narrow by', () => {
+    const view = mountThroughReactNativeWeb(
+      <HappierInputField
+        field={{ path: 'agents', title: 'Agents', widget: 'multiselect', placeholder: 'All agents', required: false }}
+        value={[]}
+        selection={[]}
+        options={[]}
+        optionsStatus="ready"
+        onChange={() => {}}
+        frame="none"
+        theme={theme}
+        testID="agents"
+      />,
+    );
+    try {
+      expect(view.container.textContent).toContain('All agents');
+      expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
+      // An empty set has nothing to open: the field reads its answer and does not offer a blank list.
+      expect(view.container.querySelector('[data-testid="agents.trigger"]')?.getAttribute('aria-disabled')).toBe('true');
+    } finally { view.unmount(); }
+  });
   it('draws two to four short choices as one segmented control and pins the pressed value', () => {
     const onChange = vi.fn();
     const view = mountThroughReactNativeWeb(

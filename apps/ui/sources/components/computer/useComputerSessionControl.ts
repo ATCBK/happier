@@ -13,7 +13,11 @@ import {
 import { projectComputerCopresence } from '@/sync/domains/computer/presence';
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
@@ -88,6 +92,21 @@ export function useComputerSessionControl(input: Readonly<{
     const serverId = scope?.serverId ?? accountLifetime?.scope.serverId ?? null;
     const sessionId = scope?.sessionId ?? null;
     const machineId = scope?.machineId ?? null;
+    const enabled = input.enabled ?? true;
+    const store = getStorage();
+    // Machine identity survives an unavailable Computer owner, but the cached
+    // inventory may only disclose facts for this borrowed Home/Account.
+    const readCachedMachineName = React.useCallback(() => {
+        const state = store.getState();
+        if (!machineId || !accountLifetime?.isCurrent()
+            || !areServerAccountScopesEqual(state.profileScope, accountLifetime.scope)
+            || !selectActiveServerAccountScopeForServer(accountLifetime.scope, serverId)) return null;
+        return getMachineDisplayName(resolveServerScopedMachine(state, serverId, machineId));
+    }, [accountLifetime, machineId, serverId, store]);
+    const subscribeCachedMachineName = React.useCallback((listener: () => void) =>
+        enabled && accountLifetime && machineId ? store.subscribe(listener) : () => {},
+    [accountLifetime, enabled, machineId, store]);
+    const cachedMachineName = React.useSyncExternalStore(subscribeCachedMachineName, readCachedMachineName, readCachedMachineName);
     const projection = React.useMemo(
         () => (sessionId && machineId && accountLifetime !== null ? getComputerSessionProjection({ serverId, sessionId, machineId }, execute, accountLifetime) : null),
         [accountLifetime, execute, machineId, serverId, sessionId],
@@ -103,7 +122,6 @@ export function useComputerSessionControl(input: Readonly<{
         ? projection?.client ?? null
         : sessionId && machineId && accountLifetime ? createComputerControlClient({ serverId, sessionId, machineId }, mountedExecute, accountLifetime) : null,
     [accountLifetime, input.execute, machineId, mountedExecute, projection, serverId, sessionId]);
-    const enabled = input.enabled ?? true;
     const subscribe = React.useCallback((listener: () => void) => projection?.subscribe(listener, enabled) ?? (() => {}), [enabled, projection]);
     const getSnapshot = React.useCallback(() => projection?.getSnapshot() ?? EMPTY_SNAPSHOT, [projection]);
     const { selection, status, grants, failure: ownerFailure } = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -238,7 +256,7 @@ export function useComputerSessionControl(input: Readonly<{
     const agentActing = status?.controller === 'agent' && status.activity !== undefined;
     const targetTitle = selection?.approvalDisplay.target?.title.trim() || null;
     const appName = selection?.approvalDisplay.appName ?? null;
-    const machineName = selection?.approvalDisplay.machineDisplayName ?? null;
+    const machineName = selection?.approvalDisplay.machineDisplayName ?? cachedMachineName;
     const canRead = Boolean(selection?.sourceId && grants?.capture === 'granted');
     const currentFailure = ownerFailure ?? failure;
     const recoveryAction = currentFailure === null ? null : resolveComputerRecovery({ kind: 'failed', code: currentFailure }, 'use')?.action;

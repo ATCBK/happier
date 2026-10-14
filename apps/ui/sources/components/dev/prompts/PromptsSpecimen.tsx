@@ -166,10 +166,10 @@ function SaveFormSpecimen() {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    transcript: { flex: 1, paddingVertical: 24, maxWidth: 860, width: '100%', alignSelf: 'center' },
+    transcript: { flex: 1, paddingVertical: theme.space.s24, maxWidth: 860, width: '100%', alignSelf: 'center' },
     saveFrame: { width: 340 },
     saveBody: { width: 340 },
-    stage: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 24, paddingBottom: 32, minHeight: 640 },
+    stage: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: theme.space.s24, paddingBottom: theme.space.s32, minHeight: 640 },
     composer: {
         alignSelf: 'center', width: '100%', maxWidth: 820, minHeight: 104, borderRadius: 22,
         paddingHorizontal: 18, paddingVertical: 14,
@@ -178,6 +178,6 @@ const styles = StyleSheet.create((theme) => ({
     composerStatic: { position: 'relative' },
     placeholder: { ...Typography.default(), fontSize: 15, color: theme.colors.text.placeholder },
     cells: { padding: 28, gap: 28 },
-    cell: { gap: 10, maxWidth: 820 },
-    cellLabel: { ...Typography.default('semiBold'), fontSize: 13, color: theme.colors.text.secondary },
+    cell: { gap: theme.space.s10, maxWidth: 820 },
+    cellLabel: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
 }));

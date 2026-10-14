@@ -1,20 +1,20 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Home-local identity shared by resource grants; this grants no authority itself. */
-export const AccountPrincipalRefV1Schema = lazyZodSchema(() => z.object({
+export const AccountPrincipalRefV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('account'),
-  accountId: z.string().min(1),
-}).strict());
-export const TeamPrincipalRefV1Schema = lazyZodSchema(() => z.object({
+  accountId: z.string().check(z.minLength(1)),
+}));
+export const TeamPrincipalRefV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('team'),
-  teamId: z.string().min(1),
-}).strict());
-export const GroupPrincipalRefV1Schema = lazyZodSchema(() => z.object({
+  teamId: z.string().check(z.minLength(1)),
+}));
+export const GroupPrincipalRefV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('group'),
-  teamId: z.string().min(1),
-  groupId: z.string().min(1),
-}).strict());
+  teamId: z.string().check(z.minLength(1)),
+  groupId: z.string().check(z.minLength(1)),
+}));
 export const PrincipalRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   AccountPrincipalRefV1Schema,
   TeamPrincipalRefV1Schema,

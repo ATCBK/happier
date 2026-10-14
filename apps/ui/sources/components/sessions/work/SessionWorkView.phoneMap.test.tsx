@@ -29,6 +29,7 @@ installDisconnectedServerSocketBoundary();
 // Keep the Work producer, launcher, selectors, pane and header publication real.
 const { storage } = await import('@/sync/domains/state/storage');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { PaneHeaderSlotProvider, PaneHeaderSlotScope, usePublishedPaneHeaderContent } = await import('@/components/appShell/panes/paneHeaderSlot');
 const { PaneHeader } = await import('@/components/appShell/panes/PaneHeader');
@@ -87,14 +88,16 @@ describe('phone Work List → Map', () => {
         let pendingReads = 0;
         // Credential storage is an external boundary. Restoration is complete; hold only the
         // mounted consumers' cold reads so the first view switch overlaps their publication.
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async () => {
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async () => {
             pendingReads++;
             await credentials.promise;
             return connection.credentials;
         });
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         try {
-            screen = await renderScreen(<WorkHost serverId={serverId} />);
+            screen = await renderScreen(<WorkHost serverId={serverId} />, {
+                wrapper: ({ children }) => <InjectedAuthProvider credentials={connection.credentials}>{children}</InjectedAuthProvider>,
+            });
             expect(pendingReads).toBeGreaterThan(0);
             const switchView = async (view: 'list' | 'map') => {
                 const tab = screen!.findByTestId(`session-work-view:${view}`);
@@ -110,6 +113,7 @@ describe('phone Work List → Map', () => {
             expect(screen.findHostByTestId('session-work-map-node-session:child')).not.toBeNull();
             expect(screen.findHostByTestId('session-work-map-node-session:foreign')).toBeNull();
         } finally {
+            credentialRead.mockRestore();
             credentials.resolve();
             await screen?.unmount();
             storage.setState(initial, true);

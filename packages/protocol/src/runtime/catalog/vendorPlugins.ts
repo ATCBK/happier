@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1));
+const NonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 function deriveMentionable(input: Readonly<{
   enabled?: boolean;
@@ -11,36 +11,31 @@ function deriveMentionable(input: Readonly<{
   return input.mentionable ?? (input.installed === true && input.enabled === true);
 }
 
-export const VendorPluginCatalogItemV1Schema = lazyZodSchema(() => z
-  .object({
+export const VendorPluginCatalogItemV1Schema = lazyZodSchema(() => z.pipe(z.looseObject({
     v: z.literal(1),
     backendId: NonEmptyStringSchema,
-    agentId: NonEmptyStringSchema.optional(),
+    agentId: z.optional(NonEmptyStringSchema),
     vendorPluginRef: NonEmptyStringSchema,
     displayName: NonEmptyStringSchema,
-    description: NonEmptyStringSchema.optional(),
-    marketplaceId: NonEmptyStringSchema.optional(),
-    installed: z.boolean().optional(),
-    enabled: z.boolean().optional(),
-    mentionable: z.boolean().optional(),
-    defaultEnabled: z.boolean().optional(),
-    capabilities: z.array(NonEmptyStringSchema).readonly().optional(),
-    updatedAt: z.number().finite().optional(),
-  })
-  .passthrough()
-  .transform((item) => ({
+    description: z.optional(NonEmptyStringSchema),
+    marketplaceId: z.optional(NonEmptyStringSchema),
+    installed: z.optional(z.boolean()),
+    enabled: z.optional(z.boolean()),
+    mentionable: z.optional(z.boolean()),
+    defaultEnabled: z.optional(z.boolean()),
+    capabilities: z.optional(z.readonly(z.array(NonEmptyStringSchema))),
+    updatedAt: z.optional(z.number()),
+  }), z.transform((item) => ({
     ...item,
     mentionable: deriveMentionable(item),
-  })));
+  }))));
 export type VendorPluginCatalogItemV1 = z.output<typeof VendorPluginCatalogItemV1Schema>;
 
-export const VendorPluginCatalogV1Schema = lazyZodSchema(() => z
-  .object({
+export const VendorPluginCatalogV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
     backendId: NonEmptyStringSchema,
-    agentId: NonEmptyStringSchema.optional(),
-    updatedAt: z.number().finite(),
-    items: z.array(VendorPluginCatalogItemV1Schema).readonly(),
-  })
-  .passthrough());
+    agentId: z.optional(NonEmptyStringSchema),
+    updatedAt: z.number(),
+    items: z.readonly(z.array(VendorPluginCatalogItemV1Schema)),
+  }));
 export type VendorPluginCatalogV1 = z.output<typeof VendorPluginCatalogV1Schema>;

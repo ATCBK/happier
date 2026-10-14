@@ -122,7 +122,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         expect(readMachineRequestReachabilityObservation(nextScope, 'machine-1')).toMatchObject({ outcome: 'failed' });
     });
 
-    it('records no-reply failure only after the caller deadline expires', async () => {
+    it('preserves Machine reachability when a no-reply caller deadline expires', async () => {
         const issued = createDeferred<void>();
         const reply = createDeferred<void>();
         boundary.setRpcAckResponder(async () => {
@@ -139,7 +139,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             await vi.advanceTimersByTimeAsync(1_000);
             expect(await pending).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
             expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1'))
-                .toMatchObject({ outcome: 'failed' });
+                .toBeNull();
         } finally {
             reply.resolve();
             vi.useRealTimers();

@@ -76,19 +76,7 @@ export type ExecutionRunControlActionInputById = {
             strategy?: 'recent_messages' | 'summary_plus_recent' | undefined;
             recentMessagesCount?: number | undefined;
             maxSeedChars?: number | undefined;
-            summaryRunner?: {
-                [x: string]: unknown;
-                v: 1;
-                backendTarget: {
-                    kind: 'builtInAgent';
-                    agentId: string;
-                } | {
-                    kind: 'configuredAcpBackend';
-                    backendId: string;
-                };
-                modelId?: string | undefined;
-                permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-            } | undefined;
+            summaryRunner?: unknown;
         } | undefined;
         intentInput?: unknown;
         structuredInput?: {
@@ -400,13 +388,13 @@ export type ExecutionRunControlActionInputById = {
                     pluginId: string;
                     localId: string;
                 };
-                key: string;
+                key: unknown;
                 value: unknown;
                 presentation: {
-                    label: string;
-                    typeLabel: string;
-                    description?: string | undefined;
-                    icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                    label: unknown;
+                    typeLabel: unknown;
+                    description?: unknown;
+                    icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                 };
                 content?: {
@@ -582,6 +570,12 @@ export type ExecutionRunControlActionInputById = {
             comparisonId: string;
             resultId?: string | undefined;
             afterRevision?: number | undefined;
+        } | {
+            comparisonId: string;
+            kind: 'scm_diff_summary';
+            output: 'summary' | 'walkthrough' | 'commitPlan';
+            resultId?: string | undefined;
+            afterRevision?: number | undefined;
         } | undefined;
     };
     readonly "execution.run.send": {
@@ -683,19 +677,7 @@ export type ExecutionRunControlActionInputById = {
                 strategy?: 'recent_messages' | 'summary_plus_recent' | undefined;
                 recentMessagesCount?: number | undefined;
                 maxSeedChars?: number | undefined;
-                summaryRunner?: {
-                    [x: string]: unknown;
-                    v: 1;
-                    backendTarget: {
-                        kind: 'builtInAgent';
-                        agentId: string;
-                    } | {
-                        kind: 'configuredAcpBackend';
-                        backendId: string;
-                    };
-                    modelId?: string | undefined;
-                    permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-                } | undefined;
+                summaryRunner?: unknown;
             } | undefined;
             intentInput?: unknown;
             structuredInput?: {
@@ -1007,13 +989,13 @@ export type ExecutionRunControlActionInputById = {
                         pluginId: string;
                         localId: string;
                     };
-                    key: string;
+                    key: unknown;
                     value: unknown;
                     presentation: {
-                        label: string;
-                        typeLabel: string;
-                        description?: string | undefined;
-                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        label: unknown;
+                        typeLabel: unknown;
+                        description?: unknown;
+                        icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                     };
                     content?: {
@@ -1636,9 +1618,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -1653,9 +1633,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -1898,9 +1876,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -1915,9 +1891,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -2160,9 +2134,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -2177,9 +2149,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -2426,9 +2396,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -2443,9 +2411,7 @@ export type ExecutionRunControlActionResultById = {
                                 value: string;
                             } | {
                                 kind: 'json';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'decision';
                                 value: string;
@@ -2700,9 +2666,7 @@ export type ExecutionRunControlActionResultById = {
                         value: string;
                     } | {
                         kind: 'json';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'decision';
                         value: string;
@@ -2717,9 +2681,7 @@ export type ExecutionRunControlActionResultById = {
                         value: string;
                     } | {
                         kind: 'json';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'decision';
                         value: string;
@@ -2952,9 +2914,7 @@ export type ExecutionRunControlActionResultById = {
                         value: string;
                     } | {
                         kind: 'json';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'decision';
                         value: string;
@@ -2969,9 +2929,7 @@ export type ExecutionRunControlActionResultById = {
                         value: string;
                     } | {
                         kind: 'json';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'decision';
                         value: string;
@@ -3103,12 +3061,8 @@ export type ExecutionRunControlActionResultById = {
         [x: string]: unknown;
         ok: true;
     };
-    readonly "execution.run.ensure": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "execution.run.ensure_or_start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "execution.run.ensure": JsonValue;
+    readonly "execution.run.ensure_or_start": JsonValue;
     readonly "execution.run.stream.start": {
         [x: string]: unknown;
         streamId: string;
@@ -3197,9 +3151,7 @@ export type ExecutionRunControlActionResultById = {
         error: string;
         errorCode: 'execution_run_not_found' | 'execution_run_not_current' | 'execution_run_turn_not_active' | 'execution_run_cancel_unsupported' | 'execution_run_cancel_failed';
     };
-    readonly "execution.run.action": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "execution.run.action": JsonValue;
     readonly "execution.run.permission.respond": {
         ok: true;
     };
@@ -3317,9 +3269,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -3334,9 +3284,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -3579,9 +3527,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -3596,9 +3542,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -3841,9 +3785,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -3858,9 +3800,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -4107,9 +4047,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;
@@ -4124,9 +4062,7 @@ export type ExecutionRunControlActionResultById = {
                             value: string;
                         } | {
                             kind: 'json';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'decision';
                             value: string;

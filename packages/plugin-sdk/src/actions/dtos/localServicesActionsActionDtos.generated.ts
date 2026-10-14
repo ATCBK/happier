@@ -502,19 +502,15 @@ export type LocalServicesActionsActionResultById = {
                         targetMachineId: string;
                     } | undefined;
                 } | {
+                    reviewedEffect: JsonValue;
+                    reviewedEffectDigest: string;
                     kind: 'pendingApproval';
                     code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    reviewedEffectDigest: string;
                     consentScope?: 'thisTime' | 'untilChanged' | undefined;
                 } | {
                     kind: 'pendingApproval';
                     code: 'project_script_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    reviewedEffect: JsonValue;
                     reviewedEffectDigest: string;
                 } | undefined;
             } | undefined;
@@ -692,12 +688,10 @@ export type LocalServicesActionsActionResultById = {
                 code: string;
             } | undefined;
             setupReview?: {
+                reviewedEffect: JsonValue;
+                reviewedEffectDigest: string;
                 kind: 'pendingApproval';
                 code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
-                reviewedEffectDigest: string;
                 consentScope?: 'thisTime' | 'untilChanged' | undefined;
             } | undefined;
         };
@@ -755,9 +749,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
     readonly "localServices.actions.openPreview": {
@@ -777,9 +769,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
     readonly "localServices.actions.forget": {
@@ -799,9 +789,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
     readonly "localServices.actions.stopManaged": {
@@ -821,9 +809,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
     readonly "localServices.actions.restartManaged": {
@@ -843,9 +829,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
     readonly "localServices.actions.terminateDetected": {
@@ -865,9 +849,7 @@ export type LocalServicesActionsActionResultById = {
         }[];
         undoKey?: string | undefined;
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
     };
 };

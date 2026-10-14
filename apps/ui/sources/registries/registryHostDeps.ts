@@ -123,8 +123,8 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
                 return { op: 'read', item: REGISTRY_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result).item };
             }
             if (request.op === 'files') {
-                const { machinePromptRegistriesDownloadItem } = await import('@/sync/ops/machinePromptRegistries');
-                const downloaded = await machinePromptRegistriesDownloadItem(machine.id, { kind: 'skill', sourceId: request.sourceId,
+                const { downloadRegistrySkillFiles } = await import('@/sync/domains/transfers/runtime/transferRuntime/families/registryTransfers');
+                const downloaded = await downloadRegistrySkillFiles(machine.id, { kind: 'skill', sourceId: request.sourceId,
                     itemId: request.itemId, version: request.version }, { serverId: account.serverId, signal: context.signal });
                 account.assertCurrent(); context.signal?.throwIfAborted();
                 if (!downloaded.ok) throw new Error(downloaded.error);
@@ -134,7 +134,7 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
             const response = await machineRpcWithServerScope<unknown, RegistryFetchRequestV1>({ machineId: machine.id,
                 serverId: account.serverId, accountId: account.accountId, preferScoped: true, method: 'daemon.registries.fetch', payload,
                 authorization: context.rpcSessionAuthorization, signal: context.signal, operationTimeoutMs: null,
-                requestId: context.actionRequestId, onDispatched: account.assertCurrent });
+                requestId: context.actionRequestId ?? undefined, onDispatched: account.assertCurrent });
             account.assertCurrent(); context.signal?.throwIfAborted();
             const parsed = RegistryFetchResponseV1Schema.parse(response);
             return parsed.op === 'list' ? { ...parsed, page: { ...parsed.page, machineId: machine.id } } : parsed;

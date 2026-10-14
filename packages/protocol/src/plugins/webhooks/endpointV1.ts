@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../../crypto/base64.js';
 import { isLoopbackHostname } from '../../server/urls/loopbackHostname.js';
@@ -16,7 +16,7 @@ const PLUGIN_WEBHOOK_ENDPOINT_ID_V1_PATTERN = new RegExp(
   'u',
 );
 
-export const PluginWebhookEndpointIdV1Schema = lazyZodSchema(() => z.string().regex(PLUGIN_WEBHOOK_ENDPOINT_ID_V1_PATTERN));
+export const PluginWebhookEndpointIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(PLUGIN_WEBHOOK_ENDPOINT_ID_V1_PATTERN)));
 
 export type PluginWebhookEndpointIdV1 = z.infer<typeof PluginWebhookEndpointIdV1Schema>;
 
@@ -41,11 +41,9 @@ export function formatPluginWebhookEndpointIdV1(randomBytes: Uint8Array): Plugin
   );
 }
 
-const PluginWebhookSourceInstanceIdV1Schema = lazyZodSchema(() => z.string()
-  .regex(/^[A-Za-z0-9._:-]{1,128}$/u));
-const PluginWebhookIdempotencyKeyV1Schema = lazyZodSchema(() => z.string()
-  .regex(/^[A-Za-z0-9._:-]{16,128}$/u));
-const PluginWebhookRevisionV1Schema = lazyZodSchema(() => z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
+const PluginWebhookSourceInstanceIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9._:-]{1,128}$/u)));
+const PluginWebhookIdempotencyKeyV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9._:-]{16,128}$/u)));
+const PluginWebhookRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)));
 /**
  * The controller-owned ordering of one endpoint's target intent.
  *
@@ -55,17 +53,17 @@ const PluginWebhookRevisionV1Schema = lazyZodSchema(() => z.number().int().posit
  * only records the highest intent an authorized controller has converged, so a
  * late retry of a superseded intent cannot move delivery backwards.
  */
-const PluginWebhookTargetIntentEpochV1Schema = lazyZodSchema(() => z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
-const PluginWebhookTimestampMsV1Schema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-export const PluginWebhookPublicUrlV1Schema = lazyZodSchema(() => z.string().url().max(2_048).refine((value) => {
+const PluginWebhookTargetIntentEpochV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const PluginWebhookTimestampMsV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+export const PluginWebhookPublicUrlV1Schema = lazyZodSchema(() => z.string().check(z.url(), z.maxLength(2_048), z.refine((value) => {
   const url = new URL(value);
   if (url.protocol === 'https:') return true;
   if (url.protocol !== 'http:') return false;
   return isLoopbackHostname(url.hostname);
 }, {
   message: 'Webhook public URLs require HTTPS except for an explicit loopback development URL',
-}));
-const PluginWebhookCredentialVersionIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(128));
+})));
+const PluginWebhookCredentialVersionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 
 export const PluginWebhookEndpointReadinessV1Schema = lazyZodSchema(() => z.enum([
   'ready',
@@ -76,38 +74,38 @@ export const PluginWebhookEndpointReadinessV1Schema = lazyZodSchema(() => z.enum
 ]));
 
 export const PluginWebhookEndpointSetupV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('accountEndpointV1'),
     credential: z.literal('serverGenerated'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('githubSharedInstallationV1'),
-    installationId: z.string().regex(/^[1-9][0-9]{0,19}$/u),
-    installationAuthorizationRef: z.string().trim().min(1).max(512),
-  }).strict(),
+    installationId: z.string().check(z.regex(/^[1-9][0-9]{0,19}$/u)),
+    installationAuthorizationRef: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  }),
 ]));
 
-export const PluginWebhookEndpointEnsureInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointEnsureInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookContribution: asProtocolZod(PluginContributionIdentityV1Schema),
   targetMaterialization: PluginMachineMaterializationRefV1Schema,
   sourceInstanceId: PluginWebhookSourceInstanceIdV1Schema,
   setup: PluginWebhookEndpointSetupV1Schema,
   idempotencyKey: PluginWebhookIdempotencyKeyV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointEnsureResultV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointEnsureResultV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   revision: PluginWebhookRevisionV1Schema,
   publicUrl: PluginWebhookPublicUrlV1Schema,
   readiness: PluginWebhookEndpointReadinessV1Schema,
-  oneTimeGeneratedSecret: z.string().min(1).max(512).optional(),
-}).strict());
+  oneTimeGeneratedSecret: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+}));
 
-export const PluginWebhookEndpointReadInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointReadInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointReadResultV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointReadResultV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   revision: PluginWebhookRevisionV1Schema,
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
@@ -117,60 +115,60 @@ export const PluginWebhookEndpointReadResultV1Schema = lazyZodSchema(() => z.obj
   readiness: PluginWebhookEndpointReadinessV1Schema,
   publicUrl: PluginWebhookPublicUrlV1Schema,
   createdAt: PluginWebhookTimestampMsV1Schema,
-  revokedAt: PluginWebhookTimestampMsV1Schema.optional(),
-}).strict());
+  revokedAt: z.optional(PluginWebhookTimestampMsV1Schema),
+}));
 
-export const PluginWebhookEndpointRevokeInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointRevokeInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   expectedRevision: PluginWebhookRevisionV1Schema,
   idempotencyKey: PluginWebhookIdempotencyKeyV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointRevokeResultV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointRevokeResultV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['revoked', 'alreadyRevoked']),
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   revision: PluginWebhookRevisionV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointRetargetInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointRetargetInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   expectedRevision: PluginWebhookRevisionV1Schema,
   targetMaterialization: PluginMachineMaterializationRefV1Schema,
   idempotencyKey: PluginWebhookIdempotencyKeyV1Schema,
-}).strict());
+}));
 
 export const PluginWebhookEndpointRetargetResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.enum(['retargeted', 'alreadyRetargeted']),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     revision: PluginWebhookRevisionV1Schema,
     previousTargetMaterialization: PluginMachineMaterializationRefV1Schema,
     targetMaterialization: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.enum(['revisionConflict', 'targetUnavailable', 'incompatible']),
-    currentRevision: PluginWebhookRevisionV1Schema.optional(),
-  }).strict(),
+    currentRevision: z.optional(PluginWebhookRevisionV1Schema),
+  }),
 ]));
 
-export const PluginWebhookEndpointCheckCorrespondenceInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCheckCorrespondenceInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   webhookContribution: asProtocolZod(PluginContributionIdentityV1Schema),
   targetMaterialization: PluginMachineMaterializationRefV1Schema,
   sourceInstanceId: PluginWebhookSourceInstanceIdV1Schema,
   setup: PluginWebhookEndpointSetupV1Schema,
-}).strict());
+}));
 
 export const PluginWebhookEndpointCheckCorrespondenceResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('ready'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     revision: PluginWebhookRevisionV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('unavailable'),
-    code: z.string().regex(/^[a-z0-9._-]{1,64}$/u),
-  }).strict(),
+    code: z.string().check(z.regex(/^[a-z0-9._-]{1,64}$/u)),
+  }),
 ]));
 
 /**
@@ -189,32 +187,32 @@ export const PluginWebhookEndpointCheckCorrespondenceResultV1Schema = lazyZodSch
  * ordering epoch of the intent that desires it. No expected revision is
  * accepted, because the endpoint revision is not this caller's authority.
  */
-export const PluginWebhookEndpointConvergeTargetInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointConvergeTargetInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   webhookContribution: asProtocolZod(PluginContributionIdentityV1Schema),
   sourceInstanceId: PluginWebhookSourceInstanceIdV1Schema,
   setup: PluginWebhookEndpointSetupV1Schema,
   desiredTargetMaterialization: PluginMachineMaterializationRefV1Schema,
   targetIntentEpoch: PluginWebhookTargetIntentEpochV1Schema,
-}).strict());
+}));
 
 export const PluginWebhookEndpointConvergeTargetResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('converged'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     revision: PluginWebhookRevisionV1Schema,
     targetMaterialization: PluginMachineMaterializationRefV1Schema,
     targetIntentEpoch: PluginWebhookTargetIntentEpochV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('superseded'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     currentTargetIntentEpoch: PluginWebhookTargetIntentEpochV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('unavailable'),
-    code: z.string().regex(/^[a-z0-9._-]{1,64}$/u),
-  }).strict(),
+    code: z.string().check(z.regex(/^[a-z0-9._-]{1,64}$/u)),
+  }),
 ]));
 
 /**
@@ -223,89 +221,89 @@ export const PluginWebhookEndpointConvergeTargetResultV1Schema = lazyZodSchema((
  * operation names no predecessor: an endpoint that moved A -> B -> C still owns
  * rows frozen to A, and naming one predecessor would strand them.
  */
-export const PluginWebhookDeliveryMovePendingInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookDeliveryMovePendingInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   endpointRevision: PluginWebhookRevisionV1Schema,
   targetMaterialization: PluginMachineMaterializationRefV1Schema,
-  cursor: z.string().min(1).max(512).optional(),
-  pageSize: z.number().int().min(1).max(500).default(500),
-}).strict());
+  cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+  pageSize: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(500)), 500),
+}));
 
 export const PluginWebhookDeliveryMovePendingResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
-    moved: z.number().int().nonnegative().max(500),
-    skippedClaimed: z.number().int().nonnegative(),
-    nextCursor: z.string().min(1).max(512).nullable(),
+  z.strictObject({
+    moved: z.number().check(z.int(), z.nonnegative(), z.maximum(500)),
+    skippedClaimed: z.number().check(z.int(), z.nonnegative()),
+    nextCursor: z.nullable(z.string().check(z.minLength(1), z.maxLength(512))),
     done: z.boolean(),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.enum(['revisionConflict', 'targetMismatch', 'incompatible', 'unavailable']),
-  }).strict(),
+  }),
 ]));
 
-export const PluginWebhookEndpointCredentialConfigureInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCredentialConfigureInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   expectedRevision: PluginWebhookRevisionV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointCredentialConfigureResultV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCredentialConfigureResultV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['configured', 'alreadyConfigured']),
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   revision: PluginWebhookRevisionV1Schema,
   credentialVersionId: PluginWebhookCredentialVersionIdV1Schema,
-  oneTimeGeneratedSecret: z.string().min(1).max(512).optional(),
-}).strict());
+  oneTimeGeneratedSecret: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+}));
 
-export const PluginWebhookEndpointCredentialRotateInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCredentialRotateInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   expectedRevision: PluginWebhookRevisionV1Schema,
-}).strict());
+}));
 
-export const PluginWebhookEndpointCredentialRotateResultV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCredentialRotateResultV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['rotated', 'alreadyRotated']),
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   revision: PluginWebhookRevisionV1Schema,
   credentialVersionId: PluginWebhookCredentialVersionIdV1Schema,
   previousCredentialVersionId: PluginWebhookCredentialVersionIdV1Schema,
   previousAcceptUntilMs: PluginWebhookTimestampMsV1Schema,
-  oneTimeGeneratedSecret: z.string().min(1).max(512).optional(),
-}).strict());
+  oneTimeGeneratedSecret: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+}));
 
-export const PluginWebhookEndpointCredentialFinishRotationInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookEndpointCredentialFinishRotationInputV1Schema = lazyZodSchema(() => z.strictObject({
   webhookEndpointId: PluginWebhookEndpointIdV1Schema,
   expectedRevision: PluginWebhookRevisionV1Schema,
   expectedPreviousCredentialVersionId: PluginWebhookCredentialVersionIdV1Schema,
-}).strict());
+}));
 
 export const PluginWebhookEndpointCredentialFinishRotationResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.enum(['retired', 'alreadyRetired']),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     revision: PluginWebhookRevisionV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.enum(['credentialChanged', 'revisionConflict', 'unavailable']),
-    currentRevision: PluginWebhookRevisionV1Schema.optional(),
-  }).strict(),
+    currentRevision: z.optional(PluginWebhookRevisionV1Schema),
+  }),
 ]));
 
 export const PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1 = '/v1/plugins/webhooks/deliveries/replay';
 export const PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1 = '/v1/plugins/webhooks/deliveries/discard';
 
-export const PluginWebhookDeliveryIdV1Schema = lazyZodSchema(() => z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u));
-export const PluginWebhookDeliveryReplayInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginWebhookDeliveryIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9._:-]{1,128}$/u)));
+export const PluginWebhookDeliveryReplayInputV1Schema = lazyZodSchema(() => z.strictObject({
   deliveryId: PluginWebhookDeliveryIdV1Schema,
-  expectedRevision: z.number().int().nonnegative().safe(),
-}).strict());
+  expectedRevision: z.number().check(z.int(), z.nonnegative(), z.int()),
+}));
 export const PluginWebhookDeliveryReplayResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('requeued'), revision: z.number().int().nonnegative().safe() }).strict(),
-  z.object({ kind: z.enum(['revisionConflict', 'unavailable', 'replayLimit']) }).strict(),
+  z.strictObject({ kind: z.literal('requeued'), revision: z.number().check(z.int(), z.nonnegative(), z.int()) }),
+  z.strictObject({ kind: z.enum(['revisionConflict', 'unavailable', 'replayLimit']) }),
 ]));
 
 export const PluginWebhookDeliveryDiscardInputV1Schema = PluginWebhookDeliveryReplayInputV1Schema;
 export const PluginWebhookDeliveryDiscardResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('discarded'), revision: z.number().int().nonnegative().safe() }).strict(),
-  z.object({ kind: z.enum(['revisionConflict', 'unavailable']) }).strict(),
+  z.strictObject({ kind: z.literal('discarded'), revision: z.number().check(z.int(), z.nonnegative(), z.int()) }),
+  z.strictObject({ kind: z.enum(['revisionConflict', 'unavailable']) }),
 ]));
 
 export const PLUGIN_WEBHOOK_ACTION_IDS_V1 = Object.freeze([
@@ -382,7 +380,7 @@ export const PluginWebhookActionInputSchemasV1 = Object.freeze({
   'plugin.webhook.endpoint.credential.configure': PluginWebhookEndpointCredentialConfigureInputV1Schema,
   'plugin.webhook.endpoint.credential.rotate': PluginWebhookEndpointCredentialRotateInputV1Schema,
   'plugin.webhook.endpoint.credential.finishRotation': PluginWebhookEndpointCredentialFinishRotationInputV1Schema,
-} as const satisfies Readonly<Record<PluginWebhookActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<PluginWebhookActionIdV1, z.ZodMiniType>>);
 
 export const PluginWebhookActionOutputSchemasV1 = Object.freeze({
   'plugin.webhook.endpoint.ensure': PluginWebhookEndpointEnsureResultV1Schema,
@@ -397,7 +395,7 @@ export const PluginWebhookActionOutputSchemasV1 = Object.freeze({
   'plugin.webhook.endpoint.credential.configure': PluginWebhookEndpointCredentialConfigureResultV1Schema,
   'plugin.webhook.endpoint.credential.rotate': PluginWebhookEndpointCredentialRotateResultV1Schema,
   'plugin.webhook.endpoint.credential.finishRotation': PluginWebhookEndpointCredentialFinishRotationResultV1Schema,
-} as const satisfies Readonly<Record<PluginWebhookActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<PluginWebhookActionIdV1, z.ZodMiniType>>);
 
 export type PluginWebhookEndpointReadinessV1 = z.infer<typeof PluginWebhookEndpointReadinessV1Schema>;
 export type PluginWebhookEndpointSetupV1 = z.infer<typeof PluginWebhookEndpointSetupV1Schema>;

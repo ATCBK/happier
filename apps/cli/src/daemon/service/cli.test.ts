@@ -30,6 +30,10 @@ function doMockChildProcessSpawnSync(
   });
 }
 
+function isHappierTaskFolderListing(command: string, args: readonly string[] = []): boolean {
+  return command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'));
+}
+
 const SCOPED_ENV_KEYS = [
   'HAPPIER_DAEMON_SERVICE_PLATFORM',
   'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
@@ -1544,7 +1548,11 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
       vi.resetModules();
-      doMockChildProcessSpawnSync(() => ({ status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }));
+      doMockChildProcessSpawnSync((command, args = []) => ({
+        status: 0,
+        stdout: Buffer.from(isHappierTaskFolderListing(command, args) ? '[]' : ''),
+        stderr: Buffer.from(''),
+      }));
       vi.doMock('./commandExistsInPath', () => ({
         commandExistsInPath: vi.fn(() => true),
       }));
@@ -1659,6 +1667,9 @@ describe('runDaemonServiceCliCommand', () => {
           return {
             ...actual,
             spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+              if (isHappierTaskFolderListing(command, args)) {
+                return { status: 0, stdout: Buffer.from('[]'), stderr: Buffer.from('') };
+              }
               if (command.endsWith('powershell.exe') && String(args.at(-1)).includes('RegisterTask')) {
                 lifecycleEvents.push('registered');
               }
@@ -1780,87 +1791,98 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_POLL_MS: '10',
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
-      vi.resetModules();
-      vi.doMock('node:child_process', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('node:child_process')>();
-        return {
-          ...actual,
-          spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
-            if (command !== 'schtasks') {
-              return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
-            }
-            const action = String(args[0] ?? '');
-            lifecycleEvents.push(action);
-            if (action === '/Run' && writeDaemonStateImpl) {
-              writeDaemonStateImpl({
-                pid: process.pid,
-                httpPort: 43143,
-                startedAt: Date.now(),
-                startedWithCliVersion: configuration.currentCliVersion,
-                startedWithPublicReleaseChannel: currentPublicReleaseChannel,
-                startupSource: 'background-service',
-                serviceLabel: paths.label,
-                runtimeId: 'runtime-win32-restarted',
-              });
-            }
-            if (action === '/Query') {
-              return {
-                status: 0,
-                stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'),
-                stderr: Buffer.from(''),
-              };
-            }
-            return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
-          }),
-        };
-      });
-      vi.doMock('./commandExistsInPath', () => ({
-        commandExistsInPath: vi.fn(() => true),
-      }));
-
-      const controlClient = await import('@/daemon/controlClient');
-      const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
-        import('@/persistence'),
-        import('@/configuration'),
-      ]);
-      vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
-        lifecycleEvents.push('stopDaemon');
-        await clearDaemonStateForTestTeardown();
-        return { status: 'stopped', method: 'graceful' };
-      });
-
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
-        loadCliModule(),
-      ]);
-      writeDaemonStateImpl = writeDaemonState;
-
-      const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
-      const paths = resolveDaemonServicePaths(runtime);
-      const currentPublicReleaseChannel = runtime.channel === 'publicdev' ? 'dev' : runtime.channel;
-      mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledWindowsDaemonServiceFile(paths.installedPath, { releaseChannel: 'preview' });
-      writeDaemonState({
-        pid: process.pid,
-        httpPort: 43142,
-        startedAt: Date.now(),
-        startedWithCliVersion: configuration.currentCliVersion,
-        startedWithPublicReleaseChannel: 'stable',
-        startupSource: 'background-service',
-        serviceLabel: paths.label,
-        runtimeId: 'runtime-win32-stale-owner',
-      });
-
-      const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+      const daemonOwner = spawnDaemonLifecycleOwner();
       try {
-        await runDaemonServiceCliCommand({ argv: ['restart', '--json'] });
-        const payload = output.json();
-        expect(payload.ok).toBe(true);
-        expect(payload.platform).toBe('win32');
-      } finally {
-        output.restore();
-      }
+        vi.resetModules();
+        vi.doMock('node:child_process', async (importOriginal) => {
+          const actual = await importOriginal<typeof import('node:child_process')>();
+          return {
+            ...actual,
+            spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+              if (isHappierTaskFolderListing(command, args)) {
+                return { status: 0, stdout: Buffer.from(JSON.stringify(['\\' + paths.label])), stderr: Buffer.from('') };
+              }
+              if (command === 'schtasks' && args.includes('/XML')) {
+                return { status: 0, stdout: Buffer.from(`<Task><Actions><Exec><Arguments>-File &quot;${paths.installedPath}&quot;</Arguments></Exec></Actions></Task>`), stderr: Buffer.from('') };
+              }
+              if (command !== 'schtasks') {
+                return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+              }
+              const action = String(args[0] ?? '');
+              if (action !== '/Query') lifecycleEvents.push(action);
+              if (action === '/Run' && writeDaemonStateImpl) {
+                writeDaemonStateImpl({
+                  pid: daemonOwner.pid,
+                  httpPort: 43143,
+                  startedAt: Date.now(),
+                  startedWithCliVersion: configuration.currentCliVersion,
+                  startedWithPublicReleaseChannel: currentPublicReleaseChannel,
+                  startupSource: 'background-service',
+                  serviceLabel: paths.label,
+                  runtimeId: 'runtime-win32-restarted',
+                });
+              }
+              if (action === '/Query') {
+                return {
+                  status: 0,
+                  stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'),
+                  stderr: Buffer.from(''),
+                };
+              }
+              return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+            }),
+          };
+        });
+        vi.doMock('./commandExistsInPath', () => ({
+          commandExistsInPath: vi.fn(() => true),
+        }));
 
-      expect(lifecycleEvents.slice(0, 3)).toEqual(['stopDaemon', '/End', '/Run']);
+        const controlClient = await import('@/daemon/controlClient');
+        const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
+          import('@/persistence'),
+          import('@/configuration'),
+        ]);
+        vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
+          lifecycleEvents.push('stopDaemon');
+          await clearDaemonStateForTestTeardown();
+          return { status: 'stopped', method: 'graceful' };
+        });
+
+        const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
+          loadCliModule(),
+        ]);
+        writeDaemonStateImpl = writeDaemonState;
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
+        const paths = resolveDaemonServicePaths(runtime);
+        const currentPublicReleaseChannel = runtime.channel === 'publicdev' ? 'dev' : runtime.channel;
+        mkdirSync(dirname(paths.installedPath), { recursive: true });
+        writeValidInstalledWindowsDaemonServiceFile(paths.installedPath, { releaseChannel: 'preview' });
+        writeDaemonState({
+          pid: daemonOwner.pid,
+          httpPort: 43142,
+          startedAt: Date.now(),
+          startedWithCliVersion: configuration.currentCliVersion,
+          startedWithPublicReleaseChannel: 'stable',
+          startupSource: 'background-service',
+          serviceLabel: paths.label,
+          runtimeId: 'runtime-win32-stale-owner',
+        });
+
+        const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+        try {
+          await runDaemonServiceCliCommand({ argv: ['restart', '--json'] });
+          const payload = output.json();
+          expect(payload.ok).toBe(true);
+          expect(payload.platform).toBe('win32');
+        } finally {
+          output.restore();
+        }
+
+        expect(lifecycleEvents.slice(0, 3)).toEqual(['stopDaemon', '/End', '/Run']);
+      } finally {
+        expect(await daemonOwner.kill()).toBe(true);
+      }
     });
   });
 
@@ -1875,85 +1897,101 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
         HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
       });
-      vi.resetModules();
-      vi.doMock('node:child_process', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('node:child_process')>();
-        return {
-          ...actual,
-          spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
-            if (command === 'schtasks') {
-              lifecycleEvents.push(String(args[0] ?? ''));
-            }
-            return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
-          }),
-        };
-      });
-      vi.doMock('./commandExistsInPath', () => ({
-        commandExistsInPath: vi.fn(() => true),
-      }));
-
-      const controlClient = await import('@/daemon/controlClient');
-      const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
-        import('@/persistence'),
-        import('@/configuration'),
-      ]);
-      const stopSpy = vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
-        lifecycleEvents.push('stopDaemon');
-        await clearDaemonStateForTestTeardown();
-        return { status: 'stopped', method: 'graceful' };
-      });
-
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
-        loadCliModule(),
-      ]);
-      const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
-      const paths = resolveDaemonServicePaths(runtime);
-      mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
-      writeDaemonState({
-        pid: process.pid,
-        httpPort: 43144,
-        startedAt: Date.now(),
-        startedWithCliVersion: configuration.currentCliVersion,
-        startupSource: 'background-service',
-        serviceLabel: paths.label,
-        runtimeId: 'runtime-win32-transfer-owner',
-      });
-
-      const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+      const daemonOwner = spawnDaemonLifecycleOwner();
       try {
-        await runDaemonServiceCliCommand({
-          argv: ['stop', '--json'],
+        vi.resetModules();
+        vi.doMock('node:child_process', async (importOriginal) => {
+          const actual = await importOriginal<typeof import('node:child_process')>();
+          return {
+            ...actual,
+            spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+              if (isHappierTaskFolderListing(command, args)) {
+                return { status: 0, stdout: Buffer.from(JSON.stringify(['\\' + paths.label])), stderr: Buffer.from('') };
+              }
+              if (command === 'powershell.exe' && args.some((arg) => arg.includes('Stop-ScheduledTask'))) {
+                lifecycleEvents.push('stopTask');
+                return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+              }
+              if (command === 'schtasks' && args.includes('/XML')) {
+                return { status: 0, stdout: Buffer.from(`<Task><Actions><Exec><Arguments>-File &quot;${paths.installedPath}&quot;</Arguments></Exec></Actions></Task>`), stderr: Buffer.from('') };
+              }
+              if (command === 'schtasks' && args[0] === '/Query') {
+                return { status: 0, stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'), stderr: Buffer.from('') };
+              }
+              if (command === 'schtasks') lifecycleEvents.push(String(args[0] ?? ''));
+              return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+            }),
+          };
         });
-        expect(output.json()).toEqual(expect.objectContaining({ ok: true, platform: 'win32' }));
+        vi.doMock('./commandExistsInPath', () => ({
+          commandExistsInPath: vi.fn(() => true),
+        }));
+
+        const controlClient = await import('@/daemon/controlClient');
+        const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
+          import('@/persistence'),
+          import('@/configuration'),
+        ]);
+        const stopSpy = vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
+          lifecycleEvents.push('stopDaemon');
+          await clearDaemonStateForTestTeardown();
+          return { status: 'stopped', method: 'graceful' };
+        });
+
+        const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
+          loadCliModule(),
+        ]);
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
+        const paths = resolveDaemonServicePaths(runtime);
+        mkdirSync(dirname(paths.installedPath), { recursive: true });
+        writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
+        writeDaemonState({
+          pid: daemonOwner.pid,
+          httpPort: 43144,
+          startedAt: Date.now(),
+          startedWithCliVersion: configuration.currentCliVersion,
+          startupSource: 'background-service',
+          serviceLabel: paths.label,
+          runtimeId: 'runtime-win32-transfer-owner',
+        });
+
+        const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+        try {
+          await runDaemonServiceCliCommand({
+            argv: ['stop', '--json'],
+          });
+          expect(output.json()).toEqual(expect.objectContaining({ ok: true, platform: 'win32' }));
+        } finally {
+          output.restore();
+        }
+
+        expect(stopSpy).toHaveBeenCalledWith();
+        expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', 'stopTask']);
+
+        stopSpy.mockClear();
+        lifecycleEvents.length = 0;
+        writeDaemonState({
+          pid: daemonOwner.pid,
+          httpPort: 43145,
+          startedAt: Date.now(),
+          startedWithCliVersion: configuration.currentCliVersion,
+          startupSource: 'background-service',
+          serviceLabel: paths.label,
+          runtimeId: 'runtime-win32-permanent-stop-owner',
+        });
+        const permanentStopOutput = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+        try {
+          await runDaemonServiceCliCommand({ argv: ['stop', '--json'] });
+          expect(permanentStopOutput.json()).toEqual(expect.objectContaining({ ok: true, platform: 'win32' }));
+        } finally {
+          permanentStopOutput.restore();
+        }
+
+        expect(stopSpy.mock.calls).toEqual([[]]);
+        expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', 'stopTask']);
       } finally {
-        output.restore();
+        expect(await daemonOwner.kill()).toBe(true);
       }
-
-      expect(stopSpy).toHaveBeenCalledWith();
-      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', '/End']);
-
-      stopSpy.mockClear();
-      lifecycleEvents.length = 0;
-      writeDaemonState({
-        pid: process.pid,
-        httpPort: 43145,
-        startedAt: Date.now(),
-        startedWithCliVersion: configuration.currentCliVersion,
-        startupSource: 'background-service',
-        serviceLabel: paths.label,
-        runtimeId: 'runtime-win32-permanent-stop-owner',
-      });
-      const permanentStopOutput = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
-      try {
-        await runDaemonServiceCliCommand({ argv: ['stop', '--json'] });
-        expect(permanentStopOutput.json()).toEqual(expect.objectContaining({ ok: true, platform: 'win32' }));
-      } finally {
-        permanentStopOutput.restore();
-      }
-
-      expect(stopSpy.mock.calls).toEqual([[]]);
-      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', '/End']);
     });
   });
 

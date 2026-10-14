@@ -403,9 +403,9 @@ export function DetailsSpecimen(props: Readonly<{ only: string | null; phone: bo
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    content: { padding: 16, gap: 24 },
+    content: { padding: theme.space.s16, gap: theme.space.s24 },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 22 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.secondary, padding: 8 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary, padding: theme.space.s8 },
     frame: {
         width: 600,
         height: 880,

@@ -1,5 +1,5 @@
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
-import { resolveEphemeralRunnerMachineRpcAuthority } from "@happier-dev/protocol/rpc";
+import { resolveEphemeralRunnerMachineRpcAuthority } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 
 import type { SocketClientType } from "../socketRooms";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";

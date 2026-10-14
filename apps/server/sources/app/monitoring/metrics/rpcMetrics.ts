@@ -8,6 +8,7 @@ type RpcFailureReason =
     | "internal_error"
     | "invalid_method"
     | "method_not_available"
+    | "target_unavailable"
     | "request_error"
     | "self_call";
 type RpcLookupResult = "resolved" | "miss";

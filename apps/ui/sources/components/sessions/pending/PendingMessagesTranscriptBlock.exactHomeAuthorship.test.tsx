@@ -41,7 +41,7 @@ vi.mock('./PendingMessagesDragReorderList', () => ({
 
 installPendingMessagesCommonModuleMocks({
     storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit');
+        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
             useSession: () => homes.rawSession,
             useSessionListRenderableWithServerScope: (serverId: string | null | undefined, sessionId: string) =>

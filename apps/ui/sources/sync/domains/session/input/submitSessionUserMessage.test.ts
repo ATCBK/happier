@@ -708,7 +708,7 @@ describe('submitSessionUserMessage Pending action ownership', () => {
         expect(harness.enqueuePendingMessage).not.toHaveBeenCalled();
     });
 
-    it('persists steer_if_active only for a currently steerable turn', async () => {
+    it.each(['agent_queue', 'server_pending'] as const)('persists busy steering with %s delivery through Pending', async (configuredMode) => {
         const session = createSession({
             thinking: true,
             thinkingAt: 1_000,
@@ -716,12 +716,22 @@ describe('submitSessionUserMessage Pending action ownership', () => {
         });
         const { port, enqueuePendingMessage } = createPort();
 
-        await submitSessionUserMessage(port, submitOptions(session));
+        const result = await submitSessionUserMessage(port, { ...submitOptions(session), configuredMode });
 
         expect(enqueuePendingMessage).toHaveBeenCalledWith(
             's1', 'hello', undefined, expect.any(Object),
             expect.objectContaining({ requestedAction: { v: 1, kind: 'steer_if_active' } }),
         );
+        expect(result).toMatchObject({ persistence: 'pending' });
+        for (const overrides of [{ explicitMode: 'server_pending' as const }, { busySteerSendPolicy: 'server_pending' as const }]) {
+            const queued = createPort();
+            await submitSessionUserMessage(queued.port, { ...submitOptions(session), configuredMode, ...overrides });
+            expect(queued.enqueuePendingMessage).toHaveBeenCalledWith(
+                's1', 'hello', undefined, expect.any(Object),
+                expect.objectContaining({ requestedAction: { v: 1, kind: 'enqueue' } }),
+            );
+            expect(queued.sendMessage).not.toHaveBeenCalled();
+        }
     });
 
     it('queues busy input when fallback catalog state lacks exact transition authority', async () => {

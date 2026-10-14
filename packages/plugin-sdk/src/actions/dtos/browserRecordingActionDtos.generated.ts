@@ -77,7 +77,7 @@ export type BrowserRecordingActionResultById = {
             captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
             fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
             startedAtMs: number;
-            status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+            status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
             navigationGenerationStart: number;
             durationMs: number;
             byteSize: number;
@@ -153,7 +153,7 @@ export type BrowserRecordingActionResultById = {
             captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
             fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
             startedAtMs: number;
-            status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+            status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
             navigationGenerationStart: number;
             durationMs: number;
             byteSize: number;
@@ -222,7 +222,7 @@ export type BrowserRecordingActionResultById = {
             captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
             fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
             startedAtMs: number;
-            status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+            status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
             navigationGenerationStart: number;
             durationMs: number;
             byteSize: number;
@@ -299,7 +299,7 @@ export type BrowserRecordingActionResultById = {
             captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
             fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
             startedAtMs: number;
-            status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+            status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
             navigationGenerationStart: number;
             durationMs: number;
             byteSize: number;
@@ -373,7 +373,7 @@ export type BrowserRecordingActionResultById = {
         captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
         fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
         startedAtMs: number;
-        status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+        status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
         navigationGenerationStart: number;
         durationMs: number;
         byteSize: number;
@@ -440,7 +440,7 @@ export type BrowserRecordingActionResultById = {
         captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
         fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
         startedAtMs: number;
-        status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+        status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
         navigationGenerationStart: number;
         durationMs: number;
         byteSize: number;
@@ -509,7 +509,7 @@ export type BrowserRecordingActionResultById = {
             captureKind: 'unavailable' | 'cdpScreencast' | 'webContentsCapture' | 'nativeViewCapture' | 'streamFrameCapture' | 'mediaRecorder';
             fidelity: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame';
             startedAtMs: number;
-            status: 'recording' | 'starting' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
+            status: 'starting' | 'recording' | 'paused' | 'stopping' | 'completed' | 'finalized' | 'failed' | 'canceled' | 'discarded' | 'expired';
             navigationGenerationStart: number;
             durationMs: number;
             byteSize: number;

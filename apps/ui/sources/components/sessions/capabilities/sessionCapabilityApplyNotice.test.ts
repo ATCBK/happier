@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from './sessionCapabilityApplyNotice';
-import { readPendingCapabilityApplyV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readPendingCapabilityApplyV1, writeCapabilitySelectionApplyV1, clearCapabilitySelectionApplyV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { setSessionCapabilitySelectionItemV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
@@ -9,6 +10,105 @@ import { SessionCapabilitySelectionAuthoringV1Schema } from '@happier-dev/protoc
 
 describe('the single session capability apply notice', () => {
     const translate = (key: string, params?: Readonly<Record<string, string>>) => JSON.stringify([key, params ?? {}]);
+    it.each([
+        [{ t: 'next_turn' }, 'Changes apply at the next turn'],
+        [{ t: 'applied_now' }, 'Changes apply at the next turn'],
+    ] as const)('reads the rule apply-status producer through strict owner metadata for %j and clears on acknowledgment', (timing, text) => {
+        const metadata = writeCapabilitySelectionApplyV1({}, { skills: { source: 'rules', reason: 'next_turn' } });
+        const created = createSessionOwnerMetadataV1({ metadata });
+        if (!created.ok) throw new Error('Rule status rejected by owner metadata');
+        const projected = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: projectSessionSharedMetadataV1({ metadata }),
+            ownerMetadata: SessionOwnerMetadataV1Schema.parse(created.ownerMetadata) });
+        const notice = (value: unknown) => sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(value),
+            applyTiming: { mcp: { t: 'next_turn' }, skills: timing }, change: readSessionCapabilityApplyChange(value, () => null),
+            machineOnline: true, machineName: 'QA', turnSettled: false });
+        expect(notice(projected)?.text).toBe(text);
+        expect(notice(clearCapabilitySelectionApplyV1(projected, 'skills'))).toBeNull();
+    });
+    it('reads MCP rule pending and manual-restart words from the same strict owner producer without a Session override', () => {
+        for (const [reason, restartBy, key] of [
+            ['next_turn', undefined, 'pendingNextTurn'],
+            ['restart_to_apply', 'terminal', 'restartTerminal'],
+        ] as const) {
+            const metadata = writeCapabilitySelectionApplyV1({}, { mcp: { source: 'rules', reason, ...(restartBy ? { restartBy } : {}) } });
+            const created = createSessionOwnerMetadataV1({ metadata });
+            if (!created.ok) throw new Error('MCP rule status rejected by owner metadata');
+            const projected = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: projectSessionSharedMetadataV1({ metadata }),
+                ownerMetadata: SessionOwnerMetadataV1Schema.parse(created.ownerMetadata) });
+            const notice = (value: unknown) => sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(value),
+                applyTiming: { mcp: { t: 'applied_now' }, skills: { t: 'applied_now' } },
+                change: readSessionCapabilityApplyChange(value, () => null), machineOnline: true, machineName: 'QA', turnSettled: false });
+            expect(notice(projected)?.key).toBe(key);
+            expect(notice(clearCapabilitySelectionApplyV1(projected, 'mcp'))).toBeNull();
+        }
+    });
+    it('uses the busy Claude owner record from QA-FIX20R3 instead of its live-reload declaration', () => {
+        const owner = SessionOwnerMetadataV1Schema.parse({ v: 1, runtime: {
+            agentRuntimeCapabilitiesV1: { capabilitySelection: { vendorResume: 'supported', skillsLiveReload: 'supported' } },
+            capabilitySelectionApplyV1: { skills: { reason: 'next_turn', source: 'rules' } },
+        } });
+        const metadata = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: owner });
+        expect(sessionCapabilityApplyNotice({
+            pendingApply: readPendingCapabilityApplyV1(metadata),
+            applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } },
+            change: readSessionCapabilityApplyChange(metadata, () => null), machineOnline: true, machineName: 'QA', turnSettled: false,
+        })?.key).toBe('pendingNextTurn');
+    });
+    it('keeps a rules change paired with its own record when MCP also has a refusal', () => {
+        const selected = writeSessionCapabilitySelectionToMetadataV1({}, setSessionCapabilitySelectionItemV1({}, 'mcp_server', 'linear', 'on'), { sessionActive: true });
+        const metadata = writeCapabilitySelectionApplyV1(selected, {
+            mcp: { reason: 'restart_to_apply', restartBy: 'terminal' }, skills: { reason: 'next_turn', source: 'rules' },
+        });
+        expect(sessionCapabilityApplyNotice({ pendingApply: { ...readPendingCapabilityApplyV1(metadata), reason: 'restart_to_apply', restartBy: 'terminal' },
+            applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } },
+            change: readSessionCapabilityApplyChange(metadata, () => 'Linear'), machineOnline: true, machineName: 'QA', turnSettled: false })?.key).toBe('pendingNextTurn');
+    });
+    it.each(['skill', 'mcp_server', 'native_skill'] as const)('uses the runner reason for %s additions and removals, even without a preview', kind => {
+        for (const state of ['on', 'off'] as const) {
+            const input = { pendingApply: { mcp: kind === 'mcp_server', skills: kind !== 'mcp_server', reason: 'next_turn' },
+                applyTiming: { mcp: { t: 'applied_now' }, skills: { t: 'applied_now' } } as const,
+                change: { kind, title: 'Review', state }, machineOnline: true, machineName: 'QA', turnSettled: false };
+            expect(sessionCapabilityApplyNotice(input)?.key).toBe(state === 'on' ? 'joinsNextTurn' : 'leavesNextTurn');
+            expect(sessionCapabilityApplyNotice({ ...input, applyTiming: null })?.key).toBe(state === 'on' ? 'joinsNextTurn' : 'leavesNextTurn');
+            expect(sessionCapabilityApplyNotice({ ...input, pendingApply: { ...input.pendingApply, reason: 'applied_now' },
+                applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'next_turn' } } })?.key).toBe(state === 'on' ? 'addedNow' : 'removedNow');
+            const baseline = writeSessionCapabilitySelectionToMetadataV1({}, setSessionCapabilitySelectionItemV1({}, kind, 'review', state === 'on' ? 'off' : 'on'), { sessionActive: false });
+            const selected = writeSessionCapabilitySelectionToMetadataV1(baseline, setSessionCapabilitySelectionItemV1({}, kind, 'review', state), { sessionActive: true });
+            const metadata = writeCapabilitySelectionApplyV1(selected, kind === 'mcp_server' ? { mcp: { reason: 'next_turn' } } : { skills: { reason: 'next_turn' } });
+            // Native enable removes its exclusion; the canonical override is inherit.
+            const key = kind === 'native_skill' && state === 'on' ? 'saved' : state === 'on' ? 'joinsNextTurn' : 'leavesNextTurn';
+            expect(sessionCapabilityApplyNotice({ ...input, pendingApply: readPendingCapabilityApplyV1(metadata),
+                change: readSessionCapabilityApplyChange(metadata, () => 'Review') })?.key).toBe(key);
+        }
+    });
+    it.each([
+        ['next_turn', 'pendingNextTurn'], ['applied_now', 'appliedNow'], ['new_sessions_only', 'newSessionsOnly'],
+        ['session_not_running', 'nextStart'], ['apply_failed', 'saved'],
+    ] as const)('uses the rules record %s ahead of static restart timing', (reason, key) => {
+        expect(sessionCapabilityApplyNotice({ pendingApply: { mcp: false, skills: true, reason },
+            applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'restart_to_apply', restartBy: 'terminal' } },
+            change: { kind: 'skill', source: 'rules' }, machineOnline: true, machineName: 'QA', turnSettled: false })?.key).toBe(key);
+    });
+    it.each([
+        [{ t: 'applied_now' }, 'on', 'Review added · applied now'],
+        [{ t: 'applied_now' }, 'off', 'Review turned off · applied now'],
+        [{ t: 'next_turn' }, 'on', 'Review joins at the next turn'],
+        [{ t: 'next_turn' }, 'off', 'Review leaves at the next turn'],
+        [{ t: 'new_sessions_only' }, 'on', 'Applies to new sessions'],
+        [{ t: 'restart_to_apply', restartBy: 'user' }, 'on', 'Restart to apply'],
+        [{ t: 'restart_to_apply', restartBy: 'terminal' }, 'on', 'Restart to apply · restart it from its terminal'],
+    ] as const)('renders the §4.3 words for %j/%s', (timing, state, text) => {
+        expect(sessionCapabilityApplyNotice({ pendingApply: { mcp: false, skills: true },
+            applyTiming: { mcp: { t: 'next_turn' }, skills: timing },
+            change: { kind: 'skill', title: 'Review', state }, machineOnline: true, machineName: 'MacBook', turnSettled: true })?.text).toBe(text);
+    });
+    it('renders the offline and missing-resume words from the same producer', () => {
+        const input = { pendingApply: { mcp: false, skills: true }, applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'next_turn' } } as const,
+            change: { kind: 'native_skill', title: 'Review', state: 'off' } as const, machineOnline: true, machineName: 'MacBook', turnSettled: true };
+        expect(sessionCapabilityApplyNotice({ ...input, machineOnline: false })?.text).toBe('Applies when MacBook is back');
+        expect(sessionCapabilityApplyNotice({ ...input, pendingApply: { ...input.pendingApply, reason: 'missing_resume_snapshot' } })?.text)
+            .toBe("Couldn't apply · this session can't resume");
+    });
     it('uses the same desired/applied metadata producer for a dollar pick and a sheet edit', async () => {
         const item = SkillListItemV1Schema.parse({ skillId: 'skill', name: 'review', description: null, revision: '1:1', rules: [],
             trust: 'text_only', cost: { bodyTokens: 1, descriptionTokens: 0 }, provenance: { kind: 'written' }, modified: false,
@@ -41,11 +141,23 @@ describe('the single session capability apply notice', () => {
             change: { kind: 'mcp_server', title: 'Linear', state: 'on' }, machineOnline: true, machineName: 'MacBook',
             turnSettled: true, translate })?.key).toBe('saved');
     });
-    it('waits for the host live-reload acknowledgment before saying applied now', () => {
+    it('does not reinterpret a pending live reload as next-turn when the changed items are unknown', () => {
+        expect(sessionCapabilityApplyNotice({ pendingApply: { mcp: false, skills: true },
+            applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } }, change: null,
+            machineOnline: true, machineName: 'MacBook', turnSettled: true })?.text).toBe('Change saved');
+    });
+    it('uses the canonical live apply timing even while the selection marker is pending', () => {
         const input = { pendingApply: { mcp: false, skills: true }, applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } } as const,
             change: { kind: 'skill', title: 'Review', state: 'on' } as const, machineOnline: true, machineName: 'MacBook', turnSettled: true, translate };
-        expect(sessionCapabilityApplyNotice(input)?.key).toBe('saved');
+        expect(sessionCapabilityApplyNotice(input)?.key).toBe('addedNow');
         expect(sessionCapabilityApplyNotice({ ...input, pendingApply: { mcp: false, skills: false } })?.key).toBe('addedNow');
+    });
+    it('reports turning a running session skill off with the exact apply-table words', () => {
+        const metadata = writeSessionCapabilitySelectionToMetadataV1({}, setSessionCapabilitySelectionItemV1({}, 'skill', 'review', 'off'), { sessionActive: true });
+        expect(sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(metadata),
+            applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } },
+            change: readSessionCapabilityApplyChange(metadata, () => 'Review'), machineOnline: true, machineName: 'MacBook', turnSettled: true }))
+            .toEqual({ key: 'removedNow', text: 'Review turned off · applied now', restart: null });
     });
     it.each([
         [{ t: 'applied_now' }, 'on', 'addedNow'], [{ t: 'applied_now' }, 'off', 'removedNow'],

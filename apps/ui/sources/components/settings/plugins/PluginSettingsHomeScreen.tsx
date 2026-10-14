@@ -136,7 +136,7 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
         [installedQuery, installedStatus, state.installedPlugins],
     );
     const installedCollectionState = resolvePluginsCollectionState({
-        noTarget: false,
+        noTarget,
         noticeReason: null,
         listRead: state.installedPluginsRead,
         itemCount: state.installedPlugins.length,

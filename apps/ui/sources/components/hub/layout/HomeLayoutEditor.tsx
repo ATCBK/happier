@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { Switch } from '@/components/ui/forms/Switch';
+import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -12,7 +13,6 @@ import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Typography } from '@/constants/Typography';
-import { resolveAnchoredListMoveV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import { HomeHubLayoutIntentSchema } from '@happier-dev/protocol/home';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, entityReorderPreview, entityReorderRefused, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -52,14 +52,19 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
         () => layout.sections.map((section) => ({ id: section.id, title: homeHubSectionTitle(section) })),
         [layout.sections],
     );
+    const projectMove: NonNullable<EntityFlatReorderBinding['projectMove']> = (sectionId, position) => {
+        try { return layout.projectMove(sectionId, position); }
+        catch { return null; }
+    };
     const binding: EntityFlatReorderBinding = {
         scope, kind: 'home-section', items: placed,
         getItem: (id) => scope && placed.some(item => item.id === id) ? { kind: 'home-section', scope, sectionId: id } : null,
         getSourceId: (item) => item.kind === 'home-section' ? item.sectionId : null,
+        projectMove,
         resolve: (sectionId, position) => {
             if (!scope) return entityReorderRefused('reorder_scope_unavailable');
             const ids = placed.map(item => item.id);
-            const next = resolveAnchoredListMoveV1(ids, sectionId, position);
+            const next = projectMove(sectionId, position);
             if (!next) return entityReorderRefused('reorder_member_gone');
             if (next.every((id, index) => id === ids[index])) return entityReorderRefused('same-position');
             return { status: 'allowed', effect: { actionId: 'home.hub.layout.update', input: { intent: { kind: 'move_to', sectionId, position } }, preview: entityReorderPreview(position, placed) } };
@@ -129,6 +134,7 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
                     <EditorRowView
                         key={row.id}
                         row={row}
+                        copy={groupCopyOf(rows, row)}
                         layout={layout}
                         showDivider={index < rows.length - 1 || layout.hiddenSetupStepCount > 0}
                     />
@@ -154,14 +160,29 @@ function rowIcon(row: EditorRow): IconName {
     return findHomeHubBuiltinSection(row.section.id)?.icon ?? 'squares-four';
 }
 
-function rowSubtitle(row: EditorRow): string {
-    if (row.section.kind === 'group') return t('widgetFrame.groupCount', { count: row.section.children.length });
+/**
+ * Groups placed from one saved group read the same, so a row says which copy it is among those that share
+ * its title (in the order Home shows them); a group with a title of its own needs no such mark.
+ */
+function groupCopyOf(rows: readonly EditorRow[], row: EditorRow): Readonly<{ index: number; total: number }> | null {
+    if (row.section.kind !== 'group') return null;
+    const title = homeHubSectionTitle(row.section);
+    const same = rows.filter(other => other.section.kind === 'group' && homeHubSectionTitle(other.section) === title);
+    return same.length > 1 ? { index: same.indexOf(row) + 1, total: same.length } : null;
+}
+
+function rowSubtitle(row: EditorRow, copy: ReturnType<typeof groupCopyOf>): string {
+    if (row.section.kind === 'group') {
+        const count = row.section.children.length;
+        return copy ? t('widgetFrame.groupCopyOf', { count, ...copy }) : t('widgetFrame.groupCount', { count });
+    }
     if (row.section.kind === 'widget') return row.section.widget?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
     return findHomeHubBuiltinSection(row.section.id)?.description() ?? t('homeIndex.builtIn');
 }
 
 function EditorRowView(props: Readonly<{
     row: EditorRow;
+    copy: ReturnType<typeof groupCopyOf>;
     layout: HomeHubLayout;
     showDivider: boolean;
 }>) {
@@ -188,15 +209,16 @@ function EditorRowView(props: Readonly<{
                     <Item
                         testID={`home-layout.${row.id}`}
                         title={title}
-                        subtitle={rowSubtitle(row)}
+                        subtitle={rowSubtitle(row, props.copy)}
                         icon={<Icon name={rowIcon(row)} />}
                         showChevron={false}
                         showDivider={props.showDivider && size === null}
                         rightElement={group ? undefined : alwaysShown ? (
-                            <View style={styles.locked}>
+                            // The lock alone: a word here would take the title's room ("Needs your attent…"); hover or
+                            // focus says it, and assistive tech reads it.
+                            <Tooltip testID={`home-layout.${row.id}.locked`} label={t('homeIndex.alwaysShown')} style={styles.locked}>
                                 <Icon name="lock" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
-                                <Text style={styles.lockedText}>{t('homeIndex.alwaysShown')}</Text>
-                            </View>
+                            </Tooltip>
                         ) : (
                             <Switch
                                 testID={`home-layout.${row.id}.shown`}
@@ -264,10 +286,5 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s4,
-    },
-    lockedText: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('meta'),
-        color: theme.colors.text.tertiary,
     },
 }));

@@ -10,7 +10,7 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
-import { Typography } from '@/constants/Typography';
+import { EYEBROW_TYPOGRAPHY, Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal';
 import {
     previewSessionAgentTransitionBriefOnMachine,
@@ -312,7 +312,7 @@ const styles = StyleSheet.create((_theme) => ({
         gap: 8,
     },
     sectionLabel: {
-        ...Typography.eyebrow(),
+        ...EYEBROW_TYPOGRAPHY,
     },
     sectionAttributes: {
         flexShrink: 1,

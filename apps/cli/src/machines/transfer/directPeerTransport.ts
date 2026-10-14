@@ -9,6 +9,7 @@ import fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { DIRECT_TRANSFER_SESSION_EXPIRES_AT_HEADER, isSafeDirectTransferEndpointCandidate } from '@happier-dev/protocol/machines/transfer/directPeerUrls';
 import { TransferChunkEnvelopeSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
+import { PreparedTransferRpcRequestV1Schema, type PreparedTransferRpcRequestV1, type PreparedTransferRpcResponseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
 import type { TransferEndpointCandidate } from '@happier-dev/protocol';
 import { z } from 'zod';
 import {
@@ -1253,17 +1254,11 @@ export async function startDirectPeerTransferServer(params: Readonly<{
   onImportSessionCountChanged?: (count: number) => void;
   onImportSessionActivity?: () => void;
   composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: Parameters<typeof createDirectTransferImportSessionManager>[0] extends infer T
-    ? T extends Readonly<object>
-      ? T extends { promptAssetUpload?: infer P }
-        ? P
-        : never
-      : never
-    : never;
   finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
 }>): Promise<Readonly<{
   activity: LiveWorkProducerV1;
   port: number;
+  requestPreparedTransfer: (input: PreparedTransferRpcRequestV1) => Promise<PreparedTransferRpcResponseV1>;
   stop: () => Promise<void>;
   releasePublishedTransferHandles: (transferToken: string) => Promise<void>;
   issueImportOpenAuthorizationToken: (input: DirectTransferImportOpenRequest) => Readonly<{
@@ -1289,7 +1284,6 @@ export async function startDirectPeerTransferServer(params: Readonly<{
     onActivity: params.onImportSessionActivity,
     accessPolicy: params.accessPolicy,
     ...(params.composerMediaStage ? { composerMediaStage: params.composerMediaStage } : {}),
-    ...(params.promptAssetUpload ? { promptAssetUpload: params.promptAssetUpload } : {}),
     ...(params.finalizeFileOperations
       ? { finalizeFileOperations: params.finalizeFileOperations }
       : {}),
@@ -1315,6 +1309,24 @@ export async function startDirectPeerTransferServer(params: Readonly<{
   return {
     port,
     activity: importSessionManager.activity,
+    requestPreparedTransfer: async (input) => {
+      const request = PreparedTransferRpcRequestV1Schema.parse(input);
+      const response = await app.inject({
+        method: request.httpMethod,
+        url: request.path,
+        headers: {
+          ...(request.authorizationToken ? { authorization: `Bearer ${request.authorizationToken}` } : {}),
+          ...(request.recipientPublicKeyBase64 ? { [DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER]: request.recipientPublicKeyBase64 } : {}),
+          ...(request.body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(request.body === undefined ? {} : { payload: JSON.stringify(request.body) }),
+      });
+      const contentType = response.headers['content-type'];
+      const sessionExpiresAt = response.headers[DIRECT_TRANSFER_SESSION_EXPIRES_AT_HEADER];
+      return { status: response.statusCode, body: response.body,
+        ...(typeof contentType === 'string' ? { contentType } : {}),
+        ...(typeof sessionExpiresAt === 'string' ? { sessionExpiresAt } : {}) };
+    },
     releasePublishedTransferHandles,
     issueImportOpenAuthorizationToken: (input) => importSessionManager.issueImportOpenAuthorizationToken(input),
     openTrustedImportSession: async (input, filesystemScope, privateStagingDirectory) => await importSessionManager.openTrustedImportSession(input, filesystemScope, privateStagingDirectory),

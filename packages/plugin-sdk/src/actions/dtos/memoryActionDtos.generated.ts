@@ -74,6 +74,7 @@ export type MemoryActionInputById = {
         };
         machineIds?: string[] | undefined;
         mode?: 'auto' | 'indexed' | 'standard' | undefined;
+        retryUnreachableMachines?: boolean | undefined;
     };
     readonly "memory.get_window": {
         source: {
@@ -101,11 +102,7 @@ export type MemoryActionInputById = {
         sessionId?: string | undefined;
     };
     readonly "memory.remember": {
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        };
+        [x: string]: any;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -123,11 +120,7 @@ export type MemoryActionInputById = {
         expiresAtMs?: number | undefined;
         topic?: string | undefined;
         reviewedTarget?: {
-            ref: {
-                artifactId: string;
-                kind: 'doc';
-                serverId?: string | undefined;
-            };
+            [x: string]: any;
             expectedRevision: {
                 headerVersion: number;
                 bodyVersion: number;
@@ -139,11 +132,7 @@ export type MemoryActionInputById = {
         expiresAtMs?: number | undefined;
         topic?: string | undefined;
         reviewedTarget?: {
-            ref: {
-                artifactId: string;
-                kind: 'doc';
-                serverId?: string | undefined;
-            };
+            [x: string]: any;
             expectedRevision: {
                 headerVersion: number;
                 bodyVersion: number;
@@ -159,11 +148,7 @@ export type MemoryActionInputById = {
         expiresAtMs?: number | undefined;
         topic?: string | undefined;
         reviewedTarget?: {
-            ref: {
-                artifactId: string;
-                kind: 'doc';
-                serverId?: string | undefined;
-            };
+            [x: string]: any;
             expectedRevision: {
                 headerVersion: number;
                 bodyVersion: number;
@@ -171,11 +156,7 @@ export type MemoryActionInputById = {
         } | null | undefined;
     };
     readonly "memory.update": {
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        };
+        [x: string]: any;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -185,11 +166,7 @@ export type MemoryActionInputById = {
         topic?: string | undefined;
         expiresAtMs?: number | null | undefined;
     } | {
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        };
+        [x: string]: any;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -200,11 +177,7 @@ export type MemoryActionInputById = {
         restoreTopic?: string | undefined;
     };
     readonly "memory.forget": {
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        };
+        [x: string]: any;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -213,11 +186,7 @@ export type MemoryActionInputById = {
         topic?: string | undefined;
     };
     readonly "memory.read": {
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        };
+        [x: string]: any;
         topic?: string | undefined;
     };
     readonly "memory.list": {
@@ -373,37 +342,7 @@ export type MemoryActionResultById = {
             failureBackoffBaseMs: number;
             failureBackoffMaxMs: number;
         };
-        embeddings: {
-            [x: string]: unknown;
-            mode: 'custom' | 'disabled' | 'preset';
-            presetId: 'balanced' | 'long_context' | 'quality';
-            custom: {
-                [x: string]: unknown;
-                kind: 'local_transformers';
-                modelId: string;
-                queryPrefix: string | null;
-                documentPrefix: string | null;
-            } | {
-                [x: string]: unknown;
-                kind: 'openai_compatible';
-                baseUrl: string | null;
-                apiKey: {
-                    _isSecretValue: true;
-                    value?: string | undefined;
-                    encryptedValue?: {
-                        t: 'enc-v1';
-                        c: string;
-                    } | undefined;
-                } | null;
-                model: string;
-                dimensions: number | null;
-            } | null;
-            blend: {
-                [x: string]: unknown;
-                ftsWeight: number;
-                embeddingWeight: number;
-            };
-        };
+        embeddings: unknown;
         budgets: {
             [x: string]: unknown;
             maxDiskMbLight: number;
@@ -504,37 +443,7 @@ export type MemoryActionResultById = {
             failureBackoffBaseMs: number;
             failureBackoffMaxMs: number;
         };
-        embeddings: {
-            [x: string]: unknown;
-            mode: 'custom' | 'disabled' | 'preset';
-            presetId: 'balanced' | 'long_context' | 'quality';
-            custom: {
-                [x: string]: unknown;
-                kind: 'local_transformers';
-                modelId: string;
-                queryPrefix: string | null;
-                documentPrefix: string | null;
-            } | {
-                [x: string]: unknown;
-                kind: 'openai_compatible';
-                baseUrl: string | null;
-                apiKey: {
-                    _isSecretValue: true;
-                    value?: string | undefined;
-                    encryptedValue?: {
-                        t: 'enc-v1';
-                        c: string;
-                    } | undefined;
-                } | null;
-                model: string;
-                dimensions: number | null;
-            } | null;
-            blend: {
-                [x: string]: unknown;
-                ftsWeight: number;
-                embeddingWeight: number;
-            };
-        };
+        embeddings: unknown;
         budgets: {
             [x: string]: unknown;
             maxDiskMbLight: number;
@@ -582,7 +491,7 @@ export type MemoryActionResultById = {
         } | null;
         worker: {
             [x: string]: unknown;
-            state: 'error' | 'disabled' | 'idle' | 'inventorying' | 'indexing' | 'waiting' | 'backoff';
+            state: 'disabled' | 'error' | 'idle' | 'inventorying' | 'indexing' | 'waiting' | 'backoff';
             lastTickAtMs: number | null;
             lastInventoryAtMs: number | null;
             currentSessionId: string | null;
@@ -643,16 +552,14 @@ export type MemoryActionResultById = {
                 agentId: string;
                 sourceKey: string;
             };
-            state: 'error' | 'disabled' | 'ready' | 'indexing';
+            state: 'disabled' | 'error' | 'ready' | 'indexing';
             indexedThroughMs?: number | undefined;
         }[] | undefined;
     };
     readonly "memory.clear_index": {
         ok: true;
     };
-    readonly "search.conversations": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "search.conversations": JsonValue;
     readonly "memory.get_window": {
         [x: string]: unknown;
         v: 1;
@@ -689,36 +596,24 @@ export type MemoryActionResultById = {
         ok: boolean;
     };
     readonly "memory.remember": {
+        [x: string]: any;
         ok: true;
         artifactId: string;
         factId: string;
-        ref?: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
     };
     readonly "memory.update": {
+        [x: string]: any;
         ok: true;
         artifactId: string;
         factId: string;
-        ref?: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
     };
     readonly "memory.forget": {
+        [x: string]: any;
         ok: true;
         artifactId: string;
         factId: string;
-        ref?: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
     };
     readonly "memory.read": {

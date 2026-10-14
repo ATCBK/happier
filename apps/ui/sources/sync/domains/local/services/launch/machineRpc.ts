@@ -111,6 +111,10 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START,
             payload,
+            // Start includes native preparation; its caller owns cancellation,
+            // as for Project finite operations, while connection setup stays bounded.
+            operationTimeoutMs: null,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };

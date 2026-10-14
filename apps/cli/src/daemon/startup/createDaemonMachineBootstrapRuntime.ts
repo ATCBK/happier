@@ -203,7 +203,6 @@ export function createDaemonMachineBootstrapRuntime(
     prepareServerTransportForReconnect?: BootstrapRuntime['prepareServerTransportForReconnect'];
     acquireWorkspaceSyncMachineIngress?: BootstrapRuntime['acquireWorkspaceSyncMachineIngress'];
     acquireLocalServicePreviewApplication?: BootstrapRuntime['acquireLocalServicePreviewApplication'];
-    directTransferPromptAssetAdapterRegistry: BootstrapRuntime['directTransferPromptAssetAdapterRegistry'];
     directTransferRegistryHost: BootstrapRuntime['directTransferRegistryHost'];
     daemonServerWorkScheduler: BootstrapRuntime['daemonServerWorkScheduler'];
     cancelConnectedServiceRuntimeAuthRecovery?: BootstrapRuntime['cancelConnectedServiceRuntimeAuthRecovery'];
@@ -674,7 +673,6 @@ export function createDaemonMachineBootstrapRuntime(
     },
     requestShutdown: params.requestShutdown,
     directPeerServerLifecycle: params.directPeerServerLifecycle,
-    directTransferPromptAssetAdapterRegistry: params.directTransferPromptAssetAdapterRegistry,
     directTransferRegistryHost: params.directTransferRegistryHost,
     ...(params.cancelConnectedServiceRuntimeAuthRecovery
       ? { cancelConnectedServiceRuntimeAuthRecovery: params.cancelConnectedServiceRuntimeAuthRecovery }

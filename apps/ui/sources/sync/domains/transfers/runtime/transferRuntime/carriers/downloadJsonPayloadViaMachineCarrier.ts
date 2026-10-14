@@ -12,7 +12,7 @@ type MachineJsonCarrierDownloadParams<TPayload> = Readonly<{
     signal?: AbortSignal | null;
 }>;
 
-/** Downloads one JSON payload through the mandatory finite machine/1 carrier. */
+/** Downloads one JSON payload through the canonical prepared Machine carrier. */
 export async function downloadJsonPayloadViaMachineCarrier<
     TPayload,
     TDirectExportRequest extends DirectExportRequest,
@@ -36,7 +36,7 @@ export async function downloadJsonPayloadViaMachineCarrier<
 
     return await downloadBulkJsonPayloadViaDirectExport({
         machineId: params.machineId,
-        ...(typeof params.serverId === 'string' ? { serverId: params.serverId } : {}),
+        serverId: machineRoute.serverId,
         ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
         request: params.directExportRequest,
         parsePayload: params.parsePayload,

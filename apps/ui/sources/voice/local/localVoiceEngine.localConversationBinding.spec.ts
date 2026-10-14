@@ -57,7 +57,7 @@ async function configureAgentMode(): Promise<void> {
         // Withhold the hidden carrier from the HTTP source so the real binding
         // owner must prepare it through canonical Session creation.
         sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: localVoiceHomeId,
-            active: true, presence: 'online', metadata: { machineId: 'machine-1', path: '/workspace/project',
+            active: true, presence: 'online', metadata: { machineId: 'machine-1', path: '/workspace/project', host: 'voice.test',
                 flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
             } }) },
     });
@@ -275,7 +275,7 @@ describe('local voice engine local conversation binding', () => {
             rejectBinding(new Error('Binding fixture cleanup'));
             releaseSdk();
             await Promise.allSettled([start, newerStart]);
-            await newerAdapter.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+            await newerAdapter.stop({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
             await assembly.dispose();
             registerVoiceAdapters(previousAdapters);
             setLocalVoiceHttpResponder(null);

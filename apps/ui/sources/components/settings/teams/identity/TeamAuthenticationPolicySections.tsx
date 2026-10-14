@@ -298,7 +298,7 @@ export const TeamAuthenticationPolicySections = React.memo(function TeamAuthenti
                 context.refresh();
                 return;
             }
-            setError(policyFailureLabel(outcome.failure) ?? teamMutationFailureLabel(outcome.failure));
+            setError(policyFailureLabel(outcome.failure) ?? teamMutationFailureLabel(outcome.failure, 'authentication_policy'));
         } catch (cause) {
             if (isTeamActionApprovalPendingError(cause)) {
                 // The shell now renders and owns the pending state.

@@ -33,9 +33,6 @@ describe('happier mcp serve (env hardening)', () => {
       readStoredCredentials: async () => credentials,
       bootstrapAccountSettingsContext: vi.fn(async () => ({}) as any),
       ensureMachineIdForCredentials: vi.fn(async () => ({ machineId: 'machine-1' })),
-      detectProviderMcpServers: vi.fn(async () => ({ ok: true, servers: [] }) as any),
-      randomUUID: () => 'id',
-      nowMs: () => 1,
       createExternalMcpServer: vi.fn(() => ({ mcp: { connect }, toolNames: [] }) as any),
       connectMcpStdio: vi.fn(async (_server) => {}),
     };
@@ -84,9 +81,6 @@ describe('happier mcp serve (env hardening)', () => {
       readStoredCredentials: async () => credentials,
       bootstrapAccountSettingsContext: vi.fn(async () => ({ settings: {} }) as any),
       ensureMachineIdForCredentials: vi.fn(async () => ({ machineId: 'machine-1' })),
-      detectProviderMcpServers: vi.fn(async () => ({ ok: true, servers: [] }) as any),
-      randomUUID: () => 'id',
-      nowMs: () => 1,
       readDaemonPluginCatalog: vi.fn(async () => ({
         kind: 'available' as const,
         plugins: [],
@@ -138,9 +132,6 @@ describe('happier mcp serve (env hardening)', () => {
         },
       }) as any),
       ensureMachineIdForCredentials: vi.fn(async () => ({ machineId: 'machine-1' })),
-      detectProviderMcpServers: vi.fn(async () => ({ ok: true, servers: [] }) as any),
-      randomUUID: () => 'id',
-      nowMs: () => 1,
       createExternalMcpServer: vi.fn(() => ({ mcp: { connect }, toolNames: [] }) as any),
       connectMcpStdio: vi.fn(async (_server) => {}),
     };
@@ -171,9 +162,6 @@ describe('happier mcp serve (env hardening)', () => {
       readStoredCredentials: async () => credentials,
       bootstrapAccountSettingsContext: vi.fn(async () => ({}) as any),
       ensureMachineIdForCredentials: vi.fn(async () => ({ machineId: 'machine-1' })),
-      detectProviderMcpServers: vi.fn(async () => ({ ok: true, servers: [] }) as any),
-      randomUUID: () => 'id',
-      nowMs: () => 1,
       createExternalMcpServer: vi.fn(() => ({ mcp: { connect: vi.fn(async () => {}) }, toolNames: [] }) as any),
       connectMcpStdio: vi.fn(async (_server) => {}),
     };
@@ -223,9 +211,6 @@ describe('happier mcp serve (env hardening)', () => {
         }) as any,
         createExternalMcpServer: () => ({ mcp: { connect: async () => {} } as any, toolNames: [] }),
         connectMcpStdio: async () => {},
-        detectProviderMcpServers: async () => ({} as any),
-        randomUUID: () => 'uuid',
-        nowMs: () => 0,
       }),
     ).resolves.toBeUndefined();
 
@@ -337,9 +322,6 @@ describe('happier mcp serve (env hardening)', () => {
         connectMcpStdio: async (mcp) => {
           connectedSnapshots.push((mcp as unknown as { snapshot: typeof constructedSnapshots[number] }).snapshot);
         },
-        detectProviderMcpServers: async () => ({} as any),
-        randomUUID: () => 'uuid',
-        nowMs: () => 0,
       };
 
       try {
@@ -426,9 +408,6 @@ describe('happier mcp serve (env hardening)', () => {
         bootstrapAccountSettingsContext,
         createExternalMcpServer: vi.fn(() => ({ mcp: { connect: async () => {} } as any, toolNames: [] })),
         connectMcpStdio: async () => {},
-        detectProviderMcpServers: async () => ({} as any),
-        randomUUID: () => 'uuid',
-        nowMs: () => 0,
       }, selection)).rejects.toMatchObject({ code: 'identity_mismatch' });
 
       expect(observeServerFeaturesSnapshot).toHaveBeenCalledWith({
@@ -492,9 +471,6 @@ describe('happier mcp serve (env hardening)', () => {
           bootstrapAccountSettingsContext: async () => ({ settings: { actionsSettingsV1: null } }) as any,
           createExternalMcpServer,
           connectMcpStdio: async () => {},
-          detectProviderMcpServers: async () => ({} as any),
-          randomUUID: () => 'uuid',
-          nowMs: () => 0,
         }, selection);
 
         expect(configuration.activeServerId).toBe(selection.activeServerId);
@@ -541,9 +517,6 @@ describe('happier mcp serve (env hardening)', () => {
       bootstrapAccountSettingsContext,
       createExternalMcpServer,
       connectMcpStdio,
-      detectProviderMcpServers: vi.fn(async () => ({} as any)),
-      randomUUID: () => 'uuid',
-      nowMs: () => 0,
     })).resolves.toBeUndefined();
 
     expect(ensureMachineIdForCredentials).toHaveBeenCalledWith(credentials);
@@ -587,9 +560,6 @@ describe('happier mcp serve (env hardening)', () => {
           bootstrapAccountSettingsContext: async () => ({ settings: { actionsSettingsV1: null } }) as any,
           createExternalMcpServer,
           connectMcpStdio: async () => {},
-          detectProviderMcpServers: async () => ({} as any),
-          randomUUID: () => 'uuid',
-          nowMs: () => 0,
         }));
 
         expect(createExternalMcpServer).toHaveBeenCalledWith({
@@ -635,9 +605,6 @@ describe('happier mcp serve (env hardening)', () => {
         bootstrapAccountSettingsContext,
         createExternalMcpServer: () => ({ mcp: { connect: async () => {} } as any, toolNames: [] }),
         connectMcpStdio: async () => {},
-        detectProviderMcpServers: async () => ({} as any),
-        randomUUID: () => 'uuid',
-        nowMs: () => 0,
       }),
     ).resolves.toBeUndefined();
 

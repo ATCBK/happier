@@ -4,6 +4,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineDisplayRenderable } from './machineDisplayRenderable';
 import {
     areMachineDisplayRenderablesEqual,
+    areMachineDisplaySemanticsEqual,
     buildMachineDisplayRenderableFromMachine,
     getMachineDisplaySubtitle,
 } from './machineDisplayRenderable';
@@ -24,6 +25,13 @@ function makeMachineDisplay(partial: Partial<MachineDisplayRenderable> & Pick<Ma
 }
 
 describe('machine display renderables', () => {
+    it('invalidates an architecture-only update in both display subscription comparisons', () => {
+        const before = makeMachineDisplay({ id: 'build', metadata: { platform: 'linux' } });
+        const after = { ...before, metadata: { ...before.metadata, arch: 'x64' } };
+        expect(areMachineDisplayRenderablesEqual(before, after)).toBe(false);
+        expect(areMachineDisplaySemanticsEqual(before, after)).toBe(false);
+        expect(areMachineDisplaySemanticsEqual(after, { ...after, metadata: { ...after.metadata } })).toBe(true);
+    });
     it('preserves admitted access facts and invalidates them when readiness changes', () => {
         const machine = {
             id: 'shared', seq: 1, createdAt: 1, updatedAt: 2, active: true, activeAt: 1,

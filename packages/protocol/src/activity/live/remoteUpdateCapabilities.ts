@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   LiveActivityRemoteTargetKindSchema,
@@ -29,68 +29,52 @@ const LiveActivityDirectApnsConfigurationDiagnosticSchema = lazyZodSchema(() => 
   'apns_bundle_id_allowlist_missing',
 ]));
 
-export const LiveActivityRemoteUpdateModeDiagnosticSchema = lazyZodSchema(() => z
-  .object({
+export const LiveActivityRemoteUpdateModeDiagnosticSchema = lazyZodSchema(() => z.strictObject({
     available: z.boolean(),
     reasons: z.array(LiveActivityRemoteUpdateCapabilityReasonSchema),
-    configurationDiagnostics: z
-      .array(LiveActivityDirectApnsConfigurationDiagnosticSchema)
-      .optional()
-      .default([]),
-  })
-  .strict());
+    configurationDiagnostics: z._default(z.optional(z
+      .array(LiveActivityDirectApnsConfigurationDiagnosticSchema)), []),
+  }));
 
-const LiveActivityPerActivityUpdateCapabilityDiagnosticSchema = lazyZodSchema(() => z
-  .object({
+const LiveActivityPerActivityUpdateCapabilityDiagnosticSchema = lazyZodSchema(() => z.strictObject({
     id: z.literal('per_activity_update'),
     status: z.enum(['supported_when_configured', 'future_unsupported']),
     events: z.array(LiveActivityRemoteUpdateEventSchema),
     targetKinds: z.array(LiveActivityRemoteTargetKindSchema),
     availableModes: z.array(LiveActivityRemoteTransportModeSchema),
     reasons: z.array(LiveActivityRemoteUpdateCapabilityReasonSchema),
-  })
-  .strict());
+  }));
 
-const LiveActivityPushToStartCapabilityDiagnosticSchema = lazyZodSchema(() => z
-  .object({
+const LiveActivityPushToStartCapabilityDiagnosticSchema = lazyZodSchema(() => z.strictObject({
     id: z.literal('push_to_start'),
     status: z.enum(['supported_when_configured', 'future_unsupported']),
     events: z.tuple([z.literal('start')]),
     targetKinds: z.array(LiveActivityRemoteTargetKindSchema),
     availableModes: z.array(LiveActivityRemoteTransportModeSchema),
     reasons: z.array(LiveActivityRemoteUpdateCapabilityReasonSchema),
-  })
-  .strict());
+  }));
 
-const LiveActivityBroadcastChannelCapabilityDiagnosticSchema = lazyZodSchema(() => z
-  .object({
+const LiveActivityBroadcastChannelCapabilityDiagnosticSchema = lazyZodSchema(() => z.strictObject({
     id: z.literal('broadcast_channel'),
     status: z.enum(['supported_when_configured', 'future_unsupported']),
     events: z.tuple([]),
     targetKinds: z.array(LiveActivityRemoteTargetKindSchema),
     availableModes: z.array(LiveActivityRemoteTransportModeSchema),
     reasons: z.array(LiveActivityRemoteUpdateCapabilityReasonSchema),
-  })
-  .strict());
+  }));
 
-export const LiveActivityRemoteUpdateCapabilityDiagnosticsSchema = lazyZodSchema(() => z
-  .object({
-    modes: z
-      .object({
+export const LiveActivityRemoteUpdateCapabilityDiagnosticsSchema = lazyZodSchema(() => z.strictObject({
+    modes: z.strictObject({
         hosted_happier_relay: LiveActivityRemoteUpdateModeDiagnosticSchema,
         direct_apns: LiveActivityRemoteUpdateModeDiagnosticSchema,
         background_wake_best_effort: LiveActivityRemoteUpdateModeDiagnosticSchema,
-      })
-      .strict(),
-    capabilities: z
-      .object({
+      }),
+    capabilities: z.strictObject({
         perActivityUpdate: LiveActivityPerActivityUpdateCapabilityDiagnosticSchema,
         pushToStart: LiveActivityPushToStartCapabilityDiagnosticSchema,
         broadcastChannel: LiveActivityBroadcastChannelCapabilityDiagnosticSchema,
-      })
-      .strict(),
-  })
-  .strict());
+      }),
+  }));
 
 export const DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS =
   buildLiveActivityRemoteUpdateCapabilityDiagnostics({

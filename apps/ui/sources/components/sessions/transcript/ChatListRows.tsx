@@ -159,9 +159,10 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
     // local mutation occurs, the mounted row's natural content is authoritative and all subsequent
     // layouts are ignored for reservation purposes until the row remounts in its collapsed state.
     const [hasRowLocalLayoutMutation, setHasRowLocalLayoutMutation] = React.useState(false);
+    const [hasContentLayoutMutation, setHasContentLayoutMutation] = React.useState(false);
     const latestSignatureRef = React.useRef(props.signature);
     latestSignatureRef.current = props.signature;
-    const reservedMinHeight = hasRowLocalLayoutMutation ? undefined : reservation?.minHeight;
+    const reservedMinHeight = hasRowLocalLayoutMutation || hasContentLayoutMutation ? undefined : reservation?.minHeight;
     const shellStyle = React.useMemo(() => (
         reservedMinHeight === undefined ? undefined : { minHeight: reservedMinHeight }
     ), [reservedMinHeight]);
@@ -173,6 +174,7 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
             if (!hasRowLocalLayoutMutation) {
                 props.reconciler.recordMeasuredHeight({ signature: props.signature, heightPx });
             }
+            setHasContentLayoutMutation(false);
             props.onRowMeasured?.({
                 itemId: props.itemId,
                 rowKind: props.signature.kind,
@@ -204,14 +206,15 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
         });
     }, [props.onRowLayoutMutation, props.reconciler, props.itemId, signatureKey, props.signature]);
     const handleChildRowLayoutMutation = React.useCallback((mutation: TranscriptRowLayoutMutation) => {
-        if (mutation.reason === 'collapse') {
+        if (mutation.reason === 'collapse' || mutation.reason === 'content-change') {
             props.reconciler.resetReservationForStructuralChange({
                 itemId: props.itemId,
                 signature: latestSignatureRef.current,
-                invalidateExact: !hasRowLocalLayoutMutation,
+                invalidateExact: mutation.reason === 'content-change' || !hasRowLocalLayoutMutation,
             });
         }
-        setHasRowLocalLayoutMutation(true);
+        if (mutation.reason === 'content-change') setHasContentLayoutMutation(true);
+        else setHasRowLocalLayoutMutation(true);
         props.onRowLayoutMutation?.({
             itemId: props.itemId,
             mutation,

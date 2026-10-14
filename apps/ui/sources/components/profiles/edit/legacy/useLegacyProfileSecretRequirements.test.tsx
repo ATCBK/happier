@@ -12,7 +12,7 @@ import { SavedSecretCatalogEntryV1Schema } from '@happier-dev/protocol/account/s
 import { applyProfileCatalogSnapshot, beginProfileCatalogLoad, getProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import { applySavedSecretCatalogPage, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { readAiLaunchProfileRecords, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
-import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
+import { ProfileRecordV1Schema, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 import { createEmptyCustomProfile } from '@/sync/domains/profiles/profileMutations';
 
 const previousSettings = storage.getState().settings;
@@ -28,8 +28,8 @@ function publishProfile(profile: AiLaunchProfile, secretBindings: ProfileRecordV
     storage.setState({ settingsScope: scope });
     applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
         controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 7,
-            record: { v: 1, id: profile.id, definition: { kind: 'legacy', profile: AIBackendProfileSchema.parse(profile) },
-                enabled: false, promptStack: [], secretBindings } }] }, true);
+            record: ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'legacy', profile: AIBackendProfileSchema.parse(profile) },
+                enabled: false, promptStack: [], secretBindings }) }] }, true);
 }
 
 const capture = vi.hoisted(() => ({
@@ -47,6 +47,23 @@ vi.mock('@/text', async () => {
 });
 
 describe('useLegacyProfileSecretRequirements', () => {
+    it('captures the matching retained legacy row during refresh and saves after fresh admission without rebasing its bindings', async () => {
+        const profile = { ...AIBackendProfileSchema.parse({ id: 'legacy', name: 'Frontend review',
+            environmentVariables: [], createdAt: 1, updatedAt: 1 }), profileRecordRevision: 7 };
+        const bindings = { MASKED: null, TOKEN: 'happier:shared-secret:v1:retained' };
+        publishProfile(profile, bindings);
+        const catalog = getProfileCatalogSnapshot(scope)!.catalog;
+        beginProfileCatalogLoad(scope);
+        const hook = await renderHook(() => useLegacyProfileSecretRequirements({ profile, profileName: profile.name,
+            environmentVariables: profile.environmentVariables }));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => applyProfileCatalogSnapshot(scope, catalog, true));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual(bindings);
+        if (catalog.status !== 'ready') throw new Error('Expected the fixture census');
+        act(() => applyProfileCatalogSnapshot(scope, { ...catalog, records: catalog.records.map(row => ({ ...row, revision: 8 })) }, true));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        await hook.unmount();
+    });
     it('keeps a selected default secret in the profile draft until save', async () => {
         capture.modalShow.mockReset();
         storage.setState({ settings: settingsParse({
@@ -110,8 +127,8 @@ describe('useLegacyProfileSecretRequirements', () => {
             body: JSON.stringify({ kind: 'launch-profile.v1', profile: definition,
                 secretBindings: { DEPLOY_TOKEN: inherited, OTHER: 'happier:shared-secret:v1:other-inherited' } }),
             access: 'owner' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
-        const record: ProfileRecordV1 = { v: 1, id: definition.id, definition: { kind: 'artifact', artifactId: artifact.artifactId },
-            enabled: false, promptStack: [], secretBindings: { MASKED: null, PRIVATE: privateReference } };
+        const record: ProfileRecordV1 = ProfileRecordV1Schema.parse({ v: 1, id: definition.id, definition: { kind: 'artifact', artifactId: artifact.artifactId },
+            enabled: false, promptStack: [], secretBindings: { MASKED: null, PRIVATE: privateReference } });
         const artifactsById = new Map([[artifact.artifactId, artifact]]);
         const catalog = { status: 'ready' as const, source: 'destination' as const, authority: 'active' as const, control: null,
             controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ record, revision: 7 }] };
@@ -173,8 +190,8 @@ describe('useLegacyProfileSecretRequirements', () => {
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toEqual({ MASKED: null });
         act(() => applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
             controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 8,
-                record: { v: 1, id: source.id, definition: { kind: 'legacy', profile: source },
-                    enabled: false, promptStack: [], secretBindings: { MASKED: null } } }] }, true));
+                record: ProfileRecordV1Schema.parse({ v: 1, id: source.id, definition: { kind: 'legacy', profile: AIBackendProfileSchema.parse(source) },
+                    enabled: false, promptStack: [], secretBindings: { MASKED: null } }) }] }, true));
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
         act(() => hook.getCurrent().notifySaveUnavailable());
         expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_revision_conflict');

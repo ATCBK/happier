@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SESSION_SYSTEM_RECORD_MEMORY_NAMESPACE = 'memory' as const;
 

@@ -598,11 +598,6 @@ describe('ActionsService source contract', () => {
                 machineId: 'machine-target',
                 items: [{ name: 'reviewer', path: '/workspace/.agents/skills/reviewer' }],
             });
-            void service.execute('daemon.promptAssets.delete', {
-                assetTypeId: 'acme.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
-            });
             const navigateResult = service.execute('browser.navigate', {
                 kind: 'navigate',
                 commandId: 'command-1',

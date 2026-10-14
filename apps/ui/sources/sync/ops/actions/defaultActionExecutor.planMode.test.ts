@@ -15,10 +15,9 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import type { Settings } from '@/sync/domains/settings/settings';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
-import { bindMachineAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions';
+import { bindMachineAccessActionHttpRequestV1, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -68,7 +67,8 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefi
 let serverId = '';
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 
-function installSession(id: string, metadata: NonNullable<ReturnType<typeof createSessionFixture>['metadata']>) {
+function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnType<typeof createSessionFixture>['metadata']>>) {
+  const metadata = { path: '/repo', host: 'tester.local', ...partialMetadata };
   const session = createSessionFixture({ id, serverId, active: true, metadata });
   storage.setState({ sessions: { ...storage.getState().sessions, [id]: session } });
   let row = SessionCurrentProjectionRecordV1Schema.parse({
@@ -101,8 +101,8 @@ const modes = (agentId: string, currentModeId: string, ids: readonly string[]) =
 });
 const context = () => ({ surface: 'ui' as const, authority: 'present_user' as const, serverId });
 
-function installActionSettings(actions: NonNullable<Settings['actionsSettingsV1']>['actions']) {
-  const settings = { ...storage.getState().settings, actionsSettingsV1: { v: 1 as const, actions } };
+function installActionSettings(actions: unknown) {
+  const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions }) };
   storage.setState({ settings });
   // The restored Account still performs its ordinary settings fetch. Serve
   // the same Account policy at that boundary, rather than letting an empty
@@ -253,7 +253,7 @@ describe('default Action executor mode and catalog contracts', () => {
       let handedOff = false;
       const composerOptions = { sessionId: 'external-send', serverId,
         session: createSessionFixture({ id: 'external-send', serverId }), text: 'Composer message',
-        configuredMode: 'agent_queue' as const, metaOverrides: { permissionMode: 'read-only' },
+        configuredMode: 'agent_queue' as const, resumeCapabilityOptions: {}, metaOverrides: { permissionMode: 'read-only' },
         onOutboundHandoff: () => { handedOff = true; } };
       outcome = SessionMessageSendResultV1Schema.parse({ status: 'outcomeUnknown', localId: 'real-input', code: 'session_input_pending' });
       expect(await submitAppSessionComposerMessage(createSyncBackedSubmitPort(sync), composerOptions))
@@ -277,6 +277,27 @@ describe('default Action executor mode and catalog contracts', () => {
       .toMatchObject({ success: false });
     expect(outgoing).toEqual([]);
   });
+  it('preserves current daemon stop confirmation and failure detail through the real Action adapter', async () => {
+    installSession('stop-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+
+    daemonAnswer = () => ({ status: 'stopped' });
+    await expect(executeSessionLifecycleAction('session.stop', 'stop-session', { serverId }))
+      .resolves.toEqual({ success: true });
+    expect(outgoing).toContainEqual(expect.objectContaining({
+      method: `machine-a:${RPC_METHODS.STOP_SESSION}`,
+      params: { sessionId: 'stop-session' },
+    }));
+
+    outgoing.length = 0;
+    daemonAnswer = () => ({ status: 'incomplete', reason: 'destroy_failed' });
+    await expect(executeSessionLifecycleAction('session.stop', 'stop-session', { serverId }))
+      .resolves.toMatchObject({
+        success: false,
+        code: 'session_stop_failed',
+        message: 'Session stop incomplete: destroy_failed',
+      });
+  });
   it('retains next-prompt mode in the draft without invoking the immediate Action', async () => {
     const { applyPermissionModeSelection } = await import('@/sync/domains/permissions/permissionModeApply');
     const { getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
@@ -286,8 +307,9 @@ describe('default Action executor mode and catalog contracts', () => {
       draftScope: { serverId, accountId: 'alice' },
       executeAction: createDefaultActionExecutor().execute });
     expect(storage.getState().sessions['mode-session']?.permissionMode).not.toBe('safe-yolo');
-    expect(getSessionDraftSnapshot({ serverId, accountId: 'alice' }, { kind: 'session', sessionId: 'mode-session' })
-      ?.document.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('safe-yolo');
+    const retainedDraft = getSessionDraftSnapshot({ serverId, accountId: 'alice' }, { kind: 'session', sessionId: 'mode-session' });
+    if (!retainedDraft || !('extensions' in retainedDraft.document)) throw new Error('Expected Session composer draft');
+    expect(retainedDraft.document.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('safe-yolo');
     expect(read().metadataVersion).toBe(1);
     await applyPermissionModeSelection({ sessionId: 'mode-session', serverId, mode: 'read-only', applyTiming: 'immediate',
       draftScope: { serverId, accountId: 'alice' },

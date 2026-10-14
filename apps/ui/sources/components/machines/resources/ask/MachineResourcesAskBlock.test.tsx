@@ -1,7 +1,7 @@
 import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createMachineFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -14,6 +14,7 @@ it('fills the global draft from offline last-report prompts without sending or s
     await prepareSessionDraftPersistenceStorage();
     const serverId = 'srv_offline_prompts';
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://offline-prompts.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
     const machine = createMachineFixture({ id: 'machine-offline-prompts', active: false, activeAt: 1 });
     storage.setState({ isDataReady: true, isSessionDraftsReady: true,
         machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
@@ -21,8 +22,9 @@ it('fills the global draft from offline last-report prompts without sending or s
     const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
     expect(screen.root.findAllByType(NewSessionEmbeddedHostProvider)).toHaveLength(0);
     const scope = captureActiveServerAccountScopeLifetime()!.scope;
-    for (const kind of ['lastReport', 'lastStorageReport']) {
+    for (const kind of ['lastReport', 'lastStorageReport', 'notifyWhenBack']) {
         const suggestion = list().props.suggestions.find((entry: { kind: string }) => entry.kind === kind);
+        expect(suggestion).toBeDefined();
         const testId = `hub-composer.suggestion.${suggestion.id}`;
         expect(screen.findByTestId(testId)?.props.disabled).not.toBe(true);
         await screen.pressByTestIdAsync(testId);
@@ -34,6 +36,11 @@ it('fills the global draft from offline last-report prompts without sending or s
         expect(draft?.input).toBe(suggestion.fill.text);
         expect(draft?.selectedMachineId).toBeNull();
         expect(draft?.executionTarget).toBeNull();
+        if (kind === 'notifyWhenBack') {
+            const { SettingsDeclarationActionInputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+            const input = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(JSON.parse(draft!.input.split('\nsettings.set ')[1]!));
+            expect(input).toEqual({ anchor: 'notifications.machineOffline', key: machine.id, value: true });
+        }
     }
     expect(storage.getState().sessions).toEqual({});
     expect(rpc).not.toHaveBeenCalled();
@@ -43,7 +50,23 @@ it('fills the global draft from offline last-report prompts without sending or s
     expect(host.params.prompt).toBe('Inspect the current report');
     expect(host.params.machineId).toBe(machine.id);
     await screen.unmount();
-    await connection.dispose();
+});
+
+it('does not seed an offline machine alert prompt into another Home’s active Account during a page switch', async () => {
+    await prepareSessionDraftPersistenceStorage();
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://active-home.example.test', serverIdentityId: 'srv_active_home' });
+    onTestFinished(() => connection.dispose());
+    const machine = createMachineFixture({ id: 'foreign-machine', active: false, activeAt: 1 });
+    storage.setState({ isDataReady: true, isSessionDraftsReady: true,
+        machineListByServerId: { 'srv_foreign_home': [machine] }, machineListStatusByServerId: { 'srv_foreign_home': 'idle' } });
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId="srv_foreign_home" machineId={machine.id} machineName="Studio" />);
+    const list = screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
+    const suggestion = list.props.suggestions.find((entry: { kind: string }) => entry.kind === 'notifyWhenBack');
+    await screen.pressByTestIdAsync(`hub-composer.suggestion.${suggestion.id}`);
+    expect(routePush).not.toHaveBeenCalled();
+    expect(storage.getState().sessions).toEqual({});
+    expect(rpc).not.toHaveBeenCalled();
+    await screen.unmount();
 });
 
 // Native hosts and transport are the boundaries. The real embedded New Session,
@@ -58,10 +81,13 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 await loadSyncSingletonForTests();
 const { HubComposerSuggestionList } = await import('@/components/hub/composer/suggestions/HubComposerSuggestions');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineResourceStore } = await import('@/sync/domains/machines/resources/machineResourceStore');
+const { machineStorageStore } = await import('@/sync/domains/machines/storage/machineStorageStore');
+const { machineProcessesStore } = await import('@/sync/domains/machines/processes/machineProcessesStore');
 const { warmMachineResourceSummaries } = await import('@/sync/domains/machines/resources/warmMachineResourceSummaries');
 const { MachineResourcesAskBlock } = await import('./MachineResourcesAskBlock');
 const { NewSessionEmbeddedHostProvider } = await import('@/components/sessions/new/navigation/newSessionHost');
@@ -72,36 +98,42 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
 
 it('recovers the mounted Ask composer from canonical presence without requiring a caller update', async () => {
+    const serverId = 'srv_presence';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://presence.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
     const machine = createMachineFixture({ id: 'machine-presence', active: false, activeAt: 1 });
-    storage.setState({ machineListByServerId: { 'home-presence': [machine] }, machineListStatusByServerId: { 'home-presence': 'idle' } });
-    const screen = await renderScreen(<MachineResourcesAskBlock serverId="home-presence" machineId={machine.id} machineName="Laptop" />);
+    storage.setState({ machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId={machine.id} machineName="Laptop" />);
     const composers = () => screen.root.findAllByType(NewSessionEmbeddedHostProvider);
     expect(composers()).toHaveLength(0);
-    await act(async () => storage.setState({ machineListByServerId: { 'home-presence': [{ ...machine, active: true, activeAt: Date.now() }] } }));
+    await act(async () => storage.setState({ machineListByServerId: { [serverId]: [{ ...machine, active: true, activeAt: Date.now() }] } }));
     expect(composers()).toHaveLength(1);
-    await act(async () => storage.setState({ machineListByServerId: { 'home-presence': [machine] } }));
+    await act(async () => storage.setState({ machineListByServerId: { [serverId]: [machine] } }));
     expect(composers()).toHaveLength(0);
     await screen.unmount();
 });
 
 it('starts Ask on the page machine and home folder before intent, independently of a foreign remembered placement', async () => {
+    const serverId = 'srv_placement';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://placement.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
     const machine = createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now() });
     const homeDir = machine.metadata?.homeDir;
-    storage.setState({ machineListByServerId: { 'home-a': [machine] }, machineListStatusByServerId: { 'home-a': 'idle' } });
-    const screen = await renderScreen(<MachineResourcesAskBlock serverId="home-a" machineId="machine-a" machineName="Laptop" />);
+    storage.setState({ machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId="machine-a" machineName="Laptop" />);
     const host: NewSessionEmbeddedHost = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
     const targetServer = await renderHook((hostTargetServerId: string | undefined) => useNewSessionServerTargetState({
         settings: { ...settingsDefaults, serverSelectionActiveTargetKind: 'server', serverSelectionActiveTargetId: 'home-b' },
         activeServerId: 'home-b',
         serverProfiles: [
-            { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+            { id: serverId, serverUrl: 'https://placement.example.test', name: 'Home A', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
             { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', createdAt: 2, updatedAt: 2, lastUsedAt: 2 },
         ],
         hostTargetServerId,
         request: { spawnServerIdParam: typeof host.params.spawnServerId === 'string' ? host.params.spawnServerId : null },
     }), { initialProps: host.targetServerId });
-    expect(targetServer.getCurrent().targetServerId).toBe('home-a');
-    expect(targetServer.getCurrent().allowedTargetServerIds).toEqual(['home-a']);
+    expect(targetServer.getCurrent().targetServerId).toBe(serverId);
+    expect(targetServer.getCurrent().allowedTargetServerIds).toEqual([serverId]);
     expect(targetServer.getCurrent().showServerPickerChip).toBe(false);
     const placement = await renderHook(() => useNewSessionMachinePathState({
         serverId: targetServer.getCurrent().targetServerId,
@@ -112,7 +144,7 @@ it('starts Ask on the page machine and home folder before intent, independently 
         persistedExecutionTarget: { kind: 'machine', target: { serverId: 'home-b', machineId: 'machine-b' } },
         persistedPath: '/foreign/repo',
     }));
-    expect(placement.getCurrent().executionTarget).toEqual({ kind: 'machine', target: { serverId: 'home-a', machineId: 'machine-a' } });
+    expect(placement.getCurrent().executionTarget).toEqual({ kind: 'machine', target: { serverId, machineId: 'machine-a' } });
     expect(placement.getCurrent().directoryIntent).toEqual({ kind: 'path', path: homeDir });
     expect(host.demanded).toBe(false);
     expect(rpc).not.toHaveBeenCalled();
@@ -138,9 +170,62 @@ it('starts Ask on the page machine and home folder before intent, independently 
 afterEach(() => {
     standardCleanup();
     machineResourceStore.reset();
+    machineStorageStore.reset();
+    machineProcessesStore.reset();
     storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
     rpc.mockReset();
     routePush.mockReset();
+});
+
+it('uses warmed Storage and Processes facts without extra reads and suppresses unavailable Automations', async () => {
+    const { HappierStorageSummaryV1Schema } = await import('@happier-dev/protocol/storage/storageV1');
+    const { MachineProcessesAnswerV1Schema } = await import('@happier-dev/protocol/machines/processes/machineProcessesV1');
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { MachineResourcesPolicyV1Schema } = await import('@happier-dev/protocol/machines/resources/machineResourcesPolicyV1');
+    await prepareSessionDraftPersistenceStorage();
+    const serverId = 'srv_warmed_ask';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://warmed-ask.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
+    const machine = createMachineFixture({ id: 'machine-warmed', active: true, activeAt: Date.now(), metadata: {
+        ...createMachineFixture().metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: true } } }),
+    } });
+    storage.setState({ isDataReady: true, isSessionDraftsReady: true, machines: { [machine.id]: machine },
+        machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' },
+        settings: { ...storage.getState().settings, featureToggles: { ...storage.getState().settings.featureToggles, automations: false } } });
+    const accountId = captureActiveServerAccountScopeLifetime()!.scope.accountId;
+    const storageReport = HappierStorageSummaryV1Schema.parse({ revision: 1, sizedAt: 1, volumes: [], categories: [
+        { categoryId: 'caches', size: { allocatedBytes: 4_000_000_000, freesBytes: 4_000_000_000,
+            sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false }, count: 1, canGoBytes: 4_000_000_000, detailFacts: {} },
+    ], suggestionsTop: [], pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 },
+        wholeDisk: { enabled: false, scans: [] } });
+    const processReport = MachineProcessesAnswerV1Schema.parse({ v: 1, machineId: machine.id, capturedAtMs: 1,
+        state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [
+            { rowId: 'left', ref: 'left', name: 'vite', pid: 20, startedAtMs: 1, level: 'left_behind', memoryBytes: 100,
+                memoryKind: 'rss', owner: { kind: 'session', sessionId: 'finished' }, confirmedAtMs: 1 },
+        ], totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 1, memoryBytes: 100 } } });
+    rpc.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET
+        ? storageReport : method === RPC_METHODS.MACHINES_PROCESSES_LIST ? processReport : undefined);
+    await machineStorageStore.read({ serverId, machineId: machine.id, expectedAccountId: accountId });
+    await machineProcessesStore.read({ serverId, machineId: machine.id, accountId, scope: 'happier', view: 'tree' });
+    rpc.mockClear();
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId={machine.id} machineName="Laptop" />);
+    const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
+    await vi.waitFor(() => {
+        const suggestions = list().props.suggestions;
+        expect(suggestions.find((entry: { kind: string }) => entry.kind === 'leftBehind')?.reason)
+            .toBe(t('machineResources.askSuggestions.reasons.leftBehind', { count: 1 }));
+        expect(suggestions.find((entry: { kind: string }) => entry.kind === 'storage')?.reason)
+            .toBe(t('machineResources.askSuggestions.reasons.storage', { amount: '4 GB' }));
+        expect(suggestions.some((entry: { kind: string }) => entry.kind === 'weeklyReview')).toBe(false);
+    });
+    const suggestion = list().props.suggestions.find((entry: { kind: string }) => entry.kind === 'leftBehind');
+    await screen.pressByTestIdAsync(`hub-composer.suggestion.${suggestion.id}`);
+    const host: NewSessionEmbeddedHost = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
+    expect(host.params.prompt).toBe(suggestion.fill.text);
+    expect(host.params.machineId).toBe(machine.id);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(storage.getState().sessions).toEqual({});
+    await screen.unmount();
 });
 
 it('mounts Ask with a real warmed summary and reads calm from canonical attention, not the value payload', async () => {
@@ -148,6 +233,7 @@ it('mounts Ask with a real warmed summary and reads calm from canonical attentio
     await prepareSessionDraftPersistenceStorage();
     const serverId = 'srv_home_a';
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
     const sampledAt = Date.now();
     const machine = createMachineFixture({ id: 'machine-a', active: true, activeAt: sampledAt, daemonStateVersion: 1, daemonState: {
         resources: { v: 1, vitals: { state: 'reporting' },
@@ -181,5 +267,4 @@ it('mounts Ask with a real warmed summary and reads calm from canonical attentio
     expect(consoleErrors.mock.calls.filter((args) => args.some((arg) => typeof arg === 'string'
         && /Cannot update a component.*while rendering/.test(arg)))).toEqual([]);
     await screen.unmount();
-    await connection.dispose();
 });

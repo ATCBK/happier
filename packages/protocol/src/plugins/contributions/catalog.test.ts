@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import { PluginManifestV2Schema } from '../manifest/v2.js';
@@ -153,7 +154,7 @@ describe('plugin contribution catalog', () => {
 
   it('keeps the shared ACP permission map as a direct reference in both raw Manifest dialects', () => {
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      const raw = PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' });
+      const raw = z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' });
       const definitions = raw.$defs ?? raw.definitions ?? {};
       const permissionModeArgv = Object.values(definitions).find((schema) =>
         schema.type === 'object'

@@ -99,7 +99,7 @@ describe('machine administration target demand', () => {
         await upsertServerProfile({ serverUrl, name: 'Administration currentness' });
         const profile = await setServerProfileIdentityForUrl(serverUrl, 'srv_administration_currentness');
         if (!profile) throw new Error('Test profile was not created');
-        const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptAssets;
+        const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.providers;
         const targetA = { serverIdentityId: profile.serverIdentityId!, machineId: 'machine-a' };
         const targetB = { serverIdentityId: profile.serverIdentityId!, machineId: 'machine-b' };
         const machineA = createMachineFixture({ id: targetA.machineId, activeAt: Date.now(), daemonStateVersion: 1 });

@@ -264,6 +264,13 @@ controlled expansion instead when expansion belongs to a particular collection
 item. Check the package API inventory before using this new export with a
 published toolchain.
 
+In the same development source, `ItemAddRow` renders a sheet's add action
+through the owner used by Happier's own pages: a leading plus, row title and
+no chevron. Supply `title`, `onPress`, optional `subtitle` and `disabled`;
+pass controlled `expanded` when it opens an inline form. The caller owns the
+form, save/cancel actions and translated copy. Check the package API inventory
+before using this new export with a published toolchain.
+
 Authors import adapters, domain-neutral shared renderers and metrics from
 `@happier-dev/plugin-ui/components`. Host services and mounted runtime controls
 remain private to Happier.

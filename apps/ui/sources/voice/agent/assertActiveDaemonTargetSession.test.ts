@@ -45,7 +45,7 @@ function projection(terminal: boolean) {
 function seedTargetSession(overrides: Parameters<typeof createSessionFixture>[0] = {}) {
     const session = createSessionFixture({
         id: 'target-1', serverId: targetHome.id, active: true,
-        metadata: { flavor: 'claude', machineId: 'machine-1', path: '/tmp/target' },
+        metadata: { flavor: 'claude', machineId: 'machine-1', path: '/tmp/target', host: 'voice.test' },
         ...overrides,
     });
     storage.setState({ sessions: { [session.id]: session }, sessionListIndexByServerId: {
@@ -92,7 +92,7 @@ describe('assertActiveDaemonTargetSession', () => {
     });
 
     it('fails closed for an unreadable Agent identity even with a ready projection', async () => {
-        seedTargetSession({ metadata: { machineId: 'machine-1', path: '/tmp/target' } });
+        seedTargetSession({ metadata: { machineId: 'machine-1', path: '/tmp/target', host: 'voice.test' } });
         network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, projection(true));
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
             .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED' });
@@ -103,7 +103,7 @@ describe('assertActiveDaemonTargetSession', () => {
         seedTargetSession({ active: false });
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
             .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE' });
-        seedTargetSession({ presence: 'offline' });
+        seedTargetSession({ presence: 0 });
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
             .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_OFFLINE' });
     });

@@ -1,26 +1,16 @@
 import { createHash } from "node:crypto";
 import type { Prisma as PrismaTypes } from "@prisma/client";
-import type {
-    ReviewCommentEventV1,
-    ReviewCommentEventRequestBindingV1,
-    ReviewCommentListRequestV1,
-    ReviewCommentPublicationDispatchInstructionV1,
-    ReviewCommentPublicationTransportResultV1,
-    ReviewCommentV1,
-    StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
-import {
-    BoundReviewCommentEventSensitiveEnvelopeV1Schema,
-    ReviewCommentEventV1Schema,
-    ReviewCommentPublicationTransportResultV1Schema,
-    ReviewCommentV1Schema,
-    StoredJsonContentEnvelopeSchema,
-    ReviewCommentStructuralV1Schema, splitReviewCommentV1, sealReviewCommentSensitiveEnvelopeV1,
-    openReviewCommentSensitiveMigrationSourceV1,
-    openStoredReviewCommentV1,
-    type ReviewCommentStructuralV1, type ReviewCommentStoredSourceV1,
-    reviewCommentFindingScopeV1,
-} from "@happier-dev/protocol";
+import type { ReviewCommentEventV1, ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import type { ReviewCommentEventRequestBindingV1 } from '@happier-dev/protocol/reviews/comments/content';
+import type { ReviewCommentListRequestV1, ReviewCommentPublicationDispatchInstructionV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import type { ReviewCommentPublicationTransportResultV1 } from '@happier-dev/protocol/reviews/comments/publicationTransport';
+import type { StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { BoundReviewCommentEventSensitiveEnvelopeV1Schema, ReviewCommentStructuralV1Schema, splitReviewCommentV1, sealReviewCommentSensitiveEnvelopeV1, openReviewCommentSensitiveMigrationSourceV1, openStoredReviewCommentV1, type ReviewCommentStructuralV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { ReviewCommentEventV1Schema, ReviewCommentV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
+import { ReviewCommentPublicationTransportResultV1Schema } from '@happier-dev/protocol/reviews/comments/publicationTransport';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { type ReviewCommentStoredSourceV1 } from '@happier-dev/protocol/reviews/comments/mutation';
+import { reviewCommentFindingScopeV1 } from '@happier-dev/protocol/reviews/comments/findingIdentity';
 import { buildReviewCommentCanonicalStorageValues, buildReviewCommentStructuralFromStorageRow,
     readReviewCommentMigrationSourceFromStorageRow } from "./accountEncryptionMigrationPersistence";
 

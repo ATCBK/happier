@@ -12,10 +12,10 @@ describe('composed CLI command path ownership', () => {
     await expect(ensureMergedAgentCommandRegistryLoaded()).resolves.toBeUndefined();
   });
 
-  it('dispatches the Found list default and its read leaf from the real Action catalog', async () => {
+  it('dispatches the Found list and read leaves from the real Action catalog', async () => {
     await ensureMergedAgentCommandRegistryLoaded();
-    expect(await resolveAdmittedActionCliCommand(['skills', 'found', '--machine', 'machine_1']))
-      .toMatchObject({ actionId: 'skills.found.list', path: ['skills', 'found'] });
+    expect(await resolveAdmittedActionCliCommand(['skills', 'found', 'list', '--machine', 'machine_1']))
+      .toMatchObject({ actionId: 'skills.found.list', path: ['skills', 'found', 'list'] });
     expect(await resolveAdmittedActionCliCommand(['skills', 'found', 'show', 'review', '--machine', 'machine_1']))
       .toMatchObject({ actionId: 'skills.found.read', path: ['skills', 'found', 'show'] });
     expect(await resolveAdmittedActionCliCommand(['skills', 'adopt', 'review', '--machine', 'machine_1']))

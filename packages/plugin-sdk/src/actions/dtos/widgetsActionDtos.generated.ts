@@ -155,7 +155,7 @@ export type WidgetsActionInputById = {
                         submitLabel?: string | undefined;
                         fields?: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -921,7 +921,7 @@ export type WidgetsActionInputById = {
                                 submitLabel?: string | undefined;
                                 fields?: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -1324,7 +1324,7 @@ export type WidgetsActionInputById = {
                                     submitLabel?: string | undefined;
                                     fields?: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -1447,7 +1447,7 @@ export type WidgetsActionInputById = {
                                         submitLabel?: string | undefined;
                                         fields?: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -1799,7 +1799,7 @@ export type WidgetsActionInputById = {
                 submitLabel?: string | undefined;
                 fields?: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -1885,7 +1885,7 @@ export type WidgetsActionInputById = {
                 submitLabel?: string | undefined;
                 fields?: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -1978,7 +1978,7 @@ export type WidgetsActionInputById = {
                 submitLabel?: string | undefined;
                 fields?: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -2017,6 +2017,7 @@ export type WidgetsActionInputById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -2059,7 +2060,7 @@ export type WidgetsActionInputById = {
                                     submitLabel?: string | undefined;
                                     fields?: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -2123,7 +2124,6 @@ export type WidgetsActionInputById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -2171,7 +2171,7 @@ export type WidgetsActionInputById = {
                 submitLabel?: string | undefined;
                 fields?: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -2210,6 +2210,7 @@ export type WidgetsActionInputById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -2252,7 +2253,7 @@ export type WidgetsActionInputById = {
                                     submitLabel?: string | undefined;
                                     fields?: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -2316,7 +2317,6 @@ export type WidgetsActionInputById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -2503,7 +2503,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -2563,7 +2563,7 @@ export type WidgetsActionResultById = {
             title: string;
             fields: {
                 path: string;
-                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                 title: string;
                 inputType?: {
                     pluginId: string;
@@ -2680,7 +2680,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -2739,9 +2739,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -2804,7 +2802,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -2863,9 +2861,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -2929,7 +2925,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -2988,9 +2984,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -3015,9 +3009,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -3079,7 +3071,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -3138,9 +3130,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -3204,7 +3194,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -3263,9 +3253,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -3290,9 +3278,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -3348,7 +3334,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -3407,9 +3393,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -3473,7 +3457,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -3532,9 +3516,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -3559,9 +3541,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -3617,7 +3597,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -3676,9 +3656,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -3742,7 +3720,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -3801,9 +3779,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -3828,9 +3804,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -3887,7 +3861,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -3946,9 +3920,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -4012,7 +3984,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -4071,9 +4043,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -4098,9 +4068,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -4202,7 +4170,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -4261,9 +4229,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -4321,7 +4287,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -4380,9 +4346,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -4446,7 +4410,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -4505,9 +4469,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -4532,9 +4494,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -4624,7 +4584,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -4683,9 +4643,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -4743,7 +4701,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -4802,9 +4760,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -4868,7 +4824,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -4927,9 +4883,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -4954,9 +4908,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -5046,7 +4998,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -5105,9 +5057,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -5165,7 +5115,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -5224,9 +5174,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -5290,7 +5238,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -5349,9 +5297,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -5376,9 +5322,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -5504,7 +5448,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -5563,9 +5507,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -5623,7 +5565,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -5682,9 +5624,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -5748,7 +5688,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -5807,9 +5747,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -5834,9 +5772,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -5926,7 +5862,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -5985,9 +5921,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -6045,7 +5979,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -6104,9 +6038,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -6170,7 +6102,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -6229,9 +6161,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -6256,9 +6186,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -6348,7 +6276,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -6407,9 +6335,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -6467,7 +6393,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -6526,9 +6452,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -6592,7 +6516,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -6651,9 +6575,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -6678,9 +6600,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -6770,7 +6690,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -6829,9 +6749,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -6889,7 +6807,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -6948,9 +6866,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -7014,7 +6930,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -7073,9 +6989,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -7100,9 +7014,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -7152,9 +7064,7 @@ export type WidgetsActionResultById = {
         };
         bindings: Record<string, {
             kind: 'value';
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         } | {
             kind: 'context';
             slot: string;
@@ -7165,9 +7075,7 @@ export type WidgetsActionResultById = {
     };
     readonly "widgets.item.inputs.validate": {
         status: 'ready';
-        input: Record<string, string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null>;
+        input: Record<string, JsonValue>;
     } | {
         status: 'unavailable' | 'denied' | 'selection_required' | 'invalid';
         fields: {
@@ -7254,7 +7162,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -7313,9 +7221,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -7373,7 +7279,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -7432,9 +7338,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -7498,7 +7402,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -7557,9 +7461,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -7584,9 +7486,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -7676,7 +7576,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -7735,9 +7635,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -7795,7 +7693,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -7854,9 +7752,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -7920,7 +7816,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -7979,9 +7875,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -8006,9 +7900,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -8136,7 +8028,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -8195,9 +8087,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -8255,7 +8145,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -8314,9 +8204,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -8380,7 +8268,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -8439,9 +8327,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -8466,9 +8352,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -8558,7 +8442,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -8617,9 +8501,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -8677,7 +8559,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -8736,9 +8618,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -8802,7 +8682,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -8861,9 +8741,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -8888,9 +8766,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -8980,7 +8856,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -9039,9 +8915,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -9099,7 +8973,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -9158,9 +9032,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -9224,7 +9096,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -9283,9 +9155,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -9310,9 +9180,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -9402,7 +9270,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -9461,9 +9329,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -9521,7 +9387,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -9580,9 +9446,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -9646,7 +9510,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -9705,9 +9569,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -9732,9 +9594,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -9824,7 +9684,7 @@ export type WidgetsActionResultById = {
                     inputs: {
                         fields: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -9883,9 +9743,7 @@ export type WidgetsActionResultById = {
             };
             bindings: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -9943,7 +9801,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -10002,9 +9860,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -10068,7 +9924,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -10127,9 +9983,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -10154,9 +10008,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -10244,7 +10096,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -10303,9 +10155,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -10368,7 +10218,7 @@ export type WidgetsActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -10427,9 +10277,7 @@ export type WidgetsActionResultById = {
                 };
                 bindings: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -10493,7 +10341,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -10552,9 +10400,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -10579,9 +10425,7 @@ export type WidgetsActionResultById = {
             titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
             } | {
                 kind: 'context';
                 slot: string;
@@ -10643,7 +10487,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -10702,9 +10546,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -10768,7 +10610,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -10827,9 +10669,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -10854,9 +10694,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -10912,7 +10750,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -10971,9 +10809,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -11037,7 +10873,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -11096,9 +10932,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -11123,9 +10957,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -11181,7 +11013,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -11240,9 +11072,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -11306,7 +11136,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -11365,9 +11195,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -11392,9 +11220,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -11451,7 +11277,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -11510,9 +11336,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -11576,7 +11400,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -11635,9 +11459,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -11662,9 +11484,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -11799,7 +11619,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -11858,9 +11678,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -11924,7 +11742,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -11983,9 +11801,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -12010,9 +11826,7 @@ export type WidgetsActionResultById = {
                 titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -12135,7 +11949,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -12194,9 +12008,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -12260,7 +12072,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -12319,9 +12131,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -12346,9 +12156,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -12477,7 +12285,7 @@ export type WidgetsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -12536,9 +12344,7 @@ export type WidgetsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -12602,7 +12408,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -12661,9 +12467,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -12688,9 +12492,7 @@ export type WidgetsActionResultById = {
                 titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -12813,7 +12615,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -12872,9 +12674,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -12938,7 +12738,7 @@ export type WidgetsActionResultById = {
                                     inputs: {
                                         fields: readonly {
                                             path: string;
-                                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                             title: string;
                                             inputType?: {
                                                 pluginId: string;
@@ -12997,9 +12797,7 @@ export type WidgetsActionResultById = {
                             };
                             bindings: Record<string, {
                                 kind: 'value';
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'context';
                                 slot: string;
@@ -13024,9 +12822,7 @@ export type WidgetsActionResultById = {
                     titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -13299,7 +13095,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13397,7 +13193,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13518,7 +13314,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13601,7 +13397,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13684,7 +13480,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13771,7 +13567,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13829,9 +13625,7 @@ export type WidgetsActionResultById = {
         };
         suggestedBindings: Record<string, {
             kind: 'value';
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         } | {
             kind: 'context';
             slot: string;
@@ -13846,7 +13640,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -13891,6 +13685,7 @@ export type WidgetsActionResultById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -13930,7 +13725,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -13989,9 +13784,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -13999,7 +13792,6 @@ export type WidgetsActionResultById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -14012,9 +13804,7 @@ export type WidgetsActionResultById = {
                 title?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -14058,7 +13848,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -14103,6 +13893,7 @@ export type WidgetsActionResultById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -14142,7 +13933,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -14201,9 +13992,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -14211,7 +14000,6 @@ export type WidgetsActionResultById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -14224,9 +14012,7 @@ export type WidgetsActionResultById = {
                 title?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -14266,7 +14052,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -14311,6 +14097,7 @@ export type WidgetsActionResultById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -14350,7 +14137,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -14409,9 +14196,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -14419,7 +14204,6 @@ export type WidgetsActionResultById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -14432,9 +14216,7 @@ export type WidgetsActionResultById = {
                 title?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -14474,7 +14256,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -14519,6 +14301,7 @@ export type WidgetsActionResultById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -14558,7 +14341,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -14617,9 +14400,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -14627,7 +14408,6 @@ export type WidgetsActionResultById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -14640,9 +14420,7 @@ export type WidgetsActionResultById = {
                 title?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;
@@ -14682,7 +14460,7 @@ export type WidgetsActionResultById = {
             inputs: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -14727,6 +14505,7 @@ export type WidgetsActionResultById = {
                 children: {
                     kind: 'widget';
                     instance: {
+                        v: 1;
                         definition: {
                             kind: 'installed';
                             surface: {
@@ -14766,7 +14545,7 @@ export type WidgetsActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -14825,9 +14604,7 @@ export type WidgetsActionResultById = {
                         };
                         bindings: Record<string, {
                             kind: 'value';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'context';
                             slot: string;
@@ -14835,7 +14612,6 @@ export type WidgetsActionResultById = {
                             kind: 'viewer';
                             purpose: string;
                         }>;
-                        v: 1;
                         networkOverride?: {
                             networkOrigins?: string[] | undefined;
                             network?: 'none' | 'open' | undefined;
@@ -14848,9 +14624,7 @@ export type WidgetsActionResultById = {
                 title?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
-                    value: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    value: JsonValue;
                 } | {
                     kind: 'context';
                     slot: string;

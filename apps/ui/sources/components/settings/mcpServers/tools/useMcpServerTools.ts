@@ -8,6 +8,8 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { t } from '@/text';
 
 export type McpServerToolsList = z.infer<(typeof MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1)['mcp.servers.tools.list']>;
 
@@ -98,19 +100,36 @@ export function useMcpServerTools(serverId: string | null, catalogRevision: numb
     const listRef = React.useRef(current.list);
     listRef.current = current.list;
 
-    const set = React.useCallback(async (patch: McpServerToolSettingsPatchV1): Promise<string | null> => {
-        if (!serverId) return null;
+    const noticeKey = `mcp-tools:${key}`;
+    React.useEffect(() => {
+        const retirement = binding?.onRetire(() => retirePresentationNotice(noticeKey));
+        return () => { retirement?.dispose(); retirePresentationNotice(noticeKey); };
+    }, [binding, noticeKey]);
+
+    const change = React.useCallback(async (patch: McpServerToolSettingsPatchV1, undo = false): Promise<string | null> => {
+        if (!serverId || !execution.isCurrent()) return null;
         const before = listRef.current;
         if (before) setState({ key, status: 'ready', list: applyPatch(before, patch) });
         const result = await execute('mcp.servers.tools.set', { serverId, ...patch }).catch((error: unknown) => ({
             ok: false as const, errorCode: error instanceof Error ? error.message : 'mcp_tools_set_failed', error: '' }));
-        if (!result.ok) {
+        if (!execution.isCurrent()) return null;
+        const parsed = result.ok ? MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.set'].safeParse(result.result) : null;
+        if (!result.ok || !parsed?.success) {
             if (before) setState({ key, status: 'ready', list: before });
-            return result.errorCode ?? 'mcp_tools_set_failed';
+            return !result.ok ? result.errorCode ?? 'mcp_tools_set_failed' : 'invalid_action_output';
         }
+        if (!binding?.isCurrent()) return null;
         setNonce((value) => value + 1);
+        if (undo) retirePresentationNotice(noticeKey);
+        else publishPresentationNotice({ key: noticeKey, message: t('capabilities.mcp.tools.title'), severity: 'info',
+            undo: { label: t('bots.undo'), run: () => {
+                void change(parsed.data.previous, true).then(error => {
+                    if (error) publishPresentationNotice({ key: noticeKey, message: t('capabilities.mcp.tools.setFailed'), severity: 'error' });
+                });
+            } } });
         return null;
-    }, [execute, key, serverId]);
+    }, [execute, execution.isCurrent, key, serverId, binding, noticeKey]);
+    const set = React.useCallback((patch: McpServerToolSettingsPatchV1) => change(patch), [change]);
 
     const reload = React.useCallback(() => setNonce((value) => value + 1), []);
     const errorCode = current.status === 'unavailable' ? state.errorCode ?? null : null;

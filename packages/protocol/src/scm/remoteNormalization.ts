@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ScmRemotePolicyFields, validateScmRemoteLeaseAuthority, type ScmRemotePolicy } from './remotePolicy.js';
 
 export type ScmRemoteRequestNormalizationResult =
@@ -136,17 +136,16 @@ export function normalizeScmBranchSourceRef(
 function createNormalizedStringSchema<TValue extends string>(
   normalize: (value: string | undefined) => { ok: true; value: TValue } | { ok: false; error: string }
 ) {
-  return z.string().transform((value, ctx) => {
+  return z.pipe(z.string(), z.transform((value, ctx) => {
     const result = normalize(value);
     if (!result.ok) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: result.error,
-      });
+      ctx.issues.push({
+        code: "custom",
+        message: result.error, input: ctx.value });
       return z.NEVER;
     }
     return result.value;
-  });
+  }));
 }
 
 export const ScmRemoteNameSchema = createNormalizedStringSchema((value) => {
@@ -157,12 +156,12 @@ export const ScmRemoteNameSchema = createNormalizedStringSchema((value) => {
 });
 export type ScmRemoteName = z.infer<typeof ScmRemoteNameSchema>;
 
-export const ScmOptionalRemoteNameSchema = lazyZodSchema(() => z.preprocess((value) => {
+export const ScmOptionalRemoteNameSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }
   return value.trim() ? value : undefined;
-}, ScmRemoteNameSchema.optional()));
+}), z.optional(ScmRemoteNameSchema)));
 export type ScmOptionalRemoteName = z.infer<typeof ScmOptionalRemoteNameSchema>;
 
 export const ScmRemoteManagementNameSchema = createNormalizedStringSchema((value) => {
@@ -171,12 +170,12 @@ export const ScmRemoteManagementNameSchema = createNormalizedStringSchema((value
     ? { ok: true, value: normalized.name }
     : normalized;
 });
-export const ScmOptionalRemoteManagementNameSchema = lazyZodSchema(() => z.preprocess((value) => {
+export const ScmOptionalRemoteManagementNameSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }
   return value.trim() ? value : undefined;
-}, ScmRemoteManagementNameSchema.optional()));
+}), z.optional(ScmRemoteManagementNameSchema)));
 
 export const ScmRemoteUrlSchema = createNormalizedStringSchema((value) => {
   const normalized = normalizeScmRemoteUrl(value);
@@ -194,12 +193,12 @@ export const ScmBranchSourceRefSchema = createNormalizedStringSchema((value) => 
 });
 export type ScmBranchSourceRef = z.infer<typeof ScmBranchSourceRefSchema>;
 
-export const ScmOptionalBranchSourceRefSchema = lazyZodSchema(() => z.preprocess((value) => {
+export const ScmOptionalBranchSourceRefSchema = lazyZodSchema(() => z.optional(z.pipe(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }
   return value.trim() ? value : undefined;
-}, ScmBranchSourceRefSchema.optional()).optional());
+}), z.optional(ScmBranchSourceRefSchema))));
 export type ScmOptionalBranchSourceRef = z.infer<typeof ScmOptionalBranchSourceRefSchema>;
 
 export function normalizeScmRemoteRequest(

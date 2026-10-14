@@ -7,7 +7,7 @@ import {
     type HappierReleaseOutcome,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { PANE_DROP_UNCHANGED_CODES } from '@/components/appShell/splitCanvas/presentation/paneDropPresentation';
+import { ENTITY_DROP_UNCHANGED_CODES } from '../entityDropNoChange';
 import { SESSION_LIST_NO_TARGET_CODE } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
 import { t } from '@/text';
 import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
@@ -25,12 +25,6 @@ import { WIDGET_MOVE_SILENT_CODES } from '../widgetLayoutEntityDrop';
  */
 
 const isRelation = (effect: HappierDropEffect) => effect.actionId === 'session.reports_to.set';
-
-/** "Already here": releasing changes nothing, so it is quiet, never a refusal. */
-const UNCHANGED_CODES: ReadonlySet<string> = new Set([
-    ...PANE_DROP_UNCHANGED_CODES,
-    'no-change', 'same-position', 'board-no-change',
-]);
 
 function vocabulary(verdict?: HappierDropVerdict): HappierDropOutcomeVocabulary {
     return {
@@ -67,7 +61,7 @@ function vocabulary(verdict?: HappierDropVerdict): HappierDropOutcomeVocabulary 
         unknownTitle: effect => t('entityDragDrop.settled.unknown', { verb: effect.preview.verb }),
         unknownDetail: resolveActionExecutionFailureMessage({ ok: false, errorCode: verdict?.outcome && verdict.outcome.status !== 'applied' ? verdict.outcome.reason.code : undefined },
             t('entityDragDrop.preview.unknownDetail'))!,
-        unchangedCodes: UNCHANGED_CODES,
+        unchangedCodes: ENTITY_DROP_UNCHANGED_CODES,
         unchangedTitle: t('entityDragDrop.pane.alreadyHere'),
         unchangedDetail: t('entityDragDrop.pane.leaveIt'),
         silentCodes: new Set([SESSION_LIST_NO_TARGET_CODE, ...WIDGET_MOVE_SILENT_CODES]),

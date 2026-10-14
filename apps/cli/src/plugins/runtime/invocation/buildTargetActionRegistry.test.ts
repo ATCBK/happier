@@ -57,7 +57,8 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutab
 import { createPluginReloadController } from '../reload/controller';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '../reload/runtimeLease';
 import { unexpectedCaptureSourceResolution } from '@/plugins/testkit/unexpectedCaptureSourceResolution';
-import { createCommittedContributedActionDefinitionLister } from './actions/createCommittedContributedActionDeps';
+import { createCommittedContributedActionDefinitionLister, createCommittedContributedActionSchemaReader } from './actions/createCommittedContributedActionDeps';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createUnavailablePluginServices } from './services/unavailable';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
@@ -526,10 +527,10 @@ function fact(overrides: Partial<PluginTargetActivationFact> = {}): PluginTarget
 }
 
 describe('buildTargetActionInvocationRegistry', () => {
-    it('keeps a current client Action discoverable without a daemon handler registration', async () => {
+    it.each(['client', 'daemon'] as const)('keeps a current %s Action discoverable before daemon activation', async (executionTarget) => {
         const contributes = registry({ pluginManifest: manifest({
             surfaces: ['agent', 'mcp', 'cli'],
-            execution: {
+            execution: executionTarget === 'daemon' ? { target: 'daemon' } : {
                 target: 'client',
                 client: { artifactId: 'client-action', exportName: 'activate' },
                 platforms: ['web'],
@@ -549,7 +550,7 @@ describe('buildTargetActionInvocationRegistry', () => {
         });
         // These surfaces came through the real manifest and registry normalizers.
         expect(contributes.actions[0]?.definition).toMatchObject({
-            execution: { target: 'client' },
+            execution: { target: executionTarget },
             surfaces: { agent: true, mcp: true, cli: true },
         });
         expect(target.has('acme.alpha', 'run')).toBe(false);
@@ -576,17 +577,25 @@ describe('buildTargetActionInvocationRegistry', () => {
         const listContributedActionDefinitions = createCommittedContributedActionDefinitionLister({
             tryAcquireRuntimeRegistryLease: () => tryAcquireAuthoritativePluginRuntimeRegistryLease({ controller }),
         });
-        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), listContributedActionDefinitions });
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), listContributedActionDefinitions,
+            readContributedActionSchemas: createCommittedContributedActionSchemaReader(listContributedActionDefinitions) });
         const id = formatQualifiedPluginActionId({ pluginId: 'acme.alpha', localId: 'run' });
         try {
             expect(listContributedActionDefinitions().map((definition) => definition.id)).toEqual([id]);
-            for (const surface of ['agent', 'mcp', 'cli'] as const) {
-                await expect(executor.execute('action.spec.search', { query: id }, { surface })).resolves.toMatchObject({
+            for (const surface of ['agent', 'mcp', 'cli', 'api'] as const) {
+                const search = await executor.execute('action.spec.search', { query: id }, { surface });
+                expect(search).toMatchObject({
                     ok: true, result: { actionSpecs: expect.arrayContaining([expect.objectContaining({
                         id,
                         surfaces: expect.objectContaining({ agent: true, mcp: true, cli: true }),
                     })]) },
                 });
+                if (!search.ok) throw new Error('Expected contributed discovery');
+                expect(getActionSpec('action.spec.search').outputSchema.safeParse(search.result).success).toBe(true);
+                const get = await executor.execute('action.spec.get', { id }, { surface });
+                expect(get).toMatchObject({ ok: true, result: { actionSpec: { id } } });
+                if (!get.ok) throw new Error('Expected contributed schema');
+                expect(getActionSpec('action.spec.get').outputSchema.safeParse(get.result).success).toBe(true);
             }
             expect(target.evaluateCatalogPolicy('acme.alpha', 'run')).toMatchObject({
                 outcome: 'visible', requiresCurrentIntent: false,

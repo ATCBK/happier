@@ -36,7 +36,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     tile: {
         width: 46,

@@ -10,6 +10,7 @@ import { readRegisteredStorageState, subscribeRegisteredStorageState } from '@/s
 import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { readSessionCapabilityAgentFactsV1, readCapabilityLaunchRestartFromMetadataV1, resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 type ItemKind = SessionCapabilitiesSetInputV1['kind'];
 type ItemState = SessionCapabilitiesSetInputV1['state'];
@@ -28,14 +29,19 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
     const { binding } = useServerCredentialAccountScopeBinding(options?.serverId ?? active.serverId);
     const subscribe = React.useCallback((listener: () => void) => suppliedMetadata !== undefined
         ? () => {} : subscribeRegisteredStorageState(listener) ?? (() => {}), [suppliedMetadata]);
+    const readSession = React.useCallback(() => {
+        const registered = readRegisteredStorageState();
+        return registered && binding && areServerAccountScopesEqual(registered.sessionLocalStateScope, binding.scope)
+            ? selectHomeQualifiedSession(registered, sessionId, binding.scope.serverId, active.serverId) : null;
+    }, [sessionId, binding?.scope.serverId, binding?.scope.accountId, active.serverId]);
     const readMetadata = React.useCallback(() => {
         if (suppliedMetadata !== undefined) return suppliedMetadata;
-        const registered = readRegisteredStorageState();
-        const session = registered && binding && areServerAccountScopesEqual(registered.sessionLocalStateScope, binding.scope)
-            ? selectHomeQualifiedSession(registered, sessionId, binding.scope.serverId, active.serverId) : null;
+        const session = readSession();
         return session ? readSessionOwnerMetadataView(session) : null;
-    }, [suppliedMetadata, sessionId, binding?.scope.serverId, binding?.scope.accountId, active.serverId]);
+    }, [suppliedMetadata, readSession]);
+    const readRunning = React.useCallback(() => readSession()?.active ?? null, [readSession]);
     const sessionMetadata = React.useSyncExternalStore(subscribe, readMetadata, readMetadata);
+    const sessionRunning = React.useSyncExternalStore(subscribe, readRunning, readRunning);
     const execution = useMountedActionExecution(binding?.scope);
     const key = JSON.stringify([binding?.scope.serverId, binding?.scope.accountId, sessionId]);
     const [, render] = React.useState(0);
@@ -119,8 +125,19 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
         const refusal = currentApply.mcp ?? currentApply.skills;
         return { ...currentPending, ...(refusal ? { reason: refusal.reason, ...(refusal.restartBy ? { restartBy: refusal.restartBy } : {}) } : {}) };
     }, [sessionMetadata, preview?.pendingApply]);
-    const demandPreview = React.useCallback(() => setDemanded(true), []);
+    // Apply notices read the host's admitted facts even before the detail preview is demanded.
+    const applyTiming = React.useMemo(() => {
+        const agent = readSessionCapabilityAgentFactsV1(sessionMetadata);
+        if (!agent || sessionRunning === null) return preview?.applyTiming ?? null;
+        const input = { agent, sessionRunning, launchRestart: readCapabilityLaunchRestartFromMetadataV1(sessionMetadata) };
+        return { mcp: resolveCapabilityApplyTimingV1({ ...input, kind: 'mcp_server' }),
+            skills: resolveCapabilityApplyTimingV1({ ...input, kind: 'skill' }) };
+    }, [sessionMetadata, sessionRunning, preview?.applyTiming]);
+    const demandPreview = React.useCallback(() => {
+        if (demanded && execution.ready) void refresh();
+        else setDemanded(true);
+    }, [demanded, execution.ready, refresh]);
     return { sessionId, scopeKey: key, metadata: sessionMetadata, selection: state.selection, items: preview ? { mcp: preview.mcp.items, skills: preview.skills.items } : null,
-        pendingApply, applyTiming: preview?.applyTiming ?? null,
+        pendingApply, applyTiming,
         preview, lastKnownPreview: preview, status, error, setItem, undoLast, demandPreview, refresh };
 }

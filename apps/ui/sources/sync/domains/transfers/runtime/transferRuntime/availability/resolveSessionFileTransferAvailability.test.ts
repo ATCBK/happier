@@ -25,7 +25,7 @@ const declaredTransferState = {
     transfer: {
         supported: { import: true, export: true },
         listenerClasses: {
-            loopback_http: { enabled: false, configured: false, active: false },
+            loopback_http: { enabled: true, configured: true, active: false },
             tailscale_serve_https: { enabled: false, configured: false, active: false },
         },
         lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
@@ -33,6 +33,17 @@ const declaredTransferState = {
 } as const;
 
 describe('resolveSessionFileTransferAvailability', () => {
+    it('projects the Home route selected for a declared browser without Iroh hints or enabled peer mediation', () => {
+        const result = resolveSessionFileTransferAvailability({
+            sessionAvailable: true, machineTargetAvailable: true,
+            serverFeatures: FeaturesResponseSchema.parse({ features: { machines: { enabled: true,
+                transfer: { enabled: true, directPeer: { enabled: false }, serverRouted: { enabled: false } },
+                peerMediation: { enabled: false } } }, capabilities: {} }),
+            machineCarrierHost: { kind: 'browser' }, machineDaemonState: declaredTransferState,
+        });
+        expect(result.available).toBe(true);
+        expect(result.decision).toMatchObject({ kind: 'selected', preferredRouteKind: 'machine_rpc_server' });
+    });
     it('uses the same Iroh-first preselection as execution', () => {
         const result = resolveSessionFileTransferAvailability({
             sessionAvailable: true,

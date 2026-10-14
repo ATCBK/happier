@@ -1,16 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import {
-    DIRECT_ROUTE_GRANT_TTL_MS,
-    decodePeerTcpTunnelBinaryFrameV2,
-    encodePeerTcpTunnelBinaryFrameV2,
-    PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-    PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    type LocalServicePreviewResourceV1,
-    type PeerTcpTunnelBinaryFrameHeaderV2,
-    type PeerTcpTunnelRelayEnvelope,
-} from "@happier-dev/protocol";
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { decodePeerTcpTunnelBinaryFrameV2, encodePeerTcpTunnelBinaryFrameV2, type PeerTcpTunnelBinaryFrameHeaderV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v2';
+import { PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
+import { PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v1';
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
+import { type LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import {
     createPeerTcpTunnelRelaySubstream,
     type PeerTcpTunnelRelaySubstream,

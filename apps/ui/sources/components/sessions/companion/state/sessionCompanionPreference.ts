@@ -194,7 +194,14 @@ export function showSessionCompanion(
     const base = Object.freeze({ ...preference, visible: true, collapsed: false });
     if (item) return addSessionCompanionItem(base, item);
     if (base.items.length > 0) return base;
-    return withItems(base, [SESSION_SUMMARY_COMPANION_ITEM]);
+    return withItems(base, DEFAULT_SHOWN_COMPANION_ITEMS);
+}
+
+const DEFAULT_SHOWN_COMPANION_ITEMS = Object.freeze([SESSION_SUMMARY_COMPANION_ITEM]);
+
+/** The header previews the same default content a bare Show will reveal. */
+export function resolveSessionCompanionItemCount(input: Readonly<{ visible: boolean; itemCount: number }>): number {
+    return !input.visible && input.itemCount === 0 ? DEFAULT_SHOWN_COMPANION_ITEMS.length : input.itemCount;
 }
 
 /** Hiding preserves items, order, collapse, density and edge for quick restoration. */

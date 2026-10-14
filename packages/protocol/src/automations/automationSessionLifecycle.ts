@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema, TurnIdSchema } from '../sessions/idsV1.js';
@@ -27,29 +27,29 @@ export type AutomationSessionLifecycleRequestKind =
 
 export const AUTOMATION_SESSION_LIFECYCLE_MAX_MATCH_COUNT = 2_147_483_647;
 
-const AutomationSessionLifecycleNextMatchesPolicySchema = lazyZodSchema(() => z.object({
+const AutomationSessionLifecycleNextMatchesPolicySchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('nextMatches'),
-  count: z.number().int().positive().max(AUTOMATION_SESSION_LIFECYCLE_MAX_MATCH_COUNT),
-}).strict());
+  count: z.number().check(z.int(), z.positive(), z.maximum(AUTOMATION_SESSION_LIFECYCLE_MAX_MATCH_COUNT)),
+}));
 
 export const AutomationSessionLifecyclePolicySnapshotSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('currentTurn') }).strict(),
-  z.object({ kind: z.literal('firstMatch') }).strict(),
+  z.strictObject({ kind: z.literal('currentTurn') }),
+  z.strictObject({ kind: z.literal('firstMatch') }),
   AutomationSessionLifecycleNextMatchesPolicySchema,
-  z.object({ kind: z.literal('everyMatch') }).strict(),
+  z.strictObject({ kind: z.literal('everyMatch') }),
 ]));
 export type AutomationSessionLifecyclePolicySnapshot = z.infer<
   typeof AutomationSessionLifecyclePolicySnapshotSchema
 >;
 
 export const AutomationSessionLifecyclePolicySchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('currentTurn'),
     sourceTurnId: TurnIdSchema,
-  }).strict(),
-  z.object({ kind: z.literal('firstMatch') }).strict(),
+  }),
+  z.strictObject({ kind: z.literal('firstMatch') }),
   AutomationSessionLifecycleNextMatchesPolicySchema,
-  z.object({ kind: z.literal('everyMatch') }).strict(),
+  z.strictObject({ kind: z.literal('everyMatch') }),
 ]));
 export type AutomationSessionLifecyclePolicy = z.infer<
   typeof AutomationSessionLifecyclePolicySchema
@@ -57,14 +57,14 @@ export type AutomationSessionLifecyclePolicy = z.infer<
 
 export const AutomationSessionLifecycleEventsSchema = lazyZodSchema(() => z.array(
   AutomationSessionLifecycleEventSchema,
-).min(1).superRefine((events, context) => {
+).check(z.minLength(1), z.superRefine((events, context) => {
   if (new Set(events).size !== events.length) {
     context.addIssue({
       code: 'custom',
       message: 'Session lifecycle Events must be unique',
     });
   }
-}));
+})));
 
 /**
  * A selected Event set is a set: only its membership decides admission. Authors
@@ -81,11 +81,11 @@ export function canonicalizeAutomationSessionLifecycleEvents(
   );
 }
 
-export const AutomationSessionLifecycleConfigurationSchema = lazyZodSchema(() => z.object({
+export const AutomationSessionLifecycleConfigurationSchema = lazyZodSchema(() => z.strictObject({
   sourceSessionId: asProtocolZod(SessionIdSchema),
   events: AutomationSessionLifecycleEventsSchema,
   policy: AutomationSessionLifecyclePolicySchema,
-}).strict());
+}));
 export type AutomationSessionLifecycleConfiguration = z.infer<
   typeof AutomationSessionLifecycleConfigurationSchema
 >;

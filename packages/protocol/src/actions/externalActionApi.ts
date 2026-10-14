@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccessibleMachineAccessV1Schema } from '../machines/machineAccessV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ApiTokenGrantV1Schema, ApiTokenSessionSpawnAdmissionV1Schema } from '../auth/apiTokenGrant.js';
 import { AuthTokenAuthoritySchema, AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '../auth/authToken.js';
 import { ManagedAdmissionComputeInputV1Schema } from '../machines/managed/actionsV1.js';
@@ -74,16 +74,10 @@ export const EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1 = '/v1/actions/' as const;
  * finite scalar bound matches the other external Action identity fields while
  * admission remains exclusively with the target daemon's Action registry.
  */
-export const ExternalActionActionIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH)
-  .refine((value) => value.trim() === value, 'actionId must not have outer whitespace'));
+export const ExternalActionActionIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH), z.refine((value) => value.trim() === value, 'actionId must not have outer whitespace')));
 export type ExternalActionActionIdV1 = z.infer<typeof ExternalActionActionIdV1Schema>;
 
-export const ExternalActionRequestIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1)
-  .refine((value) => value.trim() === value, 'requestId must not have outer whitespace'));
+export const ExternalActionRequestIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1), z.refine((value) => value.trim() === value, 'requestId must not have outer whitespace')));
 
 const EXTERNAL_ACTION_HTTP_ERROR_CODES_V1 = [
   'invalid_action',
@@ -125,38 +119,37 @@ export type ExternalActionHttpErrorCode = z.infer<typeof ExternalActionHttpError
  * request has been opened. HTTP adapters and the reserved daemon relay project
  * the same codes; authentication-only failures remain at their HTTP boundary.
  */
-export const ExternalActionPreOpenFailureCodeSchema = lazyZodSchema(() => ExternalActionHttpErrorCodeSchema
-  .exclude(EXTERNAL_ACTION_HTTP_AUTHENTICATION_ERROR_CODES));
+export const ExternalActionPreOpenFailureCodeSchema = lazyZodSchema(() => (<const Values extends readonly string[], const Excluded extends readonly Values[number][]>(values: Values, excluded: Excluded) => { for (const value of excluded) if (!values.includes(value)) throw new Error(`Key ${value} not found in enum`); return z.enum(values.filter((value): value is Exclude<Values[number], Excluded[number]> => !excluded.some(item => item === value))); })(ExternalActionHttpErrorCodeSchema.options, EXTERNAL_ACTION_HTTP_AUTHENTICATION_ERROR_CODES));
 export type ExternalActionPreOpenFailureCode = z.infer<
   typeof ExternalActionPreOpenFailureCodeSchema
 >;
 
 /** Stable transport failures emitted before an Action execution envelope exists. */
-export const ExternalActionHttpErrorV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionHttpErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('invalid_request'),
   code: ExternalActionHttpErrorCodeV1Schema,
-}).strict());
+}));
 export type ExternalActionHttpErrorV1 = z.infer<typeof ExternalActionHttpErrorV1Schema>;
 
-const ExternalActionInvalidRequestHttpErrorSchema = lazyZodSchema(() => z.object({
+const ExternalActionInvalidRequestHttpErrorSchema = lazyZodSchema(() => z.strictObject({
   error: z.literal('invalid_request'),
   code: ExternalActionPreOpenFailureCodeSchema,
-  requestId: ExternalActionRequestIdV1Schema.optional(),
-}).strict());
-export const ExternalActionManagedAdmissionReceiptV1Schema = lazyZodSchema(() => z.object({
-  managedId: z.string().min(1).refine(value => value.trim() === value),
-}).strict());
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
+}));
+export const ExternalActionManagedAdmissionReceiptV1Schema = lazyZodSchema(() => z.strictObject({
+  managedId: z.string().check(z.minLength(1), z.refine(value => value.trim() === value)),
+}));
 export type ExternalActionManagedAdmissionReceiptV1 = z.infer<typeof ExternalActionManagedAdmissionReceiptV1Schema>;
-const ExternalActionManagedWaitingHttpErrorSchema = lazyZodSchema(() => z.object({
+const ExternalActionManagedWaitingHttpErrorSchema = lazyZodSchema(() => z.strictObject({
   error: z.literal('invalid_request'), code: z.literal('target_unavailable'),
-  requestId: ExternalActionRequestIdV1Schema.optional(),
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
   managedAdmission: ExternalActionManagedAdmissionReceiptV1Schema,
-}).strict());
+}));
 
-const ExternalActionAuthenticationHttpErrorSchema = lazyZodSchema(() => z.object({
+const ExternalActionAuthenticationHttpErrorSchema = lazyZodSchema(() => z.strictObject({
   error: z.enum(EXTERNAL_ACTION_HTTP_AUTHENTICATION_ERROR_CODES),
-}).strict());
-const ExternalActionCredentialScopeHttpErrorSchema = lazyZodSchema(() => z.object({ error: z.literal('credential_scope_denied') }).strict());
+}));
+const ExternalActionCredentialScopeHttpErrorSchema = lazyZodSchema(() => z.strictObject({ error: z.literal('credential_scope_denied') }));
 
 /** One strict redacted outer error union shared by both Action HTTP origins. */
 export const ExternalActionHttpErrorSchema = lazyZodSchema(() => z.union([
@@ -273,18 +266,18 @@ export function readExternalActionProtectedRequestId(value: unknown): string | u
   return requestId.success ? requestId.data : undefined;
 }
 
-const ExternalActionExecutionSuccessV1Schema = lazyZodSchema(() => z.object({
+const ExternalActionExecutionSuccessV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   result: z.unknown(),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (!Object.prototype.hasOwnProperty.call(value, 'result')) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['result'],
       message: 'result is required',
     });
   }
-}));
+})));
 
 /** Closed public execution union. Bridge-private execution metadata cannot cross it. */
 export const ExternalActionExecutionResultV1Schema = lazyZodSchema(() => z.union([
@@ -296,15 +289,15 @@ const EXTERNAL_ACTION_RESULT_TOO_LARGE_MESSAGE =
   'Action execution completed, but its response exceeded the external Action response limit and could not be represented.' as const;
 
 /** Strict admitted result used only after the Action has completed. */
-export const ExternalActionResultTooLargeExecutionV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionResultTooLargeExecutionV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: z.literal('result_too_large'),
   error: z.literal(EXTERNAL_ACTION_RESULT_TOO_LARGE_MESSAGE),
-  details: z.object({
+  details: z.strictObject({
     executionCompleted: z.literal(true),
     maxSerializedBytes: z.literal(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES),
-  }).strict(),
-}).strict());
+  }),
+}));
 export type ExternalActionResultTooLargeExecutionV1 = Readonly<z.infer<
   typeof ExternalActionResultTooLargeExecutionV1Schema
 >>;
@@ -325,31 +318,31 @@ export function createExternalActionResultTooLargeExecutionV1(): ExternalActionR
  * Strict public external Action response. Both HTTP origins and the SDK use
  * this one envelope; Action-domain failures stay inside `execution`.
  */
-export const ExternalActionResponseEnvelopeV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionResponseEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   actionId: ExternalActionActionIdV1Schema,
-  requestId: ExternalActionRequestIdV1Schema.optional(),
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
   execution: ExternalActionExecutionResultV1Schema,
-}).strict());
+}));
 
 /**
  * Strict outer relay framing. The relay may receive a daemon execution result
  * with private metadata, but never gains a second public response envelope.
  */
-const ExternalActionResponseEnvelopeV1ProjectionInputSchema = lazyZodSchema(() => z.object({
+const ExternalActionResponseEnvelopeV1ProjectionInputSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   actionId: ExternalActionActionIdV1Schema,
-  requestId: ExternalActionRequestIdV1Schema.optional(),
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
   execution: z.unknown(),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (!Object.prototype.hasOwnProperty.call(value, 'execution')) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['execution'],
       message: 'execution is required',
     });
   }
-}));
+})));
 
 /** Stable finite response envelope shared by the daemon and server adapters. */
 export type ExternalActionResponseEnvelopeV1 = Readonly<{
@@ -417,21 +410,17 @@ export type ExternalActionDaemonDispatchInvalidRequestCodeV1 = z.infer<
   typeof ExternalActionDaemonDispatchInvalidRequestCodeV1Schema
 >;
 
-const ExternalActionDaemonDispatchInvalidRequestV1Schema = lazyZodSchema(() => z.object({
+const ExternalActionDaemonDispatchInvalidRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('invalid_request'),
   errorCode: ExternalActionDaemonDispatchInvalidRequestCodeV1Schema,
-}).strict());
+}));
 
 /**
  * Socket.IO carries the already-prepared public response as a binary
  * attachment. A JSON string would need another escaping pass in the Socket.IO
  * frame and could exceed the one-megabyte response-carrier reserve.
  */
-const ExternalActionDaemonDispatchPreparedBodyV1Schema = lazyZodSchema(() => z.instanceof(Uint8Array)
-  .refine(
-    (value) => value.byteLength <= EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
-    `external Action relay response must not exceed ${EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES} bytes`,
-  ));
+const ExternalActionDaemonDispatchPreparedBodyV1Schema = lazyZodSchema(() => z.instanceof(Uint8Array).check(z.refine((value) => value.byteLength <= EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES, `external Action relay response must not exceed ${EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES} bytes`)));
 
 /**
  * Closed result of the reserved server-to-daemon Action relay. Admission
@@ -440,10 +429,10 @@ const ExternalActionDaemonDispatchPreparedBodyV1Schema = lazyZodSchema(() => z.i
  */
 export const ExternalActionDaemonDispatchResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   ExternalActionDaemonDispatchInvalidRequestV1Schema,
-  z.object({
+  z.strictObject({
     kind: z.literal('response'),
     body: ExternalActionDaemonDispatchPreparedBodyV1Schema,
-  }).strict(),
+  }),
 ]));
 export type ExternalActionDaemonDispatchResultV1 = Readonly<
   | {
@@ -686,10 +675,7 @@ export function serializeExternalActionResponseEnvelopeV1(value: unknown): Reado
   };
 }
 
-const ExternalActionTargetIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(256)
-  .refine((value) => value.trim() === value, 'target id must not have outer whitespace'));
+const ExternalActionTargetIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value.trim() === value, 'target id must not have outer whitespace')));
 
 /**
  * Closed Account-server bootstrap projection used only to select an exact
@@ -707,11 +693,11 @@ const ExternalActionTargetIdV1Schema = lazyZodSchema(() => z.string()
  * therefore cannot open encrypted Machine content, and an encryption-capable credential
  * reaches the same verifier every other authorized Account device reaches.
  */
-export const ExternalActionMachineBootstrapV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionMachineBootstrapV1Schema = lazyZodSchema(() => z.strictObject({
   id: ExternalActionTargetIdV1Schema,
   active: z.boolean(),
-  revokedAt: z.number().int().nonnegative().nullable(),
-  replacedByMachineId: ExternalActionTargetIdV1Schema.nullable(),
+  revokedAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  replacedByMachineId: z.nullable(ExternalActionTargetIdV1Schema),
   kind: MachineKindFromLegacyProjectionSchema,
   /**
    * Runner only; the activation-signed claim persisted when the endpoint claimed
@@ -722,14 +708,14 @@ export const ExternalActionMachineBootstrapV1Schema = lazyZodSchema(() => z.obje
    * but cannot author it. It carries public keys and proofs only, never a
    * credential.
    */
-  runnerClaim: RunnerClaimV1Schema.nullable().default(null),
+  runnerClaim: z._default(z.nullable(RunnerClaimV1Schema), null),
   /** Exact current installation for Runner or admitted shared persistent target. */
-  installationId: z.string().trim().min(1).nullable().default(null),
-  dataEncryptionKey: z.string().min(1).nullable().default(null),
-  runnerContentKeyBinding: RunnerMachineContentKeyBindingV1Schema.nullable().default(null),
+  installationId: z._default(z.nullable(z.string().check(z.trim(), z.minLength(1))), null),
+  dataEncryptionKey: z._default(z.nullable(z.string().check(z.minLength(1))), null),
+  runnerContentKeyBinding: z._default(z.nullable(RunnerMachineContentKeyBindingV1Schema), null),
   /** Safe target resource facts; this is discovery, never effect authority. */
-  access: AccessibleMachineAccessV1Schema.optional(),
-}).strict());
+  access: z.optional(AccessibleMachineAccessV1Schema),
+}));
 export type ExternalActionMachineBootstrapV1 = z.infer<
   typeof ExternalActionMachineBootstrapV1Schema
 >;
@@ -746,24 +732,24 @@ export type ExternalActionMachineBootstrapListV1 = z.infer<
  * caller provenance, approval state, or a contributor-generation assertion.
  */
 export const ExternalActionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('machine'),
     machineId: ExternalActionTargetIdV1Schema,
     /** Optional machine-local project target, cryptographically bound as transport metadata. */
-    project: WorkflowProjectTargetV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    project: z.optional(WorkflowProjectTargetV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.project && value.project.machineId !== value.machineId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['project', 'machineId'],
         message: 'project target must match machineId',
       });
     }
-  }),
-  z.object({
+  })),
+  z.strictObject({
     kind: z.literal('session'),
     sessionId: ExternalActionTargetIdV1Schema,
-  }).strict(),
+  }),
 ]));
 export type ExternalActionTargetV1 = z.infer<typeof ExternalActionTargetV1Schema>;
 
@@ -806,52 +792,52 @@ export function isExternalActionResolvedTargetAllowedV1(input: Readonly<{
  * absent: each ingress verifies credentials and stamps authority, provenance,
  * cancellation, and placement after this parser succeeds.
  */
-export const ExternalActionManagedAdmissionV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionManagedAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
   actionId: z.literal('machines.managed.acquire'),
   input: ManagedAdmissionComputeInputV1Schema,
   continuationPresent: z.boolean(),
-}).strict());
+}));
 export type ExternalActionManagedAdmissionV1 = z.infer<typeof ExternalActionManagedAdmissionV1Schema>;
 
 /** Closed routing hints; only the authenticated Home can turn them into custody authority. */
-export const ExternalActionHandoffAdmissionV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionHandoffAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: ExternalActionTargetIdV1Schema,
   sourceMachineId: ExternalActionTargetIdV1Schema,
   targetMachineId: ExternalActionTargetIdV1Schema,
-}).strict());
+}));
 export type ExternalActionHandoffAdmissionV1 = z.infer<typeof ExternalActionHandoffAdmissionV1Schema>;
 /** Both installations are issuer-observed, not inferred from a caller's Machine id. */
-export const ExternalActionHandoffBindingV1Schema = lazyZodSchema(() => ExternalActionHandoffAdmissionV1Schema.extend({
+export const ExternalActionHandoffBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalActionHandoffAdmissionV1Schema, {
   sourceInstallationId: ExternalActionTargetIdV1Schema,
   targetInstallationId: ExternalActionTargetIdV1Schema,
-}).strict());
-export const ExternalActionHandoffContinuationV1Schema = lazyZodSchema(() => z.object({
+})));
+export const ExternalActionHandoffContinuationV1Schema = lazyZodSchema(() => z.strictObject({
   rootRequestId: ExternalActionRequestIdV1Schema,
-  rootRequestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  rootRequestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
   handoffId: ExternalActionTargetIdV1Schema,
-}).strict());
+}));
 
-export const ExternalActionRequestEnvelopeV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionRequestEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  requestId: ExternalActionRequestIdV1Schema.optional(),
-  target: ExternalActionTargetV1Schema.optional(),
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
+  target: z.optional(ExternalActionTargetV1Schema),
   input: StrictJsonValueSchema,
-  pluginInvocation: DaemonPluginMountedInvocationV1Schema.optional(),
-  managedAdmission: ExternalActionManagedAdmissionV1Schema.optional(),
-  sessionSpawnAdmission: ApiTokenSessionSpawnAdmissionV1Schema.optional(),
-  handoffAdmission: ExternalActionHandoffAdmissionV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  pluginInvocation: z.optional(DaemonPluginMountedInvocationV1Schema),
+  managedAdmission: z.optional(ExternalActionManagedAdmissionV1Schema),
+  sessionSpawnAdmission: z.optional(ApiTokenSessionSpawnAdmissionV1Schema),
+  handoffAdmission: z.optional(ExternalActionHandoffAdmissionV1Schema),
+}).check(z.superRefine((value, context) => {
   if (value.pluginInvocation && !value.requestId) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestId'], message: 'Mounted plugin invocation requires requestId' });
+    context.addIssue({ code: "custom", path: ['requestId'], message: 'Mounted plugin invocation requires requestId' });
   }
   if (!Object.prototype.hasOwnProperty.call(value, 'input')) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['input'],
       message: 'input is required',
     });
   }
-}));
+})));
 export type ExternalActionRequestEnvelopeV1 = z.infer<
   typeof ExternalActionRequestEnvelopeV1Schema
 >;
@@ -972,13 +958,13 @@ export function projectExternalActionPendingResetStartReadPurposeDigestV1(purpos
 }
 
 /** Fixed-size exact reset purpose; no raw quota identity is copied into JWT headers. */
-export const ExternalActionPendingResetStartAdmissionV1Schema = lazyZodSchema(() => z.object({
-  sessionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-  sourceDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-  recordDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-  witnessDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-  mutationDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-}).strict());
+export const ExternalActionPendingResetStartAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+  sourceDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+  recordDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+  witnessDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+  mutationDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+}));
 export type ExternalActionPendingResetStartAdmissionV1 = z.infer<typeof ExternalActionPendingResetStartAdmissionV1Schema>;
 
 export function projectExternalActionPendingResetStartAdmissionV1(input: unknown): ExternalActionPendingResetStartAdmissionV1 {
@@ -992,16 +978,16 @@ export function projectExternalActionPendingResetStartAdmissionV1(input: unknown
 }
 
 /** V2 is closed at every routing and encryption boundary; content is opaque. */
-export const ExternalActionRequestEnvelopeV2Schema = lazyZodSchema(() => z.object({
+export const ExternalActionRequestEnvelopeV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), requestId: ExternalActionRequestIdV1Schema,
-  target: ExternalActionTargetV1Schema.optional(),
-  pluginInvocation: DaemonPluginMountedInvocationV1Schema.optional(),
-  payload: z.object({ t: z.literal('encrypted'), c: z.string().min(1).max(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2) }).strict(),
-  managedAdmission: ExternalActionManagedAdmissionV1Schema.optional(),
-  sessionSpawnAdmission: ApiTokenSessionSpawnAdmissionV1Schema.optional(),
-  handoffAdmission: ExternalActionHandoffAdmissionV1Schema.optional(),
-  pendingResetStartAdmission: ExternalActionPendingResetStartAdmissionV1Schema.optional(),
-}).strict());
+  target: z.optional(ExternalActionTargetV1Schema),
+  pluginInvocation: z.optional(DaemonPluginMountedInvocationV1Schema),
+  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2)) }),
+  managedAdmission: z.optional(ExternalActionManagedAdmissionV1Schema),
+  sessionSpawnAdmission: z.optional(ApiTokenSessionSpawnAdmissionV1Schema),
+  handoffAdmission: z.optional(ExternalActionHandoffAdmissionV1Schema),
+  pendingResetStartAdmission: z.optional(ExternalActionPendingResetStartAdmissionV1Schema),
+}));
 export type ExternalActionRequestEnvelopeV2 = z.infer<typeof ExternalActionRequestEnvelopeV2Schema>;
 export const ExternalActionRequestEnvelopeSchema = lazyZodSchema(() => z.union([
   ExternalActionRequestEnvelopeV1Schema, ExternalActionRequestEnvelopeV2Schema,
@@ -1030,10 +1016,10 @@ export function isExternalActionRequestVersionAllowedForAccountModeV1(input: Rea
 }>): boolean {
   return input.accountEncryptionMode === 'plain' || input.envelopeVersion === 2;
 }
-export const ExternalActionResponseEnvelopeV2Schema = lazyZodSchema(() => z.object({
+export const ExternalActionResponseEnvelopeV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), actionId: ExternalActionActionIdV1Schema, requestId: ExternalActionRequestIdV1Schema,
-  payload: z.object({ t: z.literal('encrypted'), c: z.string().min(1).max(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2) }).strict(),
-}).strict());
+  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2)) }),
+}));
 export type ExternalActionResponseEnvelopeV2 = z.infer<typeof ExternalActionResponseEnvelopeV2Schema>;
 export type PreparedExternalActionResponseEnvelope = Readonly<{
   response: ExternalActionResponseEnvelopeV1 | ExternalActionResponseEnvelopeV2;
@@ -1051,58 +1037,54 @@ export function isExternalActionRequestWithinLimit(envelope: ExternalActionReque
     && measureJsonUtf8Bytes(pendingResetStartAdmission) <= measureJsonUtf8Bytes(maximumPendingResetStartAdmission);
 }
 
-const ExternalActionServerPrincipalIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(256)
-  .refine((value) => value.trim() === value, 'principal identifiers must not have outer whitespace'));
+const ExternalActionServerPrincipalIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value.trim() === value, 'principal identifiers must not have outer whitespace')));
 
 /** Server-stamped PAT provenance; it is never accepted in the public envelope. */
-export const ExternalActionApiTokenServerPrincipalV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionApiTokenServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   principalId: ExternalActionServerPrincipalIdV1Schema,
   credentialId: ExternalActionServerPrincipalIdV1Schema,
   authority: z.literal('account_automation'),
   grant: ApiTokenGrantV1Schema,
-}).strict());
-export const ExternalActionAccountAuthenticationV1Schema = lazyZodSchema(() => z.object({
+}));
+export const ExternalActionAccountAuthenticationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('account'),
-  tokenEpoch: z.number().int().nonnegative(),
-  evidence: AuthTokenAuthenticationEvidenceSnapshotV1Schema.shape.evidence.optional(),
-}).strict());
+  tokenEpoch: z.number().check(z.int(), z.nonnegative()),
+  evidence: z.optional(AuthTokenAuthenticationEvidenceSnapshotV1Schema.shape.evidence),
+}));
 /** The real terminal bearer keeps its signed automation floor and Home epoch. */
-export const ExternalActionTerminalAuthenticationV1Schema = lazyZodSchema(() => ExternalActionAccountAuthenticationV1Schema
-  .extend({ kind: z.literal('terminal') }).strict());
+export const ExternalActionTerminalAuthenticationV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalActionAccountAuthenticationV1Schema, { kind: z.literal('terminal') })));
 export const ExternalActionSignedAuthenticationV1Schema = lazyZodSchema(() => z.union([
   ExternalActionAccountAuthenticationV1Schema, ExternalActionTerminalAuthenticationV1Schema,
 ]));
 export type ExternalActionSignedAuthenticationV1 = z.infer<typeof ExternalActionSignedAuthenticationV1Schema>;
-export const ExternalActionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   authority: AuthTokenAuthoritySchema,
   authentication: ExternalActionAccountAuthenticationV1Schema,
-}).strict());
-export const ExternalActionTerminalServerPrincipalV1Schema = lazyZodSchema(() => z.object({
+}));
+export const ExternalActionTerminalServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   authority: z.literal('account_automation'),
   authentication: ExternalActionTerminalAuthenticationV1Schema,
-}).strict());
+}));
 /** Session automation requires the installed source's Home-admitted origin. */
-export const ExternalActionSessionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionSessionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   authority: z.literal('account_automation'),
   authentication: ExternalActionSignedAuthenticationV1Schema,
   sessionActionOrigin: SessionActionRpcOriginV1Schema,
-}).strict());
+}));
 /** The installed FIN executor proves this retained Run at Home. */
-export const ExternalActionWorkflowOriginV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionWorkflowOriginV1Schema = lazyZodSchema(() => z.strictObject({
   runId: ExternalActionTargetIdV1Schema, requestId: ExternalActionRequestIdV1Schema,
-}).strict());
-export const ExternalActionWorkflowAccountServerPrincipalV1Schema = lazyZodSchema(() => z.object({
+}));
+export const ExternalActionWorkflowAccountServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   authority: z.literal('account_automation'),
   authentication: ExternalActionSignedAuthenticationV1Schema,
   workflowActionOrigin: ExternalActionWorkflowOriginV1Schema,
-}).strict());
+}));
 export const ExternalActionServerPrincipalV1Schema = lazyZodSchema(() => z.union([
   ExternalActionApiTokenServerPrincipalV1Schema, ExternalActionAccountServerPrincipalV1Schema, ExternalActionTerminalServerPrincipalV1Schema,
   ExternalActionSessionAccountServerPrincipalV1Schema,
@@ -1111,18 +1093,18 @@ export const ExternalActionServerPrincipalV1Schema = lazyZodSchema(() => z.union
 export type ExternalActionServerPrincipalV1 = z.infer<typeof ExternalActionServerPrincipalV1Schema>;
 
 /** Issuer-derived exact fresh-creation tuple, rechecked at the child effect boundary. */
-export const ExternalActionManagedContinuationV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionManagedContinuationV1Schema = lazyZodSchema(() => z.strictObject({
   managedId: ExternalActionTargetIdV1Schema,
   creationRequestId: ExternalActionRequestIdV1Schema,
-  expectedIntentRevision: z.number().int().nonnegative(),
+  expectedIntentRevision: z.number().check(z.int(), z.nonnegative()),
   controller: ManagedControllerV1Schema,
-  acquireRequestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-}).strict());
+  acquireRequestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+}));
 export type ExternalActionManagedContinuationV1 = z.infer<typeof ExternalActionManagedContinuationV1Schema>;
 
-const ExternalActionSessionSourceV1Schema = lazyZodSchema(() => z.object({
+const ExternalActionSessionSourceV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ExternalActionTargetIdV1Schema, installationId: ExternalActionTargetIdV1Schema,
-}).strict());
+}));
 
 /** Home-authenticated invocation facts. The selected daemon owns plaintext transformation. */
 const externalActionExecutionAuthorizationRoutingShapeV1 = () => ({
@@ -1133,29 +1115,31 @@ const externalActionExecutionAuthorizationRoutingShapeV1 = () => ({
     installationId: ExternalActionTargetIdV1Schema,
     actionId: ExternalActionActionIdV1Schema,
     requestId: ExternalActionRequestIdV1Schema,
-    requestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+    requestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+    /** Exact run-now operand, stamped from the admitted plaintext request. */
+    automationId: z.optional(ExternalActionTargetIdV1Schema),
     target: ExternalActionTargetV1Schema,
-    managedContinuation: ExternalActionManagedContinuationV1Schema.optional(),
-    handoffAdmission: ExternalActionHandoffBindingV1Schema.optional(),
-    handoffContinuation: ExternalActionHandoffContinuationV1Schema.optional(),
-    handoffPreflight: z.object({
+    managedContinuation: z.optional(ExternalActionManagedContinuationV1Schema),
+    handoffAdmission: z.optional(ExternalActionHandoffBindingV1Schema),
+    handoffContinuation: z.optional(ExternalActionHandoffContinuationV1Schema),
+    handoffPreflight: z.optional(z.strictObject({
       rootRequestId: ExternalActionRequestIdV1Schema,
-      rootRequestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-    }).strict().optional(),
-    accountEncryptionMode: AccountEncryptionModeSchema.optional(),
-    sessionActionOrigin: SessionActionRpcOriginV1Schema.optional(),
-    sessionActionSource: ExternalActionSessionSourceV1Schema.optional(),
-    workflowActionOrigin: ExternalActionWorkflowOriginV1Schema.optional(),
-    pendingResetStartAdmission: ExternalActionPendingResetStartAdmissionV1Schema.optional(),
+      rootRequestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+    })),
+    accountEncryptionMode: z.optional(AccountEncryptionModeSchema),
+    sessionActionOrigin: z.optional(SessionActionRpcOriginV1Schema),
+    sessionActionSource: z.optional(ExternalActionSessionSourceV1Schema),
+    workflowActionOrigin: z.optional(ExternalActionWorkflowOriginV1Schema),
+    pendingResetStartAdmission: z.optional(ExternalActionPendingResetStartAdmissionV1Schema),
   });
 export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema(() => z.union([
-  ExternalActionApiTokenServerPrincipalV1Schema.omit({ authority: true })
-    .extend(externalActionExecutionAuthorizationRoutingShapeV1()).strict(),
-  ExternalActionAccountServerPrincipalV1Schema.omit({ authority: true })
-    .extend(externalActionExecutionAuthorizationRoutingShapeV1()).strict(),
-  ExternalActionTerminalServerPrincipalV1Schema.omit({ authority: true })
-    .extend(externalActionExecutionAuthorizationRoutingShapeV1()).strict(),
-]).superRefine((value, context) => {
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(ExternalActionApiTokenServerPrincipalV1Schema, { authority: true }), externalActionExecutionAuthorizationRoutingShapeV1())),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(ExternalActionAccountServerPrincipalV1Schema, { authority: true }), externalActionExecutionAuthorizationRoutingShapeV1())),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(ExternalActionTerminalServerPrincipalV1Schema, { authority: true }), externalActionExecutionAuthorizationRoutingShapeV1())),
+]).check(z.superRefine((value, context) => {
+  if (value.automationId !== undefined && value.actionId !== 'workflow.trigger.run_now') {
+    context.addIssue({ code: 'custom', path: ['automationId'], message: 'Automation admission binds only run-now' });
+  }
   if (value.pendingResetStartAdmission && (value.actionId !== 'session.pending.resetStart.set'
     || value.target.kind === 'session' && projectExternalActionPendingResetStartSessionDigestV1(value.target.sessionId) !== value.pendingResetStartAdmission.sessionDigest)) {
     context.addIssue({ code: 'custom', path: ['pendingResetStartAdmission'], message: 'Reset admission binds only its exact Session set input' });
@@ -1184,23 +1168,23 @@ export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema
         && value.installationId === value.handoffAdmission.targetInstallationId))) {
     context.addIssue({ code: 'custom', path: ['handoffPreflight'], message: 'Handoff preflight retains its exact original root and admitted peer' });
   }
-}));
+})));
 export type ExternalActionExecutionAuthorizationBindingV1 = z.infer<typeof ExternalActionExecutionAuthorizationBindingV1Schema>;
 
 /** Authorization material: usable only together with the selected Machine's request signature. */
-export const ExternalActionExecutionAuthorizationV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionExecutionAuthorizationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  token: z.string().min(1),
+  token: z.string().check(z.minLength(1)),
   binding: ExternalActionExecutionAuthorizationBindingV1Schema,
   /** Private installed-key custody on this same carrier; never principal authority. */
-  requesterAccountContext: SessionRequesterInstallationSealedBootstrapV1Schema.optional(),
+  requesterAccountContext: z.optional(SessionRequesterInstallationSealedBootstrapV1Schema),
   /** Home-proved finite placement hint and private custody; neither retargets the root. */
-  managedFiniteWake: z.object({
+  managedFiniteWake: z.optional(z.strictObject({
     target: ManagedWakeTargetV1Schema,
     installationPublicKey: MachineInstallationPublicKeySchema,
-    requesterAccountContext: SessionRequesterInstallationSealedBootstrapV1Schema.optional(),
-  }).strict().optional(),
-}).strict().superRefine((value, context) => {
+    requesterAccountContext: z.optional(SessionRequesterInstallationSealedBootstrapV1Schema),
+  })),
+}).check(z.superRefine((value, context) => {
   const wake = value.managedFiniteWake;
   if (!wake) return;
   const root = value.binding;
@@ -1211,7 +1195,7 @@ export const ExternalActionExecutionAuthorizationV1Schema = lazyZodSchema(() => 
     || wake.requesterAccountContext && wake.requesterAccountContext.installationId !== wake.target.controller.installationId) {
     context.addIssue({ code: 'custom', path: ['managedFiniteWake'], message: 'Finite custody requires its exact original guest root and installed controller' });
   }
-}));
+})));
 /**
  * Admitted host-local Account ports, attached to the existing authorization
  * carrier only after requester custody has been proved. They are not wire
@@ -1276,14 +1260,14 @@ export type ExternalActionExecutionAuthorizationV1 = z.infer<typeof ExternalActi
   }>;
 
 /** Optional authenticated auxiliary arm of the incumbent socket RPC request. */
-export const ExternalActionMachineRpcExecutionV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionMachineRpcExecutionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   authorization: ExternalActionExecutionAuthorizationV1Schema,
   effectActionId: ExternalActionActionIdV1Schema,
   target: ExternalActionTargetV1Schema,
-  installationId: z.string().trim().min(1),
-  machineSignature: z.string().regex(/^[A-Za-z0-9_-]{86}$/u),
-}).strict());
+  installationId: z.string().check(z.trim(), z.minLength(1)),
+  machineSignature: z.string().check(z.regex(/^[A-Za-z0-9_-]{86}$/u)),
+}));
 export type ExternalActionMachineRpcExecutionV1 = z.infer<typeof ExternalActionMachineRpcExecutionV1Schema>;
 
 export const EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER = 'x-happier-action-execution-authorization';
@@ -1299,22 +1283,22 @@ export function bindExternalActionExecutionAuthorizationVerifyHttpPathV1(actionI
   return `${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}/verify`;
 }
 function externalActionExecutionAuthorizationRequestSchemaV1(actionId?: 'session.board.item.upsert') {
-  return z.object({
+  return z.strictObject({
   v: z.literal(1), machineId: ExternalActionTargetIdV1Schema, envelope: ExternalActionRequestEnvelopeSchema,
-  executionAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
-  sessionActionOrigin: SessionActionRpcOriginV1Schema.optional(),
-  sessionActionSource: ExternalActionSessionSourceV1Schema.optional(),
-  workflowActionOrigin: ExternalActionWorkflowOriginV1Schema.optional(),
-  installationProof: MachineInstallationProofV1Schema.optional(),
-  managedContinuation: ExternalActionManagedContinuationV1Schema.pick({
+  executionAuthorization: z.optional(ExternalActionExecutionAuthorizationV1Schema),
+  sessionActionOrigin: z.optional(SessionActionRpcOriginV1Schema),
+  sessionActionSource: z.optional(ExternalActionSessionSourceV1Schema),
+  workflowActionOrigin: z.optional(ExternalActionWorkflowOriginV1Schema),
+  installationProof: z.optional(MachineInstallationProofV1Schema),
+  managedContinuation: lazyZodSchema(() => z.optional(z.pick(ExternalActionManagedContinuationV1Schema, {
     managedId: true, creationRequestId: true, expectedIntentRevision: true,
-  }).optional(),
-  handoffContinuation: z.object({
+  }))),
+  handoffContinuation: z.optional(z.strictObject({
     authorization: ExternalActionExecutionAuthorizationV1Schema,
     handoffId: ExternalActionTargetIdV1Schema,
-  }).strict().optional(),
-  handoffPreflight: z.object({ authorization: ExternalActionExecutionAuthorizationV1Schema }).strict().optional(),
-}).strict().superRefine((value, context) => {
+  })),
+  handoffPreflight: z.optional(z.strictObject({ authorization: ExternalActionExecutionAuthorizationV1Schema })),
+}).check(z.superRefine((value, context) => {
   if (value.executionAuthorization && (value.sessionActionOrigin || value.sessionActionSource || value.workflowActionOrigin
     || value.installationProof || value.managedContinuation || value.handoffContinuation || value.handoffPreflight)) {
     context.addIssue({ code: 'custom', path: ['executionAuthorization'], message: 'An admitted relay cannot author fresh origin or continuation claims' });
@@ -1374,7 +1358,7 @@ function externalActionExecutionAuthorizationRequestSchemaV1(actionId?: 'session
       context.addIssue({ code: 'custom', path: ['handoffPreflight'], message: 'Handoff preflight requires its exact Home-issued root and destination' });
     }
   }
-  });
+  }));
 }
 export const ExternalActionExecutionAuthorizationRequestV1Schema = lazyZodSchema(() => externalActionExecutionAuthorizationRequestSchemaV1());
 const SessionVisualExecutionAuthorizationRequestV1Schema = lazyZodSchema(() => externalActionExecutionAuthorizationRequestSchemaV1('session.board.item.upsert'));
@@ -1384,57 +1368,57 @@ export function externalActionExecutionAuthorizationRequestSchemaForActionV1(act
     ? SessionVisualExecutionAuthorizationRequestV1Schema : ExternalActionExecutionAuthorizationRequestV1Schema;
 }
 export type ExternalActionExecutionAuthorizationRequestV1 = z.infer<typeof ExternalActionExecutionAuthorizationRequestV1Schema>;
-export const ExternalActionExecutionAuthorizationVerifyRequestV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionExecutionAuthorizationVerifyRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   managedFiniteWakeTarget: z.optional(ManagedWakeTargetV1Schema),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.managedFiniteWakeTarget && value.managedFiniteWakeTarget.origin.kind !== 'finite-command') {
     context.addIssue({ code: 'custom', path: ['managedFiniteWakeTarget'], message: 'Controller custody requires an original finite-command target' });
   }
-}));
-export const ExternalActionExecutionAuthorizationVerifyResponseV1Schema = lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict());
+})));
+export const ExternalActionExecutionAuthorizationVerifyResponseV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true) }));
 
 /** Exact server-held placement facts for the closed daemon dispatch. */
-export const ExternalActionDaemonPlacementV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionDaemonPlacementV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ExternalActionTargetIdV1Schema,
-  target: z.object({
+  target: z.strictObject({
     kind: z.literal('machine'),
     machineId: ExternalActionTargetIdV1Schema,
-  }).strict(),
-}).strict().superRefine((value, context) => {
+  }),
+}).check(z.superRefine((value, context) => {
   if (value.machineId !== value.target.machineId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['target', 'machineId'],
       message: 'placement target must match machineId',
     });
   }
-}));
+})));
 export type ExternalActionDaemonPlacementV1 = z.infer<typeof ExternalActionDaemonPlacementV1Schema>;
 
 /** Closed server-to-daemon Action dispatch framing. */
-export const ExternalActionDaemonDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActionDaemonDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   // The relay proves only closed framing, provenance, and placement. The
   // target daemon is the sole Action-id admission owner.
   actionId: ExternalActionActionIdV1Schema,
   envelope: ExternalActionRequestEnvelopeV1Schema,
   principal: ExternalActionServerPrincipalV1Schema,
   placement: ExternalActionDaemonPlacementV1Schema,
-}).strict());
+}));
 export type ExternalActionDaemonDispatchRequestV1 = z.infer<
   typeof ExternalActionDaemonDispatchRequestV1Schema
 >;
 
-export const ExternalActionDaemonDispatchRequestSchema = lazyZodSchema(() => ExternalActionDaemonDispatchRequestV1Schema.extend({
+export const ExternalActionDaemonDispatchRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalActionDaemonDispatchRequestV1Schema, {
   envelope: ExternalActionRequestEnvelopeSchema,
-  executionAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
-}).strict());
+  executionAuthorization: z.optional(ExternalActionExecutionAuthorizationV1Schema),
+})));
 export type ExternalActionDaemonDispatchRequest = z.infer<typeof ExternalActionDaemonDispatchRequestSchema>;
 
-const ExternalActionDaemonDispatchInvalidRequestSchema = lazyZodSchema(() => ExternalActionDaemonDispatchInvalidRequestV1Schema.extend({
+const ExternalActionDaemonDispatchInvalidRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalActionDaemonDispatchInvalidRequestV1Schema, {
   errorCode: ExternalActionPreOpenFailureCodeSchema,
-  requestId: ExternalActionRequestIdV1Schema.optional(),
-}).strict());
+  requestId: z.optional(ExternalActionRequestIdV1Schema),
+})));
 
 export type ParsedExternalActionDaemonDispatchResult = Readonly<
   | z.infer<typeof ExternalActionDaemonDispatchInvalidRequestSchema>
@@ -1452,8 +1436,7 @@ export function createExternalActionDaemonDispatchResponse(prepared: PreparedExt
 
 const ExternalActionDaemonDispatchResultSchema = lazyZodSchema(() => z.union([
   ExternalActionDaemonDispatchInvalidRequestSchema,
-  z.object({ kind: z.literal('response'), body: z.instanceof(Uint8Array)
-    .refine((value) => value.byteLength <= EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2) }).strict(),
+  z.strictObject({ kind: z.literal('response'), body: z.instanceof(Uint8Array).check(z.refine((value) => value.byteLength <= EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2)) }),
 ]));
 
 export function parseExternalActionDaemonDispatchResult(value: unknown): ParsedExternalActionDaemonDispatchResult | null {

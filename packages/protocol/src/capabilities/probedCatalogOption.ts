@@ -1,5 +1,5 @@
 import { AgentModelOptionOverrideRuleSchema, type AgentModelOptionOverrideRule } from '../models/descriptor.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The single normalizer for a probed session-control option.
@@ -29,40 +29,40 @@ export type ProbedCatalogOption = Readonly<{
   overridesWhenOn?: AgentModelOptionOverrideRule;
 }>;
 
-const ProbeNonEmptyStringSchema = z.string().trim().min(1);
+const ProbeNonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const ProbeDescriptionSchema = z.string();
 export const ProbedCatalogOptionValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 /** Native probe output, after the single plugin-ingress normalizer below. */
-export const ProbedCatalogOptionSchema: z.ZodType<ProbedCatalogOption> = z.object({
+export const ProbedCatalogOptionSchema: z.ZodMiniType<ProbedCatalogOption> = z.strictObject({
   id: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
   type: ProbeNonEmptyStringSchema,
   currentValue: ProbedCatalogOptionValueSchema,
-  options: z.array(z.object({
+  options: z.optional(z.readonly(z.array(z.strictObject({
     value: ProbedCatalogOptionValueSchema,
     name: ProbeNonEmptyStringSchema,
-    description: ProbeDescriptionSchema.optional(),
-  }).strict()).readonly().optional(),
-  overridesWhenOn: AgentModelOptionOverrideRuleSchema.optional(),
-}).strict();
+    description: z.optional(ProbeDescriptionSchema),
+  })))),
+  overridesWhenOn: z.optional(AgentModelOptionOverrideRuleSchema),
+});
 
 const ProbedCatalogOptionChoiceInputSchema = z.object({
-  value: z.unknown().optional(),
+  value: z.optional(z.unknown()),
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
 });
 
 const ProbedCatalogOptionInputSchema = z.object({
   id: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
   type: ProbeNonEmptyStringSchema,
-  currentValue: z.unknown().optional(),
-  options: z.array(z.unknown()).optional(),
+  currentValue: z.optional(z.unknown()),
+  options: z.optional(z.array(z.unknown())),
   // A malformed rule must not discard the whole option, so it is parsed separately below.
-  overridesWhenOn: z.unknown().optional(),
+  overridesWhenOn: z.optional(z.unknown()),
 });
 
 export function normalizeProbedOptionValue(value: unknown): ProbedCatalogOptionValue {

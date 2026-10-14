@@ -29,7 +29,7 @@ resetSettingValues();
 
 installCodeDiffCommonModuleMocks({
     storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit');
+        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
             useSetting: (key: string) => {
                 if (Object.prototype.hasOwnProperty.call(settingValues, key)) {

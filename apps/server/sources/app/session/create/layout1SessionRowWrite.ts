@@ -2,11 +2,8 @@ import { initializeSessionOwnerReadStateInTx } from "@/app/session/personal/read
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { attachCreatedSessionReportsToInTx, type SessionReportsToSetResult } from "@/app/session/relations/sessionReportsToService";
 import { workflowRunIdentityWhere } from "@/app/workflows/workflowRunService";
-import {
-    encodeSessionOwnerMetadataEnvelopeV1,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    AutomationDefinitionCreateRequestSchema,
-} from "@happier-dev/protocol";
+import { encodeSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { AutomationDefinitionCreateRequestSchema } from '@happier-dev/protocol/automations/automationApiV3';
 
 import { applySessionCreationPlacementInTx } from "@/app/session/organization/organizationMutations";
 import { writeSessionDataKeyEnvelopeInTx } from "@/app/session/encryption/sessionDataKeyEnvelopePersistence";
@@ -18,10 +15,10 @@ import { AutomationValidationError } from "@/app/automations/automationValidatio
 import { AutomationStoredContentReadError } from "@/app/automations/automationStoredContentRead";
 import { admitSessionLifecycleAutomationRunsTx } from "@/app/automations/automationSessionLifecycleAdmission";
 import { resolveAutomationRecipeFeaturePolicy } from "@/app/automations/automationRecipeFeaturePolicy";
-import type { AutomationTriggerCreateRequest } from "@happier-dev/protocol";
+import type { AutomationTriggerCreateRequest } from '@happier-dev/protocol/automations/automationApiV3';
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
-import type { ExternalActionExecutionAuthorizationBindingV1 } from "@happier-dev/protocol/actions";
+import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
 import {
     applyInitialSessionAccessInTx,

@@ -1,10 +1,5 @@
-import {
-    ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1,
-    ActionOperationRevisionEphemeralV1Schema,
-    ActionOperationSnapshotPushV1Schema,
-    isAccountScopedBlobCiphertextForKind,
-    type ActionOperationRevisionEphemeralV1,
-} from '@happier-dev/protocol';
+import { ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1, ActionOperationRevisionEphemeralV1Schema, ActionOperationSnapshotPushV1Schema, type ActionOperationRevisionEphemeralV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
 
 export function projectActionOperationSnapshotPush(
     raw: unknown,

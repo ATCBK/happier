@@ -1,11 +1,11 @@
 import type { UsageAnalyticsBreakdownDimension, UsageAnalyticsBreakdownEntry, UsageAnalyticsContribution, UsageAnalyticsQueryResponse, UsageAnalyticsTimelineSource } from './usageAnalyticsContracts.js';
-import { addUsageCostForMode, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, withEffectiveUsageCost } from './usageAggregation.js';
+import { aggregateUsageContributionCosts, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, withEffectiveUsageCost } from './usageAggregation.js';
 import { resolveEffectiveUsageCostUsd, resolveUsageContributionDimensionKey, type UsageCostMode } from './usageCostFacts.js';
 
 export type UsageLeaderDimension = Parameters<typeof resolveUsageContributionDimensionKey>[1];
 export type UsageLeaderContribution = Pick<UsageAnalyticsContribution,
     'sessionId' | 'agentId' | 'backendMode' | 'modelId' | 'projectKey' | 'workspaceId' | 'source' | 'tokens' | 'cost'>
-    & Pick<UsageAnalyticsContribution, 'sourceContext'> & { machineId?: string | null; eventCount: number };
+    & Pick<UsageAnalyticsContribution, 'sourceContext'> & { id?: string; machineId?: string | null; eventCount: number };
 type UsageLeader = NonNullable<NonNullable<UsageAnalyticsQueryResponse['leaders']>['models']>[number];
 type UsageRankedLeader = UsageLeader & { tokens: UsageLeaderContribution['tokens']; cost: UsageLeaderContribution['cost'] };
 
@@ -14,32 +14,44 @@ export function buildUsageLeaderList(rows: readonly UsageLeaderContribution[], d
     mode: UsageCostMode, labels: ReadonlyMap<string, string | undefined> = new Map(), includeSources = false): UsageRankedLeader[] | undefined {
     const grouped = new Map<string, UsageRankedLeader>();
     const sourceGroups = new Map<string, Map<string, UsageAnalyticsTimelineSource>>();
+    const costRows = new Map<string, UsageLeaderContribution[]>();
+    const sourceCostRows = new Map<string, UsageLeaderContribution[]>();
     for (const row of rows) {
         const key = resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown';
+        const costs = costRows.get(key) ?? [];
+        costs.push(row);
+        costRows.set(key, costs);
         const existing = grouped.get(key) ?? { key, label: labels.get(key) ?? key, eventCount: 0,
             tokens: createEmptyUsageTokens(), cost: createEmptyUsageCost() };
         existing.eventCount += row.eventCount;
         existing.tokens = addUsageTokens(existing.tokens, row.tokens);
-        existing.cost = addUsageCostForMode(existing.cost, row.cost, mode);
         if (includeSources) {
             const context = row.sourceContext ?? { path: 'unknown' as const, execution: 'unknown' as const };
             const source = row.source ?? 'unknown';
             const sourceKey = JSON.stringify([source, context.path, context.execution]);
+            const costKey = JSON.stringify([key, sourceKey]);
+            const costs = sourceCostRows.get(costKey) ?? [];
+            costs.push(row);
+            sourceCostRows.set(costKey, costs);
             const parts = sourceGroups.get(key) ?? new Map<string, UsageAnalyticsTimelineSource>();
             const part = parts.get(sourceKey) ?? { ...context, source, eventCount: 0, tokens: createEmptyUsageTokens(), cost: createEmptyUsageCost() };
             parts.set(sourceKey, { ...part, eventCount: part.eventCount + row.eventCount,
-                tokens: addUsageTokens(part.tokens, row.tokens), cost: addUsageCostForMode(part.cost, row.cost, mode) });
+                tokens: addUsageTokens(part.tokens, row.tokens) });
             sourceGroups.set(key, parts);
         }
         grouped.set(key, existing);
     }
     if (!grouped.size) return undefined;
-    return [...grouped.values()].sort((left, right) => right.tokens.total - left.tokens.total
+    return [...grouped.values()].map(leader => ({ ...leader,
+        cost: aggregateUsageContributionCosts(costRows.get(leader.key)!, mode) }))
+        .sort((left, right) => right.tokens.total - left.tokens.total
         || resolveEffectiveUsageCostUsd(right.cost, mode) - resolveEffectiveUsageCostUsd(left.cost, mode)
         || right.eventCount - left.eventCount || left.key.localeCompare(right.key))
-        .slice(0, topLimit).map(leader => ({ ...leader, cost: withEffectiveUsageCost(leader.cost, mode),
+        .slice(0, topLimit).map(leader => ({ ...leader,
+            cost: withEffectiveUsageCost(leader.cost, mode),
             ...(includeSources ? { sources: [...sourceGroups.get(leader.key)!.entries()].sort(([left], [right]) => left.localeCompare(right))
-                .map(([, part]) => ({ ...part, cost: withEffectiveUsageCost(part.cost, mode) })) } : {}) }));
+                .map(([sourceKey, part]) => ({ ...part, cost: withEffectiveUsageCost(
+                    aggregateUsageContributionCosts(sourceCostRows.get(JSON.stringify([leader.key, sourceKey]))!, mode), mode) })) } : {}) }));
 }
 
 /** Breakdown decoration retains the last witnessed context; ranking shares the leader owner. */

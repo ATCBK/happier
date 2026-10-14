@@ -30,6 +30,10 @@ import { resolveDeclarativeDataResourceBinding } from './declarativeDataSource';
 import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
 import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
 installDisconnectedServerSocketBoundary();
 const connections: Awaited<ReturnType<typeof restoreServerAccountForTest>>[] = [];
 afterEach(async () => {
@@ -236,7 +240,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             { 'acme.composer': { ...widgetInstalledPackage('acme.composer', 'Composer'), occurrenceId: 'occurrence-42' } },
             { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', contentType: 'application/json', scope: 'session' } });
         const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
-            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const };
+            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const, accountLifetime: a.lifetime };
         async function run(mode: 'eager' | 'demanded') {
             installLiveResourceRpc();
             const renderWidget: BoardCanvasWidgetRender = (widget, state) => <WidgetFrame testID={`demand-frame:${widget.title}`}
@@ -289,13 +293,13 @@ describe('PluginContextualResourceStoreProvider', () => {
             occurrenceId: 'occurrence-42' } }, { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config',
                 contentType: 'application/json', scope: 'session' } });
         const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
-            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const };
+            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const, accountLifetime: a.lifetime };
         const retained = unionPluginUiProjections([{ machineId: 'machine-1', serverId: a.lifetime.scope.serverId,
-            projection, phase: 'retainedOffline', interactionEnabled: false }], new Map(), 'machine-1');
+            projection, phase: 'retainedOffline', interactionEnabled: false }], new Map());
         expect(Object.values(retained.pluginUiProjection!.resourcesById)).toEqual(expect.arrayContaining([expect.objectContaining({ id: RESOURCE_ID })]));
         if (document.root.kind !== 'metric') throw new Error('Expected metric');
         const foreign = unionPluginUiProjections([{ machineId: 'machine-1', serverId: 'other-home',
-            projection, phase: 'current', interactionEnabled: true }], new Map(), 'machine-1');
+            projection, phase: 'current', interactionEnabled: true }], new Map());
         // Local declarative bodies need no unique AppShell scope, but each live
         // node still denies an origin from another Home before opening a read.
         expect(resolveDeclarativeDataResourceBinding({ projection: foreign.pluginUiProjection, input: {},
@@ -323,7 +327,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             await act(async () => {});
             expect(JSON.stringify(screenA.tree.toJSON())).not.toContain('"1"');
             expect(firstWatch.nextSignals.every(signal => signal.aborted)).toBe(true);
-            screenB = await renderScreen(<DeclarativeWidgetDocument document={document} input={{}} runtime={runtime}
+            screenB = await renderScreen(<DeclarativeWidgetDocument document={document} input={{}} runtime={{ ...runtime, accountLifetime: b.lifetime }}
                 accountLifetime={b.lifetime} sessionId="session-1" isCurrent={b.lifetime.isCurrent} testID="typed-b" />);
             await vi.waitFor(() => { expect(JSON.stringify(screenB!.tree.toJSON())).toContain('"2"'); });
             expect(a.http.writes).toHaveLength(0);
@@ -341,7 +345,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             occurrenceId: 'occurrence-42' } }, { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config',
                 contentType: 'application/json', scope: 'session' } });
         const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
-            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const };
+            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const, accountLifetime: a.lifetime };
         const captureSlot = createWidgetSnapshotCaptureSlot();
         const screen = await renderScreen(<WidgetFrame testID="kept-frame" frameStyle="card" placement="home" title="Checks" source="Composer"
             meta="As of today" body={{ kind: 'content', children: <WidgetSnapshotCaptureContext.Provider value={captureSlot}>
@@ -397,7 +401,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             { 'acme.composer': { ...widgetInstalledPackage('acme.composer', 'Composer'), occurrenceId: 'occurrence-42' } },
             { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', contentType: 'application/json', scope: 'session' } });
         const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
-            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const };
+            interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const, accountLifetime: a.lifetime };
         const captureSlot = createWidgetSnapshotCaptureSlot();
         const renderDocument = (sessionId: string) => <WidgetFrame testID="private-frame" frameStyle="card" placement="home" title="Checks"
             body={{ kind: 'content', children: <WidgetSnapshotCaptureContext.Provider value={captureSlot}>
@@ -442,7 +446,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             occurrenceId: 'occurrence-42', resources: [{ pluginId: 'acme.composer', localId: RESOURCE_ID }] }],
             { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, resources);
         const projected = unionPluginUiProjections([{ machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
-            projection: model, phase: 'current', interactionEnabled: true }], new Map(), 'machine-1');
+            projection: model, phase: 'current', interactionEnabled: true }], new Map());
         const store = createPluginDeclaredResourceStore({ ...binding(account.lifetime), resourcesById: model.resourcesById })!;
         const entry = store.getEntry(RESOURCE_ID);
         const release = entry.subscribe(() => {}, false);
@@ -483,7 +487,8 @@ describe('PluginContextualResourceStoreProvider', () => {
             sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
             resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projected,
             interactionEnabled: true, daemonInteractionEnabled: true } });
-        expect(controller.resourceStore !== undefined).toBe(owner === 'shared');
+        // The mounted facade includes both shared declarations and its ordinary fallback transport.
+        expect(controller.resourceStore).toBeDefined();
         const host = controller.hostApi;
         const surface = createPluginSurfaceContextFixture();
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({

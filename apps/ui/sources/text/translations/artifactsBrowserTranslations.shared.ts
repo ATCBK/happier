@@ -12,6 +12,7 @@ export type ArtifactsBrowserTranslations = Readonly<{
         prompt: string;
         memory: string;
         board: string;
+        widget: string;
         workflow: string;
         role: string;
         launchProfile: string;
@@ -21,6 +22,7 @@ export type ArtifactsBrowserTranslations = Readonly<{
         prompt: string;
         memory: string;
         board: string;
+        widget: string;
         workflow: string;
         role: string;
         launchProfile: string;
@@ -92,6 +94,7 @@ export type ArtifactsBrowserTranslations = Readonly<{
         prompt: string;
         memory: string;
         board: string;
+        widget: string;
         workflow: string;
         role: string;
         launchProfile: string;
@@ -145,6 +148,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             prompt: 'Prompts',
             memory: 'Memory',
             board: 'Boards',
+            widget: 'Widgets',
             workflow: 'Workflows',
             role: 'Roles',
             launchProfile: 'Launch profiles',
@@ -154,6 +158,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             prompt: 'Prompt',
             memory: 'Memory',
             board: 'Board',
+            widget: 'Widget',
             workflow: 'Workflow',
             role: 'Role',
             launchProfile: 'Launch profile',
@@ -227,6 +232,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             prompt: 'Open prompt',
             memory: 'Open memory',
             board: 'Open board',
+            widget: 'Open widget',
             workflow: 'Open workflow',
             role: 'Open role',
             launchProfile: 'Open launch profile',

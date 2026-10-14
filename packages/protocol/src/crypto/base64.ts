@@ -4,27 +4,11 @@ export type Base64Variant = 'base64' | 'base64url';
 
 export function readCanonicalPaddedBase64DecodedLength(input: string): number | null {
   if (input.length % 4 !== 0) return null;
-  let paddingStart = input.length;
-  for (let index = 0; index < input.length; index += 1) {
-    const code = input.charCodeAt(index);
-    const isAlphabet =
-      (code >= 65 && code <= 90)
-      || (code >= 97 && code <= 122)
-      || (code >= 48 && code <= 57)
-      || code === 43
-      || code === 47;
-    if (isAlphabet) {
-      if (paddingStart !== input.length) return null;
-      continue;
-    }
-    if (code !== 61) return null;
-    if (paddingStart === input.length) {
-      paddingStart = index;
-    }
-    if (index < input.length - 2) return null;
-  }
-  const paddingLength = input.length - paddingStart;
-  if (paddingLength > 2) return null;
+  const paddingLength = input.endsWith('==') ? 2 : input.endsWith('=') ? 1 : 0;
+  const paddingStart = input.length - paddingLength;
+  // Scan the complete alphabet in the native string engine, without decoding or
+  // a per-character JavaScript loop. Any extra/interior '=' remains invalid.
+  if (/[^A-Za-z0-9+/]/.test(input.slice(0, paddingStart))) return null;
   // Padded encodings have unused low bits in their last alphabet character.
   // Reject alternate spellings of the same bytes at the canonical boundary.
   if (paddingLength > 0) {

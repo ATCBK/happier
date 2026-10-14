@@ -91,7 +91,7 @@ const MachineNeedsYouItem = React.memo(function MachineNeedsYouItem(props: Reado
 
 const stylesheet = StyleSheet.create(() => ({
     word: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
     },
 }));

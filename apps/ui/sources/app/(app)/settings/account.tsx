@@ -44,6 +44,7 @@ import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRo
 import { AccountDirectConnectionsSection } from '@/components/settings/connections/DirectConnectionSettings';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
+import { AccountNameField } from '@/components/account/AccountNameField';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Avatar } from '@/components/ui/avatar/Avatar';
@@ -262,24 +263,17 @@ export const WorkspaceRouteBody = React.memo(() => {
                         />
                     ) : null}
                     <SectionContentRow>
-                        <FieldItem label={t('settingsAccount.nameLabel')}>
-                            <FieldTextInput
-                                testID="settings-account-name-field"
-                                value={profileDraft.name}
-                                onChangeText={(name) => { setNameError(null); setProfileDraft({ ...profileDraft, name }); }}
-                                accessibilityLabel={t('settingsAccount.nameLabel')}
-                                placeholder={t('settingsAccount.namePlaceholder')}
-                                error={nameError}
-                                autoCapitalize="words"
-                                autoComplete="name"
-                                textContentType="name"
-                                autoFocus
-                                editable={!savingProfile}
-                                returnKeyType={canSetUsername ? 'next' : 'done'}
-                                onSubmitEditing={saveProfile}
-                                onKeyPress={cancelOnEscape}
-                            />
-                        </FieldItem>
+                        <AccountNameField
+                            testID="settings-account-name-field"
+                            value={profileDraft.name}
+                            onChangeText={(name) => { setNameError(null); setProfileDraft({ ...profileDraft, name }); }}
+                            error={nameError}
+                            autoFocus
+                            editable={!savingProfile}
+                            returnKeyType={canSetUsername ? 'next' : 'done'}
+                            onSubmitEditing={saveProfile}
+                            onKeyPress={cancelOnEscape}
+                        />
                     </SectionContentRow>
                     {canSetUsername ? (
                         <SectionContentRow>

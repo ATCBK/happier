@@ -1,4 +1,4 @@
-import type { NormalizedVerifiedEmail } from '@happier-dev/protocol';
+import type { NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import type { Tx } from '@/storage/inTx';
 
 /**

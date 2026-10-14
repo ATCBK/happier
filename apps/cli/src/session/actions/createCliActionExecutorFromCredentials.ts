@@ -1,4 +1,5 @@
 import { createSessionFollowActionDeps, createSessionTrackedTargetCompatibilityDep } from '@/api/sessionFollowActionDeps';
+import { measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { randomUUID } from 'node:crypto';
 import { createSessionReadStateActionDeps } from '@/api/sessionReadStateActionDeps';
 import { importHistoricalSessionTranscript } from '@/session/transport/http/sessionsHttp';
@@ -46,7 +47,6 @@ import { requiresMachineAdmissionForSessionInput } from '@/session/services/sess
 import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
@@ -88,7 +88,7 @@ import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCus
 import { ensureCliActionPolicySettings } from './ensureCliActionPolicySettings';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
-import { dispatchOriginalAccountAction, requiresOriginalAccountMachineActionProof, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
+import { dispatchOriginalAccountAction, readExternalActionInstalledMachine, requiresOriginalAccountMachineActionProof, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import {
   fetchServerFeaturesSnapshot,
@@ -118,6 +118,11 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { isMachineTerminalActionId } from '@happier-dev/protocol/actions/specs/machineTerminal';
+import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { MachineInstallationPublicKeySchema } from '@happier-dev/protocol/machines/identity/installationIdentity';
 
 type CliActionExecutor = ReturnType<typeof createCliActionExecutor>;
 
@@ -604,7 +609,6 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   /** Explicit CLI machine selector for public Action transport. */
   machineId?: string;
   readCredentials?: () => Promise<StoredCredentials | null>;
-  readRegisteredPromptAssetAdapters?: () => ReadonlyMap<string, PromptAssetAdapter>;
   resolveAutomationEventAdoptedDefinitionSet?: ResolveAutomationEventAdoptedDefinitionSetV1;
   revalidatePluginActionCallerMaterialization?: RevalidatePluginActionCallerMaterialization;
   revalidatePluginActionCallerOccurrence?: RevalidatePluginActionCallerOccurrence;
@@ -703,8 +707,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     throw new MachineAdmissionTransportUnavailableError();
   }
   const machineAdmissionTransport = daemonMachineAdmissionTransport ?? params.machineAdmissionTransport;
-  const approvalServerApiUrl = fixedServerApiUrl ?? configuration.apiServerUrl;
-  const resolveActionServerApiUrl = (): string => fixedServerApiUrl ?? configuration.apiServerUrl;
+  const approvalServerApiUrl = fixedServerApiUrl ?? resolveServerHttpBaseUrl();
+  const resolveActionServerApiUrl = (): string => fixedServerApiUrl ?? resolveServerHttpBaseUrl();
   const runWithActionServer = <T>(run: () => T): T => fixedServerApiUrl
     ? runWithServerHttpBaseUrl(fixedServerApiUrl, run)
     : run();
@@ -775,8 +779,10 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     const snapshotLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
     // Ordinary invocation bootstrap already admitted this exact Account. Its
     // material readers must use the factory's credentials, not ambient disk.
-    // An explicitly supplied daemon context remains the canonical custodian.
+    // Explicit daemon custody and the admitted Session bootstrap retain their
+    // own holder; an ambient Account snapshot cannot replace either one.
     const savedSecretOperationContext = params.savedSecretOperationContext
+      ?? params.requesterSessionBootstrap?.savedSecretOperationContext
       ?? (snapshot?.scopeKey === resolveAccountSettingsScopeKeyForToken(credentials.token)
         ? createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl: approvalServerApiUrl,
             isCurrent: async () => getActiveAccountSettingsSnapshotLifetimeToken() === snapshotLifetime
@@ -784,8 +790,45 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
               && sameStoredCredentials(credentials, await readCurrentCredentials()) })
         : undefined);
 
-    const isApprovalExecutionOriginCurrent = params.isApprovalExecutionOriginCurrent ?? (async (args) => {
+    const isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']> = async (args) => {
+      // Account/client proposals belong to the deciding Account, not the old
+      // runner. The signature authenticates unchanged proposal provenance.
+      if (!requiresExactDaemonApprovalReplay(args.request)) {
+        const { origin, request, signal } = args;
+        if (origin.accountId !== undefined && origin.accountId !== readAccountIdFromToken(credentials.token)) return false;
+        const snapshot = await resolveServerFeaturesSnapshot();
+        if (signal?.aborted || !snapshot || snapshot.status !== 'ready' || snapshot.provenance !== 'authenticated'
+          || (origin.serverIdentityId ? origin.serverIdentityId !== snapshot.features.capabilities.serverIdentity.serverIdentityId
+            : origin.serverId !== approvalServerId)
+          || !sameStoredCredentials(credentials, await readCurrentCredentials())) return false;
+        const authorization = origin.externalActionExecutionAuthorization;
+        if (!authorization) return true;
+        if (request.v !== 2 || !origin.machineId || !origin.target || !origin.externalActionInputSignature
+          || origin.actionId !== request.actionId
+          || (authorization.binding.actionId !== request.actionId && authorization.binding.actionId !== 'approval.request.create')
+          || origin.caller.kind !== 'session' || request.createdBy.sessionId !== origin.caller.sessionId) return false;
+        const source = await readExternalActionInstalledMachine({ serverHttpBaseUrl: approvalServerApiUrl,
+          machineId: origin.machineId, headers: { Authorization: `Bearer ${credentials.token}` }, ...(signal ? { signal } : {}) });
+        if (!source?.installationPublicKey || source.installationId !== authorization.binding.installationId
+          || signal?.aborted || !sameStoredCredentials(credentials, await readCurrentCredentials())) return false;
+        const publicKey = decodeBase64(source.installationPublicKey, 'base64');
+        if (encodeBase64(publicKey, 'base64') !== source.installationPublicKey
+          || !MachineInstallationPublicKeySchema.safeParse(encodeBase64(publicKey, 'base64url')).success) return false;
+        return verifyExternalActionApprovalInputV1({ authorizationToken: authorization.token,
+          actionId: request.actionId, input: request.actionArgs, target: origin.target,
+          signature: origin.externalActionInputSignature, publicKey });
+      }
+      // A daemon's live-custody callback owns exact replay, not an Account proposal.
+      if (params.isApprovalExecutionOriginCurrent) return await params.isApprovalExecutionOriginCurrent(args);
+      // A standalone fixed-Home terminal approval already names its exact
+      // Machine. Reconcile that signed request through the existing selector;
+      // the currentness checker still verifies Home, Account and installation.
+      const terminalTarget = isMachineTerminalActionId(args.request.actionId)
+        ? resolveExternalActionMachineTarget({ actionId: args.request.actionId,
+            rawInput: args.request.actionArgs, target: args.origin.target }) : null;
+      if (terminalTarget?.kind === 'rejected') return false;
       const currentMachineId = readNonEmptyString(params.machineId)
+        ?? (terminalTarget?.kind === 'ready' ? terminalTarget.machineId : null)
         ?? (fixedServerId === null
           ? readNonEmptyString((await readSettings().catch(() => null))?.machineId)
           : null);
@@ -805,7 +848,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           : {}),
       });
       return checker ? await checker(args) : false;
-    });
+    };
 
     const sessionFollowActionDeps = createSessionFollowActionDeps({
       token: credentials.token,
@@ -913,9 +956,6 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         : {}),
       sessionId: 'cli-global',
       ...(params.getCurrentTurnWorkDepth ? { getCurrentTurnWorkDepth: params.getCurrentTurnWorkDepth } : {}),
-      ...(params.readRegisteredPromptAssetAdapters
-        ? { readRegisteredPromptAssetAdapters: params.readRegisteredPromptAssetAdapters }
-        : {}),
       ...(params.resolveAutomationEventAdoptedDefinitionSet
         ? { resolveAutomationEventAdoptedDefinitionSet: params.resolveAutomationEventAdoptedDefinitionSet }
         : {}),
@@ -940,6 +980,31 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.targetActionApprovalReplay
         ? { targetActionApprovalReplay: params.targetActionApprovalReplay }
         : {}),
+      approvalRequestApprovedReplay: async ({ artifactId, request, context, requestId, signal }) => {
+        // A standalone deciding CLI cannot spend the installation's Machine
+        // admission. Send the already-recorded decision to its exact owner,
+        // just as the app does; daemon-local replay keeps its admitted path.
+        if (machineAdmissionTransport || params.machineActionDirectTargetTransport
+          || !isMachineTerminalActionId(request.actionId) || !requiresExactDaemonApprovalReplay(request)) return null;
+        if (request.v !== 2 || !request.executionOriginV1.machineId
+          || !hasStoredSessionCredentialProvenance(credentials)
+          || context.surface !== 'cli' || context.authority !== 'present_user'
+          || context.externalActionCredential || context.externalActionExecutionAuthorization
+          || context.rpcSessionAuthorization || context.actionCaller && context.actionCaller.kind !== 'host') {
+          return actionFailure('present_user_required');
+        }
+        if (!request.executionOriginV1.serverIdentityId) return actionFailure('approval_origin_unavailable');
+        if (signal?.aborted) return actionFailure('cancelled');
+        if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+        return await dispatchOriginalAccountAction({ actionId: 'approval.request.decide',
+          input: { artifactId, decision: 'approve', serverIdentityId: request.executionOriginV1.serverIdentityId,
+            originServerId: request.executionOriginV1.serverId },
+          requestId: requestId ?? randomUUID(), target: { kind: 'machine', machineId: request.executionOriginV1.machineId },
+          credentials, serverHttpBaseUrl: approvalServerApiUrl, serverIdentityId: context.serverIdentityId,
+          authority: context.authority,
+          isCurrent: async () => sameStoredCredentials(credentials, await readCurrentCredentials()),
+          ...(signal ? { signal } : {}) });
+      },
       isApprovalExecutionOriginCurrent,
       ...(params.prepareApprovalExecutionAuthorization
         ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
@@ -1085,14 +1150,15 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const spec = getActionSpec(ActionIdSchema.parse(actionId));
       const clientAction = spec.cli !== undefined && (!settingsAction || settingsInput?.success)
         && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'client';
-      const originalPluginInstall = actionId === 'plugins.install' && originalCliCaller
+      const originalMachineAction = (actionId === 'plugins.install' || isMachineTerminalActionId(actionId)) && originalCliCaller
         ? spec.inputSchema.safeParse(admittedInput) : null;
-      const selectedPluginMachine = originalPluginInstall?.success
-        && typeof readRecord(originalPluginInstall.data)?.machineId === 'string'
-        ? resolveExternalActionMachineTarget({ actionId: 'plugins.install', rawInput: originalPluginInstall.data,
-          target: context.externalActionTarget }) : null;
-      if (selectedPluginMachine && (selectedPluginMachine.kind === 'rejected'
-        || params.machineId && params.machineId !== selectedPluginMachine.machineId)) return { context,
+      const selectedOriginalMachine = originalMachineAction?.success
+        && (typeof readRecord(originalMachineAction.data)?.machineId === 'string'
+          || params.machineId || context.externalActionTarget)
+        ? resolveExternalActionMachineTarget({ actionId: spec.id, rawInput: originalMachineAction.data,
+          target: context.externalActionTarget, fallbackMachineId: params.machineId }) : null;
+      if (selectedOriginalMachine && (selectedOriginalMachine.kind === 'rejected'
+        || params.machineId && params.machineId !== selectedOriginalMachine.machineId)) return { context,
           invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
       const pairedTerminal = originalCliCaller && provenance?.provenance.kind === 'terminal';
       let requiresDaemonInputAdmission = false;
@@ -1117,20 +1183,19 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // A semantic Machine selector needs the same admitted delivery as an
       // outer CLI selector, even for Machine-placed friendly commands.
       const usesDaemonIngress = params.externalActionClient || requiresDaemonInputAdmission
-        || selectedPluginMachine?.kind === 'ready';
+        || selectedOriginalMachine?.kind === 'ready';
       const originalDaemonTarget = usesDaemonIngress && originalCliCaller
         ? await resolveLiveDaemonControlTargetForServer(fixedServerId ?? approvalServerId).catch(() => null)
         : undefined;
       const ownDaemon = originalDaemonTarget?.accountId
         && originalDaemonTarget.accountId === readAccountIdFromToken(credentials.token);
-      const originalContext = usesDaemonIngress && originalCliCaller && provenance?.provenance.kind === 'terminal'
-        ? { ...context, authority: 'account_automation' as const } : context;
+      const originalContext = context;
       const originalMachineEnvironment = actionId === 'machines.environment.apply' && originalCliCaller
         ? MachineEnvironmentApplyInputV1Schema.safeParse(input) : null;
       if (originalMachineEnvironment && (!originalMachineEnvironment.success
         || originalMachineEnvironment.data.homeId !== context.serverIdentityId)) return { context: originalContext,
           invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
-      const originalMachineTarget = selectedPluginMachine?.kind === 'ready' || (context.externalActionTarget
+      const originalMachineTarget = selectedOriginalMachine?.kind === 'ready' || (context.externalActionTarget
         ? context.externalActionTarget.kind === 'machine' : Boolean(params.machineId));
       const originalFiniteProjectAction = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId) && originalCliCaller;
       if (usesDaemonIngress && hasStoredSessionCredentialProvenance(credentials)
@@ -1143,8 +1208,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         const signal = combineInvocationSignals(invocationSignal, context?.signal);
         let target = context?.externalActionTarget
           ?? (params.machineId ? { kind: 'machine' as const, machineId: params.machineId } : undefined)
-          ?? (selectedPluginMachine?.kind === 'ready'
-            ? { kind: 'machine' as const, machineId: selectedPluginMachine.machineId } : undefined);
+          ?? (selectedOriginalMachine?.kind === 'ready'
+            ? { kind: 'machine' as const, machineId: selectedOriginalMachine.machineId } : undefined);
         if (originalMachineEnvironment?.success) {
           if (target && (target.kind !== 'machine' || target.machineId !== originalMachineEnvironment.data.machineId)) return { context: originalContext,
             invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
@@ -1348,7 +1413,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ) {
           await ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl());
         }
-        const executor = await resolveExecutor(credentials, sessionMemoryEnabled);
+        const executor = await measureActionStartPhaseV1(originalContext, 'credentialed_factory',
+          () => resolveExecutor(credentials, sessionMemoryEnabled));
         return await executor.execute(actionId, input, signal ? { ...originalContext, signal } : originalContext);
       },
       continueConfidentialApprovalRequest: async (input, context) => {

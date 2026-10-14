@@ -43,7 +43,7 @@ function normalizeVoiceAgentModelId(value: unknown, preserveDefault = false): st
   return trimmed;
 }
 
-function normalizeVoiceAgentProfileId(value: unknown): string | null {
+function normalizeVoiceAgentLaunchProfileId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -81,7 +81,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     }
     const chatModelId = normalizeVoiceAgentModelId(params.chatModelId);
     const commitModelId = normalizeVoiceAgentModelId(params.commitModelId, true);
-    const profileId = normalizeVoiceAgentProfileId(params.profileId);
+    const launchProfileId = normalizeVoiceAgentLaunchProfileId(params.launchProfileId);
     const chatModelSelection = params.chatModelSelection ?? (chatModelId
       ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: chatModelId }
       : params.chatModelId?.trim() === 'default' ? null : undefined);
@@ -116,7 +116,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
         ? { sessionConfigOptionOverrides: params.sessionConfigOptionOverrides }
         : {}),
       ...(params.commitIsolation === true ? { commitIsolation: true } : {}),
-      ...(profileId ? { profileId } : {}),
+      ...(launchProfileId ? { launchProfileId } : {}),
       idleTtlSeconds: params.idleTtlSeconds,
       initialContext: params.initialContext,
       initialContextMode: params.initialContextMode,

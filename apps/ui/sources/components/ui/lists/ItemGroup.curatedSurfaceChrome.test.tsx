@@ -59,7 +59,8 @@ describe('ItemGroup curated surface chrome', () => {
 
         const surfaceStyle = screen.findAllByType('View' as never)
             .map((node) => flattenStyle(node.props.style))
-            .find((style) => style.backgroundColor === '#ffffff' && style.borderRadius === GROUPED_SURFACE_RADIUS_PX) ?? {};
+            // GlassSurface keeps border/shadow on the layout host and paint on a child layer.
+            .find((style) => style.borderRadius === GROUPED_SURFACE_RADIUS_PX && style.borderColor !== undefined) ?? {};
 
         expect(surfaceStyle.borderColor).toBe('rgba(0,0,0,0.08)');
         expect(Number(surfaceStyle.borderWidth)).toBeGreaterThan(0);

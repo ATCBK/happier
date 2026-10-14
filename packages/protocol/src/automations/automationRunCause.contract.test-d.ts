@@ -1,4 +1,4 @@
-import type { $brand } from 'zod';
+import type { $brand } from 'zod/mini';
 
 import type {
   AutomationRunCause,

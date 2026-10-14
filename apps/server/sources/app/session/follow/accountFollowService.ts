@@ -1,25 +1,8 @@
-import {
-    AUTOMATIC_SESSION_FOLLOW_STATE_V1,
-    AccountSessionFollowV1Schema,
-    EXPLICIT_SESSION_UNFOLLOW_STATE_V1,
-    SessionAutoFollowPreferencesV1Schema,
-    SetSessionFollowRequestSchema,
-    ReplaceSessionVoiceInclusionsRequestSchema,
-    compareSessionFollowFrontierProgressV1,
-    encodePersistedSessionFollowFrontierV1,
-    isSessionFollowConsumptionWithinCurrentV1,
-    isSessionFollowFrontierEqualV1,
-    isSessionFollowTurnEqualV1,
-    parsePersistedSessionFollowFrontierV1,
-    projectSessionFollowFrontierFromSourceV1,
-    isActiveHomeAccountStatus,
-    type AccountSessionFollowV1,
-    type SessionAutoFollowPreferencesV1,
-    type SetSessionFollowRequest,
-    type GetSessionFollowResponse,
-    type SessionFollowFrontierV1,
-    VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-} from "@happier-dev/protocol";
+import { AUTOMATIC_SESSION_FOLLOW_STATE_V1, AccountSessionFollowV1Schema, EXPLICIT_SESSION_UNFOLLOW_STATE_V1, SessionAutoFollowPreferencesV1Schema, type AccountSessionFollowV1, type SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { SetSessionFollowRequestSchema, ReplaceSessionVoiceInclusionsRequestSchema, type SetSessionFollowRequest, type GetSessionFollowResponse } from '@happier-dev/protocol/sessions/follow/api';
+import { compareSessionFollowFrontierProgressV1, encodePersistedSessionFollowFrontierV1, isSessionFollowConsumptionWithinCurrentV1, isSessionFollowFrontierEqualV1, isSessionFollowTurnEqualV1, parsePersistedSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
+import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
 
 import { resolveEffectiveSessionAccess, resolveSessionAccessForAccountsInTx, resolveStructuralSessionAccessForAccountsInTx } from "@/app/session/access/sessionAccess";
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";

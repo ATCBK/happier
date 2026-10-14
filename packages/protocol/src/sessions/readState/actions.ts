@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
@@ -15,10 +15,10 @@ const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
  * The `sessionId` path parameter is lifted into the URL by the shared
  * `bindActionHttpRequest` helper; only `{ state }` travels as JSON body.
  */
-export const SessionReadStateSetInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionReadStateSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionIdZodSchema,
   state: z.enum(['read', 'unread']),
-}).strict());
+}));
 export type SessionReadStateSetInputV1 = z.infer<typeof SessionReadStateSetInputV1Schema>;
 
 /**
@@ -30,21 +30,21 @@ export type SessionReadStateSetInputV1 = z.infer<typeof SessionReadStateSetInput
  * private viewer facts immediately while the ordinary Session-list refresh
  * converges every other projection.
  */
-export const SessionReadStateSetResultV1Schema = lazyZodSchema(() => z.object({
+export const SessionReadStateSetResultV1Schema = lazyZodSchema(() => z.strictObject({
   state: z.enum(['read', 'unread', 'empty']),
-  lastViewedSessionSeq: z.number().int().min(0).nullable(),
+  lastViewedSessionSeq: z.nullable(z.number().check(z.int(), z.minimum(0))),
   didChange: z.boolean(),
-  viewer: SessionViewerProjectionV1Schema.optional(),
-}).strict());
+  viewer: z.optional(SessionViewerProjectionV1Schema),
+}));
 export type SessionReadStateSetResultV1 = z.infer<typeof SessionReadStateSetResultV1Schema>;
 
 export const SESSION_READ_STATE_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
   'session.read_state.set': SessionReadStateSetInputV1Schema,
-} as const satisfies Readonly<Record<SessionReadStateActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<SessionReadStateActionIdV1, z.ZodMiniType>>);
 
 export const SESSION_READ_STATE_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'session.read_state.set': SessionReadStateSetResultV1Schema,
-} as const satisfies Readonly<Record<SessionReadStateActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<SessionReadStateActionIdV1, z.ZodMiniType>>);
 
 export type SessionReadStateActionInputV1 = {
   [K in SessionReadStateActionIdV1]: z.input<(typeof SESSION_READ_STATE_ACTION_INPUT_SCHEMAS_V1)[K]>;

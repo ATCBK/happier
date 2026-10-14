@@ -52,10 +52,6 @@ function buildVendorRecipePath(runtimeSpec: AgentCliRuntimeDescriptor, env: Node
     .split(delimiter)
     .map((value) => value.trim())
     .filter(Boolean);
-  if (process.platform === 'win32') {
-    return currentEntries.join(delimiter);
-  }
-
   const homeDir = typeof env.HOME === 'string' ? env.HOME.trim() : '';
   if (!homeDir) {
     return currentEntries.join(delimiter);
@@ -126,10 +122,12 @@ export async function runLoggedAgentCommand(params: Readonly<{
   const childEnv = {
     ...process.env,
     ...env,
-    PATH: buildVendorRecipePath(runtimeSpec, {
+    // Only POSIX recipes add user install directories. Preserve Windows Path
+    // instead of shadowing the case-insensitive key with an empty PATH.
+    ...(process.platform === 'win32' ? {} : { PATH: buildVendorRecipePath(runtimeSpec, {
       ...process.env,
       ...env,
-    }),
+    }) }),
     ...(vendorScratchDir ? { TMPDIR: vendorScratchDir, TMP: vendorScratchDir, TEMP: vendorScratchDir } : {}),
   };
   const invocation = resolveWindowsCommandInvocation({

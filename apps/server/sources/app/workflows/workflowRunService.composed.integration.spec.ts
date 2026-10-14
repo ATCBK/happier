@@ -53,6 +53,8 @@ import { claimAutomationRun, heartbeatAutomationRun, toAutomationV3WorkerClaimRe
 import { automationRunWithAutomationSelect } from "@/app/automations/automationPersistenceSelect";
 import { projectAutomationOriginRun } from "@/app/automations/automationRunCauseCodec";
 import { AUTOMATION_RUN_TERMINAL_STATES } from "@/app/automations/automationTypes";
+import { deleteAutomation } from "@/app/automations/automationCrudService";
+import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { createMaterializedEphemeralRunnerFixture } from "@/app/ephemeralRunner/materializedRunner.testkit";
 import { createSignedPluginInstallationPublisherHeader, createTrustedMachineInstallation } from "@/testkit/pluginInstallationPublisherTestkit";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
@@ -453,6 +455,27 @@ describe("workflowRunService (integration)", () => {
             expectedLifecycle: "waiting_for_approval", lifecycle: "completed" }))
             .resolves.toMatchObject({ parentRevision: 5 });
         expect((await getWorkflowRun(seeded)).run.revision).toBe(5);
+    });
+
+    it.each([true, false])("retains Automation scope in strict Run lists after definition deletion (session scoped: %s)", async (scoped) => {
+        const seeded = await seed();
+        const automation = await db.automation.create({ data: { accountId: seeded.accountId, name: "Retained trigger",
+            scopeSessionId: scoped ? seeded.sessionId : null, templateCiphertext: JSON.stringify({ t: "plain", v: {} }) } });
+        const runId = randomUUID();
+        await admitWorkflowRun({ ...seeded, runId, origin: { kind: "direct", originSessionId: seeded.sessionId },
+            acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId, originSessionId: seeded.sessionId }) });
+        // Retained immutable cause is independent of whether the trigger's definition is still listed.
+        await db.automationRun.update({ where: { id: runId }, data: { originKind: "automation", automationId: automation.id,
+            causeKind: "conversation", triggerId: "retired-trigger", occurrenceKey: "A".repeat(43), causeOccurredAt: new Date() } });
+        await deleteAutomation({ accountId: seeded.accountId, automationId: automation.id });
+        const { app, headers } = await createReviewStorageApp(seeded.accountId);
+        try {
+            const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage", headers,
+                payload: { operation: "list", request: { originSessionId: seeded.sessionId }, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } });
+            expect(response.statusCode, response.body).toBe(200);
+            const runs = response.json<{ runs: unknown[] }>().runs.map(run => WorkflowRunSummaryV1Schema.parse(run));
+            expect(runs.find(run => run.id === runId)).toMatchObject({ automationScopeSessionId: scoped ? seeded.sessionId : null });
+        } finally { await app.close(); }
     });
 
     it.each([true, false])("freezes the scoped Automation origin and explicit delivery request at accepted-snapshot resolution (delivery: %s)", async (deliver) => {

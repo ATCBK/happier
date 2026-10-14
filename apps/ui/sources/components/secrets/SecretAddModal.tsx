@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import React from 'react';
 import { View, Pressable, Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -132,7 +133,7 @@ export function SecretAddModal(props: SecretAddModalProps) {
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         width: '92%',
-        maxWidth: 560,
+        maxWidth: HAPPIER_PAGE_METRICS.dialogWidthPx.wide,
         backgroundColor: theme.colors.background.canvas,
         borderRadius: 16,
         overflow: 'hidden',

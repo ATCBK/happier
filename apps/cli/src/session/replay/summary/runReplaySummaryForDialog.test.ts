@@ -1,87 +1,45 @@
 import { describe, expect, it } from 'vitest';
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { ExecutionRunStartRequestSchema, type ExecutionRunStartRequest } from '@happier-dev/protocol/execution/runs/startRequest';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { runReplaySummaryForDialog } from './runReplaySummaryForDialog';
 
-import type { LlmTaskRunnerConfigV1 } from '@happier-dev/protocol';
-
-import { runReplaySummaryForDialog, type ReplaySummaryTextPromptRunner } from './runReplaySummaryForDialog';
-
-describe('runReplaySummaryForDialog', () => {
-  it('uses the configured runner and includes dialog messages in the summarizer prompt', async () => {
-    const calls: Array<{
-      sessionId: string;
-      backendTarget: unknown;
-      modelId?: string;
-      permissionMode?: string;
-      intent: string;
-      prompt: string;
-    }> = [];
-
-    const runner: LlmTaskRunnerConfigV1 = {
-      v: 1,
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      modelId: 'default',
-      permissionMode: 'no_tools',
-    } as any;
-    const out = await runReplaySummaryForDialog({
-      cwd: '/repo',
-      parentSessionId: 'sess_parent',
-      runner,
-      dialog: [
-        { role: 'User', createdAt: 1, text: 'hello' },
-        { role: 'Assistant', createdAt: 2, text: 'world' },
-      ],
-      deps: {
-        runTextPrompt: (async (args) => {
-          calls.push({
-            sessionId: args.sessionId,
-            backendTarget: (args as any).backendTarget,
-            modelId: args.modelId,
-            permissionMode: args.permissionMode,
-            intent: args.intent,
-            prompt: args.prompt,
-          });
-          return 'SUMMARY_OK';
-        }) satisfies ReplaySummaryTextPromptRunner,
-      },
+describe('Replay summary settings to Run Action', () => {
+    it.each([
+        { target: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'default' },
+        { target: { kind: 'configuredAcpBackend', backendId: 'review-bot' }, modelId: 'custom/model' },
+    ])('runs predecessor $target.kind selection through the real start-and-wait Action with canonical model identity', async ({ target, modelId }) => {
+        const runner = LlmTaskRunnerConfigV1Schema.parse({ v: 1, backendTarget: target, modelId, permissionMode: 'no_tools' });
+        const requests: ExecutionRunStartRequest[] = [];
+        // The answering Run host is the external process boundary. Schema, Action admission,
+        // text-prompt orchestration and Replay prompt construction all remain real.
+        const executor = createActionExecutor({
+            executionRunCheckProtocolV2: async () => ({ ok: true }),
+            executionRunStart: async (sessionId, input) => {
+                expect(sessionId).toBe('sess_parent');
+                requests.push(ExecutionRunStartRequestSchema.parse(input));
+                return { runId: 'summary-run', callId: 'summary-call', sidechainId: 'summary-call' };
+            },
+            executionRunWait: async () => ({ ok: true, status: 'succeeded', result: { latestToolResult: ' SUMMARY_OK ' } }),
+        } as unknown as ActionExecutorDeps); // Unrelated host ports are absent and must remain unused.
+        expect(await runReplaySummaryForDialog({ cwd: '/repo', parentSessionId: 'sess_parent', runner,
+            dialog: [{ role: 'User', createdAt: 1, text: 'hello' }, { role: 'Assistant', createdAt: 2, text: 'world' }],
+            deps: { executeStart: (input, context) => executor.execute('execution.run.start', input, context) },
+        })).toBe('SUMMARY_OK');
+        expect(requests).toHaveLength(1);
+        const request = requests[0]!;
+        expect(request.modelSelection).toEqual(runner.modelSelection);
+        expect(buildBackendTargetKeyV2(request.backendTarget)).toBe(runner.modelSelection.agentTargetKey);
+        expect(request.modelId).toBeUndefined();
+        expect(request).toMatchObject({ intent: 'task', permissionMode: 'no_tools', retentionPolicy: 'ephemeral', runClass: 'bounded' });
+        expect(request.instructions).toContain('User: hello');
+        expect(request.instructions).toContain('Assistant: world');
+        // Agents and MCP callers use the same schema and dispatch owner for this selection.
+        for (const surface of ['agent', 'mcp'] as const) {
+            expect(await executor.execute('execution.run.start', { ...request, sessionId: 'sess_parent' },
+                { surface, authority: 'account_automation' })).toMatchObject({ ok: true, result: { runId: 'summary-run' } });
+            expect(requests.at(-1)?.modelSelection).toEqual(runner.modelSelection);
+        }
     });
-
-    expect(out).toBe('SUMMARY_OK');
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.sessionId).toBe('sess_parent');
-    expect(calls[0]?.backendTarget).toEqual({ kind: 'builtInAgent', agentId: 'claude' });
-    expect(calls[0]?.modelId).toBe('default');
-    expect(calls[0]?.permissionMode).toBe('no_tools');
-    expect(calls[0]?.intent).toBe('task');
-    expect(String(calls[0]?.prompt ?? '')).toContain('User: hello');
-    expect(String(calls[0]?.prompt ?? '')).toContain('Assistant: world');
-    expect(String(calls[0]?.prompt ?? '')).toContain('## Goal');
-    expect(String(calls[0]?.prompt ?? '')).toContain('## Relevant files / directories');
-    expect(String(calls[0]?.prompt ?? '')).toContain('Preserve exact identifiers, codes, names, numbers, paths, and user constraints when they matter.');
-  });
-
-  it('passes configured ACP backend targets through to the text-prompt runner', async () => {
-    const calls: Array<{ backendTarget: unknown }> = [];
-
-    const runner: LlmTaskRunnerConfigV1 = {
-      v: 1,
-      backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
-      modelId: 'review-model',
-      permissionMode: 'no_tools',
-    } as any;
-
-    const out = await runReplaySummaryForDialog({
-      cwd: '/repo',
-      parentSessionId: 'sess_parent',
-      runner,
-      dialog: [{ role: 'User', createdAt: 1, text: 'hello' }],
-      deps: {
-        runTextPrompt: (async (args) => {
-          calls.push({ backendTarget: (args as any).backendTarget });
-          return 'SUMMARY_OK';
-        }) satisfies ReplaySummaryTextPromptRunner,
-      },
-    });
-
-    expect(out).toBe('SUMMARY_OK');
-    expect(calls).toEqual([{ backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' } }]);
-  });
 });

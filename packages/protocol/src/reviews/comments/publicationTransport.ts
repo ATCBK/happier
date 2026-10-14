@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   deriveReviewCommentPublicationIdentityV1,
@@ -23,41 +23,41 @@ import {
   type ReviewCommentPublicationPlanV1,
 } from './actions.js';
 
-const identity = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const outcomeSchema = lazyZodSchema(() => z.object({
+const identity = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/));
+const outcomeSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['published', 'failed', 'uncertain', 'skippedPriorFailure']),
-  externalRefTag: identity.optional(),
-  content: StoredJsonContentEnvelopeSchema.optional(),
-}).strict().superRefine((outcome, ctx) => {
+  externalRefTag: z.optional(identity),
+  content: z.optional(StoredJsonContentEnvelopeSchema),
+}).check(z.superRefine((outcome, ctx) => {
   if ((outcome.kind === 'published' || outcome.kind === 'failed' || outcome.externalRefTag !== undefined)
     && outcome.content === undefined) {
     ctx.addIssue({ code: 'custom', message: 'review_comment_publication_outcome_content_required' });
   }
-}));
-export const ReviewCommentPublicationTransportResultV1Schema = lazyZodSchema(() => z.object({
+})));
+export const ReviewCommentPublicationTransportResultV1Schema = lazyZodSchema(() => z.strictObject({
   publicationPlanId: identity,
-  entries: z.array(ReviewCommentPublicationCorrelationV1Schema.extend({ outcome: outcomeSchema })),
+  entries: z.array(z.extend(ReviewCommentPublicationCorrelationV1Schema, { outcome: outcomeSchema })),
   verdict: z.union([
-    z.object({ kind: z.literal('notRequested') }).strict(),
-    z.object({ publicationCorrelationId: identity, outcome: outcomeSchema }).strict(),
+    z.strictObject({ kind: z.literal('notRequested') }),
+    z.strictObject({ publicationCorrelationId: identity, outcome: outcomeSchema }),
   ]),
-}).strict());
+}));
 export type ReviewCommentPublicationTransportResultV1 = z.infer<typeof ReviewCommentPublicationTransportResultV1Schema>;
 
 /** Server-readable admission/effect state only. The frozen provider plan never leaves the host. */
-export const ReviewCommentPublicationTransportRequestV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentPublicationTransportRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   mode: z.enum(['plain', 'e2ee']),
-  contentPublicKeyFingerprint: z.string().min(1).nullable(),
+  contentPublicKeyFingerprint: z.nullable(z.string().check(z.minLength(1))),
   targetKey: identity,
   publicationPlanId: identity,
-  entries: z.array(ReviewCommentPublicationCorrelationV1Schema.extend({ expectedServerRevision: z.number().int().positive() })),
-  verdict: z.object({ publicationCorrelationId: identity }).strict().nullable(),
-  settlement: z.object({
-    dispatchToken: z.string().min(1).nullable(),
+  entries: z.array(z.extend(ReviewCommentPublicationCorrelationV1Schema, { expectedServerRevision: z.number().check(z.int(), z.positive()) })),
+  verdict: z.nullable(z.strictObject({ publicationCorrelationId: identity })),
+  settlement: z.optional(z.strictObject({
+    dispatchToken: z.nullable(z.string().check(z.minLength(1))),
     result: ReviewCommentPublicationTransportResultV1Schema,
-  }).strict().optional(),
-}).strict().superRefine((request, ctx) => {
+  })),
+}).check(z.superRefine((request, ctx) => {
   const correlations = [...request.entries.map((entry) => entry.publicationCorrelationId),
     ...(request.verdict === null ? [] : [request.verdict.publicationCorrelationId])];
   if (correlations.length === 0 || new Set(correlations).size !== correlations.length
@@ -81,18 +81,18 @@ export const ReviewCommentPublicationTransportRequestV1Schema = lazyZodSchema(()
       ctx.addIssue({ code: 'custom', message: 'review_comment_encryption_mode_mismatch' });
     }
   }
-}));
+})));
 export type ReviewCommentPublicationTransportRequestV1 = z.infer<typeof ReviewCommentPublicationTransportRequestV1Schema>;
 
-export const ReviewCommentPublicationTransportResponseV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentPublicationTransportResponseV1Schema = lazyZodSchema(() => z.strictObject({
   disposition: z.enum(['dispatch', 'reconcile']),
-  dispatchToken: z.string().min(1).nullable(),
+  dispatchToken: z.nullable(z.string().check(z.minLength(1))),
   publicationPlanId: identity,
   entries: z.array(ReviewCommentPublicationCorrelationV1Schema),
-  verdict: z.object({ publicationCorrelationId: identity }).strict().nullable(),
-  instructions: z.object({ entries: z.array(ReviewCommentPublicationDispatchInstructionV1Schema), verdict: ReviewCommentPublicationDispatchInstructionV1Schema.nullable() }).strict(),
-  priorResult: ReviewCommentPublicationTransportResultV1Schema.nullable(),
-}).strict());
+  verdict: z.nullable(z.strictObject({ publicationCorrelationId: identity })),
+  instructions: z.strictObject({ entries: z.array(ReviewCommentPublicationDispatchInstructionV1Schema), verdict: z.nullable(ReviewCommentPublicationDispatchInstructionV1Schema) }),
+  priorResult: z.nullable(ReviewCommentPublicationTransportResultV1Schema),
+}));
 export type ReviewCommentPublicationTransportResponseV1 = z.infer<typeof ReviewCommentPublicationTransportResponseV1Schema>;
 
 export type ReviewCommentPublicationCryptoContextV1 = Readonly<{
@@ -116,11 +116,11 @@ function binding(plan: ReviewCommentPublicationPlanV1, context: ReviewCommentPub
   };
 }
 
-const privateOutcomeSchema = lazyZodSchema(() => z.object({
+const privateOutcomeSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), purpose: z.literal('publicationOutcome'), accountId: z.string(),
   publicationPlanId: identity, publicationCorrelationId: identity,
   outcome: ReviewCommentPublicationVerdictEffectOutcomeV1Schema,
-}).strict());
+}));
 
 export function buildReviewCommentPublicationTransportRequestV1(params: Readonly<{
   input: ReviewCommentClaimPublicationDispatchRequestV1;

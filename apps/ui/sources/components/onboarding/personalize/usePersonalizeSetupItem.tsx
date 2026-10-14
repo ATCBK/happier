@@ -154,8 +154,8 @@ function PersonalizeInPlacePanel(props: Readonly<{ close: () => void; onContinue
 
 const styles = StyleSheet.create((theme) => ({
     panel: {
-        padding: 20,
-        gap: 20,
+        padding: theme.space.s20,
+        gap: theme.space.s20,
     },
     panelSideBySide: {
         flexDirection: 'row',
@@ -163,7 +163,7 @@ const styles = StyleSheet.create((theme) => ({
     main: {
         flex: 1,
         minWidth: 0,
-        gap: 10,
+        gap: theme.space.s10,
     },
     title: {
         ...Typography.default('semiBold'),
@@ -178,15 +178,15 @@ const styles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 6,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s6,
     },
     steps: {
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     stepsSide: {
         width: 260,
-        paddingLeft: 20,
+        paddingLeft: theme.space.s20,
         borderLeftWidth: StyleSheet.hairlineWidth,
         borderLeftColor: theme.colors.border.default,
     },

@@ -1,4 +1,4 @@
-import type { PluginPermissionGrantAuthoritySourceV1 } from "@happier-dev/protocol";
+import type { PluginPermissionGrantAuthoritySourceV1 } from '@happier-dev/protocol/plugins/permissions/grants';
 import { db } from "@/storage/db";
 
 export type PluginPermissionGrantAuthorityRequest = Readonly<{

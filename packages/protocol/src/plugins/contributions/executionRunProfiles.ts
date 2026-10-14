@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -12,31 +12,31 @@ import {
 } from './publicTypes.js';
 
 export const PluginExecutionRunProfileActionReferenceV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('contributionAction'),
     action: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('hostAction'),
     actionId: z.literal('reviews.comments.create'),
-  }).strict(),
+  }),
 ]));
 export type PluginExecutionRunProfileActionReferenceV2 = z.infer<typeof PluginExecutionRunProfileActionReferenceV2Schema>;
 
-export const PluginExecutionRunProfileContributionV2Schema = lazyZodSchema(() => z.object({
+export const PluginExecutionRunProfileContributionV2Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   intent: ExecutionRunIntentSchema,
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
   promptAsset: asProtocolZod(PluginContributionReferenceV2Schema),
-  defaults: z.object({
+  defaults: z.strictObject({
     retention: z.enum(['ephemeral', 'resumable']),
     runClass: z.enum(['bounded', 'longLived']),
     io: z.enum(['requestResponse', 'streaming']),
-  }).strict(),
-  compatibleAgents: z.array(asProtocolZod(PluginContributionReferenceV2Schema)).min(1),
-  actions: z.array(PluginExecutionRunProfileActionReferenceV2Schema).optional(),
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict());
+  }),
+  compatibleAgents: z.array(asProtocolZod(PluginContributionReferenceV2Schema)).check(z.minLength(1)),
+  actions: z.optional(z.array(PluginExecutionRunProfileActionReferenceV2Schema)),
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}));
 export type PluginExecutionRunProfileContributionV2 = z.infer<typeof PluginExecutionRunProfileContributionV2Schema>;

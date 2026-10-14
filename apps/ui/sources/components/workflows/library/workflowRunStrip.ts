@@ -1,6 +1,7 @@
 import type { WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { t } from '@/text';
 
 /**
@@ -18,6 +19,13 @@ export type WorkflowRunStrip = Readonly<{
 }>;
 
 type SummaryInput = Pick<WorkflowRunSummariesResultV1['summaries'][number], 'recent' | 'needsYouCount' | 'needsYouRunId'>;
+
+/** Column status and Library view membership classify the same summary facts. */
+export function hasWorkingWorkflowLibraryRun(summary: Pick<SummaryInput, 'recent'> | undefined): boolean {
+    return summary?.recent.some((run) => resolveWorkStatusTone({
+        kind: 'workflow_run', facts: { state: run.state, word: '' },
+    }).bucket === 'working') ?? false;
+}
 
 /**
  * One saved workflow's run strip from its summary. Healthy runs, and a stop you chose, stay neutral;

@@ -40,7 +40,7 @@ type ResourceUpdate =
     | Readonly<{ kind: 'error' | 'not_reported'; errorCode?: string }>;
 type HistoryInput = MachineResourceKey & Readonly<{ range: MachineVitalsRange }>;
 
-function machineKey(input: MachineResourceKey): string { return JSON.stringify([input.serverId ?? null, input.machineId]); }
+function machineKey(input: MachineResourceKey): string { return JSON.stringify([input.serverId ?? null, input.expectedAccountId ?? null, input.machineId]); }
 function retain<T>(previous: T, next: T): T { return JSON.stringify(previous) === JSON.stringify(next) ? previous : next; }
 
 function retainSample(previous: MachineVitalsSampleV1 | null, next: MachineVitalsSampleV1): MachineVitalsSampleV1 {
@@ -93,7 +93,8 @@ function applySnapshot(state: MachineResourceState, incoming: MachineVitalsSnaps
     const projected = projectMachineResourceSummaryV1(snapshot);
     const summary = state.summary && projected ? retain(state.summary, {
         ...projected,
-        cpu: retain(state.summary.cpu, projected.cpu), memory: retain(state.summary.memory, projected.memory),
+        // Missing samples stay gaps in history; the figure keeps the last measurement.
+        cpu: retain(state.summary.cpu, { ...projected.cpu, busyPct: projected.cpu.busyPct ?? state.summary.cpu.busyPct }), memory: retain(state.summary.memory, projected.memory),
         disk: retain(state.summary.disk, projected.disk), network: retain(state.summary.network, projected.network),
     }) : projected;
     const next: MachineResourceState = { status: 'ready', snapshot, summary, stale: false, samples: sample ? appendSamples(state.samples, [sample]) : state.samples };
@@ -167,7 +168,7 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
     >({
         emptyState: EMPTY_MACHINE_RESOURCE_STATE, createState: () => EMPTY_MACHINE_RESOURCE_STATE,
         normalizeInput: input => ({ ...input, serverId: input.serverId ?? null }),
-        storeKey: input => JSON.stringify([input.serverId ?? null, input.machineId, input.view]),
+        storeKey: input => JSON.stringify([machineKey(input), input.view]),
         defaultSnapshotClient: clients.snapshotClient, defaultWatchClient: clients.watchClient,
         retainState: true, watchAfterRefresh: true,
         shouldWatch: state => state.status === 'ready' && state.snapshot?.state === 'reporting',
@@ -218,7 +219,7 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
     const histories = createSharedSubscriptionStore<HistoryInput, MachineResourceHistoryState, MachineVitalsHistoryV1, MachineResourceClients['historyClient']>({
         emptyState: EMPTY_MACHINE_RESOURCE_HISTORY_STATE, createState: () => EMPTY_MACHINE_RESOURCE_HISTORY_STATE,
         normalizeInput: input => ({ ...input, serverId: input.serverId ?? null }),
-        storeKey: input => JSON.stringify([input.serverId ?? null, input.machineId, input.range]),
+        storeKey: input => JSON.stringify([machineKey(input), input.range]),
         defaultSnapshotClient: clients.historyClient, retainState: true,
         refresh: async ({ input, state, snapshotClient, signal }) => {
             if (unsupported.has(machineKey(input))) return NOT_REPORTED_HISTORY_STATE;

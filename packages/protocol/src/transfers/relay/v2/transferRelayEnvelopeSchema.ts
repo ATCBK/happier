@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { readCanonicalPaddedBase64DecodedLength } from '../../../crypto/base64.js';
 
@@ -11,63 +11,53 @@ const MAX_TRANSFER_ABORT_REASON_LENGTH = 1024;
 const MAX_USER_ID_LENGTH = 256;
 const MAX_MACHINE_ID_LENGTH = 256;
 
-function boundedString(maxLength: number): z.ZodString {
-  return z.string().min(1).max(maxLength);
+function boundedString(maxLength: number): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.maxLength(maxLength));
 }
 
 function boundedBase64String(maxLength: number) {
-  return boundedString(maxLength).superRefine((value, context) => {
+  return boundedString(maxLength).check(z.superRefine((value, context) => {
     if (readCanonicalPaddedBase64DecodedLength(value) !== null) return;
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Invalid base64 payload',
     });
-  });
+  }));
 }
 
-const TransferRelayV2OpenEnvelopeSchema = z
-  .object({
+const TransferRelayV2OpenEnvelopeSchema = z.strictObject({
     transferId: boundedString(MAX_TRANSFER_ID_LENGTH),
     kind: z.literal('open'),
     recipientPublicKeyBase64: boundedBase64String(MAX_TRANSFER_PUBLIC_KEY_BASE64_LENGTH),
-    openPayloadBase64: boundedBase64String(MAX_TRANSFER_OPEN_PAYLOAD_BASE64_LENGTH).optional(),
-  })
-  .strict();
+    openPayloadBase64: z.optional(boundedBase64String(MAX_TRANSFER_OPEN_PAYLOAD_BASE64_LENGTH)),
+  });
 
-const TransferRelayV2ChunkEnvelopeSchema = z
-  .object({
+const TransferRelayV2ChunkEnvelopeSchema = z.strictObject({
     transferId: boundedString(MAX_TRANSFER_ID_LENGTH),
     kind: z.literal('chunk'),
-    sequence: z.number().int().nonnegative(),
+    sequence: z.number().check(z.int(), z.nonnegative()),
     payloadBase64: boundedBase64String(MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH),
-    encryptedDataKeyEnvelopeBase64: boundedBase64String(MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH).optional(),
-  })
-  .strict();
+    encryptedDataKeyEnvelopeBase64: z.optional(boundedBase64String(MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH)),
+  });
 
-const TransferRelayV2AckEnvelopeSchema = z
-  .object({
+const TransferRelayV2AckEnvelopeSchema = z.strictObject({
     transferId: boundedString(MAX_TRANSFER_ID_LENGTH),
     kind: z.literal('ack'),
-    nextSequence: z.number().int().nonnegative(),
-    windowBytes: z.number().int().nonnegative().optional(),
-  })
-  .strict();
+    nextSequence: z.number().check(z.int(), z.nonnegative()),
+    windowBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+  });
 
-const TransferRelayV2FinishEnvelopeSchema = z
-  .object({
+const TransferRelayV2FinishEnvelopeSchema = z.strictObject({
     transferId: boundedString(MAX_TRANSFER_ID_LENGTH),
     kind: z.literal('finish'),
     manifestHash: boundedString(MAX_TRANSFER_MANIFEST_HASH_LENGTH),
-  })
-  .strict();
+  });
 
-const TransferRelayV2AbortEnvelopeSchema = z
-  .object({
+const TransferRelayV2AbortEnvelopeSchema = z.strictObject({
     transferId: boundedString(MAX_TRANSFER_ID_LENGTH),
     kind: z.literal('abort'),
     reason: boundedString(MAX_TRANSFER_ABORT_REASON_LENGTH),
-  })
-  .strict();
+  });
 
 export const TransferRelayV2EnvelopeSchema = z.discriminatedUnion('kind', [
   TransferRelayV2OpenEnvelopeSchema,
@@ -78,20 +68,16 @@ export const TransferRelayV2EnvelopeSchema = z.discriminatedUnion('kind', [
 ]);
 export type TransferRelayV2Envelope = z.infer<typeof TransferRelayV2EnvelopeSchema>;
 
-export const TransferRelayV2UserParticipantSchema = z
-  .object({
+export const TransferRelayV2UserParticipantSchema = z.strictObject({
     kind: z.literal('user'),
-    socketId: boundedString(MAX_USER_ID_LENGTH).optional(),
-  })
-  .strict();
+    socketId: z.optional(boundedString(MAX_USER_ID_LENGTH)),
+  });
 export type TransferRelayV2UserParticipant = z.infer<typeof TransferRelayV2UserParticipantSchema>;
 
-export const TransferRelayV2MachineParticipantSchema = z
-  .object({
+export const TransferRelayV2MachineParticipantSchema = z.strictObject({
     kind: z.literal('machine'),
     machineId: boundedString(MAX_MACHINE_ID_LENGTH),
-  })
-  .strict();
+  });
 export type TransferRelayV2MachineParticipant = z.infer<typeof TransferRelayV2MachineParticipantSchema>;
 
 export const TransferRelayV2SenderSchema = z.discriminatedUnion('kind', [
@@ -106,12 +92,10 @@ export const TransferRelayV2RecipientSchema = z.discriminatedUnion('kind', [
 ]);
 export type TransferRelayV2Recipient = z.infer<typeof TransferRelayV2RecipientSchema>;
 
-export const TransferRelayV2SendEnvelopeSchema = z
-  .object({
+export const TransferRelayV2SendEnvelopeSchema = z.strictObject({
     scopeUserId: boundedString(MAX_USER_ID_LENGTH),
     sender: TransferRelayV2SenderSchema,
     recipient: TransferRelayV2RecipientSchema,
     envelope: TransferRelayV2EnvelopeSchema,
-  })
-  .strict();
+  });
 export type TransferRelayV2SendEnvelope = z.infer<typeof TransferRelayV2SendEnvelopeSchema>;

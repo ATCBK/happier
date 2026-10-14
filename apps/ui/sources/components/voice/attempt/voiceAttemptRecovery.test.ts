@@ -20,7 +20,7 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
 import type { VoiceConnectRecoveryTarget } from '@/components/voice/surface/resolveVoiceConnectRecoveryTarget';
-import type { VoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
+import { resolveVoiceSurfaceRecovery, type VoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
 
 const state = vi.hoisted(() => ({
   openSettings: vi.fn(async () => undefined),
@@ -307,19 +307,19 @@ describe('whether an offered Voice recovery can reach a remedy', () => {
   }
 
   it('withholds Connect recovery whose account cannot be resolved', async () => {
-    const recovery = { kind: 'connect_agent', labelKey: 'voiceSurface.connectAgent' } as const;
+    const recovery = resolveVoiceSurfaceRecovery('connect_agent');
     expect(await available(recovery)).toBe(true);
     expect(await available(recovery, { connectRecoveryTarget: { kind: 'unavailable' } })).toBe(false);
   });
 
   it('withholds Agent runtime recovery without an exact runtime target', async () => {
-    const recovery = { kind: 'install_agent_runtime', labelKey: 'voiceSurface.installAgentRuntime' } as const;
+    const recovery = resolveVoiceSurfaceRecovery('install_agent_runtime');
     expect(await available(recovery)).toBe(true);
     expect(await available(recovery, { runtimeRecoveryTarget: null })).toBe(false);
   });
 
   it('withholds a retry with no conversation and no global start authority', async () => {
-    const recovery = { kind: 'retry', labelKey: 'common.retry' } as const;
+    const recovery = resolveVoiceSurfaceRecovery('retry');
     expect(await available(recovery, {
       attemptSessionId: null,
       startSessionId: null,
@@ -333,8 +333,8 @@ describe('whether an offered Voice recovery can reach a remedy', () => {
   });
 
   it('keeps settings-shaped recoveries available', async () => {
-    expect(await available({ kind: 'open_settings', labelKey: 'modals.openSettings' })).toBe(true);
-    expect(await available({ kind: 'review_credentials', labelKey: 'voiceSurface.reviewCredentials' })).toBe(true);
+    expect(await available(resolveVoiceSurfaceRecovery('open_settings'))).toBe(true);
+    expect(await available(resolveVoiceSurfaceRecovery('review_credentials'))).toBe(true);
     expect(await available(null)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   TeamAuthenticationPolicyV1Schema,
@@ -66,20 +66,20 @@ export const TEAM_DEFAULT_SESSION_HISTORY_ACCESS_V1: SessionHistoryAccessV1 = 'f
  * Authentication narrowing consumes the canonical Lane 03 selector codec.
  * Persisted null is inherit; projections retain that one representation.
  */
-export const TeamPolicyV1Schema = lazyZodSchema(() => z.object({
+export const TeamPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionCreationPolicy: TeamSessionCreationPolicyV1Schema,
   externalSharingPolicy: TeamExternalSharingPolicyV1Schema,
   defaultSessionHistoryAccess: SessionHistoryAccessV1Schema,
   admissionMode: TeamAdmissionModeV1Schema,
-  authenticationPolicy: TeamRestrictedAuthenticationPolicyV1Schema.nullable(),
+  authenticationPolicy: z.nullable(TeamRestrictedAuthenticationPolicyV1Schema),
   /**
    * Malformed persisted policy is never reinterpreted as inheritance. Older
    * Team projections may omit this additive field; current servers always
    * publish it so an administrator can distinguish repair from Home-policy use.
    */
-  authenticationPolicyStatus: z.enum(['available', 'repair_required']).optional(),
-}).strict());
+  authenticationPolicyStatus: z.optional(z.enum(['available', 'repair_required'])),
+}));
 export type TeamPolicyV1 = z.infer<typeof TeamPolicyV1Schema>;
 
 /**
@@ -139,9 +139,9 @@ export function validateTeamDescriptionV1(raw: string | null | undefined): TeamD
   return { status: 'ok', description };
 }
 
-const TeamIdV1Schema = lazyZodSchema(() => z.string().min(1).max(64));
-const TeamNameInputV1Schema = lazyZodSchema(() => z.string().min(1).max(TEAM_NAME_MAX_LENGTH_V1 * 4));
-const TeamDescriptionInputV1Schema = lazyZodSchema(() => z.string().max(TEAM_DESCRIPTION_MAX_LENGTH_V1 * 4));
+const TeamIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(64)));
+const TeamNameInputV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(TEAM_NAME_MAX_LENGTH_V1 * 4)));
+const TeamDescriptionInputV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(TEAM_DESCRIPTION_MAX_LENGTH_V1 * 4)));
 
 /**
  * `teams.create`. `initialOwnerAccountId` is how a Home administrator creates a
@@ -155,28 +155,25 @@ const TeamDescriptionInputV1Schema = lazyZodSchema(() => z.string().max(TEAM_DES
  * create two Teams. It is scoped to actor, operation, and payload at the
  * existing idempotent domain transaction boundary — not a generic Action ledger.
  */
-export const TeamCreateInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCreateInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   name: TeamNameInputV1Schema,
-  description: TeamDescriptionInputV1Schema.nullable().optional(),
-  initialOwnerAccountId: z.string().min(1).optional(),
-  requestKey: z.string().min(1).max(128),
-}).strict());
+  description: z.optional(z.nullable(TeamDescriptionInputV1Schema)),
+  initialOwnerAccountId: z.optional(z.string().check(z.minLength(1))),
+  requestKey: z.string().check(z.minLength(1), z.maxLength(128)),
+}));
 export type TeamCreateInputV1 = z.infer<typeof TeamCreateInputV1Schema>;
 
 /**
  * `teams.update`. Metadata only, authorized by `manageSettings`. An omitted
  * field is unchanged; an explicit null description clears it.
  */
-export const TeamUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdV1Schema,
-  name: TeamNameInputV1Schema.optional(),
-  description: TeamDescriptionInputV1Schema.nullable().optional(),
-}).strict().refine(
-  (input) => input.name !== undefined || input.description !== undefined,
-  { message: 'Team metadata patch changes nothing' },
-));
+  name: z.optional(TeamNameInputV1Schema),
+  description: z.optional(z.nullable(TeamDescriptionInputV1Schema)),
+}).check(z.refine((input) => input.name !== undefined || input.description !== undefined, { message: 'Team metadata patch changes nothing' })));
 export type TeamUpdateInputV1 = z.infer<typeof TeamUpdateInputV1Schema>;
 
 /**
@@ -186,10 +183,10 @@ export type TeamUpdateInputV1 = z.infer<typeof TeamUpdateInputV1Schema>;
  *
  * Authentication policy is independently authorized by `manageAuthentication`.
  */
-export const TeamAuthenticationPolicyRepairBasisV1Schema = lazyZodSchema(() => z.object({
+export const TeamAuthenticationPolicyRepairBasisV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: z.literal('repair_required'),
-}).strict());
+}));
 export type TeamAuthenticationPolicyRepairBasisV1 = z.infer<typeof TeamAuthenticationPolicyRepairBasisV1Schema>;
 
 export const TeamAuthenticationPolicyComparisonBasisV1Schema = lazyZodSchema(() => z.union([
@@ -201,38 +198,35 @@ export type TeamAuthenticationPolicyComparisonBasisV1 = z.infer<
   typeof TeamAuthenticationPolicyComparisonBasisV1Schema
 >;
 
-export const TeamPolicySetInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamPolicySetInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdV1Schema,
-  sessionCreationPolicy: TeamSessionCreationPolicyV1Schema.optional(),
-  externalSharingPolicy: TeamExternalSharingPolicyV1Schema.optional(),
-  defaultSessionHistoryAccess: SessionHistoryAccessV1Schema.optional(),
-  admissionMode: TeamAdmissionModeV1Schema.optional(),
-  previousAuthenticationPolicy: TeamAuthenticationPolicyComparisonBasisV1Schema.optional(),
-  authenticationPolicy: TeamAuthenticationPolicyV1Schema.nullable().optional(),
-}).strict().superRefine((input, context) => {
+  sessionCreationPolicy: z.optional(TeamSessionCreationPolicyV1Schema),
+  externalSharingPolicy: z.optional(TeamExternalSharingPolicyV1Schema),
+  defaultSessionHistoryAccess: z.optional(SessionHistoryAccessV1Schema),
+  admissionMode: z.optional(TeamAdmissionModeV1Schema),
+  previousAuthenticationPolicy: z.optional(TeamAuthenticationPolicyComparisonBasisV1Schema),
+  authenticationPolicy: z.optional(z.nullable(TeamAuthenticationPolicyV1Schema)),
+}).check(z.superRefine((input, context) => {
   if ((input.authenticationPolicy !== undefined) !== (input.previousAuthenticationPolicy !== undefined)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Authentication policy edits require the previously read canonical value',
       path: ['previousAuthenticationPolicy'],
     });
   }
-}).refine(
-  (input) => input.sessionCreationPolicy !== undefined
+}), z.refine((input) => input.sessionCreationPolicy !== undefined
     || input.externalSharingPolicy !== undefined
     || input.defaultSessionHistoryAccess !== undefined
     || input.admissionMode !== undefined
-    || input.authenticationPolicy !== undefined,
-  { message: 'Team policy patch changes nothing' },
-));
+    || input.authenticationPolicy !== undefined, { message: 'Team policy patch changes nothing' })));
 export type TeamPolicySetInputV1 = z.infer<typeof TeamPolicySetInputV1Schema>;
 
 /** `teams.get`, `teams.archive`, `teams.restore`, `teams.logo.remove`. */
-export const TeamRefInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamRefInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdV1Schema,
-}).strict());
+}));
 export type TeamRefInputV1 = z.infer<typeof TeamRefInputV1Schema>;
 
 /**

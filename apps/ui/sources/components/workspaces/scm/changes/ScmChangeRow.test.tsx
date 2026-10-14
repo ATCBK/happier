@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Pressable as RNPressable } from 'react-native';
 import { renderScreen } from '@/dev/testkit';
 import { installSourceControlChangesCommonModuleMocks } from './sourceControlChangesTestHelpers';
+import { DEFAULT_THEME_STYLE_SCALES } from '@/theme/themeStyleScales';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -35,6 +36,7 @@ function flattenStyle(style: any): Record<string, any> {
 
 function createScmChangeRowTheme() {
     return {
+        space: DEFAULT_THEME_STYLE_SCALES.space,
         colors: {
             surface: {
                 base: '#fff',

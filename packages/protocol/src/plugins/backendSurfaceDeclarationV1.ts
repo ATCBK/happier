@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginOptionalStringSchema } from './_shared.js';
 
@@ -20,10 +20,10 @@ export const BackendSurfaceStaticSupportV1Schema = lazyZodSchema(() => z.enum([
 export type BackendSurfaceStaticSupportV1 = z.infer<typeof BackendSurfaceStaticSupportV1Schema>;
 
 export const AgentSurfaceAvailabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('available', [
-  z.object({
+  z.strictObject({
     available: z.literal(true),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     available: z.literal(false),
     reasonCode: z.enum([
       'provider_setting_disabled',
@@ -35,20 +35,20 @@ export const AgentSurfaceAvailabilityV1Schema = lazyZodSchema(() => z.discrimina
       'unsupported',
       'evaluation_error',
     ]),
-    retryable: z.boolean().optional(),
-    safeMessage: z.string().trim().min(1).max(1_000).optional(),
-  }).strict(),
+    retryable: z.optional(z.boolean()),
+    safeMessage: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(1_000))),
+  }),
 ]));
 export type AgentSurfaceAvailabilityV1 = z.infer<typeof AgentSurfaceAvailabilityV1Schema>;
 
-export const AttachSurfaceStaticMetadataV1Schema = lazyZodSchema(() => z.object({
+export const AttachSurfaceStaticMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   attachStrategy: z.enum(['terminal_host', 'provider_attach', 'remote_display']),
   topology: z.enum(['exclusive', 'shared']),
-  locality: z.enum(['same_machine', 'session_machine', 'network_reachable']).optional(),
-  maxClients: z.number().int().positive().nullable().optional(),
-  requiresLocalAttachmentInfo: z.boolean().optional(),
-  liveProbe: z.enum(['none', 'optional', 'required']).optional(),
-}).strict());
+  locality: z.optional(z.enum(['same_machine', 'session_machine', 'network_reachable'])),
+  maxClients: z.optional(z.nullable(z.number().check(z.int(), z.positive()))),
+  requiresLocalAttachmentInfo: z.optional(z.boolean()),
+  liveProbe: z.optional(z.enum(['none', 'optional', 'required'])),
+}));
 export type AttachSurfaceStaticMetadataV1 = z.infer<typeof AttachSurfaceStaticMetadataV1Schema>;
 
 export const BackendSurfaceOperationCatalogV1 = Object.freeze({
@@ -105,40 +105,40 @@ export function isSupportedBackendSurfaceOperationV1(params: Readonly<{
   return supportedOperations.includes(normalizedOperation);
 }
 
-export const BackendSurfaceHandlerRefV1Schema = lazyZodSchema(() => z.object({
+export const BackendSurfaceHandlerRefV1Schema = lazyZodSchema(() => z.looseObject({
   target: z.literal('daemon'),
   exportName: PluginOptionalStringSchema,
-}).passthrough());
+}));
 export type BackendSurfaceHandlerRefV1 = z.infer<typeof BackendSurfaceHandlerRefV1Schema>;
 
-const BackendSurfaceDeclarationBaseV1Schema = lazyZodSchema(() => z.object({
-  surfaceApiVersion: z.literal(1).default(1),
-  id: z.string().trim().min(1),
-  operation: z.string().trim().min(1),
-  support: BackendSurfaceStaticSupportV1Schema.default('supported'),
+const BackendSurfaceDeclarationBaseV1Schema = lazyZodSchema(() => z.looseObject({
+  surfaceApiVersion: z._default(z.literal(1), 1),
+  id: z.string().check(z.trim(), z.minLength(1)),
+  operation: z.string().check(z.trim(), z.minLength(1)),
+  support: z._default(BackendSurfaceStaticSupportV1Schema, 'supported'),
   handler: BackendSurfaceHandlerRefV1Schema,
-  staticMetadata: z.record(z.string(), z.unknown()).optional(),
-  compatibility: z.record(z.string(), z.unknown()).optional(),
-}).passthrough());
+  staticMetadata: z.optional(z.record(z.string(), z.unknown())),
+  compatibility: z.optional(z.record(z.string(), z.unknown())),
+}));
 
-const TerminalRuntimeBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => BackendSurfaceDeclarationBaseV1Schema.extend({
+const TerminalRuntimeBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => z.extend(BackendSurfaceDeclarationBaseV1Schema, {
   kind: z.literal('terminalRuntime'),
 }));
 
-const AttachBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => BackendSurfaceDeclarationBaseV1Schema.extend({
+const AttachBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => z.extend(BackendSurfaceDeclarationBaseV1Schema, {
   kind: z.literal('attach'),
-  staticMetadata: AttachSurfaceStaticMetadataV1Schema.optional(),
+  staticMetadata: z.optional(AttachSurfaceStaticMetadataV1Schema),
 }));
 
-const HandoffBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => BackendSurfaceDeclarationBaseV1Schema.extend({
+const HandoffBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => z.extend(BackendSurfaceDeclarationBaseV1Schema, {
   kind: z.literal('handoff'),
 }));
 
-const ForkBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => BackendSurfaceDeclarationBaseV1Schema.extend({
+const ForkBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => z.extend(BackendSurfaceDeclarationBaseV1Schema, {
   kind: z.literal('fork'),
 }));
 
-const CheckpointBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => BackendSurfaceDeclarationBaseV1Schema.extend({
+const CheckpointBackendSurfaceDeclarationV1Schema = lazyZodSchema(() => z.extend(BackendSurfaceDeclarationBaseV1Schema, {
   kind: z.literal('checkpoint'),
 }));
 

@@ -8,8 +8,8 @@ import ts from 'typescript';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const serverRoot = resolve(repoRoot, 'apps/server');
 
-function readProject(name) {
-  const project = ts.getParsedCommandLineOfConfigFile(resolve(serverRoot, name), {}, {
+function readProject(name, packageRoot = serverRoot) {
+  const project = ts.getParsedCommandLineOfConfigFile(resolve(packageRoot, name), {}, {
     ...ts.sys,
     onUnRecoverableConfigFileDiagnostic(diagnostic) {
       throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
@@ -19,6 +19,36 @@ function readProject(name) {
   assert.deepEqual(project.errors, []);
   return project;
 }
+
+test('CLI editor roots keep composed fixtures outside its package compiler', () => {
+  const cliRoot = resolve(repoRoot, 'apps/cli');
+  const cli = readProject('tsconfig.json', cliRoot);
+  assert.deepEqual(cli.fileNames.filter(file => file.includes('.composed.')), [],
+    'CLI editor roots must honor the existing composition boundary');
+  assert.ok(cli.fileNames.includes(resolve(cliRoot, 'src/index.ts')));
+  assert.ok(cli.fileNames.some(file => file.endsWith('.test.ts')), 'Ordinary CLI tests remain checked');
+});
+
+test('UI compiler roots keep cross-app composition in its existing Vitest lanes', () => {
+  const ui = readProject('tsconfig.json', resolve(repoRoot, 'apps/ui'));
+  const crossAppEdges = [];
+  for (const file of ui.fileNames) {
+    const source = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
+    for (const { fileName } of source.importedFiles) {
+      if (!fileName.startsWith('.')) continue;
+      const target = resolve(dirname(file), fileName);
+      for (const app of ['cli', 'server']) {
+        const appPath = relative(resolve(repoRoot, `apps/${app}`), target);
+        if (appPath && appPath !== '..' && !appPath.startsWith(`..${sep}`) && !isAbsolute(appPath)) {
+          crossAppEdges.push(`${relative(repoRoot, file)} -> ${fileName}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(crossAppEdges, [], 'Cross-app fixtures must use the excluded .composed. convention');
+  assert.ok(ui.fileNames.some(file => file.endsWith('.test.ts') || file.endsWith('.test.tsx')),
+    'Ordinary UI tests remain in the developer compiler');
+});
 
 test('server compiler roots keep cross-app composition in the test-only project', () => {
   const server = readProject('tsconfig.json');

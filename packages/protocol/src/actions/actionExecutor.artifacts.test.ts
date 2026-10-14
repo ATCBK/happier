@@ -9,7 +9,7 @@ import { prepareArtifactHeaderForRevisionV1 } from '../artifacts/artifactHeaderR
 import { buildWorkBoardArtifactHeaderV1, readWorkBoardArtifactSummaryV1 } from '../boards/workBoardArtifactV1.js';
 import { createWorkBoardV1 } from '../boards/workBoardV1.js';
 import { ArtifactActionInputSchemasV1, type ArtifactDocumentV1Schema } from '../artifacts/artifactActionsV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsagePrimitives.js';
 

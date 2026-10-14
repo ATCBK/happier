@@ -1,10 +1,6 @@
-import type {
-    TeamIdentityConnectionUserActionIdV1,
-    IdentityConnectionUserActionIdV1,
-    IdentityConnectionV1,
-    TeamIdentityConnectionV1,
-} from "@happier-dev/protocol/teams";
-import type { HomeIdentityConnectionV1, HomeIdentityConnectionUserActionIdV1 } from "@happier-dev/protocol/home";
+import type { TeamIdentityConnectionUserActionIdV1, IdentityConnectionUserActionIdV1, HomeIdentityConnectionUserActionIdV1 } from '@happier-dev/protocol/teams/identity/actionIds';
+import type { IdentityConnectionV1, TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams/identity/connection';
+import type { HomeIdentityConnectionV1 } from '@happier-dev/protocol/home/identity';
 
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";

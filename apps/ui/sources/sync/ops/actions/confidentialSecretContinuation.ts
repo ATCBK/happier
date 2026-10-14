@@ -1,12 +1,12 @@
 import { PrivateSecretContinuationV1Schema, type PrivateSecretContinuationV1 } from '@happier-dev/protocol/approvals/privateSecretContinuationV1';
 import { SecretFillSettlementV1Schema, type SecretFillSettlementV1 } from '@happier-dev/protocol/computer/v1';
-import { applyAccountSettingsSavedSecretMutation } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { randomUUID } from '@/platform/randomUUID';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/account/settings/personalSavedSecretActionsV1';
+import { runTeamAction } from '@/sync/ops/teams/teamActionClient';
 
 export type ConfidentialSecretContinuationResult = Readonly<{
   fill: SecretFillSettlementV1;
@@ -76,34 +76,22 @@ export async function continueConfidentialSecretFill(input: Readonly<{
         remember = 'failed';
         const name = input.remember.name.trim();
         if (name) {
-          const now = Date.now();
-          const secret = { id: randomUUID(), name, kind: 'apiKey' as const,
-            encryptedValue: { _isSecretValue: true as const, value: continuation.choice.value },
-            createdAt: now, updatedAt: now };
           try {
-            // The incumbent CAS writer reads persisted Account mode and seals the same
-            // material. Its failure never repeats the already settled physical fill.
-            const account = await captureLazyActionAccountContext(input.scope.serverId, input.signal);
-            try {
-              const encryption = await account.resolveAccountEncryption();
-              if (account.accountId !== input.scope.accountId || !input.isCurrent()
-                || (input.expectedServerIdentityId && account.serverIdentityId !== input.expectedServerIdentityId)
-                || encryption.accountMode !== continuation.accountEncryptionMode) throw new Error('account_changed');
-              await account.mutateRawSettings(current => {
-                if (!input.isCurrent()) throw new Error('account_changed');
-                // The mutation owner intentionally retains the saved operand. Do not
-                // alias it with the ephemeral object that this operation clears.
-                const saved = { ...secret, encryptedValue: { ...secret.encryptedValue } };
-                return { ...applyAccountSettingsSavedSecretMutation(current, { kind: 'add', secret: saved }).settings };
-              });
-            } finally { account.dispose(); }
-            remember = 'saved';
+            const created = await runTeamAction({
+              scope: input.scope,
+              actionId: 'secrets.create',
+              input: { name, kind: 'apiKey', value: continuation.choice.value },
+              parse: value => PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.create'].parse(value),
+              approval: 'surface_confirmed',
+              signal: input.signal,
+            });
+            remember = created.kind === 'succeeded' ? 'saved'
+              : created.failure.kind === 'outcome_unknown' ? 'unknown' : 'failed';
           } catch (error) {
             remember = input.signal?.aborted || !input.isCurrent() ? 'canceled'
               : error !== null && typeof error === 'object'
-                && Reflect.get(error, 'code') === 'account_settings_mutation_outcome_unknown' ? 'unknown' : 'failed';
+                && Reflect.get(error, 'code') === 'outcome_unknown' ? 'unknown' : 'failed';
           }
-          finally { secret.encryptedValue.value = ''; }
         }
       }
     }

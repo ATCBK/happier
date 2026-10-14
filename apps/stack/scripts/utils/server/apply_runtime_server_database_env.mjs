@@ -5,7 +5,7 @@ import { getServerLightDataDirFromEnvOrDefault } from '../stack/dirs.mjs';
 import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/server';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
-import { resolveEffectiveDbProvider, resolveEffectiveDbProviderTransition, resolveSharedDatabaseSource } from './effective_db_provider.mjs';
+import { applyEffectiveDbProviderEnv, resolveEffectiveDbProviderTransition, resolveSharedDatabaseSource } from './effective_db_provider.mjs';
 import {
   renderPrismaCompatibleSqliteDatabaseUrl,
   resolveServerLightSqliteDatabaseUrlOptionsFromEnv,
@@ -86,16 +86,21 @@ export function applySharedDatabaseSourceEnv({ env }) {
   }
 }
 
-export function applyRuntimeServerDatabaseEnv({ env, serverDir }) {
+/** Resolve a server bundle's provider on the server host, after projecting any
+ * host-owned shared-database source into the runtime environment. */
+export function applyServerHostDatabaseProviderEnv({ serverComponentName, env }) {
   applySharedDatabaseSourceEnv({ env });
-  const effective = resolveEffectiveDbProvider({ serverComponentName: 'happier-server-light', env });
-  if (!effective.ok) throw new Error('[local] unsupported DB provider');
-  if (effective.provider === 'postgres') {
+  return applyEffectiveDbProviderEnv({ serverComponentName, env });
+}
+
+export function applyRuntimeServerDatabaseEnv({ env, serverDir }) {
+  const provider = applyServerHostDatabaseProviderEnv({ serverComponentName: 'happier-server-light', env });
+  if (provider === 'postgres') {
     const transition = resolveEffectiveDbProviderTransition({ nextServerComponentName: 'happier-server-light', env });
     if (!transition.ok) throw new Error('[local] postgres requires a compatible explicit DATABASE_URL');
     return;
   }
-  if (effective.provider !== 'sqlite') return;
+  if (provider !== 'sqlite') return;
   const dataDir = firstNonEmpty(env.HAPPIER_SERVER_LIGHT_DATA_DIR, env.HAPPY_SERVER_LIGHT_DATA_DIR);
   if (!dataDir) return;
 

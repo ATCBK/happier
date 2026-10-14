@@ -91,9 +91,7 @@ export function isMachineReachable(
  * Only explicit target-unavailable verdicts may override pushed presence. A missing method,
  * including an older Home's ambiguous verdict, establishes no Machine-wide reachability fact.
  */
-export function isMachineRequestReachabilityFailure(error: unknown, evidence?: Readonly<{
-    callerDeadlineExpiredWithoutReply: boolean;
-}>): boolean {
+export function isMachineRequestReachabilityFailure(error: unknown): boolean {
     const rpcErrorCode = readRpcErrorCode(error);
     if (rpcErrorCode === 'RPC_METHOD_NOT_AVAILABLE') return false;
     if (rpcErrorCode === 'target_unavailable' || rpcErrorCode === 'machine_unavailable' || rpcErrorCode === 'machine_offline') {
@@ -101,9 +99,9 @@ export function isMachineRequestReachabilityFailure(error: unknown, evidence?: R
     }
     if (!error || typeof error !== 'object') return false;
     const code = 'code' in error ? String(error.code ?? '') : '';
-    // A phase or decoding timeout does not say the daemon failed to reply.
-    return (code === 'MACHINE_RPC_TIMEOUT' && evidence?.callerDeadlineExpiredWithoutReply === true)
-        || code === 'target_unavailable'
+    // A caller deadline measures waiting, not target availability. Slow domain
+    // work can exhaust it while presence and unrelated operations stay healthy.
+    return code === 'target_unavailable'
         || code === 'machine_unavailable'
         || code === 'machine_offline';
 }

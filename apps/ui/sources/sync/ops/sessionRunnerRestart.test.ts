@@ -88,7 +88,6 @@ function statusResponse(state: SessionRunnerRuntimeStateV1 = replacedState) {
 
 const restartCases = [
     ['stale', () => ops.restartSessionRunnerOnCurrentRuntime({ runtimeState, serverId: home.id }), RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART],
-    ['configuration', () => ops.restartSessionRunnerForConfigurationChange({ runtimeState, serverId: home.id }), RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART],
     ['provider binding', () => ops.restartSessionRunnerForProviderBindingChange({ runtimeState, serverId: home.id,
         runnerProcessIdentity: processIdentity, launchBinding, nextBindingSecurityFingerprint: 'binding-security:v1:b' }), RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2],
 ] as const;
@@ -120,11 +119,9 @@ describe('session runner restart op', () => {
         } })]));
     });
 
-    it('forces configuration and confirms the exact provider security change through V2', async () => {
+    it('confirms the exact provider security change through V2', async () => {
         await restartCases[1][1]();
-        await restartCases[2][1]();
-        expect(decodedRequests[0]?.payload).toMatchObject({ mode: 'force_current_cli' });
-        expect(decodedRequests[1]).toMatchObject({ method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, payload: {
+        expect(decodedRequests[0]).toMatchObject({ method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, payload: {
             v: 2, mode: 'force_current_cli', reason: 'provider_binding_change_recovery', expectedRunnerProcessIdentity: processIdentity,
             providerBindingSecurityChangeConfirmationV1: { v: 1, sessionId: 's1', connectionId: 'pc_gateway',
                 previousBindingSecurityFingerprint: 'binding-security:v1:a', nextBindingSecurityFingerprint: 'binding-security:v1:b' },
@@ -174,22 +171,10 @@ describe('session runner restart op', () => {
         await expect(pending).resolves.toMatchObject({ ok: true, status: 'restarted' });
     });
 
-    it('does not confuse an unchanged current process with a forced configuration restart', async () => {
-        response = method => method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
-            ? { ok: false, status: 'partial_failure', sessionId: 's1' }
-            : statusResponse({ ...replacedState, runner: { ...replacedState.runner, pid: 123 } });
-        vi.useFakeTimers();
-        const pending = restartCases[1][1]();
-        await vi.waitFor(() => expect(decodedRequests.length).toBeGreaterThan(1));
-        await vi.advanceTimersByTimeAsync(20_000);
-        await expect(pending).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
-    });
-
-    it('recognizes configuration replacement and retains binding failure without applied-binding evidence', async () => {
+    it('retains binding failure without applied-binding evidence', async () => {
         response = method => method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET
             ? statusResponse() : { ok: false, status: 'partial_failure', sessionId: 's1' };
-        await expect(restartCases[1][1]()).resolves.toMatchObject({ ok: true, status: 'restarted' });
-        await expect(restartCases[2][1]()).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
+        await expect(restartCases[1][1]()).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
     });
 
     it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {

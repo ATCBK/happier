@@ -80,7 +80,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS, type SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
 import { scmFallbackError, type ScmRpcFailure } from './scmRpcFailure';
-import { runScmRpcWithAdmission } from './scmRpcAdmission';
+import { runScmRpcWithAdmission, type ScmRpcTransportResult } from './scmRpcAdmission';
 import { invokeUiScmAction, normalizeUiScmFacadeResult } from './scmActionInvocation';
 export { assertScmResponse, scmFallbackError } from './scmRpcFailure';
 
@@ -144,7 +144,7 @@ export async function runMachineScmRpc<
     method: string,
     request: R,
     options?: MachineScmCallOptions,
-): Promise<T | ScmRpcFailure> {
+): Promise<ScmRpcTransportResult<T>> {
     const payload = method.startsWith('scm.diffSummary.') || method === 'scm.hostingRepository.resolveAddress' ? request : withScmBackendPreference({
         ...request,
         outcomeVersion: 1 as const,
@@ -173,7 +173,7 @@ async function callMachineScmTransport<
     method: string,
     request: R,
     options?: MachineScmCallOptions,
-): Promise<T | ScmRpcFailure> {
+): Promise<ScmRpcTransportResult<T>> {
     try {
         return await runMachineScmRpc<T, R>(machineId, method, request, options);
     } catch (error) {
@@ -197,7 +197,7 @@ async function callMachineScm<T extends { success: boolean; error?: string; erro
     // Passive snapshot/diff observations retain the transport's cancellation contract.
     // Intentional effects and PR draft preparation enter the shared Action owner.
     if (getScmRpcSideEffectClass(method) === 'read' && method !== RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE) {
-        return callMachineScmTransport<T, R>(machineId, method, request, options);
+        return normalizeUiScmFacadeResult<T>(await callMachineScmTransport<T, R>(machineId, method, request, options));
     }
     const actionId = ActionIdSchema.parse(method);
     const schema = getActionSpec(actionId).outputSchema;

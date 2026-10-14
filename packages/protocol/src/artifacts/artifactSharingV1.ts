@@ -65,7 +65,7 @@ export type ArtifactSharingKindAdapterV1 = Readonly<{
 /** Recipient intent and content admission only. Grants and content opening belong to the store. */
 export type ArtifactUseTargetV1 = Readonly<{
   artifactId: string;
-  kind: 'open' | 'prompt_doc' | 'prompt_bundle' | 'memory' | 'workflow' | 'role' | 'launch_profile' | 'board' | 'approval';
+  kind: 'open' | 'prompt_doc' | 'prompt_bundle' | 'memory' | 'workflow' | 'role' | 'launch_profile' | 'board' | 'widget' | 'approval';
   canShare: boolean;
   browserListed: boolean;
   publicLinkAllowed: boolean;
@@ -194,7 +194,7 @@ const kindPolicies: readonly Readonly<ArtifactKindPolicyV1 & {
     { adapter: memoryDocArtifactSharingAdapterV1, useKind: 'memory' as const },
     { adapter: promptBundleArtifactSharingAdapterV1, useKind: 'prompt_bundle' as const },
     { adapter: workBoardArtifactSharingAdapterV1, useKind: 'board' as const },
-    { adapter: widgetDefinitionArtifactSharingAdapterV1, useKind: 'open' as const },
+    { adapter: widgetDefinitionArtifactSharingAdapterV1, useKind: 'widget' as const },
   ].map(policy => ({ ...documentPolicy, ...policy, kind: policy.adapter.kind, requiresTextBody: true })),
   ...Object.values(APPROVAL_ARTIFACT_KINDS_V1).map(kind => ({ ...privatePolicy, kind, useKind: 'approval' as const, requiresTextBody: true })),
   { ...documentPolicy, kind: WIDGET_SURFACE_ARTIFACT_KIND_V1, adapter: widgetSurfaceArtifactSharingAdapterV1, useKind: 'open', requiresTextBody: false,

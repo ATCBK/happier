@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1));
+const NonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 export const CheckpointRestoreScopeV1Schema = lazyZodSchema(() => z.enum(['conversation', 'workspace']));
 export type CheckpointRestoreScopeV1 = z.infer<typeof CheckpointRestoreScopeV1Schema>;
@@ -12,64 +12,64 @@ export type CheckpointTimingV1 = z.infer<typeof CheckpointTimingV1Schema>;
 export const CheckpointRestoreSourceV1Schema = lazyZodSchema(() => z.enum(['provider', 'happier_scm', 'composed']));
 export type CheckpointRestoreSourceV1 = z.infer<typeof CheckpointRestoreSourceV1Schema>;
 
-export const CheckpointRestoreAnchorEvidenceV1Schema = lazyZodSchema(() => z.object({
-  turnId: NonEmptyStringSchema.optional(),
-  messageSeq: z.number().int().nonnegative().optional(),
-  seqRange: z.object({
-    startSeqInclusive: z.number().int().nonnegative(),
-    endSeqInclusive: z.number().int().nonnegative(),
-  }).strict().optional(),
-}).strict());
+export const CheckpointRestoreAnchorEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
+  turnId: z.optional(NonEmptyStringSchema),
+  messageSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  seqRange: z.optional(z.strictObject({
+    startSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+    endSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+  })),
+}));
 export type CheckpointRestoreAnchorEvidenceV1 = z.infer<typeof CheckpointRestoreAnchorEvidenceV1Schema>;
 
-export const CheckpointRestoreAnchorV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointRestoreAnchorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('before_user_message'),
   messageId: NonEmptyStringSchema,
-  evidence: CheckpointRestoreAnchorEvidenceV1Schema.optional(),
-}).strict());
+  evidence: z.optional(CheckpointRestoreAnchorEvidenceV1Schema),
+}));
 export type CheckpointRestoreAnchorV1 = z.infer<typeof CheckpointRestoreAnchorV1Schema>;
 
 export const CheckpointProviderTargetRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('provider_checkpoint'),
     checkpointId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_message'),
     messageId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_turn'),
     turnId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_restore_token'),
     token: NonEmptyStringSchema,
-  }).strict(),
+  }),
 ]));
 export type CheckpointProviderTargetRefV1 = z.infer<typeof CheckpointProviderTargetRefV1Schema>;
 
 export const SanitizedCheckpointProviderTargetRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('provider_checkpoint'),
     checkpointId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_message'),
     messageId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_turn'),
     turnId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_restore_token'),
     redacted: z.literal(true),
-  }).strict(),
+  }),
 ]));
 export type SanitizedCheckpointProviderTargetRefV1 = z.infer<typeof SanitizedCheckpointProviderTargetRefV1Schema>;
 
-const CheckpointScopesSchema = lazyZodSchema(() => z.array(CheckpointRestoreScopeV1Schema).nonempty().superRefine((scopes, ctx) => {
+const CheckpointScopesSchema = lazyZodSchema(() => z.array(CheckpointRestoreScopeV1Schema).check(z.minLength(1), z.superRefine((scopes, ctx) => {
   const seen = new Set<CheckpointRestoreScopeV1>();
   scopes.forEach((scope, index) => {
     if (seen.has(scope)) {
@@ -82,7 +82,7 @@ const CheckpointScopesSchema = lazyZodSchema(() => z.array(CheckpointRestoreScop
     }
     seen.add(scope);
   });
-}));
+})));
 
 function sameScopeSet(
   left: readonly CheckpointRestoreScopeV1[],
@@ -110,14 +110,14 @@ function exactlyPartitionsScopes(
   return partScopes.length === requestedScopes.length && sameScopeSet(requestedScopes, partScopes);
 }
 
-const CheckpointProviderCandidateRefV1BaseSchema = lazyZodSchema(() => z.object({
+const CheckpointProviderCandidateRefV1BaseSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('provider'),
   backendId: NonEmptyStringSchema,
-  anchor: CheckpointRestoreAnchorV1Schema.optional(),
-  target: CheckpointProviderTargetRefV1Schema.optional(),
-}).strict());
+  anchor: z.optional(CheckpointRestoreAnchorV1Schema),
+  target: z.optional(CheckpointProviderTargetRefV1Schema),
+}));
 
-export const CheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => CheckpointProviderCandidateRefV1BaseSchema.superRefine((candidate, ctx) => {
+export const CheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => CheckpointProviderCandidateRefV1BaseSchema.check(z.superRefine((candidate, ctx) => {
   const sourceCount = Number(candidate.anchor !== undefined) + Number(candidate.target !== undefined);
   if (sourceCount !== 1) {
     ctx.addIssue({
@@ -126,14 +126,14 @@ export const CheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => Checkp
       path: ['anchor'],
     });
   }
-}));
+})));
 export type CheckpointProviderCandidateRefV1 = z.infer<typeof CheckpointProviderCandidateRefV1Schema>;
 
-export const CheckpointScmCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointScmCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('happier_scm'),
   checkpointRef: NonEmptyStringSchema,
-  turnId: NonEmptyStringSchema.optional(),
-}).strict());
+  turnId: z.optional(NonEmptyStringSchema),
+}));
 export type CheckpointScmCandidateRefV1 = z.infer<typeof CheckpointScmCandidateRefV1Schema>;
 
 export const CheckpointAtomicCandidateRefV1Schema = lazyZodSchema(() => z.union([
@@ -142,16 +142,16 @@ export const CheckpointAtomicCandidateRefV1Schema = lazyZodSchema(() => z.union(
 ]));
 export type CheckpointAtomicCandidateRefV1 = z.infer<typeof CheckpointAtomicCandidateRefV1Schema>;
 
-export const CheckpointSelectedAtomicCandidatePartV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointSelectedAtomicCandidatePartV1Schema = lazyZodSchema(() => z.strictObject({
   scopes: CheckpointScopesSchema,
   candidate: CheckpointAtomicCandidateRefV1Schema,
-}).strict());
+}));
 export type CheckpointSelectedAtomicCandidatePartV1 = z.infer<typeof CheckpointSelectedAtomicCandidatePartV1Schema>;
 
-export const CheckpointComposedCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointComposedCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('composed'),
-  parts: z.array(CheckpointSelectedAtomicCandidatePartV1Schema).nonempty(),
-}).strict());
+  parts: z.array(CheckpointSelectedAtomicCandidatePartV1Schema).check(z.minLength(1)),
+}));
 export type CheckpointComposedCandidateRefV1 = z.infer<typeof CheckpointComposedCandidateRefV1Schema>;
 
 export const CheckpointCandidateRefV1Schema = lazyZodSchema(() => z.union([
@@ -161,14 +161,14 @@ export const CheckpointCandidateRefV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type CheckpointCandidateRefV1 = z.infer<typeof CheckpointCandidateRefV1Schema>;
 
-const SanitizedCheckpointProviderCandidateRefV1BaseSchema = lazyZodSchema(() => z.object({
+const SanitizedCheckpointProviderCandidateRefV1BaseSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('provider'),
   backendId: NonEmptyStringSchema,
-  anchor: CheckpointRestoreAnchorV1Schema.optional(),
-  target: SanitizedCheckpointProviderTargetRefV1Schema.optional(),
-}).strict());
+  anchor: z.optional(CheckpointRestoreAnchorV1Schema),
+  target: z.optional(SanitizedCheckpointProviderTargetRefV1Schema),
+}));
 
-const SanitizedCheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => SanitizedCheckpointProviderCandidateRefV1BaseSchema.superRefine((candidate, ctx) => {
+const SanitizedCheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => SanitizedCheckpointProviderCandidateRefV1BaseSchema.check(z.superRefine((candidate, ctx) => {
   const sourceCount = Number(candidate.anchor !== undefined) + Number(candidate.target !== undefined);
   if (sourceCount !== 1) {
     ctx.addIssue({
@@ -177,22 +177,22 @@ const SanitizedCheckpointProviderCandidateRefV1Schema = lazyZodSchema(() => Sani
       path: ['anchor'],
     });
   }
-}));
+})));
 
 const SanitizedCheckpointAtomicCandidateRefV1Schema = lazyZodSchema(() => z.union([
   SanitizedCheckpointProviderCandidateRefV1Schema,
   CheckpointScmCandidateRefV1Schema,
 ]));
 
-const SanitizedCheckpointSelectedAtomicCandidatePartV1Schema = lazyZodSchema(() => z.object({
+const SanitizedCheckpointSelectedAtomicCandidatePartV1Schema = lazyZodSchema(() => z.strictObject({
   scopes: CheckpointScopesSchema,
   candidate: SanitizedCheckpointAtomicCandidateRefV1Schema,
-}).strict());
+}));
 
-export const SanitizedCheckpointComposedCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const SanitizedCheckpointComposedCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('composed'),
-  parts: z.array(SanitizedCheckpointSelectedAtomicCandidatePartV1Schema).nonempty(),
-}).strict());
+  parts: z.array(SanitizedCheckpointSelectedAtomicCandidatePartV1Schema).check(z.minLength(1)),
+}));
 
 export const SanitizedCheckpointCandidateRefV1Schema = lazyZodSchema(() => z.union([
   SanitizedCheckpointProviderCandidateRefV1Schema,
@@ -201,21 +201,21 @@ export const SanitizedCheckpointCandidateRefV1Schema = lazyZodSchema(() => z.uni
 ]));
 export type SanitizedCheckpointCandidateRefV1 = z.infer<typeof SanitizedCheckpointCandidateRefV1Schema>;
 
-const CheckpointRestoreCandidateV1BaseSchema = lazyZodSchema(() => z.object({
+const CheckpointRestoreCandidateV1BaseSchema = lazyZodSchema(() => z.strictObject({
   id: NonEmptyStringSchema,
   source: CheckpointRestoreSourceV1Schema,
   scopes: CheckpointScopesSchema,
   candidate: CheckpointCandidateRefV1Schema,
-  atomic: z.boolean().optional(),
-  label: NonEmptyStringSchema.optional(),
-  recommended: z.boolean().optional(),
-  diagnostics: z.array(z.object({
+  atomic: z.optional(z.boolean()),
+  label: z.optional(NonEmptyStringSchema),
+  recommended: z.optional(z.boolean()),
+  diagnostics: z.optional(z.array(z.strictObject({
     code: NonEmptyStringSchema,
-    message: NonEmptyStringSchema.optional(),
-  }).strict()).optional(),
-}).strict());
+    message: z.optional(NonEmptyStringSchema),
+  }))),
+}));
 
-export const CheckpointRestoreCandidateV1Schema = lazyZodSchema(() => CheckpointRestoreCandidateV1BaseSchema.superRefine((candidate, ctx) => {
+export const CheckpointRestoreCandidateV1Schema = lazyZodSchema(() => CheckpointRestoreCandidateV1BaseSchema.check(z.superRefine((candidate, ctx) => {
   if (candidate.source !== candidate.candidate.source) {
     ctx.addIssue({
       code: 'custom',
@@ -230,12 +230,12 @@ export const CheckpointRestoreCandidateV1Schema = lazyZodSchema(() => Checkpoint
       path: ['candidate', 'parts'],
     });
   }
-}));
+})));
 export type CheckpointRestoreCandidateV1 = z.infer<typeof CheckpointRestoreCandidateV1Schema>;
 
-export const SanitizedCheckpointRestoreCandidateV1Schema = lazyZodSchema(() => CheckpointRestoreCandidateV1BaseSchema.extend({
+export const SanitizedCheckpointRestoreCandidateV1Schema = lazyZodSchema(() => z.extend(CheckpointRestoreCandidateV1BaseSchema, {
   candidate: SanitizedCheckpointCandidateRefV1Schema,
-}).superRefine((candidate, ctx) => {
+}).check(z.superRefine((candidate, ctx) => {
   if (candidate.source !== candidate.candidate.source) {
     ctx.addIssue({
       code: 'custom',
@@ -250,18 +250,18 @@ export const SanitizedCheckpointRestoreCandidateV1Schema = lazyZodSchema(() => C
       path: ['candidate', 'parts'],
     });
   }
-}));
+})));
 export type SanitizedCheckpointRestoreCandidateV1 = z.infer<typeof SanitizedCheckpointRestoreCandidateV1Schema>;
 
-export const CheckpointProviderCreationCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointProviderCreationCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('provider'),
   backendId: NonEmptyStringSchema,
-}).strict());
+}));
 export type CheckpointProviderCreationCandidateRefV1 = z.infer<typeof CheckpointProviderCreationCandidateRefV1Schema>;
 
-export const CheckpointScmCreationCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointScmCreationCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('happier_scm'),
-}).strict());
+}));
 export type CheckpointScmCreationCandidateRefV1 = z.infer<typeof CheckpointScmCreationCandidateRefV1Schema>;
 
 export const CheckpointAtomicCreationCandidateRefV1Schema = lazyZodSchema(() => z.union([
@@ -270,16 +270,16 @@ export const CheckpointAtomicCreationCandidateRefV1Schema = lazyZodSchema(() => 
 ]));
 export type CheckpointAtomicCreationCandidateRefV1 = z.infer<typeof CheckpointAtomicCreationCandidateRefV1Schema>;
 
-export const CheckpointSelectedAtomicCreationCandidatePartV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointSelectedAtomicCreationCandidatePartV1Schema = lazyZodSchema(() => z.strictObject({
   scopes: CheckpointScopesSchema,
   candidate: CheckpointAtomicCreationCandidateRefV1Schema,
-}).strict());
+}));
 export type CheckpointSelectedAtomicCreationCandidatePartV1 = z.infer<typeof CheckpointSelectedAtomicCreationCandidatePartV1Schema>;
 
-export const CheckpointComposedCreationCandidateRefV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointComposedCreationCandidateRefV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('composed'),
-  parts: z.array(CheckpointSelectedAtomicCreationCandidatePartV1Schema).nonempty(),
-}).strict());
+  parts: z.array(CheckpointSelectedAtomicCreationCandidatePartV1Schema).check(z.minLength(1)),
+}));
 export type CheckpointComposedCreationCandidateRefV1 = z.infer<typeof CheckpointComposedCreationCandidateRefV1Schema>;
 
 export const CheckpointCreationCandidateRefV1Schema = lazyZodSchema(() => z.union([
@@ -289,21 +289,21 @@ export const CheckpointCreationCandidateRefV1Schema = lazyZodSchema(() => z.unio
 ]));
 export type CheckpointCreationCandidateRefV1 = z.infer<typeof CheckpointCreationCandidateRefV1Schema>;
 
-const CheckpointCreationCandidateV1BaseSchema = lazyZodSchema(() => z.object({
+const CheckpointCreationCandidateV1BaseSchema = lazyZodSchema(() => z.strictObject({
   id: NonEmptyStringSchema,
   source: CheckpointRestoreSourceV1Schema,
   scopes: CheckpointScopesSchema,
   candidate: CheckpointCreationCandidateRefV1Schema,
-  atomic: z.boolean().optional(),
-  label: NonEmptyStringSchema.optional(),
-  recommended: z.boolean().optional(),
-  diagnostics: z.array(z.object({
+  atomic: z.optional(z.boolean()),
+  label: z.optional(NonEmptyStringSchema),
+  recommended: z.optional(z.boolean()),
+  diagnostics: z.optional(z.array(z.strictObject({
     code: NonEmptyStringSchema,
-    message: NonEmptyStringSchema.optional(),
-  }).strict()).optional(),
-}).strict());
+    message: z.optional(NonEmptyStringSchema),
+  }))),
+}));
 
-export const CheckpointCreationCandidateV1Schema = lazyZodSchema(() => CheckpointCreationCandidateV1BaseSchema.superRefine((candidate, ctx) => {
+export const CheckpointCreationCandidateV1Schema = lazyZodSchema(() => CheckpointCreationCandidateV1BaseSchema.check(z.superRefine((candidate, ctx) => {
   if (candidate.source !== candidate.candidate.source) {
     ctx.addIssue({
       code: 'custom',
@@ -318,7 +318,7 @@ export const CheckpointCreationCandidateV1Schema = lazyZodSchema(() => Checkpoin
       path: ['candidate', 'parts'],
     });
   }
-}));
+})));
 export type CheckpointCreationCandidateV1 = z.infer<typeof CheckpointCreationCandidateV1Schema>;
 
 export const SanitizedCheckpointCreationCandidateRefV1Schema = CheckpointCreationCandidateRefV1Schema;
@@ -327,20 +327,20 @@ export type SanitizedCheckpointCreationCandidateRefV1 = z.infer<typeof Sanitized
 export const SanitizedCheckpointCreationCandidateV1Schema = CheckpointCreationCandidateV1Schema;
 export type SanitizedCheckpointCreationCandidateV1 = z.infer<typeof SanitizedCheckpointCreationCandidateV1Schema>;
 
-export const CheckpointRestoreConfirmationV1Schema = lazyZodSchema(() => z.object({
-  sourceChoiceConfirmed: z.boolean().optional(),
-}).strict());
+export const CheckpointRestoreConfirmationV1Schema = lazyZodSchema(() => z.strictObject({
+  sourceChoiceConfirmed: z.optional(z.boolean()),
+}));
 export type CheckpointRestoreConfirmationV1 = z.infer<typeof CheckpointRestoreConfirmationV1Schema>;
 
-export const SessionCheckpointRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionCheckpointRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: NonEmptyStringSchema,
   scopes: CheckpointScopesSchema,
-  candidate: CheckpointCreationCandidateRefV1Schema.optional(),
-  timing: CheckpointTimingV1Schema.default('idle'),
-  label: NonEmptyStringSchema.optional(),
-  confirmation: CheckpointRestoreConfirmationV1Schema.optional(),
-}).strict().superRefine((request, ctx) => {
+  candidate: z.optional(CheckpointCreationCandidateRefV1Schema),
+  timing: z._default(CheckpointTimingV1Schema, 'idle'),
+  label: z.optional(NonEmptyStringSchema),
+  confirmation: z.optional(CheckpointRestoreConfirmationV1Schema),
+}).check(z.superRefine((request, ctx) => {
   if (request.candidate?.source === 'composed' && !exactlyPartitionsScopes(request.scopes, request.candidate.parts)) {
     ctx.addIssue({
       code: 'custom',
@@ -348,17 +348,17 @@ export const SessionCheckpointRequestV1Schema = lazyZodSchema(() => z.object({
       path: ['candidate', 'parts'],
     });
   }
-}));
+})));
 export type SessionCheckpointRequestV1 = z.infer<typeof SessionCheckpointRequestV1Schema>;
 
-export const SessionRestoreRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionRestoreRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: NonEmptyStringSchema,
   scopes: CheckpointScopesSchema,
-  anchor: CheckpointRestoreAnchorV1Schema.optional(),
-  candidate: CheckpointCandidateRefV1Schema.optional(),
-  confirmation: CheckpointRestoreConfirmationV1Schema.optional(),
-}).strict().superRefine((request, ctx) => {
+  anchor: z.optional(CheckpointRestoreAnchorV1Schema),
+  candidate: z.optional(CheckpointCandidateRefV1Schema),
+  confirmation: z.optional(CheckpointRestoreConfirmationV1Schema),
+}).check(z.superRefine((request, ctx) => {
   const targetSelectors = Number(request.anchor !== undefined) + Number(request.candidate !== undefined);
   if (targetSelectors !== 1) {
     ctx.addIssue({
@@ -374,38 +374,38 @@ export const SessionRestoreRequestV1Schema = lazyZodSchema(() => z.object({
       path: ['candidate', 'parts'],
     });
   }
-}));
+})));
 export type SessionRestoreRequestV1 = z.infer<typeof SessionRestoreRequestV1Schema>;
 
-export const CheckpointFailedScopeV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointFailedScopeV1Schema = lazyZodSchema(() => z.strictObject({
   scope: CheckpointRestoreScopeV1Schema,
   code: NonEmptyStringSchema,
-  message: NonEmptyStringSchema.optional(),
-}).strict());
+  message: z.optional(NonEmptyStringSchema),
+}));
 export type CheckpointFailedScopeV1 = z.infer<typeof CheckpointFailedScopeV1Schema>;
 
-export const CheckpointOperationReceiptV1Schema = lazyZodSchema(() => z.object({
+export const CheckpointOperationReceiptV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   operation: z.enum(['checkpoint', 'restore']),
   phase: z.enum(['started', 'succeeded', 'partially_succeeded', 'failed']),
   lifecycleId: NonEmptyStringSchema,
   source: CheckpointRestoreSourceV1Schema,
   scopes: CheckpointScopesSchema,
-  candidate: SanitizedCheckpointCandidateRefV1Schema.optional(),
-  restoredScopes: CheckpointScopesSchema.optional(),
-  failedScopes: z.array(CheckpointFailedScopeV1Schema).optional(),
-}).strict());
+  candidate: z.optional(SanitizedCheckpointCandidateRefV1Schema),
+  restoredScopes: z.optional(CheckpointScopesSchema),
+  failedScopes: z.optional(z.array(CheckpointFailedScopeV1Schema)),
+}));
 export type CheckpointOperationReceiptV1 = z.infer<typeof CheckpointOperationReceiptV1Schema>;
 
 export const SessionCheckpointResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.enum(['succeeded', 'partially_succeeded']),
     source: CheckpointRestoreSourceV1Schema,
-    checkpointRef: NonEmptyStringSchema.optional(),
+    checkpointRef: z.optional(NonEmptyStringSchema),
     receipts: z.array(CheckpointOperationReceiptV1Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: z.enum([
       'source_choice_required',
@@ -415,23 +415,23 @@ export const SessionCheckpointResultV1Schema = lazyZodSchema(() => z.discriminat
       'confirmation_required',
       'invalid_request',
     ]),
-    error: NonEmptyStringSchema.optional(),
-    candidates: z.array(SanitizedCheckpointCreationCandidateV1Schema).optional(),
-    receipts: z.array(CheckpointOperationReceiptV1Schema).optional(),
-  }).strict(),
+    error: z.optional(NonEmptyStringSchema),
+    candidates: z.optional(z.array(SanitizedCheckpointCreationCandidateV1Schema)),
+    receipts: z.optional(z.array(CheckpointOperationReceiptV1Schema)),
+  }),
 ]));
 export type SessionCheckpointResultV1 = z.infer<typeof SessionCheckpointResultV1Schema>;
 
 export const SessionRestoreResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.enum(['succeeded', 'partially_succeeded']),
     source: CheckpointRestoreSourceV1Schema,
     restoredScopes: CheckpointScopesSchema,
-    failedScopes: z.array(CheckpointFailedScopeV1Schema).optional(),
+    failedScopes: z.optional(z.array(CheckpointFailedScopeV1Schema)),
     receipts: z.array(CheckpointOperationReceiptV1Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: z.enum([
       'source_choice_required',
@@ -445,10 +445,10 @@ export const SessionRestoreResultV1Schema = lazyZodSchema(() => z.discriminatedU
       'scm_restore_failed',
       'invalid_request',
     ]),
-    error: NonEmptyStringSchema.optional(),
-    candidates: z.array(SanitizedCheckpointRestoreCandidateV1Schema).optional(),
-    receipts: z.array(CheckpointOperationReceiptV1Schema).optional(),
-  }).strict(),
+    error: z.optional(NonEmptyStringSchema),
+    candidates: z.optional(z.array(SanitizedCheckpointRestoreCandidateV1Schema)),
+    receipts: z.optional(z.array(CheckpointOperationReceiptV1Schema)),
+  }),
 ]));
 export type SessionRestoreResultV1 = z.infer<typeof SessionRestoreResultV1Schema>;
 

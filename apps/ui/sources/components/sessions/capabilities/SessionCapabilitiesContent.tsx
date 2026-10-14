@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Platform, ScrollView, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
+
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
@@ -11,6 +13,7 @@ import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -69,6 +72,9 @@ export function SessionCapabilitiesContent(
     (group) => group.rows.length > 0 || group.nativeRow !== null,
   );
   const resolvingWithoutRows = model.state === 'resolving' && !hasRows;
+  // Without a preview there is nothing to list: an offline machine or a failed check says so once, and
+  // never as "No skills yet" groups, which would claim the session gets nothing.
+  const groupsUnknown = !hasRows && model.state !== 'ready';
 
   const body = (
     <View testID={`${props.testID}:lists`}>
@@ -118,7 +124,7 @@ export function SessionCapabilitiesContent(
           />
         </View>
       ) : null}
-      {resolvingWithoutRows || (model.state === 'error' && !hasRows)
+      {groupsUnknown
         ? null
         : model.groups.map((group, index) => {
             const open = expanded.has(group.kind);
@@ -135,6 +141,7 @@ export function SessionCapabilitiesContent(
                 style={index > 0 ? styles.groupDivider : null}
               >
                 <CollectionListGroupLabel
+                  presentation="menu"
                   title={group.title}
                   count={count}
                   first={index === 0}
@@ -528,8 +535,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   scroll: { flexShrink: 1 },
   scrollContent: { paddingBottom: theme.space.s4 },
+  // A state line draws its own column inset; here its glyph starts on the menu rows' text edge.
   stateLine: {
-    paddingHorizontal: theme.space.s12,
+    marginHorizontal:
+      MENU_ROW_METRICS.paddingHorizontalPx -
+      HAPPIER_STATE_LINE_METRICS.paddingHorizontalPx,
     paddingVertical: theme.space.s8,
   },
   groupDivider: {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
 
 import {
   DISCORD_MESSAGE_MAXIMUM_CODE_POINTS,
@@ -184,12 +183,12 @@ describe('Discord delivery adapter', () => {
     });
     expect(classifyDiscordDeliveryResponse({
       status: 429,
-      body: { retry_after: (MAX_CONVERSATION_RETRY_AFTER_MS / 1_000) + 1 },
+      body: { retry_after: 86_401 },
       canManageThreads: false,
     })).toEqual({
       kind: 'notSent',
       retry: 'after',
-      retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS,
+      retryAfterMs: 86_401_000,
     });
     expect(classifyDiscordDeliveryResponse({
       status: 0,

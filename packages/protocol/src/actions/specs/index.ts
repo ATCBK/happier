@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RuntimeActionIdV1Schema, type RuntimeActionIdV1 } from '../actionIds.js';
 import type { PreNormalizedActionSpec, PreNormalizedActionSurfaces } from '../actionSpecs.js';
@@ -87,7 +87,7 @@ export const RUNTIME_ACTION_INPUT_SCHEMAS: RuntimeActionInputSchemas = Object.fr
   ...LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS,
   ...PEER_MEDIATION_RUNTIME_ACTION_INPUT_SCHEMAS,
   ...SIMULATOR_RUNTIME_ACTION_INPUT_SCHEMAS,
-} as const satisfies Readonly<Record<RuntimeActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<RuntimeActionIdV1, z.ZodMiniType>>);
 
 export const RUNTIME_ACTION_OUTPUT_SCHEMAS: RuntimeActionOutputSchemas = Object.freeze({
   ...COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS,
@@ -95,7 +95,7 @@ export const RUNTIME_ACTION_OUTPUT_SCHEMAS: RuntimeActionOutputSchemas = Object.
   ...LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS,
   ...PEER_MEDIATION_RUNTIME_ACTION_OUTPUT_SCHEMAS,
   ...SIMULATOR_RUNTIME_ACTION_OUTPUT_SCHEMAS,
-} as const satisfies Readonly<Record<RuntimeActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<RuntimeActionIdV1, z.ZodMiniType>>);
 
 // UX-3: the fail-closed projection-contract copy belongs only to runtime actions whose executor is
 // not yet real. Enabled runtime actions surface human-facing copy from the family maps.
@@ -106,8 +106,8 @@ const RUNTIME_ACTION_PROJECTION_CONTRACT_HINT_DESCRIPTION =
 
 type RuntimeActionSpecFor<
   TActionId extends RuntimeActionIdV1,
-  TInputSchema extends z.ZodTypeAny,
-  TOutputSchema extends z.ZodTypeAny,
+  TInputSchema extends z.ZodMiniType,
+  TOutputSchema extends z.ZodMiniType,
 > = Omit<PreNormalizedActionSpec, 'id' | 'inputSchema' | 'outputSchema' | 'surfaces'> & Readonly<{
   id: TActionId;
   inputSchema: TInputSchema;
@@ -117,8 +117,8 @@ type RuntimeActionSpecFor<
 
 function createRuntimeActionSpecFor<
   const TActionId extends RuntimeActionIdV1,
-  const TInputSchema extends z.ZodTypeAny,
-  const TOutputSchema extends z.ZodTypeAny,
+  const TInputSchema extends z.ZodMiniType,
+  const TOutputSchema extends z.ZodMiniType,
 >(params: Readonly<{
   actionId: TActionId;
   inputSchema: TInputSchema;
@@ -173,6 +173,31 @@ function createRuntimeActionSpecFor<
       ...(executorReal ? {
         cli: { commands: [{ path: ['projects', 'service', 'relocate'], visibility: 'canonical' as const }] },
         bindings: { mcpToolName: 'projects_service_relocate', voiceClientToolName: 'projects_service_relocate' },
+        examples: { voice: { argsExample: JSON.stringify({
+          workspace: { serverId: 'home', refId: 'checkout' },
+          serviceName: 'web',
+          requestId: 'move-web-1',
+          currentTarget: {
+            kind: 'managed_service',
+            managedServiceId: 'web-current',
+            machineId: 'source-machine',
+            workspaceId: 'checkout',
+            cwd: '/workspace',
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } },
+          },
+          destination: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-1' } },
+          desiredPlacement: {
+            workspace: { serverId: 'home', refId: 'checkout' },
+            serviceName: 'web',
+            expectedRevision: 'absent',
+            expected: { kind: 'absent' },
+            value: {
+              runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-1' } },
+              unavailable: 'fail',
+            },
+          },
+          selectedTarget: { machineId: 'worker-1' },
+        }) } },
       } : {}),
     } : {}),
     ...(actionId !== 'computer.secret.fill' && Object.hasOwn(COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS, actionId)

@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MachineLiveStreamCodecIdV1Schema } from '../../machines/peer/mediation/stream/codecsV1.js';
 import { MachineLiveStreamInputControlKindV1Schema } from '../../machines/peer/mediation/stream/controlV1.js';
 
-const NonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1).max(512));
+const NonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(512)));
 const DiagnosticRecordSchema = lazyZodSchema(() => z.record(z.string(), z.unknown()));
 
 export const AndroidSimulatorAdapterUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
@@ -26,36 +26,32 @@ export type AndroidSimulatorAdapterUnavailableReasonV1 = z.infer<
   typeof AndroidSimulatorAdapterUnavailableReasonV1Schema
 >;
 
-export const AndroidSimulatorAdapterCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
+export const AndroidSimulatorAdapterCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     platform: z.literal('android'),
     transport: z.enum(['scrcpy-local-sockets-over-pms', 'adb-screencap-degraded']),
     physicalDevicesSupported: z.literal(false),
-    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).min(1),
-    supportedInputKinds: z.array(MachineLiveStreamInputControlKindV1Schema).default([]),
+    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).check(z.minLength(1)),
+    supportedInputKinds: z._default(z.array(MachineLiveStreamInputControlKindV1Schema), []),
     clipboardSyncDefault: z.literal('disabled'),
-    adbVersion: NonEmptyStringSchema.optional(),
-    scrcpyServerVersion: NonEmptyStringSchema.optional(),
-    scrcpyServerDigest: NonEmptyStringSchema.optional(),
-  })
-  .strict());
+    adbVersion: z.optional(NonEmptyStringSchema),
+    scrcpyServerVersion: z.optional(NonEmptyStringSchema),
+    scrcpyServerDigest: z.optional(NonEmptyStringSchema),
+  }));
 export type AndroidSimulatorAdapterCapabilitiesV1 = z.infer<
   typeof AndroidSimulatorAdapterCapabilitiesV1Schema
 >;
 
 export const AndroidSimulatorAdapterHealthV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  AndroidSimulatorAdapterCapabilitiesV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AndroidSimulatorAdapterCapabilitiesV1Schema, {
     status: z.literal('available'),
-  }).strict(),
-  z
-    .object({
+  })),
+  z.strictObject({
       v: z.literal(1),
       platform: z.literal('android'),
       status: z.literal('unavailable'),
       reasonCode: AndroidSimulatorAdapterUnavailableReasonV1Schema,
-      diagnostics: z.array(DiagnosticRecordSchema).default([]),
-    })
-    .strict(),
+      diagnostics: z._default(z.array(DiagnosticRecordSchema), []),
+    }),
 ]));
 export type AndroidSimulatorAdapterHealthV1 = z.infer<typeof AndroidSimulatorAdapterHealthV1Schema>;

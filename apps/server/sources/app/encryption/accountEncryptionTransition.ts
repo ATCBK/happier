@@ -7,17 +7,15 @@ import {
 import {
     resolveEffectiveAccountEncryptionModeFromAccountRow,
 } from "@/app/encryption/accountEncryptionMode";
-import {
-    computeAccountEncryptionMigrateKeyFingerprintV1,
-    parseAccountPasswordCredentialV1,
-    type AccountPasswordCredentialV1,
-} from "@happier-dev/protocol";
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { parseAccountPasswordCredentialV1, type AccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import { isE2eePasswordCredentialBoundToAccount } from "@/app/auth/password/e2eePasswordCredentialAccountBinding";
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Tx } from "@/storage/inTx";
+import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
 
 export type AccountEncryptionTransitionFenceResult =
     | Readonly<{ status: "account_not_found" }>
@@ -224,6 +222,7 @@ export async function applyAccountEncryptionTransitionInTx(
             "Account encryption transition wrote an invalid persisted mode",
         );
     }
+    await publishAccountEncryptionCurrentnessAfterTx(tx, params.accountId);
     return {
         mode: mode.mode,
         version: updated.seq,

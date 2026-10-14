@@ -1,14 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import {
-    PrimaryTurnStatusV1Schema,
-    SessionSurfacesChangeHintV1Schema,
-    SessionInputAdmissionReceiptV1Schema,
-    readStoredSessionMessageDeliveryResolutionV1,
-    type PrimaryTurnStatusV1,
-    type SessionRuntimeIssueV1,
-    type ParticipantExecutionRunRecipientRoutingIdentityV1,
-} from "@happier-dev/protocol";
+import { PrimaryTurnStatusV1Schema, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionSurfacesChangeHintV1Schema } from '@happier-dev/protocol/sessions/board';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { readStoredSessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { type ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 
 import {
     parseStoredSessionTurnTranscriptAnchors,

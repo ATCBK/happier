@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedServiceIdSchema } from '../../connect/connectedServiceBindings.js';
 import { ProviderCredentialFormatKindV1Schema } from '../credentials/v1.js';
@@ -17,14 +17,14 @@ export const ModelSelectionApplyPolicySchema = lazyZodSchema(() => z.enum(['live
 export type ModelSelectionApplyPolicy = z.infer<typeof ModelSelectionApplyPolicySchema>;
 
 function canonicalTransportNameSchema(normalize: (value: string) => string) {
-  return z.string().transform((value, ctx) => {
+  return z.pipe(z.string(), z.transform((value, ctx) => {
     try {
       return normalize(value);
     } catch {
-      ctx.addIssue({ code: 'custom', message: 'Invalid credential transport support name' });
+      ctx.issues.push({ code: 'custom', message: 'Invalid credential transport support name', input: ctx.value });
       return z.NEVER;
     }
-  });
+  }));
 }
 
 const AgentCredentialHeaderSupportNameSchema = canonicalTransportNameSchema(
@@ -34,21 +34,21 @@ const AgentCredentialQuerySupportNameSchema = canonicalTransportNameSchema(
   normalizeProviderQueryParameterName,
 );
 
-export const AgentCredentialTransportSupportV1Schema = lazyZodSchema(() => z.object({
+export const AgentCredentialTransportSupportV1Schema = lazyZodSchema(() => z.strictObject({
   protocol: ProviderWireProtocolSchema,
   destination: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('httpHeader'),
-      names: z.union([z.literal('anyValidated'), z.array(AgentCredentialHeaderSupportNameSchema).min(1).max(32)]),
-      formats: z.array(ProviderCredentialFormatKindV1Schema).min(1).max(3),
-    }).strict(),
-    z.object({
+      names: z.union([z.literal('anyValidated'), z.array(AgentCredentialHeaderSupportNameSchema).check(z.minLength(1), z.maxLength(32))]),
+      formats: z.array(ProviderCredentialFormatKindV1Schema).check(z.minLength(1), z.maxLength(3)),
+    }),
+    z.strictObject({
       kind: z.literal('queryParam'),
-      names: z.union([z.literal('anyValidated'), z.array(AgentCredentialQuerySupportNameSchema).min(1).max(32)]),
-      formats: z.array(ProviderCredentialFormatKindV1Schema).min(1).max(3),
-    }).strict(),
+      names: z.union([z.literal('anyValidated'), z.array(AgentCredentialQuerySupportNameSchema).check(z.minLength(1), z.maxLength(32))]),
+      formats: z.array(ProviderCredentialFormatKindV1Schema).check(z.minLength(1), z.maxLength(3)),
+    }),
   ]),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (Array.isArray(value.destination.names)) {
     const names = value.destination.kind === 'httpHeader'
       ? value.destination.names.map((name) => name.toLowerCase())
@@ -58,18 +58,18 @@ export const AgentCredentialTransportSupportV1Schema = lazyZodSchema(() => z.obj
   if (new Set(value.destination.formats).size !== value.destination.formats.length) {
     ctx.addIssue({ code: 'custom', path: ['destination', 'formats'], message: 'Transport formats must be unique' });
   }
-}));
+})));
 export type AgentCredentialTransportSupportV1 = z.infer<typeof AgentCredentialTransportSupportV1Schema>;
 
-export const AgentProviderRequirementsV1Schema = lazyZodSchema(() => z.object({
-  acceptsProtocols: z.array(ProviderWireProtocolSchema).min(1).max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
-  required: z.object({
-    streaming: z.literal(true).optional(),
-    toolRoundTrips: z.literal(true).optional(),
-    statefulResponses: z.literal(true).optional(),
-    reasoningControls: z.literal(true).optional(),
-  }).strict(),
-  credentialSupport: z.object({
+export const AgentProviderRequirementsV1Schema = lazyZodSchema(() => z.strictObject({
+  acceptsProtocols: z.array(ProviderWireProtocolSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
+  required: z.strictObject({
+    streaming: z.optional(z.literal(true)),
+    toolRoundTrips: z.optional(z.literal(true)),
+    statefulResponses: z.optional(z.literal(true)),
+    reasoningControls: z.optional(z.literal(true)),
+  }),
+  credentialSupport: z.strictObject({
     supportsNoAuth: z.boolean(),
     /**
      * Narrows `supportsNoAuth` to the protocols the Agent's driver can actually
@@ -78,22 +78,19 @@ export const AgentProviderRequirementsV1Schema = lazyZodSchema(() => z.object({
      * protocol declares that protocol here rather than advertising blanket
      * no-auth support and fabricating a placeholder credential at launch.
      */
-    noAuthProtocols: z.array(ProviderWireProtocolSchema)
-      .min(1)
-      .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)
-      .optional(),
-    apiKeyTransports: z.array(AgentCredentialTransportSupportV1Schema).max(32),
-  }).strict(),
-  authIsolation: z.object({
-    suppressConnectedServiceIds: z.array(ConnectedServiceIdSchema).max(32),
-    ownedEnvKeys: z.array(z.string().min(1).max(256).regex(/^[A-Z_][A-Z0-9_]*$/u)).max(64),
+    noAuthProtocols: z.optional(z.array(ProviderWireProtocolSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration))),
+    apiKeyTransports: z.array(AgentCredentialTransportSupportV1Schema).check(z.maxLength(32)),
+  }),
+  authIsolation: z.strictObject({
+    suppressConnectedServiceIds: z.array(ConnectedServiceIdSchema).check(z.maxLength(32)),
+    ownedEnvKeys: z.array(z.string().check(z.minLength(1), z.maxLength(256), z.regex(/^[A-Z_][A-Z0-9_]*$/u))).check(z.maxLength(64)),
     /** Declared session configuration keys emitted only when this binding consumes them. */
-    optionalOwnedEnvKeys: z.array(z.string().min(1).max(256).regex(/^[A-Z_][A-Z0-9_]*$/u)).max(64).optional(),
-  }).strict(),
+    optionalOwnedEnvKeys: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256), z.regex(/^[A-Z_][A-Z0-9_]*$/u))).check(z.maxLength(64))),
+  }),
   materialization: z.enum(['spawnEnv', 'engineConfig', 'configFile']),
   applyPolicy: ModelSelectionApplyPolicySchema,
   supportsFreeformModelIds: z.boolean(),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (new Set(value.acceptsProtocols).size !== value.acceptsProtocols.length) {
     ctx.addIssue({ code: 'custom', path: ['acceptsProtocols'], message: 'Accepted protocols must be unique' });
   }
@@ -121,7 +118,7 @@ export const AgentProviderRequirementsV1Schema = lazyZodSchema(() => z.object({
       }
     });
   }
-}));
+})));
 
 /**
  * The single decision for "can this Agent drive this wire protocol with no
@@ -171,24 +168,24 @@ export const ProviderCompatibilityReasonCodeV1Schema = lazyZodSchema(() => z.enu
 export type ProviderCompatibilityReasonCodeV1 = z.infer<typeof ProviderCompatibilityReasonCodeV1Schema>;
 
 export const ProviderBindingCompatibilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('verified'),
     selectedProtocol: ProviderWireProtocolSchema,
     evidence: ProviderCompatibilityEvidenceV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('experimental'),
     selectedProtocol: ProviderWireProtocolSchema,
-    reasons: z.array(ProviderCompatibilityReasonCodeV1Schema).min(1),
+    reasons: z.array(ProviderCompatibilityReasonCodeV1Schema).check(z.minLength(1)),
     confirmationScope: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('connection') }).strict(),
-      z.object({ kind: z.literal('model'), modelId: z.string().trim().min(1).max(512) }).strict(),
+      z.strictObject({ kind: z.literal('connection') }),
+      z.strictObject({ kind: z.literal('model'), modelId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)) }),
     ]),
-    evidence: ProviderCompatibilityEvidenceV1Schema.optional(),
-  }).strict(),
-  z.object({
+    evidence: z.optional(ProviderCompatibilityEvidenceV1Schema),
+  }),
+  z.strictObject({
     status: z.literal('incompatible'),
-    reasons: z.array(ProviderCompatibilityReasonCodeV1Schema).min(1),
-  }).strict(),
+    reasons: z.array(ProviderCompatibilityReasonCodeV1Schema).check(z.minLength(1)),
+  }),
 ]));
 export type ProviderBindingCompatibilityV1 = z.infer<typeof ProviderBindingCompatibilityV1Schema>;

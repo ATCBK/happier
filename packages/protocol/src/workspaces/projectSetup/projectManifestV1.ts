@@ -1,3 +1,4 @@
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 import * as z from 'zod/mini';
 
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -55,7 +56,7 @@ export const ProjectManifestV1Schema = z.strictObject({
   $schema: z.optional(nonempty),
   environment: z.optional(ProjectEnvironmentSelectionV1Schema),
   devcontainer: z.optional(ProjectDevcontainerSelectionV1Schema),
-  environmentVariables: z.optional(z.array(EnvVarRequirementSchema.strict())),
+  environmentVariables: z.optional(z.array(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(EnvVarRequirementSchema)))),
   workspace: z.optional(z.strictObject({
     setup: z.optional(z.array(finiteSource)), teardown: z.optional(z.array(finiteSource)),
     setupInputs: z.optional(z.array(containedPath)), memoryDemand: z.optional(ProjectMemoryDemandV1Schema),

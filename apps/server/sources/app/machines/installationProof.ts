@@ -1,15 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import tweetnacl from "tweetnacl";
-import {
-    ContentPublicKeyFingerprintSchema,
-    computeContentPublicKeyFingerprint as computeProtocolContentPublicKeyFingerprint,
-    decodeBase64,
-    MachineInstallationProofV1Schema,
-    MachineInstallationPublicKeySchema,
-    MachineReplacementReasonSchema,
-    verifyMachineInstallationProof,
-    type MachineInstallationProofPayloadV1,
-} from "@happier-dev/protocol";
+import { ContentPublicKeyFingerprintSchema, computeContentPublicKeyFingerprint as computeProtocolContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { MachineInstallationProofV1Schema, MachineInstallationPublicKeySchema, verifyMachineInstallationProof, type MachineInstallationProofPayloadV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { MachineReplacementReasonSchema } from '@happier-dev/protocol/machines/identity/machineReplacement';
 
 export type VerifiedMachineInstallationIdentity = Readonly<{
     installationId: string;

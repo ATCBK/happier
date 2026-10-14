@@ -1,31 +1,5 @@
-import {
-    PluginWebhookActionHttpPathsV1,
-    PluginWebhookDeliveryMovePendingInputV1Schema,
-    PluginWebhookDeliveryMovePendingResultV1Schema,
-    PluginWebhookEndpointEnsureInputV1Schema,
-    PluginWebhookEndpointEnsureResultV1Schema,
-    PluginWebhookEndpointCredentialConfigureInputV1Schema,
-    PluginWebhookEndpointCredentialConfigureResultV1Schema,
-    PluginWebhookEndpointCredentialFinishRotationInputV1Schema,
-    PluginWebhookEndpointCredentialFinishRotationResultV1Schema,
-    PluginWebhookEndpointCredentialRotateInputV1Schema,
-    PluginWebhookEndpointCredentialRotateResultV1Schema,
-    PluginWebhookEndpointReadInputV1Schema,
-    PluginWebhookEndpointReadResultV1Schema,
-    PluginWebhookEndpointRetargetInputV1Schema,
-    PluginWebhookEndpointRetargetResultV1Schema,
-    PluginWebhookEndpointRevokeInputV1Schema,
-    PluginWebhookEndpointRevokeResultV1Schema,
-    PLUGIN_WEBHOOK_ACCOUNT_STATUS_HTTP_PATH_V1,
-    PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1,
-    PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1,
-    PluginWebhookAccountStatusRequestV1Schema,
-    PluginWebhookAccountStatusResultV1Schema,
-    PluginWebhookDeliveryDiscardInputV1Schema,
-    PluginWebhookDeliveryDiscardResultV1Schema,
-    PluginWebhookDeliveryReplayInputV1Schema,
-    PluginWebhookDeliveryReplayResultV1Schema,
-} from "@happier-dev/protocol";
+import { PluginWebhookActionHttpPathsV1, PluginWebhookDeliveryMovePendingInputV1Schema, PluginWebhookDeliveryMovePendingResultV1Schema, PluginWebhookEndpointEnsureInputV1Schema, PluginWebhookEndpointEnsureResultV1Schema, PluginWebhookEndpointCredentialConfigureInputV1Schema, PluginWebhookEndpointCredentialConfigureResultV1Schema, PluginWebhookEndpointCredentialFinishRotationInputV1Schema, PluginWebhookEndpointCredentialFinishRotationResultV1Schema, PluginWebhookEndpointCredentialRotateInputV1Schema, PluginWebhookEndpointCredentialRotateResultV1Schema, PluginWebhookEndpointReadInputV1Schema, PluginWebhookEndpointReadResultV1Schema, PluginWebhookEndpointRetargetInputV1Schema, PluginWebhookEndpointRetargetResultV1Schema, PluginWebhookEndpointRevokeInputV1Schema, PluginWebhookEndpointRevokeResultV1Schema, PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1, PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1, PluginWebhookDeliveryDiscardInputV1Schema, PluginWebhookDeliveryDiscardResultV1Schema, PluginWebhookDeliveryReplayInputV1Schema, PluginWebhookDeliveryReplayResultV1Schema } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
+import { PLUGIN_WEBHOOK_ACCOUNT_STATUS_HTTP_PATH_V1, PluginWebhookAccountStatusRequestV1Schema, PluginWebhookAccountStatusResultV1Schema } from '@happier-dev/protocol/plugins/webhooks/statusV1';
 import type { FastifyReply } from "fastify";
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";

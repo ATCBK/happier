@@ -1,4 +1,4 @@
-import type { ManagedIdentityProviderKindV1 } from "@happier-dev/protocol";
+import type { ManagedIdentityProviderKindV1 } from '@happier-dev/protocol/home/governance';
 
 import {
     readHomeGovernancePolicyInTx,

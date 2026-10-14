@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PeerRouteNonceProofV1Schema } from '../directRouteGrantNonceV1.js';
 import { SignedDirectRouteGrantV1Schema } from '../directRouteGrantV1.js';
@@ -36,47 +36,41 @@ export const PeerMachineRpcDirectFallbackReasonCodeV1Schema = lazyZodSchema(() =
   'handler_unavailable',
 ]));
 
-export const PeerMachineRpcDirectRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const PeerMachineRpcDirectRequestV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    requestId: z.string().min(1),
-    method: z.string().min(1),
+    requestId: z.string().check(z.minLength(1)),
+    method: z.string().check(z.minLength(1)),
     params: z.unknown(),
     grant: SignedDirectRouteGrantV1Schema,
     nonceProof: PeerRouteNonceProofV1Schema,
     routeKind: DirectPeerRouteKindV1Schema,
     flowKind: z.literal('machine_rpc'),
-    endpointFingerprint: z.string().min(1),
-    commandReceipt: PeerMachineRpcCommandReceiptRequestV1Schema.optional(),
-  })
-  .passthrough());
+    endpointFingerprint: z.string().check(z.minLength(1)),
+    commandReceipt: z.optional(PeerMachineRpcCommandReceiptRequestV1Schema),
+  }));
 
 export const PeerMachineRpcDirectResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z
-    .object({
+  z.looseObject({
       v: z.literal(1),
       ok: z.literal(true),
       receipt: z.literal(PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded),
-      requestId: z.string().min(1),
-      method: z.string().min(1),
+      requestId: z.string().check(z.minLength(1)),
+      method: z.string().check(z.minLength(1)),
       routeKind: DirectPeerRouteKindV1Schema,
       result: z.unknown(),
-      commandReceipt: PeerMachineRpcCommandReceiptSuccessV1Schema.optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      commandReceipt: z.optional(PeerMachineRpcCommandReceiptSuccessV1Schema),
+    }),
+  z.looseObject({
       v: z.literal(1),
       ok: z.literal(false),
       receipt: z.union([
         z.literal(PEER_MEDIATION_RECEIPTS.rpcFellBackToServer),
         z.literal(PEER_MEDIATION_RECEIPTS.routeFallback),
       ]),
-      requestId: z.string().min(1),
-      method: z.string().min(1),
+      requestId: z.string().check(z.minLength(1)),
+      method: z.string().check(z.minLength(1)),
       reasonCode: PeerMachineRpcDirectFallbackReasonCodeV1Schema,
-    })
-    .passthrough(),
+    }),
 ]));
 
 export type PeerMachineRpcDirectFallbackReasonCodeV1 = z.infer<typeof PeerMachineRpcDirectFallbackReasonCodeV1Schema>;

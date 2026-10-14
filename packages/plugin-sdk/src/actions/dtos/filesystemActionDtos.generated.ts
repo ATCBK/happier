@@ -47,8 +47,8 @@ export type FilesystemActionInputById = {
             sizeBytes: number;
             sha256: string;
         } | {
-            rootPath: string;
             path: string;
+            rootPath: string;
             serverId: string;
             machineId: string;
             sourceId: string;

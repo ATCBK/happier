@@ -10,11 +10,13 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { getPreferredLanguage, t } from '@/text';
+import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { resolveScmDiffSummaryDiscussionTarget } from '@/sync/domains/scm/diffSummary/discussion';
 import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
@@ -78,6 +80,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const boundStart = bound.onStart;
     const onStart = React.useCallback(() => boundStart(), [boundStart]);
     const [choosingModel, setChoosingModel] = React.useState(false);
+    const openExplainSetting = useOpenExplainChangesSetting();
     const key = viewModel?.requestKey;
     const runId = viewModel?.executionRunId ?? null;
     const marks = useWalkthroughReviewedMarks({ comparison: capturedComparison, serverId: props.serverId ?? null, host: bound.host });
@@ -240,12 +243,21 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                     if (!selected.success || !modelAvailable) setChoosingModel(true);
                     else void onStart();
                 } } : {}) } : null}
-                start={{ modelPicker: <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} testID="walkthrough-model-choice" />,
-                    onStart, busy: starting, disabled: !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns,
-                    reason: error ?? (!selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null) }}
+                start={{ options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'walkthrough-start-options', modelTestID: 'walkthrough-model-choice',
+                        prerequisite: !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null,
+                        onEnableExplain: openExplainSetting })} />,
+                    onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
+                failure={bound.generationFailure}
+                onEnableExplain={openExplainSetting}
                 onRetry={onStart}
                 onChooseModel={() => setChoosingModel(true)}
                 endedConversation={saved && sessionId && discussion?.kind !== 'continue' ? { onStartNew, onAskSession } : null}
+                notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId
+                    ? <RunWorkNotifications serverId={props.serverId}
+                        source={{ kind: 'execution_run', machineId: machine.machineId, runId, ...(sessionId ? { sessionId } : {}) }}
+                        project={{ machineId: machine.machineId, directory: cwd }}
+                        selectedOutput={{ output: 'walkthrough', comparisonId: capturedComparison.id, resultId: viewModel.resultId,
+                            message: t('sessionWork.notify.walkthroughUpdate') }} /> : null}
                 savedActions={saved && cwd && key && operations ? <WalkthroughSavedActions result={saved} cwd={cwd} operations={operations}
                     nativeDiscussion={!sessionId}
                     nativeDiscussionReply={nativeDiscussionReply}

@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SavedSecretSlotBindingsV1Schema } from '../../providers/settings/v1.js';
 import {
@@ -16,15 +16,11 @@ import { parseSavedSecretRefV1, type SavedSecretRefV1 } from '../../account/sett
 const RESERVED_PROVIDER_IDS = new Set(['constructor', 'prototype']);
 
 const LegacyVoiceProviderIdSchema = lazyZodSchema(() => z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/)
-  .refine((providerId) => !RESERVED_PROVIDER_IDS.has(providerId), {
+  .string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/), z.refine((providerId) => !RESERVED_PROVIDER_IDS.has(providerId), {
     message: 'Reserved provider identifier',
-  }));
+  })));
 
-export const VoiceProviderIdSchema = lazyZodSchema(() => z.string().min(3).max(256).refine((providerId) => {
+export const VoiceProviderIdSchema = lazyZodSchema(() => z.string().check(z.minLength(3), z.maxLength(256), z.refine((providerId) => {
   const separator = providerId.indexOf('/');
   if (separator <= 0 || separator === providerId.length - 1) return false;
   const identity = PluginContributionIdentityV1Schema.safeParse({
@@ -32,27 +28,27 @@ export const VoiceProviderIdSchema = lazyZodSchema(() => z.string().min(3).max(2
     localId: providerId.slice(separator + 1),
   });
   return identity.success && buildQualifiedPluginContributionKey(identity.data) === providerId;
-}, { message: 'Voice provider ids must be canonical qualified Plugin contribution keys' }));
+}, { message: 'Voice provider ids must be canonical qualified Plugin contribution keys' })));
 
 export type VoiceProviderId = z.infer<typeof VoiceProviderIdSchema>;
 
-const LegacyVoiceCredentialBindingBaseV1Schema = lazyZodSchema(() => z.object({
+const LegacyVoiceCredentialBindingBaseV1Schema = lazyZodSchema(() => z.strictObject({
   credentialBindings: SavedSecretSlotBindingsV1Schema,
-  approvedRecipientContractDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u).optional(),
-}).strict());
+  approvedRecipientContractDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u))),
+}));
 
-export const LegacyVoiceCredentialBindingV1Schema = lazyZodSchema(() => LegacyVoiceCredentialBindingBaseV1Schema.extend({
+export const LegacyVoiceCredentialBindingV1Schema = lazyZodSchema(() => z.extend(LegacyVoiceCredentialBindingBaseV1Schema, {
   providerId: LegacyVoiceProviderIdSchema,
 }));
 
 /** The actual predecessor ingress grammar, not a ceiling on the full census. */
-export const PredecessorVoiceCredentialBindingV1Schema = lazyZodSchema(() => LegacyVoiceCredentialBindingBaseV1Schema.extend({
+export const PredecessorVoiceCredentialBindingV1Schema = lazyZodSchema(() => z.extend(LegacyVoiceCredentialBindingBaseV1Schema, {
   providerId: z.union([LegacyVoiceProviderIdSchema, VoiceProviderIdSchema]),
-}).superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (Object.keys(value.credentialBindings.byMachineId ?? {}).length > 2_048) {
     context.addIssue({ code: 'custom', path: ['credentialBindings', 'byMachineId'], message: 'Too many machine secret-binding branches' });
   }
-}));
+})));
 export type PredecessorVoiceCredentialBindingV1 = Readonly<z.infer<typeof PredecessorVoiceCredentialBindingV1Schema>>;
 
 export type LegacyVoiceCredentialMigrationCandidateV1 = Readonly<{
@@ -134,15 +130,15 @@ export function classifyLegacyVoiceCredentialCandidateV1(input: Readonly<{
 }
 
 /** Canonical current Voice credential binding keyed only by contribution and slot. */
-export const VoiceCredentialBindingV1Schema = lazyZodSchema(() => z.object({
+export const VoiceCredentialBindingV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   credentialSlotId: VoiceCredentialSlotIdSchema,
-  credentialSource: z.object({
+  credentialSource: z.strictObject({
     kind: z.enum(['none', 'savedSecret', 'connectedAccount']),
-  }).strict(),
+  }),
   credentialBindings: SavedSecretSlotBindingsV1Schema,
-  approvedRecipientContractDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u).optional(),
-}).strict().superRefine((value, context) => {
+  approvedRecipientContractDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u))),
+}).check(z.superRefine((value, context) => {
   const accountSlotIds = Object.keys(value.credentialBindings.account ?? {});
   const machineSlotIds = Object.entries(value.credentialBindings.byMachineId ?? {})
     .flatMap(([machineId, bindings]) => Object.keys(bindings).map((slotId) => ({ machineId, slotId })));
@@ -164,7 +160,7 @@ export const VoiceCredentialBindingV1Schema = lazyZodSchema(() => z.object({
       });
     }
   });
-}));
+})));
 
 export type VoiceCredentialBindingV1 = Readonly<
   z.infer<typeof VoiceCredentialBindingV1Schema>
@@ -226,7 +222,7 @@ export const VoiceProviderSettingsJsonValueV1Schema = lazyZodSchema(() => {
  * settings boundary and the owning bundled provider respectively.
  */
 export const VoiceProviderSettingsEnvelopeV1Schema = lazyZodSchema(() => z.object({
-  schemaVersion: z.number().int().min(1).max(0x7fffffff),
+  schemaVersion: z.number().check(z.int(), z.minimum(1), z.maximum(0x7fffffff)),
   config: VoiceProviderSettingsJsonValueV1Schema,
 }));
 

@@ -46,6 +46,7 @@ import { formatProcessOwnerTag, readHostProcessOwnerTag, withHostProcessOwnerEnv
 import { buildCgroupProcessLaunchSpec, prepareCgroupProcessLaunchScope, type LinuxProcessLaunchScope } from '@/daemon/platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 import { createHappierLinuxScopeName } from '@/daemon/platform/linux/systemdUserResourceGovernor';
 import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
+import { logger } from '@/ui/logger';
 
 /** Prepared by the host Project owner, never accepted from an SDK Exec request. */
 export type HostProjectNativeLaunchAdmission =
@@ -998,6 +999,7 @@ export function createStablePluginExecService(params: Readonly<{
             return Object.freeze({
                 executable,
                 executablePath: resolved.executablePath,
+                ...(resolved.providerExitOwnership === 'direct' ? { providerExitOwnership: 'direct' as const } : {}),
                 ...(resolved.diagnostics ? {
                     diagnostics: Object.freeze(resolved.diagnostics.map((diagnostic) => {
                         const detail = Object.freeze(Object.fromEntries(
@@ -1159,11 +1161,13 @@ export function createStablePluginExecService(params: Readonly<{
         options?: Parameters<ExecService['run']>[1],
         transformProtocolClientEnvironment = false,
     ): Promise<SupervisedPluginProcess> {
+        const launchStartedAt = performance.now();
         // Only the supervisor installs this exact host-owned request; public
         // Exec options cannot transfer invocation authority or process custody.
         const managedCustody = readInstalledManagedProcessCustody(service, request);
         const lifetime = managedCustody?.lifetime;
         const launch = await authorizeLaunch(request, options, undefined, undefined, lifetime);
+        const authorizedAt = performance.now();
         try { guard(options?.signal, lifetime); }
         catch (error) { await launch.release(); throw error; }
         let environment: Readonly<Record<string, string>>;
@@ -1189,6 +1193,12 @@ export function createStablePluginExecService(params: Readonly<{
             ...(params.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
                 : {}),
+        });
+        logger.infoFile('[PluginExec] Launch preparation phase', {
+            phase: 'spawn_requested', executableKind: request.executable.kind, pid: supervised.child.pid,
+            authorizationDurationMs: Math.round(authorizedAt - launchStartedAt),
+            durationMs: Math.round(performance.now() - authorizedAt),
+            elapsedMs: Math.round(performance.now() - launchStartedAt),
         });
         if (!lifetime) retain(supervised);
         const outputSubscription = !lifetime && options?.outputDelivery === 'invocation' && params.observeProcessOutput

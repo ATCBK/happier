@@ -49,9 +49,9 @@ import { useRepositoryUploadActionTarget } from '@/components/workspaces/files/r
 import { useWorkspaceRepositoryTreeRowActions } from '@/hooks/workspaces/files/useWorkspaceRepositoryTreeRowActions';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
-import { isMachineDaemonFiniteTransferApplicationSupported } from '@/sync/domains/transfers/runtime/transferRuntime/availability/machineDaemonTransferState';
-import { isMachineFiniteTransferRpcDeclared, readCurrentMachineIrohEndpoint, resolveMachineCarrierPreselection } from '@/sync/domains/transfers/runtime/transferRuntime/routing/resolveMachineCarrierPreselection';
-import { isBrowserIrohHost } from '@/sync/runtime/browserIroh/hostEligibility';
+import { isMachineDaemonFiniteTransferApplicationSupported, isMachineDaemonIrohTransferApplicationSupported } from '@/sync/domains/transfers/runtime/transferRuntime/availability/machineDaemonTransferState';
+import { isMachineFiniteTransferRpcDeclared, readCurrentMachineIrohEndpoint, resolveMachineCarrierHostEligibility, resolveMachineCarrierPreselection } from '@/sync/domains/transfers/runtime/transferRuntime/routing/resolveMachineCarrierPreselection';
+import { resolveBrowserIrohHostDecision } from '@/sync/runtime/browserIroh/hostEligibility';
 import {
     isIrohMachineTransferLifecycleAvailable,
     probeIrohMachineTransferLifecycleAvailability,
@@ -186,12 +186,12 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             active: machine?.active,
             revokedAt: machine?.revokedAt,
         }),
-        host: isBrowserIrohHost()
-            ? { kind: 'browser' }
-            : { kind: 'native', lifecycleAvailable: nativeMachineCarrierAvailable },
+        host: resolveMachineCarrierHostEligibility({ browserIroh: resolveBrowserIrohHostDecision(), nativeLifecycleAvailable: nativeMachineCarrierAvailable }),
         finiteTransferApplicationSupported: machine?.kind === 'ephemeral_session_runner'
             ? runnerFiniteTransferRpcDeclared
             : isMachineDaemonFiniteTransferApplicationSupported(machine?.daemonState),
+        irohApplicationSupported: machine?.kind === 'ephemeral_session_runner'
+            ? runnerFiniteTransferRpcDeclared : isMachineDaemonIrohTransferApplicationSupported(machine?.daemonState),
     });
     const transferActionsAvailable = props.transferEffectsEnabled !== false && machineRpcTargetAvailable && transferPreselection.kind !== 'unavailable';
 

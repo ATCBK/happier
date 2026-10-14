@@ -3,16 +3,8 @@ import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import * as privacyKit from "privacy-kit";
 
-import {
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1,
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1,
-    TeamCredentialExternalProviderApplicationRequestV1Schema,
-    TeamCredentialExternalProviderErrorV1Schema,
-    TeamCredentialExternalProviderRequestHeadersV1Schema,
-    type TeamCredentialExternalProviderApplicationRequestV1,
-    type TeamCredentialExternalProviderErrorCodeV1,
-} from "@happier-dev/protocol/teams";
-import { resolveTeamCredentialExternalApiAvailability } from "@happier-dev/protocol";
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1, TeamCredentialExternalProviderApplicationRequestV1Schema, TeamCredentialExternalProviderErrorV1Schema, TeamCredentialExternalProviderRequestHeadersV1Schema, type TeamCredentialExternalProviderApplicationRequestV1, type TeamCredentialExternalProviderErrorCodeV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
+import { resolveTeamCredentialExternalApiAvailability } from '@happier-dev/protocol/features/payload/capabilities/teamCredentialCapabilities';
 import type { Fastify } from "@/app/api/types";
 import { readHomeEffectiveEnv, resolveServerFeaturesForGating } from "@/app/features/catalog/serverFeatureGate";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";

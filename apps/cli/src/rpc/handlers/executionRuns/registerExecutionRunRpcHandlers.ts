@@ -12,8 +12,7 @@ import type {
   ExecutionRunProfileContributionCatalog,
 } from '@/agent/executionRuns/profiles/intentRegistry';
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
-import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
-import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { acquireExecutionRunRuntimeSnapshot } from './acquireExecutionRunRuntimeSnapshot';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
 import type { BrowserContextRoutes } from '@/daemon/browser/context/routes';
@@ -50,8 +49,6 @@ import { resolveWorkspaceRefForMachineRoot } from '@/workspaces/workspaceRefsV1'
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { admitDaemonExecutionRunStart, checkExecutionRunConnectedServicesGenerationCurrent } from '@/daemon/controlClient';
-import { resolvePluginPromptAssetBlocks } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
-import { resolveInvocationContributionPolicyFacts } from '@/plugins/runtime/policy/evaluate';
 import type { NativeAgentSessionInteractionHostBinding } from '@/agent/runtime/registry/engineRegistryTypes';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -216,52 +213,7 @@ export function registerExecutionRunRpcHandlers(
       ? { executionRunProfileCatalog: ctx.executionRunProfileCatalog }
       : {
           resolveExecutionRunProfileCatalog: async () => {
-            const runtimeRegistryLease = await acquireAuthoritativePluginRuntimeRegistryLease();
-            try {
-              const engineRegistry = await resolveCliEngineRegistry({
-                runtimeRegistry: runtimeRegistryLease.registry,
-                ...(ctx.savedSecretOperationContext ? { savedSecretOperationContext: ctx.savedSecretOperationContext } : {}),
-              });
-              const profileCatalog = await engineRegistry.resolveExecutionRunProfileCatalog({
-                  resolveAgentIdentity: (agentId) => {
-                    const agent = engineRegistry.contributions.agents.find((candidate) => (
-                      candidate.id === agentId && candidate.pluginId
-                    ));
-                    // The durable identity is the Agent's own `identity`; the
-                    // routing id is qualified for installed Agents and must not
-                    // be re-read as a local id.
-                    return agent?.pluginId
-                      ? {
-                        pluginId: agent.identity?.pluginId ?? agent.pluginId,
-                        localId: agent.identity?.localId ?? agent.definition.id,
-                      }
-                      : null;
-                  },
-                  resolvePolicyFacts: ({ agentId }) => resolveInvocationContributionPolicyFacts({
-                    ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
-                    facts: {
-                      'session.agentId': agentId,
-                      ...(ctx.machineId ? { 'machine.id': ctx.machineId } : {}),
-                    },
-                  }),
-                  resolvePromptAssetBlocks: async ({ promptAsset, agentId }) => {
-                    return await resolvePluginPromptAssetBlocks({
-                      agentId,
-                      selectedAsset: promptAsset,
-                      ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
-                      ...(ctx.machineId ? { machineId: ctx.machineId } : {}),
-                    });
-                  },
-                });
-              return {
-                profileCatalog,
-                engineRegistry,
-                release: runtimeRegistryLease.release,
-              };
-            } catch (error) {
-              await runtimeRegistryLease.release();
-              throw error;
-            }
+            return await acquireExecutionRunRuntimeSnapshot(ctx);
           },
         };
 
@@ -376,12 +328,12 @@ export function registerExecutionRunRpcHandlers(
     },
     ...(materializeReviewHostAction ? { materializeReviewHostAction } : {}),
     ...(reviewComments ? { reviewComments } : {}),
-    checkConnectedServicesGenerationCurrent: async ({ runId, registration }) => {
+    checkConnectedServicesGenerationCurrent: async ({ runId, registration, signal }) => {
       const result = await checkExecutionRunConnectedServicesGenerationCurrent({
         runId,
         runnerPid: process.pid,
         registration,
-      });
+      }, { signal });
       return { current: result.ok === true && result.current === true };
     },
     ...profileCatalogOptions,

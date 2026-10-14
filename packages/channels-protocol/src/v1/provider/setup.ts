@@ -14,8 +14,6 @@ import {
     CONVERSATION_OUTBOUND_TEXT_UNITS_V1,
     CONVERSATION_TRANSPORT_KINDS_V1,
     MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
-    MAX_CONVERSATION_OBSERVATION_AGE_MS,
-    MIN_CONVERSATION_OBSERVATION_AGE_MS,
 } from '../bounds.js';
 import {
     ConversationProviderConfigV1ProtocolSchema,
@@ -37,8 +35,8 @@ const conversationPluginContributionRefV1 = ConversationPluginContributionRefV1P
 /** @internal One configurable freshness range, also used by connection writes. */
 export const ConversationMaximumObservationAgeV1ProtocolSchema = defineProtocolNumber({
     integer: true,
-    minimum: MIN_CONVERSATION_OBSERVATION_AGE_MS,
-    maximum: MAX_CONVERSATION_OBSERVATION_AGE_MS,
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER,
 });
 
 const conversationTransportKindV1 = defineProtocolUnion([

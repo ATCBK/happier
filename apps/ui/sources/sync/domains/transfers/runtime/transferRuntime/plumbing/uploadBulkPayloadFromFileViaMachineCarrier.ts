@@ -24,7 +24,7 @@ function toDirectFailure(error: unknown): BulkTransferFailureResponse {
     };
 }
 
-/** Uploads one prepared finite transfer through the mandatory machine/1 carrier. */
+/** Uploads one prepared finite transfer through the canonical Machine carrier. */
 export async function uploadBulkPayloadFromFileViaMachineCarrier<
     TResponse,
 >(params: Readonly<{
@@ -52,8 +52,7 @@ export async function uploadBulkPayloadFromFileViaMachineCarrier<
                 account.assertCurrent();
             } catch (error) { return toDirectFailure(error); }
         }
-        // Selection precedes preparation. An unavailable mandatory carrier must
-        // not allocate a transfer that a legacy RPC/relay path could consume.
+        // Capture the carrier before allocating the prepared capability.
         const machineRoute = await resolveMachineCarrierRoute(params.machineId, account?.serverId ?? params.serverId);
         if (machineRoute.kind === 'unavailable') {
             return {

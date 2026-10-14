@@ -8,7 +8,10 @@ import { createProjectAccountSnapshotMutation, readProjectAccountRows, mutatePro
 import { updatePersonalProjectContextV1, ProjectContextUpdateInputV1Schema, type ProjectContextActionOwnerDepsV1 } from '@happier-dev/protocol/projects/projectContextV1';
 import { PromptStackEntryV1Schema } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
-import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { createProjectWorkspaceRetirement } from './projectWorkspaceRetirement';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { mockProjectAccountRowsHttpBoundary as boundary } from './projectAccountRows.testkit';
 
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 const credentials = { token: 'project-token', encryption: null };
@@ -20,19 +23,144 @@ function deferred() {
   const promise = new Promise<void>(settle => { resolve = settle; });
   return { promise, resolve };
 }
-function boundary(rows: unknown[]) {
-  vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 0 } });
-  return vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
-    if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
-    const request = body as ProjectAccountRowMutationRequestV1;
-    for (const mutation of request.mutations) {
-      const index = rows.findIndex(row => JSON.stringify(Reflect.get(row as object, 'key')) === JSON.stringify(mutation.key));
-      const next = { key: mutation.key, revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content };
-      if (index < 0) rows.push(next); else rows[index] = next;
-    }
-    return { status: 200, data: { status: 'updated', rows: request.mutations.map(mutation => rows.find(row => JSON.stringify(Reflect.get(row as object, 'key')) === JSON.stringify(mutation.key))), cursor: 1 } };
+
+describe('Project checkout retirement', () => {
+  const createOwner = () => createProjectWorkspaceRetirement({ authority: { credentials, serverId: ref.serverId },
+    serverId: ref.serverId, machineId: ref.machineId, assertCurrentAuthority: async () => {} });
+  const row = (value: WorkspaceRefV1 = ref, revision = 2) => {
+    const rowKey = { ...key, serverId: value.serverId, id: value.id };
+    return { key: rowKey, revision, content: { t: 'plain', v: { key: rowKey, value } } };
+  };
+  it('retires the reviewed main and dependent refs together and exactly restores their identities through Undo', async () => {
+    const dependent = { ...ref, id: 'external-worktree', rootPath: '/other/branch', projectKey: 'retained-project' };
+    const nested = { ...ref, id: 'nested-project', rootPath: '/work/a/nested' };
+    const unrelated = { ...ref, id: 'unrelated', rootPath: '/work/a2' };
+    const ancestor = { ...ref, id: 'ancestor', rootPath: '/work' };
+    const foreignMachine = { ...ref, id: 'other-machine', machineId: 'machine-b' };
+    const independent = { ...ref, id: 'independent-repository', rootPath: `${dependent.rootPath}/nested` };
+    const organizationKey = { kind: 'project-organization' as const, serverId: ref.serverId, projectKey: 'retained-project' };
+    const rows = [row(), row(dependent), row(nested), row(unrelated), row(ancestor), row(foreignMachine), row(independent),
+      { key: organizationKey, revision: 3, content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } }];
+    boundary(rows);
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: ref.rootPath, dependentWorktreePaths: [dependent.rootPath] });
+    // The real producer must survive the existing JSON-only Trash owner-data boundary.
+    const retained = JSON.parse(JSON.stringify(prepared.ownerData));
+    await owner.assertCurrent(retained);
+    await owner.retire(retained);
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([unrelated, ancestor, foreignMachine, independent]);
+    expect((await readProjectAccountRows({ credentials, serverId: ref.serverId })).workspaceRefs).toEqual([unrelated, ancestor, foreignMachine, independent]);
+    await owner.retire(retained);
+    await owner.reinstate(retained, ref.rootPath);
+    await owner.reinstate(retained, ref.rootPath);
+    const restored = await readProjectAccountRows({ credentials, serverId: ref.serverId });
+    expect(restored.workspaceRefs).toEqual([ref, dependent, nested, unrelated, ancestor, foreignMachine, independent]);
+    expect(restored.organizations).toMatchObject([{ key: organizationKey, revision: 3, value: { pinned: true } }]);
   });
-}
+  it('rejects reviewed state changes and never overwrites a ref recreated after retirement', async () => {
+    const rows = [row()];
+    const post = boundary(rows);
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: ref.rootPath });
+    rows[0] = row({ ...ref, label: 'Changed' }, 3);
+    await expect(owner.assertCurrent(prepared.ownerData)).rejects.toMatchObject({ code: 'changed_since_review' });
+    await expect(owner.retire(prepared.ownerData)).rejects.toMatchObject({ code: 'changed_since_review' });
+    expect(post.mock.calls.filter(([url]) => url.endsWith('/mutate'))).toHaveLength(0);
+    const latest = await owner.prepare({ rootPath: ref.rootPath });
+    await owner.retire(latest.ownerData);
+    rows[0] = row({ ...ref, label: 'Recreated' }, 5);
+    await expect(owner.reinstate(latest.ownerData, ref.rootPath)).rejects.toMatchObject({ code: 'changed_since_review' });
+    expect((await readProjectAccountRows({ credentials, serverId: ref.serverId })).workspaceRefs).toEqual([{ ...ref, label: 'Recreated' }]);
+  });
+  it('blocks even a paused Sync endpoint before checkout retirement is prepared', async () => {
+    const other = { ...ref, id: 'ref-b', rootPath: '/work/b' };
+    const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const relationship = { v: 1 as const, relationshipId: 'paused-sync', controllerMachineId: ref.machineId,
+      alphaWorkspaceRefId: ref.id, betaWorkspaceRefId: other.id, mode: 'keep_both_in_sync' as const, enabled: false,
+      createdAtMs: 1, updatedAtMs: 1, contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) } };
+    const post = boundary([row(), row(other), { key: graphKey, revision: 2,
+      content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } }]);
+    await expect(createOwner().prepare({ rootPath: ref.rootPath })).rejects.toMatchObject({
+      code: 'workspace_ref_in_use', relationshipIds: ['paused-sync'],
+    });
+    expect(post.mock.calls.filter(([url]) => url.endsWith('/mutate'))).toHaveLength(0);
+  });
+  it('settles lost retirement and Undo replies from the exact retained rows without repeating their writes', async () => {
+    const rows: unknown[] = [row()];
+    const post = boundary(rows);
+    const transport = post.getMockImplementation()!;
+    let loseReply = true;
+    post.mockImplementation(async (...args) => {
+      const result = await transport(...args);
+      if (args[0].endsWith('/mutate') && loseReply) {
+        loseReply = false;
+        throw new Error('Account reply unavailable after commit');
+      }
+      return result;
+    });
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: ref.rootPath });
+    await expect(owner.retire(prepared.ownerData)).rejects.toMatchObject({ code: 'project_account_row_outcome_unknown' });
+    await owner.retire(prepared.ownerData);
+    expect(rows[0]).toMatchObject({ revision: 3, content: null });
+    loseReply = true;
+    await expect(owner.reinstate(prepared.ownerData, ref.rootPath)).rejects.toMatchObject({ code: 'project_account_row_outcome_unknown' });
+    await owner.reinstate(prepared.ownerData, ref.rootPath);
+    expect(rows[0]).toEqual(row(ref, 4));
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([ref]);
+  });
+  it('guards the complete ref census with graph CAS and refuses a changed restoration path', async () => {
+    const rows: unknown[] = [row()];
+    const post = boundary(rows, { beforeMutation: request => {
+      const graph = request.mutations.find(mutation => mutation.key.kind === 'relationship-graph');
+      if (graph) rows.push({ key: graphKey, revision: 0, content: { t: 'plain', v: { key: graphKey, value: { relationships: [] } } } });
+      rows.push(row({ ...ref, id: 'new-checkout', rootPath: `${ref.rootPath}/new` }));
+    } });
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: ref.rootPath });
+    await expect(owner.retire(prepared.ownerData)).rejects.toMatchObject({ code: 'changed_since_review' });
+    expect(rows[0]).toEqual(row());
+    await expect(owner.reinstate(prepared.ownerData, `${ref.rootPath} (restored)`)).rejects.toMatchObject({ code: 'restore_path_unsupported' });
+    expect(post.mock.calls.filter(([url]) => url.endsWith('/mutate'))).toHaveLength(1);
+  });
+  it('retires Windows roots through canonical mixed-separator equality without collecting sibling prefixes', async () => {
+    const main = { ...ref, rootPath: 'C:\\Users\\alice\\project' };
+    const nested = { ...ref, id: 'windows-child', rootPath: 'C:/Users/alice/project/nested' };
+    const sibling = { ...ref, id: 'windows-sibling', rootPath: 'C:\\Users\\alice\\project2' };
+    boundary([row(main), row(nested), row(sibling)]);
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: main.rootPath });
+    await owner.retire(prepared.ownerData);
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([sibling]);
+    await owner.reinstate(prepared.ownerData, 'C:/Users/alice/project');
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([main, nested, sibling]);
+  });
+  it('restores a renamed payload without changing refs when its retirement write never committed', async () => {
+    const rows: unknown[] = [row()];
+    boundary(rows);
+    const owner = createOwner();
+    const prepared = await owner.prepare({ rootPath: ref.rootPath });
+    await owner.reinstate(prepared.ownerData, ref.rootPath);
+    expect(rows).toEqual([row()]);
+  });
+  it('rechecks captured machine custody after an awaited mode read before opening a row mutation', async () => {
+    const rows: unknown[] = [row()];
+    boundary(rows);
+    let current = true;
+    const owner = createProjectWorkspaceRetirement({ authority: { credentials, serverId: ref.serverId },
+      serverId: ref.serverId, machineId: ref.machineId, assertCurrentAuthority: async () => {
+        if (!current) throw Object.assign(new Error('machine_target_unavailable'), { code: 'machine_target_unavailable' });
+      } });
+    const prepared = await owner.prepare({ rootPath: ref.rootPath });
+    let reads = 0;
+    vi.mocked(axios.get).mockImplementation(async () => {
+      if (++reads === 2) current = false;
+      return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
+    });
+    await expect(owner.retire(prepared.ownerData)).rejects.toMatchObject({ code: 'machine_target_unavailable' });
+    expect(rows).toEqual([row()]);
+  });
+});
 describe('Project Account row transport', () => {
   it('uses admitted requester HTTP and cipher ports for private row acceptance without replacing the daemon snapshot', async () => {
     boundary([]);
@@ -42,12 +170,19 @@ describe('Project Account row transport', () => {
     let current = true;
     const requests: unknown[] = [];
     // The host has already proved this carrier; the network/signing boundary supplies HTTP headers.
-    const authorization = { requesterAccountProjection: { accountId: 'bob', serverId: 'home-a', accountEncryptionMode: 'e2ee',
+    const authorization = { ...ExternalActionExecutionAuthorizationV1Schema.parse({
+      v: 1, token: 'admitted-account-authorization', binding: {
+        accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
+        serverIdentityId: 'home-identity', machineId: 'machine-a', custodianAccountId: 'bob', installationId: 'installation-a',
+        actionId: 'projects.open', requestId: 'project-open-request', requestEnvelopeDigest: 'a'.repeat(43),
+        target: { kind: 'machine', machineId: 'machine-a' }, accountEncryptionMode: 'e2ee',
+      },
+    }), requesterAccountProjection: { accountId: 'bob', serverId: 'home-a', accountEncryptionMode: 'e2ee',
       projectAccountRowCipher: cipher, isCurrent: async () => current, readArtifact: async () => null },
       requesterHttpProjection: { accountId: 'bob', serverId: 'home-a', serverIdentityId: 'home-identity', serverHttpBaseUrl: 'https://bob-home.example',
         accountEncryptionMode: 'e2ee', isCurrent: async () => current,
         createRequestHeaders: async (request: unknown) => { requests.push(request); return current ? { 'x-requester-proof': 'bob' } : null; } },
-      binding: { accountId: 'bob', accountEncryptionMode: 'e2ee' } } as ExternalActionExecutionAuthorizationV1;
+    } satisfies ExternalActionExecutionAuthorizationV1;
     const transport = vi.mocked(axios.post);
     transport.mockClear();
     const get = vi.mocked(axios.get);

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { formatHappierAsOfTime, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -126,6 +126,7 @@ export type SessionWidgetHostProps = Readonly<{
     deferBody?: boolean;
     /** Bounded renderer height report for an `auto` item, when the host measured one. */
     reportedHeight?: number | null;
+    onIntrinsicHeightChange?: (height: number) => void;
     /**
      * The canonical expanded route for this item. Card geometry no longer bounds
      * the content, so a long or read-only note is fully readable and selectable
@@ -281,9 +282,21 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const testID = props.testID ?? `session-board-item-${props.item.itemId}`;
-    const [hostedFrameReportedHeight, setHostedFrameReportedHeight] = React.useState<number | null>(null);
+    const [hostedFrameReportedHeight, setHostedFrameReportedHeight] = React.useState<number | null>(props.reportedHeight ?? null);
+    const measuredHeightRef = React.useRef<number | null>(null);
+    const onReportIntrinsicHeight = React.useCallback((height: number) => {
+        if (!Number.isFinite(height) || height <= 0 || measuredHeightRef.current === height) return;
+        measuredHeightRef.current = height;
+        setHostedFrameReportedHeight(height);
+        props.onIntrinsicHeightChange?.(height);
+    }, [props.onIntrinsicHeightChange]);
+    const onDeclarativeLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const height = Math.ceil(event.nativeEvent.layout.height);
+        onReportIntrinsicHeight(height);
+    }, [onReportIntrinsicHeight]);
     React.useLayoutEffect(() => {
-        setHostedFrameReportedHeight(null);
+        measuredHeightRef.current = null;
+        setHostedFrameReportedHeight(props.reportedHeight ?? null);
     }, [props.item.itemId, props.item.revision]);
     const headingRef = React.useRef<Readonly<{ focus?: () => void }> | null>(null);
     const handledHeadingFocusRequestRef = React.useRef<number | null>(null);
@@ -584,6 +597,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         </View>
     ) : null;
     const configuredReference = presentation.kind === 'preview' && widgetInstance !== null;
+    // This copy is not the one that runs. Saying so keeps the frame truthful; an empty body read as a
+    // visual that failed to render. A configured widget that can be opened here offers that instead.
+    const runningElsewhere = (
+        <SurfaceStateCard
+            testID={`${testID}-elsewhere`}
+            size="line"
+            kind="empty"
+            title={t('sessionBoard.item.runningElsewhere.title')}
+            detail={t('sessionBoard.item.runningElsewhere.reason')}
+            accessibilitySemantics="status"
+        />
+    );
 
     const body = executablePaused
         ? (
@@ -627,14 +652,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                 comparisonKind={state.item.source.comparison} interactive={presentation.kind === 'content'} testID={`${testID}-walkthrough`} />
         : state.kind === 'ready' && state.item.source.kind === 'declarative'
             ? (
-                <SessionBoardDeclarativeContent
-                    testID={`${testID}-declarative`}
-                    document={state.item.source.document}
-                    snapshot={state.item.snapshot !== undefined}
-                    // A preview is inert: it renders the same native content with no
-                    // dispatch path, so a background placement cannot cause effects.
-                    actionBinding={presentation.kind === 'content' ? props.actionBinding ?? null : null}
-                />
+                // Native content reports what it draws, as a frame or an installed widget does, so an
+                // `auto` card fits it instead of standing at its fallback size.
+                <View onLayout={state.item.height.mode === 'auto' ? onDeclarativeLayout : undefined}>
+                    <SessionBoardDeclarativeContent
+                        testID={`${testID}-declarative`}
+                        document={state.item.source.document}
+                        snapshot={state.item.snapshot !== undefined}
+                        // A preview is inert: it renders the same native content with no
+                        // dispatch path, so a background placement cannot cause effects.
+                        actionBinding={presentation.kind === 'content' ? props.actionBinding ?? null : null}
+                    />
+                </View>
             )
             : (presentation.kind === 'content' || configuredReference)
                 && state.kind === 'ready'
@@ -655,8 +684,8 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         // host composition, not persisted outer card chrome.
                         presentation={embeddedPresentation}
                         appRuntime={appRuntime}
-                        {...(configuredReference ? { reference: openReference } : {})}
-                        onIntrinsicHeightChange={setHostedFrameReportedHeight}
+                        {...(configuredReference ? { reference: openReference ?? runningElsewhere } : {})}
+                        onIntrinsicHeightChange={onReportIntrinsicHeight}
                         {...(props.onManagePlugin ? { onManagePlugin: props.onManagePlugin } : {})}
                         {...(inputs.onRepairInputs ? { onRepairInputs: inputs.onRepairInputs } : {})}
                     /></WidgetSnapshotCaptureContext.Provider> : <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: 'widget_viewer_scope_mismatch' }} testID={testID} />
@@ -682,23 +711,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                             {...(state.item.input === undefined ? {} : { input: state.item.input })}
                             target={hostedHtmlTarget}
                             runtime={props.callerHostedHtmlRuntime}
-                            onIntrinsicHeightChange={setHostedFrameReportedHeight}
+                            onIntrinsicHeightChange={onReportIntrinsicHeight}
                             testID={`${testID}-hosted-html`}
                         />
                     )
                 : presentation.kind === 'preview'
-                    ? (
-                        // This copy is not the one that runs. Saying so keeps the frame truthful; an
-                        // empty body read as a visual that failed to render.
-                        <SurfaceStateCard
-                            testID={`${testID}-elsewhere`}
-                            size="line"
-                            kind="empty"
-                            title={t('sessionBoard.item.runningElsewhere.title')}
-                            detail={t('sessionBoard.item.runningElsewhere.reason')}
-                            accessibilitySemantics="status"
-                        />
-                    )
+                        ? runningElsewhere
                     : (
                         // Executable sources reach this branch only when their renderer is
                         // available; the presentation resolver has already refused otherwise.
@@ -714,9 +732,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         />
                     );
 
-    // Frameless and full-bleed items reach the frame's real edge; the card clips them to its corner.
-    const bodyReachesEdge = state.kind === 'ready'
-        && (state.item.frame === 'frameless' || state.item.frame === 'full_bleed');
+    // Only full-bleed items reach the frame's real edge; the card clips them to its corner.
+    // Frameless drops the item's own chrome, never the host's inset, so its text never meets an edge.
+    const bodyReachesEdge = state.kind === 'ready' && state.item.frame === 'full_bleed';
     const placement = section ? 'companion' as const : 'board' as const;
     const frameStyle = props.frameStyle ?? (section || reply ? 'plain' : 'card');
 
@@ -724,6 +742,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         <SessionSurfaceEntityDragHandle drag={entityDrag} title={title} testID={`${testID}-move-handle`} />
     ) : null;
 
+    // A record not read yet has no name to show. "Untitled widget" would be a claim about it;
+    // the body's loading state already says what is happening.
+    const recordLoading = state.kind === 'loading';
     const heading = (
             <TitleFrame style={styles.titleWrap} {...titleFrameProps}>
                 {rename.field ?? (
@@ -734,7 +755,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         tabIndex={-1}
                         numberOfLines={1}
                         accessibilityRole="header"
-                        accessibilityLabel={props.width
+                        accessibilityLabel={recordLoading
+                            ? t('sessionBoard.item.loading.title')
+                            : props.width
                             ? t('sessionBoard.item.a11yLabelWithWidth', {
                                 title,
                                 width: t(`sessionBoard.width.${props.width}`),
@@ -742,7 +765,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                             : title}
                         {...(beginRename ? { onPress: beginRename } : {})}
                     >
-                        {title}
+                        {recordLoading ? '' : title}
                     </Text>
                 )}
             </TitleFrame>
@@ -870,7 +893,7 @@ function sessionWidgetMark(state: SessionBoardItemProjection['state']): IconName
     if (state.kind !== 'ready') return 'squares-four';
     switch (state.item.source.kind) {
         case 'walkthrough': return 'path';
-        case 'declarative': return 'note';
+        case 'declarative': return (state.item.source.document as { root?: { kind?: unknown } }).root?.kind === 'chart' ? 'chart-bar' : 'note';
         case 'hostedHtml': return 'squares-four';
         case 'widget': return 'puzzle-piece';
     }

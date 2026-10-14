@@ -14,6 +14,8 @@ import { retireExactTerminalControlServiceability } from './retireTerminalContro
 import {
   resolveDisconnectedTerminalMode,
   resolveDisconnectedTerminalHostResumeGate,
+  resolveTrackedSessionTerminalHostExitCandidate,
+  shouldRetainTrackedTerminalHostExitMarker,
   superviseDisconnectedTerminalHostCandidate,
   superviseTrackedOptionalTerminalPresentation,
 } from './disconnectedTerminalHostSupervision';
@@ -38,6 +40,21 @@ function attachment() {
 }
 
 describe('disconnected terminal-host supervision', () => {
+  it('retires an exited plain runner without resolving the Account catalog', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'plain-exit-offline-' }, async ({ homeDir }) => {
+      const get = vi.spyOn(axios, 'get').mockRejectedValue(Object.assign(new Error('Home unreachable'), { code: 'ECONNREFUSED' }));
+      try {
+        const tracked = { pid: 999_123_456, startedBy: 'daemon' as const, happySessionId: 'plain-offline',
+          spawnOptions: { directory: homeDir,
+            backendTarget: { kind: 'backend' as const, sourceKind: 'built_in' as const, backendId: 'codex' as const },
+            runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'acp' } } } };
+        await expect(shouldRetainTrackedTerminalHostExitMarker({ tracked, happyHomeDir: homeDir })).resolves.toBe(false);
+        await expect(resolveTrackedSessionTerminalHostExitCandidate({ tracked, pid: tracked.pid,
+          happyHomeDir: homeDir, attachmentInfo: null })).resolves.toBeNull();
+        expect(get).not.toHaveBeenCalled();
+      } finally { get.mockRestore(); }
+    });
+  });
   it('retires a dead borrowed native client through the existing heartbeat without retiring its controller or shell', async () => {
     await withConfiguredDaemonTestHome({ prefix: 'borrowed-client-heartbeat-' }, async ({ homeDir }) => {
       await withHerdrApi(async api => {

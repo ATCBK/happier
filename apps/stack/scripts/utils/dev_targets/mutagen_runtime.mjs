@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { DEV_TARGET_DISPOSABLE_REPLICA_ARTIFACT_ROOTS, DEV_TARGET_SYNC_EXECUTOR_REPO, resolveMutagenRepositoryKey } from './mutagen_project.mjs';
+import { DEV_TARGET_DISPOSABLE_REPLICA_ARTIFACT_ROOTS, DEV_TARGET_SYNC_EXECUTOR_REPO, isExecutionHostCandidateSyncOwner, resolveMutagenRepositoryKey } from './mutagen_project.mjs';
 import { resolveRepoStackIdentity, resolveStacksStorageRoot } from '../stack/repo_stack_identity.mjs';
 
 export const MUTAGEN_SYNC_LIST_JSON_TEMPLATE = '{{json .}}';
@@ -93,6 +93,7 @@ export function resolveDevTargetMutagenRuntime({
   stackBaseDir,
   env = process.env,
   sourceDir = env?.HAPPIER_STACK_SYNC_SOURCE_DIR || DEV_TARGET_SYNC_EXECUTOR_REPO,
+  ownerId,
   pathExists = existsSync,
 } = {}) {
   const baseDir = String(stackBaseDir ?? '').trim();
@@ -114,7 +115,9 @@ export function resolveDevTargetMutagenRuntime({
     opensshDir,
     sourceDir,
     ownerBaseDir,
-    projectFile: join(projectDir, 'mutagen.yml'),
+    // Hex preserves existing workspace identity on case-insensitive filesystems.
+    projectFile: join(projectDir, isExecutionHostCandidateSyncOwner(ownerId)
+      ? `candidate-${Buffer.from(ownerId).toString('hex')}.yml` : 'mutagen.yml'),
     syncServiceStateFile: join(projectDir, 'sync-service-state.v1.json'),
     env: {
       ...(env ?? process.env),

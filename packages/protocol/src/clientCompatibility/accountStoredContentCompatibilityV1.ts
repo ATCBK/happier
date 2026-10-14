@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V1 = 1 as const;
 export const ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V2 = 2 as const;
@@ -72,17 +72,12 @@ export const CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION_PROTOCOL_V
   ACCOUNT_STORED_CONTENT_SESSION_ACCESS_WITNESS_PROTOCOL_VERSION;
 
 export const AccountStoredContentProtocolVersionSchema = lazyZodSchema(() => z
-  .number()
-  .int()
-  .min(ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V1)
-  .max(Number.MAX_SAFE_INTEGER));
+  .number().check(z.int(), z.minimum(ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V1), z.maximum(Number.MAX_SAFE_INTEGER)));
 
-export const AccountStoredContentCompatibilityDeclarationV1Schema = lazyZodSchema(() => z
-  .object({
+export const AccountStoredContentCompatibilityDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     protocolVersion: AccountStoredContentProtocolVersionSchema,
-  })
-  .strict());
+  }));
 
 export type AccountStoredContentCompatibilityDeclarationV1 = z.infer<
   typeof AccountStoredContentCompatibilityDeclarationV1Schema
@@ -157,12 +152,10 @@ export function parseAccountStoredContentCompatibilityHttpHeadersV1(
     : { status: 'malformed' };
 }
 
-export const AccountStoredContentCompatibilitySocketAuthV1Schema = lazyZodSchema(() => z
-  .object({
+export const AccountStoredContentCompatibilitySocketAuthV1Schema = lazyZodSchema(() => z.looseObject({
     accountStoredContentCompatibility:
       AccountStoredContentCompatibilityDeclarationV1Schema,
-  })
-  .passthrough());
+  }));
 
 export type AccountStoredContentCompatibilitySocketAuthV1 = Readonly<{
   accountStoredContentCompatibility:
@@ -201,14 +194,12 @@ export function parseAccountStoredContentCompatibilitySocketAuthV1(
     : { status: 'malformed' };
 }
 
-export const AccountStoredContentCompatibilityServerRequirementsV1Schema = lazyZodSchema(() => z
-  .object({
+export const AccountStoredContentCompatibilityServerRequirementsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     minimumProtocolVersion: AccountStoredContentProtocolVersionSchema,
     currentProtocolVersion: AccountStoredContentProtocolVersionSchema,
     declarationTransport: z.literal('http-header-and-socket-auth-v1'),
-  })
-  .strict());
+  }));
 
 export type AccountStoredContentCompatibilityServerRequirementsV1 = z.infer<
   typeof AccountStoredContentCompatibilityServerRequirementsV1Schema

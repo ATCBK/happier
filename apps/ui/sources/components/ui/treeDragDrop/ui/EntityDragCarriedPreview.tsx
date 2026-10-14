@@ -44,7 +44,10 @@ function CarriedCardContent(props: EntityDragCarriedPreviewProps & Readonly<{ si
     const snapshot = useEntityDragDropSnapshot(props.runtime);
     const outcome = useEntityDropOutcome(snapshot, snapshot.sourceId ? props.runtime.describeSource(snapshot.sourceId)?.title ?? null : null);
     const returning = snapshot.phase === 'settled' && snapshot.outcome?.status === 'refused';
-    if ((snapshot.phase !== 'carrying' && snapshot.phase !== 'pending' && !returning) || !snapshot.sourceId) return null;
+    // Once released, the source row shows where it landed and that its write is on the way: the floating card
+    // is dropped. A pending drop the Home cannot be reached for keeps its quiet words, which the row does not carry.
+    const waiting = snapshot.phase === 'pending' && outcome?.tone !== 'pending';
+    if ((snapshot.phase !== 'carrying' && !waiting && !returning) || !snapshot.sourceId) return null;
     // Identity comes from the carried source itself, read when the verdict changes.
     const description = props.runtime.describeSource(snapshot.sourceId);
     if (!description) return null;

@@ -2,6 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILT_IN_ROLES_V1, RoleActionInputSchemasV1, RoleActionOutputSchemasV1 } from '@happier-dev/protocol';
+import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -103,6 +105,24 @@ const researchRole = {
 };
 
 describe('Work › Roles and Notes', () => {
+    it.each(['override', 'snapshot'] as const)('renders one inherited difference and resets only its %s layer', async layer => {
+        const inherited = snapshotSessionRolesAtSpawnV1({ leadSessionId: 'lead', roles: resolveRolesSnapshotV1({
+            ...(layer === 'snapshot' ? { settingsOverrides: { builder: { roleId: 'builder', instructionsOverride: 'Inherited build instructions.' } } } : {}),
+        }) });
+        setMetadata({ work: { sessionRolesV1: { ...inherited,
+            overrides: layer === 'override' ? { builder: { roleId: 'builder', workspaceWrites: 'deny' } } : {},
+        } } });
+        const screen = await renderScreen(<SessionRolesSection sessionId="worker" />);
+        const rows = screen.findAll(node => node.props.testID === 'session-work-roles.row.builder' && node.props.title !== undefined);
+        expect(rows).toHaveLength(1);
+        expect(declared(screen, 'session-work-roles.all', 'detail')!.props.detail).toBe(`roles.session.inUse:${enabledBuiltInCount}`);
+        expect(screen.findByTestId('session-agents-section-count:session-work-roles')!.props.children).toBe('roles.session.countChanged:1');
+        await screen.pressByTestIdAsync('session-work-roles.row.builder.reset');
+        expect(writes()).toEqual([{ actionId: layer === 'override' ? 'session.roles.override.clear' : 'session.roles.remove',
+            input: { sessionId: 'worker', roleId: 'builder' } }]);
+        expect(storage.getState().sessions.worker.metadata).toMatchObject({ work: { sessionRolesV1: { sessionRoles: inherited.sessionRoles } } });
+    });
+
     beforeEach(async () => {
         shared.platformOS = 'node';
         previousState = storage.getState();

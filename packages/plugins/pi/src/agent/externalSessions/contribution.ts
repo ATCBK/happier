@@ -72,6 +72,7 @@ type PiCandidateCursorV2 = Readonly<{
   sourceGeneration: string;
   scanId: string;
   scanned: number;
+  contentCursor?: string;
 }>;
 
 type PiTranscriptOlderProjectionCursor = Readonly<{
@@ -249,6 +250,7 @@ function decodeCandidateCursor(raw: string | undefined): PiCandidateCursorV2 | n
     || !readOptionalString(record.scanId)
     || !Number.isSafeInteger(record.scanned)
     || (record.scanned as number) < 0
+    || (record.contentCursor !== undefined && !readOptionalString(record.contentCursor))
   ) {
     return null;
   }
@@ -259,6 +261,7 @@ function decodeCandidateCursor(raw: string | undefined): PiCandidateCursorV2 | n
     sourceGeneration: String(record.sourceGeneration),
     scanId: String(record.scanId),
     scanned: record.scanned as number,
+    ...(record.contentCursor === undefined ? {} : { contentCursor: String(record.contentCursor) }),
   };
 }
 
@@ -465,12 +468,39 @@ type PiCandidateScanState = {
   currentDirectory: PiCandidateDirectory | null;
   pendingCandidate: AgentExternalSessionCandidate | null;
   pendingFilePath: string | null;
+  contentProgress: PiContentSearchProgress | null;
   scanned: number;
   complete: boolean;
   inFlight: boolean;
   retired: boolean;
   closeStarted: boolean;
 };
+
+type PiContentSearchProgress = {
+  readonly filePath: string;
+  readonly sourceIdentity: string;
+  readonly maxItems: number;
+  readonly maxSerializedBytes: number;
+  cursor: string | undefined;
+  complete: boolean;
+  itemCount: number;
+  match: Readonly<{ cursor: string | undefined; id: string; distanceFromEnd: number }> | null;
+};
+
+async function readContentSourceIdentity(filePath: string): Promise<string> {
+  const metadata = await stat(filePath, { bigint: true }).catch(() => null);
+  if (!metadata?.isFile()) throw new PiCandidateSourceChangedError('Pi transcript is unavailable during content search.');
+  return [metadata.dev, metadata.ino, metadata.birthtimeNs, metadata.size, metadata.mtimeNs, metadata.ctimeNs].join(':');
+}
+
+function readContentItemText(item: AgentExternalSessionsTranscriptPage['items'][number]): string | null {
+  const content = item.raw.content;
+  if (!isRecord(content)) return null;
+  if (content.type === 'text' && typeof content.text === 'string') return content.text;
+  if (content.type === 'acp' && 'data' in content && isRecord(content.data) && content.data.type === 'message'
+    && typeof content.data.message === 'string') return content.data.message;
+  return null;
+}
 
 function candidateScanPreparation(
   scan: PiCandidateScanState,
@@ -539,6 +569,7 @@ async function createCandidateScan(
     currentDirectory: null,
     pendingCandidate: null,
     pendingFilePath: null,
+    contentProgress: null,
     scanned: 0,
     complete: false,
     inFlight: false,
@@ -1289,7 +1320,10 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const searchTarget = request.searchTarget ?? 'metadata';
       const contentSearch = searchTarget === 'content';
       const searchTerm = contentSearch ? request.searchTerm ?? '' : readOptionalString(request.searchTerm)?.toLowerCase() ?? '';
-      const control = contentSearch ? createExternalSessionContentSearchControl(request) : null;
+      const control = contentSearch ? createExternalSessionContentSearchControl({
+        signal: request.signal,
+        deadlineAtMs: request.scanDeadlineAtMs ?? request.deadlineAtMs,
+      }) : null;
       let yielded = false;
       let partial = false;
       const decodedCursor = request.cursor ? decodeCandidateCursor(request.cursor) : null;
@@ -1324,6 +1358,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           && (
             decodedCursor.sourceGeneration !== scan.sourceGeneration
             || decodedCursor.scanned !== scan.scanned
+            || decodedCursor.contentCursor !== scan.contentProgress?.cursor
             || scan.sourceKey !== sourceKey(resolved.value)
             || scan.searchTerm !== searchTerm
             || (scan.searchTarget ?? 'metadata') !== searchTarget
@@ -1370,6 +1405,10 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           let candidate: AgentExternalSessionCandidate | null;
           try {
             control?.checkWork();
+            if (scan.contentProgress && (scan.contentProgress.filePath !== filePath
+              || scan.contentProgress.sourceIdentity !== await readContentSourceIdentity(filePath))) {
+              throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
+            }
             candidate = await inspectPiCandidateFile({
               filePath,
               fullScanLineLimit: request.maxItems,
@@ -1377,41 +1416,71 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             });
             if (candidate && control) {
               const remoteSessionId = candidate.remoteSessionId;
+              const resumingContent = scan.contentProgress !== null;
+              const sourceIdentity = scan.contentProgress?.sourceIdentity ?? await readContentSourceIdentity(filePath);
+              const progress: PiContentSearchProgress = scan.contentProgress ?? {
+                filePath, sourceIdentity, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes,
+                cursor: undefined, complete: false, itemCount: 0, match: null,
+              };
+              scan.contentProgress = progress;
+              // The native page is indivisible: commit its branch/byte cursor
+              // before cooperative yield. Native reads still observe cancellation.
+              const nativeControl = createExternalSessionContentSearchControl({ signal: request.signal });
+              const readPage = (cursor: string | undefined) => contribution.pageTranscript({
+                ...request, maxItems: progress.maxItems, maxSerializedBytes: progress.maxSerializedBytes,
+                source: { ...resolved.value.source, sessionFile: filePath }, remoteSessionId,
+                direction: 'older', cursor, scannerFileSystem: nativeControl.fileSystem,
+              });
               const searched = await searchExternalSessionContent({
                 query: searchTerm,
-                paths: [filePath],
+                ...(resumingContent ? {} : { paths: [filePath] }),
                 ripgrep: request.ripgrep,
                 control,
+                isScanComplete: () => progress.complete,
                 async decode(matchText) {
-                  const pages: Readonly<{ id: string; snippet?: string }>[][] = [];
-                  let cursor: string | undefined;
-                  do {
+                  while (!progress.complete) {
                     control.checkWork();
-                    const page = await contribution.pageTranscript({
-                      ...request,
-                      source: { ...resolved.value.source, sessionFile: filePath },
-                      remoteSessionId,
-                      direction: 'older',
-                      cursor,
-                      scannerFileSystem: control.fileSystem,
+                    const pageCursor = progress.cursor;
+                    const page = await readPage(pageCursor);
+                    if (!page.ok || page.value.truncated) {
+                      progress.complete = true;
+                      return { records: [], partial: true };
+                    }
+                    // Pages arrive newest first; the first match in an older
+                    // page supersedes a newer one. Retain locators, never text.
+                    const matchIndex = page.value.items.findIndex((item) => {
+                      const text = readContentItemText(item);
+                      return text !== null && matchText(text) !== null;
                     });
-                    control.checkWork();
-                    if (!page.ok || page.value.truncated) return { records: [], partial: true };
-                    pages.push(page.value.items.map((item) => {
-                      const content = item.raw.content;
-                      const text = isRecord(content)
-                        ? content.type === 'text' ? content.text
-                          : content.type === 'acp' && 'data' in content && isRecord(content.data) && content.data.type === 'message'
-                            ? content.data.message : null
-                        : null;
-                      const snippet = typeof text === 'string' ? matchText(text) : null;
-                      return { id: item.id, ...(snippet === null ? {} : { snippet }) };
-                    }));
-                    cursor = page.value.nextCursor ?? undefined;
-                  } while (cursor);
-                  return { records: pages.reverse().flat(), partial: false };
+                    if (matchIndex >= 0) {
+                      progress.match = { cursor: pageCursor, id: page.value.items[matchIndex]!.id,
+                        distanceFromEnd: progress.itemCount + page.value.items.length - matchIndex };
+                    }
+                    progress.itemCount += page.value.items.length;
+                    progress.cursor = page.value.nextCursor ?? undefined;
+                    progress.complete = !progress.cursor;
+                    if (!progress.complete) control.checkWork();
+                  }
+                  control.assertNotYielded();
+                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                    throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
+                  }
+                  if (!progress.match) return { records: [], partial: false };
+                  // Finalization re-decodes and re-matches the native page;
+                  // the retained locator cannot authorize returned content.
+                  const page = await readPage(progress.match.cursor);
+                  if (!page.ok || page.value.truncated) return { records: [], partial: true };
+                  const item = page.value.items.find((item) => item.id === progress.match?.id);
+                  const text = item ? readContentItemText(item) : null;
+                  const snippet = text === null ? null : matchText(text);
+                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                    throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
+                  }
+                  return { records: item && snippet !== null ? [{ id: item.id, snippet,
+                    messageIndex: progress.itemCount - progress.match.distanceFromEnd }] : [], partial: false };
                 },
               });
+              scan.contentProgress = null;
               partial ||= searched.partial;
               candidate = searched.match ? { ...candidate, match: searched.match } : null;
             }
@@ -1437,6 +1506,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             sourceGeneration: scan.sourceGeneration,
             scanId: scan.scanId,
             scanned: scan.scanned,
+            ...(scan.contentProgress?.cursor ? { contentCursor: scan.contentProgress.cursor } : {}),
           });
           const proposed = ok({
             candidates: [...candidates, candidate],
@@ -1479,7 +1549,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           );
         }
         request.signal.throwIfAborted();
-        const after = yielded ? null : getAgentExternalSessionsInvocationFailure(request);
+        const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) {
           await retireCandidateScan(scan);
           return after;
@@ -1493,6 +1563,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             sourceGeneration: scan.sourceGeneration,
             scanId: scan.scanId,
             scanned: scan.scanned,
+            ...(scan.contentProgress?.cursor ? { contentCursor: scan.contentProgress.cursor } : {}),
           })
           : null;
         const value: AgentExternalSessionsListCandidatesResult = {

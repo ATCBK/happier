@@ -4,7 +4,7 @@ import { SessionRightPanelGitCommitTab } from '@/components/sessions/panes/git/S
 import { ScmCommitSelectionToggleButton, ScmCommitSelectionCheckGlyph } from '@/components/sessions/sourceControl/commitSelection/ScmCommitSelectionToggleButton';
 import { ScmChangeOverflowMenu } from '@/components/workspaces/scm/changes/ScmChangeOverflowMenu';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { applyFileDiscardAction } from '@/scm/operations/applyFileDiscardAction';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
@@ -91,7 +91,7 @@ export type SessionRightPanelGitCommitTabContentProps = Readonly<{
 }>;
 
 export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRightPanelGitCommitTabContentProps) => {
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const commitSelectionUiEnabled = props.commitSelectionUiEnabled === true;
     const branch = props.scmSnapshot?.branch?.detached ? null : props.scmSnapshot?.branch?.head ?? null;
     const commitPlan = useSessionCommitPlan({ sessionId: props.sessionId, serverId: props.serverId, enabled: props.active !== false, branch });

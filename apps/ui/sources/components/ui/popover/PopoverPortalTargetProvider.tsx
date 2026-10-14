@@ -5,6 +5,7 @@ import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOve
 import { OverlayPortalHost, OverlayPortalProvider } from './OverlayPortal';
 import { PopoverPortalTargetContextProvider } from './PopoverPortalTarget';
 import { POPOVER_PORTAL_Z_INDEX } from './portal';
+import { POPOVER_PORTAL_HOST_ATTRIBUTE } from '@/components/ui/overlays/overlayLayers';
 
 /**
  * Creates a screen-local portal host for native popovers/dropdowns.
@@ -25,7 +26,7 @@ export function PopoverPortalTargetProvider(props: { children: React.ReactNode }
             if (typeof document === 'undefined') return null;
 
             const host = document.createElement('div');
-            host.setAttribute('data-happy-popover-portal-host', '');
+            host.setAttribute(POPOVER_PORTAL_HOST_ATTRIBUTE, '');
             Object.assign(host.style, {
                 position: 'absolute',
                 top: '0px',

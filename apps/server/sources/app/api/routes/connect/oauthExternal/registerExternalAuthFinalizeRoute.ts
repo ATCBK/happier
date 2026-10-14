@@ -30,11 +30,8 @@ import {
     RECOVERY_DISABLED_ERROR,
 } from "./oauthExternalErrors";
 import { authPendingSchema, hasInvalidOAuthSecurityBinding } from "./oauthExternalSchemas";
-import {
-    ExternalOAuthFinalizeAuthRequestSchema,
-    ExternalOAuthFinalizeAuthSuccessResponseSchema,
-    AccountDirectoryRouteErrorResponseV1Schema,
-} from "@happier-dev/protocol";
+import { ExternalOAuthFinalizeAuthRequestSchema, ExternalOAuthFinalizeAuthSuccessResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
+import { AccountDirectoryRouteErrorResponseV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { shouldDenyPublicSignupProvisioningAction } from "@/app/integrations/publicUrl/publicSignupProvisioningPolicy";
 import {
     admitAccountContentKey,

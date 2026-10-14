@@ -115,8 +115,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderCurve: 'continuous',
         borderRadius: 8,
         height: 40,
-        marginBottom: 24,
-        marginHorizontal: 16,
+        marginBottom: theme.space.s24,
+        marginHorizontal: theme.space.s16,
     },
     unavailable: {
         alignItems: 'center',

@@ -1,15 +1,10 @@
 import { z } from "zod";
 
-import {
-  AnyClientUpgradeRequiredV1Schema,
-  OperationUpdateRequiredV1Schema,
-  SESSION_METADATA_LAYOUT_VERSION_V1,
-  SESSION_LIST_PAGE_DEFAULT_LIMIT,
-  SESSION_LIST_PAGE_MAX_LIMIT,
-  V2SessionByIdNotFoundSchema,
-  V2SessionByIdResponseSchema,
-  V2SessionListResponseSchema,
-} from "@happier-dev/protocol";
+import { AnyClientUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
+import { OperationUpdateRequiredV1Schema } from '@happier-dev/protocol/compat/operationUpdateRequiredV1';
+import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SESSION_LIST_PAGE_DEFAULT_LIMIT, SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
+import { V2SessionByIdNotFoundSchema, V2SessionByIdResponseSchema, V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { inTx, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";

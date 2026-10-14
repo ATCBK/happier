@@ -21,6 +21,12 @@ export type RetainedPresentationNativeMotion = Readonly<{
     y: SharedValue<number>;
     anchorX: number;
     anchorY: number;
+    width?: SharedValue<number>;
+    height?: SharedValue<number>;
+    chromeHeight?: number;
+    /** The frame's existing grip stays above an interactive retained picture. */
+    overlay?: React.ReactNode;
+    onPortalActiveChange?: (active: boolean) => void;
 }>;
 export const RetainedPresentationNativeMotionContext = React.createContext<RetainedPresentationNativeMotion | null>(null);
 
@@ -181,6 +187,10 @@ export function RetainedPresentationPortalHost(): React.ReactElement | null {
 function RetainedPresentationPortalSlot({ entry }: Readonly<{ entry: RetainedPresentationSlotEntry }>) {
     const motion = entry.nativeMotion;
     const animatedStyle = useAnimatedStyle(() => ({
+        ...(motion?.width && motion?.height ? {
+            width: motion.width.value,
+            height: Math.max(0, motion.height.value - (motion.chromeHeight ?? 0)),
+        } : {}),
         transform: [
             { translateX: motion ? motion.x.value - motion.anchorX : 0 },
             { translateY: motion ? motion.y.value - motion.anchorY : 0 },
@@ -189,11 +199,14 @@ function RetainedPresentationPortalSlot({ entry }: Readonly<{ entry: RetainedPre
     return <Animated.View
         testID={`browser-presentation-portal-slot-${entry.slotId}`}
         style={Platform.OS === 'web' ? resolvePortalSlotStyle(entry) : [resolvePortalSlotStyle(entry), animatedStyle]}
-        pointerEvents={entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}
+        pointerEvents={entry.visible && motion?.overlay ? 'box-none' : entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}
     >
-        <PluginSurfaceFocusEligibilityProvider active={entry.visible}>
-            {entry.node}
-        </PluginSurfaceFocusEligibilityProvider>
+        <View style={{ flex: 1 }} pointerEvents={entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}>
+            <PluginSurfaceFocusEligibilityProvider active={entry.visible}>
+                {entry.node}
+            </PluginSurfaceFocusEligibilityProvider>
+        </View>
+        {entry.visible ? motion?.overlay : null}
     </Animated.View>;
 }
 
@@ -390,6 +403,12 @@ export function RetainedPresentationSlotBinder(props: RetainedPresentationSlotBi
         inputPassthrough: props.inputPassthrough,
         nativeMotion,
     });
+    const onPortalActiveChange = nativeMotion?.onPortalActiveChange;
+    React.useEffect(() => {
+        if (!portalActive || !onPortalActiveChange) return;
+        onPortalActiveChange(true);
+        return () => onPortalActiveChange(false);
+    }, [portalActive, onPortalActiveChange]);
 
     if (!portalActive) {
         return <>{focusEligibleChildren}</>;

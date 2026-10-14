@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AcpCatalogRecordV1Schema, AcpCatalogRowMutationV1Schema } from './catalogSchemasV1.js';
 import { AcpPlatformFitV1Schema } from './registry/acpPlatformFitV1.js';
 
@@ -33,29 +33,29 @@ export function normalizeAcpCatalogSettingsV1(raw: unknown): AcpCatalogSettingsV
  * An authored backend: the stored definition, with timestamps optional (they are stamped on
  * write). Loosely typed at the boundary because text fields are trimmed before validation.
  */
-export const AcpBackendAuthoringInputV1Schema = lazyZodSchema(() => z.object({
+export const AcpBackendAuthoringInputV1Schema = lazyZodSchema(() => z.strictObject({
   id: z.string(),
   name: z.string(),
   title: z.string(),
-  description: z.string().optional(),
-  origin: AcpBackendDefinitionV1Schema.shape.origin.optional(),
+  description: z.optional(z.string()),
+  origin: z.optional(AcpBackendDefinitionV1Schema.shape.origin),
   launch: AcpBackendLaunchV1Schema,
-  env: AcpBackendDefinitionV1Schema.shape.env.optional(),
-  auth: z.object({
+  env: z.optional(AcpBackendDefinitionV1Schema.shape.env),
+  auth: z.optional(z.strictObject({
     support: z.string(),
-    machineLoginKey: z.string().optional(),
-    docsUrl: z.string().optional(),
-    loginCommand: z.object({ command: z.string(), args: z.array(z.string()).optional() }).strict().optional(),
-    envVars: z.array(z.string()).optional(),
-  }).strict().optional(),
-  runtime: AcpConfiguredRuntimeV1Schema.optional(),
-  compatibility: AcpBackendCompatibilityV1Schema.optional(),
-  defaultMode: z.string().optional(),
-  defaultModel: z.string().optional(),
-  capabilities: AcpBackendCapabilitiesV1Schema.partial().strict().optional(),
-  createdAt: z.number().optional(),
-  updatedAt: z.number().optional(),
-}).strict());
+    machineLoginKey: z.optional(z.string()),
+    docsUrl: z.optional(z.string()),
+    loginCommand: z.optional(z.strictObject({ command: z.string(), args: z.optional(z.array(z.string())) })),
+    envVars: z.optional(z.array(z.string())),
+  })),
+  runtime: z.optional(AcpConfiguredRuntimeV1Schema),
+  compatibility: z.optional(AcpBackendCompatibilityV1Schema),
+  defaultMode: z.optional(z.string()),
+  defaultModel: z.optional(z.string()),
+  capabilities: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.partial(AcpBackendCapabilitiesV1Schema))),
+  createdAt: z.optional(z.number()),
+  updatedAt: z.optional(z.number()),
+}));
 export type AcpBackendAuthoringInputV1 = z.input<typeof AcpBackendAuthoringInputV1Schema>;
 
 export type AcpCatalogMutationErrorCodeV1 =
@@ -210,10 +210,10 @@ export function applyAcpBackendDeleteV1(input: Readonly<{
 
 /** `agents.acp.backends.upsert`: add or replace one custom ACP agent in the Account catalog. */
 const capturedRevisionFields = () => ({
-  expectedRevision: AcpCatalogRowMutationV1Schema.shape.expectedRevision.optional(),
+  expectedRevision: z.optional(AcpCatalogRowMutationV1Schema.shape.expectedRevision),
   sourceSettingsVersion: AcpCatalogRowMutationV1Schema.shape.sourceSettingsVersion,
 });
-function validateCapturedRevision(input: Readonly<{ expectedRevision?: number | 'absent'; sourceSettingsVersion?: number }>, context: z.RefinementCtx): void {
+function validateCapturedRevision(input: Readonly<{ expectedRevision?: number | 'absent'; sourceSettingsVersion?: number }>, context: z.core.$RefinementCtx): void {
   if (input.expectedRevision === 'absent' && input.sourceSettingsVersion === undefined) {
     context.addIssue({ code: 'custom', path: ['sourceSettingsVersion'], message: 'An absent draft requires its captured Settings version' });
   }
@@ -221,48 +221,48 @@ function validateCapturedRevision(input: Readonly<{ expectedRevision?: number | 
     context.addIssue({ code: 'custom', path: ['sourceSettingsVersion'], message: 'Settings version is only valid for an absent catalog' });
   }
 }
-export const AgentsAcpBackendsUpsertInputV1Schema = lazyZodSchema(() => z.object({
+export const AgentsAcpBackendsUpsertInputV1Schema = lazyZodSchema(() => z.strictObject({
   backend: AcpBackendAuthoringInputV1Schema,
-  dryRun: z.boolean().optional(),
+  dryRun: z.optional(z.boolean()),
   ...capturedRevisionFields(),
-}).strict().superRefine(validateCapturedRevision));
+}).check(z.superRefine(validateCapturedRevision)));
 export type AgentsAcpBackendsUpsertInputV1 = z.infer<typeof AgentsAcpBackendsUpsertInputV1Schema>;
 /** Private configured definition; default execution observations redact its executable fields. */
-export const AgentsAcpBackendsGetInputV1Schema = lazyZodSchema(() => z.object({
-  backendId: z.string().trim().min(1),
-}).strict());
+export const AgentsAcpBackendsGetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  backendId: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type AgentsAcpBackendsGetInputV1 = z.infer<typeof AgentsAcpBackendsGetInputV1Schema>;
-export const AgentsAcpBackendsGetOutputV1Schema = lazyZodSchema(() => z.object({
-  backend: AcpCatalogRecordV1Schema.shape.definitions.element,
-  revision: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.literal('absent')]),
-}).strict());
+export const AgentsAcpBackendsGetOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  backend: AcpCatalogRecordV1Schema.shape.definitions._zod.def.element,
+  revision: z.union([z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), z.literal('absent')]),
+}));
 export type AgentsAcpBackendsGetOutputV1 = z.infer<typeof AgentsAcpBackendsGetOutputV1Schema>;
 
 export const AcpCatalogCleanupV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('complete') }).strict(),
-  z.object({ status: z.literal('cleanup-pending'), reason: z.literal('history-incomplete') }).strict(),
+  z.strictObject({ status: z.literal('complete') }),
+  z.strictObject({ status: z.literal('cleanup-pending'), reason: z.literal('history-incomplete') }),
 ]));
 export type AcpCatalogCleanupV1 = z.infer<typeof AcpCatalogCleanupV1Schema>;
 
-export const AgentsAcpBackendsUpsertOutputV1Schema = lazyZodSchema(() => z.union([z.object({
+export const AgentsAcpBackendsUpsertOutputV1Schema = lazyZodSchema(() => z.union([z.strictObject({
   backend: AcpBackendDefinitionV1Schema,
-  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  cleanup: AcpCatalogCleanupV1Schema.optional(),
-}).strict(), z.object({
+  revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  cleanup: z.optional(AcpCatalogCleanupV1Schema),
+}), z.strictObject({
   dryRun: z.literal(true),
   backend: AcpBackendDefinitionV1Schema,
-  machines: z.array(z.object({ machineId: z.string().min(1), fit: AcpPlatformFitV1Schema,
-    commandFound: z.boolean().nullable() }).strict()),
-}).strict()]));
+  machines: z.array(z.strictObject({ machineId: z.string().check(z.minLength(1)), fit: AcpPlatformFitV1Schema,
+    commandFound: z.nullable(z.boolean()) })),
+})]));
 
 /** `agents.acp.backends.delete`: remove one custom ACP agent from the Account catalog. */
-export const AgentsAcpBackendsDeleteInputV1Schema = lazyZodSchema(() => z.object({
-  backendId: z.string().trim().min(1),
+export const AgentsAcpBackendsDeleteInputV1Schema = lazyZodSchema(() => z.strictObject({
+  backendId: z.string().check(z.trim(), z.minLength(1)),
   ...capturedRevisionFields(),
-}).strict().superRefine(validateCapturedRevision));
+}).check(z.superRefine(validateCapturedRevision)));
 export type AgentsAcpBackendsDeleteInputV1 = z.infer<typeof AgentsAcpBackendsDeleteInputV1Schema>;
-export const AgentsAcpBackendsDeleteOutputV1Schema = lazyZodSchema(() => z.object({
+export const AgentsAcpBackendsDeleteOutputV1Schema = lazyZodSchema(() => z.strictObject({
   backendId: z.string(),
   deleted: z.literal(true),
-  cleanup: AcpCatalogCleanupV1Schema.optional(),
-}).strict());
+  cleanup: z.optional(AcpCatalogCleanupV1Schema),
+}));

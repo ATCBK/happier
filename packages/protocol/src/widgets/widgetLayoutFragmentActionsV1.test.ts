@@ -3,6 +3,7 @@ import { createActionExecutor } from '../actions/actionExecutor.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { createWidgetLayoutFragmentArtifactPortV1 } from './widgetLayoutFragmentArtifactV1.js';
 import { WidgetLayoutFragmentDraftV1Schema } from './widgetLayoutFragmentV1.js';
+import { ApprovalRequestV2Schema } from '../approvals/approvalRequestV1.js';
 
 const account = { serverId: 'home', accountId: 'owner' };
 const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Checks', inputs: { fields: [] },
@@ -12,6 +13,28 @@ const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Checks', inputs: 
     ] } });
 
 describe('widget layout fragment semantic Actions', () => {
+    it('captures a saved group name through its real Artifact owner before asking to delete it', async () => {
+        const boundary = createWorkBoardArtifactBoundary();
+        const port = createWidgetLayoutFragmentArtifactPortV1(boundary.forAccount(account.accountId), { accountId: account.accountId });
+        const requests: unknown[] = [];
+        const executor = createActionExecutor({ widgetAccountScope: () => account, widgetLayoutFragmentArtifacts: port,
+            approvalsCreate: async ({ request }) => {
+                requests.push(ApprovalRequestV2Schema.parse(request));
+                return { artifactId: 'approval' };
+            },
+        });
+        await executor.execute('widgets.fragment.create', { account, artifactId: 'saved', fragment: draft },
+            { surface: 'ui', serverId: account.serverId, bypassApprovals: true });
+        const result = await executor.execute('widgets.fragment.delete', { account, artifactId: 'saved' },
+            { surface: 'cli', authority: 'account_automation', serverId: account.serverId,
+                runtimeAccountId: account.accountId, actionRequestId: 'delete-saved-group', actionCaller: { kind: 'host' } });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        const request = ApprovalRequestV2Schema.parse(requests[0]);
+        expect(request.summary).toContain('Checks');
+        expect(request.preview).toMatchObject({ summary: expect.stringContaining('Checks') });
+        expect(request.actionArgs).toEqual({ account, artifactId: 'saved' });
+        expect((await port.get('saved'))?.name).toBe('Checks');
+    });
     it.each(['agent', 'voice'] as const)('creates and discovers a %s-authored saved group, stamps provenance and keeps child definition references', async (surface) => {
         const b = createWorkBoardArtifactBoundary();
         const port = createWidgetLayoutFragmentArtifactPortV1({ ...b.transport,

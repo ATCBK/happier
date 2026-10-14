@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import { WorkflowAuthoredProducerRefSchema } from './workflowReferenceV1.js';
@@ -32,27 +33,27 @@ import { WorkflowAuthoredProducerRefSchema } from './workflowReferenceV1.js';
 
 export const WorkflowWorktreeSourceSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   /** Committed HEAD captured during workflow initialization, before the first agent can mutate the project. */
-  z.object({ kind: z.literal('original') }).strict(),
+  z.strictObject({ kind: z.literal('original') }),
   /** Committed HEAD of the resolved workflow default at this invocation's materialization. */
-  z.object({ kind: z.literal('workflow') }).strict(),
+  z.strictObject({ kind: z.literal('workflow') }),
   /** Committed HEAD of the named producer's workspace at this invocation's materialization. */
-  z.object({ kind: z.literal('step'), producer: WorkflowAuthoredProducerRefSchema }).strict(),
+  z.strictObject({ kind: z.literal('step'), producer: WorkflowAuthoredProducerRefSchema }),
 ]));
 export type WorkflowWorktreeSource = z.infer<typeof WorkflowWorktreeSourceSchema>;
 
 export const WorkflowWorkspaceSelectionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('inherit') }).strict(),
-  z.object({ kind: z.literal('project_checkout') }).strict(),
-  z.object({ kind: z.literal('from_step'), producer: WorkflowAuthoredProducerRefSchema }).strict(),
-  z.object({ kind: z.literal('new_worktree'), source: WorkflowWorktreeSourceSchema,
-    displayName: z.string().trim().min(1).optional(),
-    baseRef: z.string().trim().min(1).nullable().optional(),
-  }).strict(),
+  z.strictObject({ kind: z.literal('inherit') }),
+  z.strictObject({ kind: z.literal('project_checkout') }),
+  z.strictObject({ kind: z.literal('from_step'), producer: WorkflowAuthoredProducerRefSchema }),
+  z.strictObject({ kind: z.literal('new_worktree'), source: WorkflowWorktreeSourceSchema,
+    displayName: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    baseRef: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  }),
 ]));
 export type WorkflowWorkspaceSelection = z.infer<typeof WorkflowWorkspaceSelectionSchema>;
 
-const WorkflowWorkspacePathSchema = lazyZodSchema(() => z.string().min(1));
-export const WorkflowCommittedRevisionV1Schema = lazyZodSchema(() => z.string().regex(/^[0-9a-f]{40,64}$/));
+const WorkflowWorkspacePathSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+export const WorkflowCommittedRevisionV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[0-9a-f]{40,64}$/)));
 
 /**
  * Host-selected project facts carried at Workflow admission. Saved and inline
@@ -60,66 +61,66 @@ export const WorkflowCommittedRevisionV1Schema = lazyZodSchema(() => z.string().
  * portable. The target daemon expands it into the accepted descriptor below
  * before any workflow filesystem or agent effect.
  */
-export const WorkflowProjectTargetV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowProjectTargetV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: preservedBoundedNfcString(191, 'Workflow Machine ids'),
   directory: WorkflowWorkspacePathSchema,
-  workspaceRefId: preservedBoundedNfcString(191, 'Workspace ids').optional(),
-}).strict());
+  workspaceRefId: zMini.optional(preservedBoundedNfcString(191, 'Workspace ids')),
+}));
 export type WorkflowProjectTargetV1 = z.infer<typeof WorkflowProjectTargetV1Schema>;
 
-export const WorkflowResolvedInvocationRefV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowResolvedInvocationRefV1Schema = lazyZodSchema(() => z.strictObject({
   producer: WorkflowAuthoredProducerRefSchema,
   invocationRecordId: preservedBoundedNfcString(191, 'Workflow invocation record ids'),
-}).strict());
+}));
 
-export const WorkflowWorkspaceDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowWorkspaceDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: preservedBoundedNfcString(191, 'Workflow Machine ids'),
   directory: WorkflowWorkspacePathSchema,
   checkoutRootPath: WorkflowWorkspacePathSchema,
-  workspaceRefId: preservedBoundedNfcString(191, 'Workspace ids').optional(),
-  sourceInvocation: WorkflowResolvedInvocationRefV1Schema.optional(),
-  checkout: z.object({
+  workspaceRefId: zMini.optional(preservedBoundedNfcString(191, 'Workspace ids')),
+  sourceInvocation: z.optional(WorkflowResolvedInvocationRefV1Schema),
+  checkout: z.optional(z.strictObject({
     kind: z.literal('git_worktree'),
-    branchName: z.string().min(1),
-  }).strict().optional(),
-}).strict());
+    branchName: z.string().check(z.minLength(1)),
+  })),
+}));
 export type WorkflowWorkspaceDescriptorV1 = z.infer<typeof WorkflowWorkspaceDescriptorV1Schema>;
 
 /** Immutable machine-local workspace facts sealed into the accepted Run. */
-export const WorkflowAcceptedWorkspaceTargetV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowAcceptedWorkspaceTargetV1Schema = lazyZodSchema(() => z.strictObject({
   project: WorkflowWorkspaceDescriptorV1Schema,
-  originalCommittedRevision: WorkflowCommittedRevisionV1Schema.optional(),
-}).strict());
+  originalCommittedRevision: z.optional(WorkflowCommittedRevisionV1Schema),
+}));
 export type WorkflowAcceptedWorkspaceTargetV1 = z.infer<typeof WorkflowAcceptedWorkspaceTargetV1Schema>;
 
-export const WorkflowWorkspaceCreationIntentV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowWorkspaceCreationIntentV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('git_worktree'),
   sourceDirectory: WorkflowWorkspacePathSchema,
-  baseRef: z.string().trim().min(1),
-  displayName: z.string().min(1),
+  baseRef: z.string().check(z.trim(), z.minLength(1)),
+  displayName: z.string().check(z.minLength(1)),
   branchMode: z.literal('new'),
-}).strict());
+}));
 export type WorkflowWorkspaceCreationIntentV1 = z.infer<typeof WorkflowWorkspaceCreationIntentV1Schema>;
 
 /** Private row-local correspondence persisted before and after the SCM effect. */
-export const WorkflowWorkspaceProgressV1Schema = lazyZodSchema(() => z.object({
-  creationIntent: WorkflowWorkspaceCreationIntentV1Schema.optional(),
-  descriptor: WorkflowWorkspaceDescriptorV1Schema.optional(),
-}).strict().refine((value) => value.creationIntent !== undefined || value.descriptor !== undefined, {
+export const WorkflowWorkspaceProgressV1Schema = lazyZodSchema(() => z.strictObject({
+  creationIntent: z.optional(WorkflowWorkspaceCreationIntentV1Schema),
+  descriptor: z.optional(WorkflowWorkspaceDescriptorV1Schema),
+}).check(z.refine((value) => value.creationIntent !== undefined || value.descriptor !== undefined, {
   message: 'Workspace progress requires creation intent or a resolved descriptor',
-}));
+})));
 export type WorkflowWorkspaceProgressV1 = z.infer<typeof WorkflowWorkspaceProgressV1Schema>;
 
 export const WorkflowWorkspaceResolutionV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), workspace: WorkflowWorkspaceDescriptorV1Schema }).strict(),
-  z.object({
+  z.strictObject({ ok: z.literal(true), workspace: WorkflowWorkspaceDescriptorV1Schema }),
+  z.strictObject({
     ok: z.literal(false),
     code: z.enum([
       'conversation_workspace_mismatch', 'source_workspace_unavailable',
       'committed_revision_unavailable', 'workspace_unavailable',
       'workspace_conflict', 'scm_unavailable',
     ]),
-  }).strict(),
+  }),
 ]));
 export type WorkflowWorkspaceResolutionV1 = z.infer<typeof WorkflowWorkspaceResolutionV1Schema>;
 

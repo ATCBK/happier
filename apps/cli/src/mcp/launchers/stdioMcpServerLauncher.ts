@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
@@ -55,6 +56,7 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
   });
+  observeProcessLaunch(child);
 
   let startupFailure: StdioMcpServerStartupFailure | undefined;
   let childStarted = false;
@@ -89,8 +91,6 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
   process.stdin.on('data', observeInitialization);
   child.once('spawn', () => {
     childStarted = true;
-    process.stdin.off('data', observeInitialization);
-    initialization.clear();
   });
 
   const forwardSignal = (signal: NodeJS.Signals) => {
@@ -114,6 +114,17 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
     startupFailure = { t: 'happier-mcp-stdio-spawn-failure-v1',
       ...(code === undefined ? {} : { code }), ...(path === undefined ? {} : { path }) };
     reportStartupFailure();
+    if (process.stdin.readableEnded && !failureReported) process.exit(1);
+  });
+
+  child.stdin.on('error', (err) => {
+    // Pipe writes fail asynchronously when the child closes stdin. Preserve a
+    // prior spawn diagnosis (e.g. ENOENT) and use the same typed MCP failure.
+    const code = classifySpawnFailure(err).errno;
+    startupFailure ??= { t: 'happier-mcp-stdio-spawn-failure-v1',
+      ...(code === undefined ? {} : { code }), path: config.command };
+    reportStartupFailure();
+    child.kill();
     if (process.stdin.readableEnded && !failureReported) process.exit(1);
   });
 

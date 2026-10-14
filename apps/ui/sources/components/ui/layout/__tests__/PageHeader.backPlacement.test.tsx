@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { renderInCollectionLayout } from '@/dev/testkit/render/renderInCollectionLayout';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -87,6 +88,24 @@ describe('PageHeader back control placement', () => {
     it('keeps back mounted (unseen) until the pane is measured, so no fallback arrow flashes', async () => {
         const screen = await renderHeader();
         expect(screen.root.findAllByType('BackArrow' as never)).toHaveLength(1);
+    });
+
+    it('decides back from the split\'s detail width on the first paint, so a wide detail never reserves a line it then drops', async () => {
+        const wide = await renderInCollectionLayout(
+            <NavigationBackChromeProvider control={BackArrow}><PageHeader testID="page-header" title="Invitations" /></NavigationBackChromeProvider>,
+            'split',
+            2560,
+        );
+        expect(gutterBacks(wide)).toBe(1);
+        expect(wide.findHostByTestId('page-header-back-line')).toBeNull();
+        // A detail beside a narrow window's list still reserves nothing it does not need: its line is drawn, shown.
+        const narrow = await renderInCollectionLayout(
+            <NavigationBackChromeProvider control={BackArrow}><PageHeader testID="page-header" title="Invitations" /></NavigationBackChromeProvider>,
+            'split',
+            1000,
+        );
+        expect(gutterBacks(narrow)).toBe(0);
+        expect(narrow.findHostByTestId('page-header-back-line')?.props.style).not.toContainEqual({ opacity: 0 });
     });
 
     it('keeps the title on the content edge and puts back in the gutter on wide panes', async () => {

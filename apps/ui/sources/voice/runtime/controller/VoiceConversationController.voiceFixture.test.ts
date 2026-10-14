@@ -82,7 +82,7 @@ describe('conversation controller canonical fixture consumer', () => {
       expect(projected.map(event => event.firstSequence)).toEqual([1, 2]);
       expect(matchesVoiceFixtureTranscript(fixture.metadata, projected.map(event => event.text).join(' '))).toBe(true);
 
-      await composed.runtime.adapter.stop();
+      await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
       // End releases the active canonical ring; ordinary stored messages own
       // retained history. A late SDK final must neither reopen that ring nor
       // append a third durable turn.

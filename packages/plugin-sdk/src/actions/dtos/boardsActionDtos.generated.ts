@@ -8,46 +8,6 @@ export type BoardsActionInputById = {
     readonly "boards.list": Record<string, never>;
     readonly "boards.apply": {
         intent: {
-            kind: 'widget_move';
-            boardId: string;
-            ref: {
-                surface: {
-                    serverId: string;
-                    accountId: string;
-                    owner: {
-                        kind: 'home';
-                    } | {
-                        kind: 'sessionBoard';
-                        sessionId: string;
-                    } | {
-                        kind: 'companion';
-                        sessionId: string;
-                    } | {
-                        kind: 'workBoard';
-                        boardId: string;
-                    } | {
-                        kind: 'project';
-                        projectId: string;
-                        layoutId?: string | undefined;
-                    } | {
-                        kind: 'pluginArea';
-                        pluginId: string;
-                        pageId: string;
-                        area: string;
-                        layoutId?: string | undefined;
-                    } | {
-                        kind: 'corePage';
-                        pageId: string;
-                        area: string;
-                        layoutId?: string | undefined;
-                    };
-                    artifactId?: string | undefined;
-                };
-                instanceId: string;
-            };
-            toIndex?: number | undefined;
-            nativeIndex?: number | undefined;
-        } | {
             kind: 'widget_add';
             instance: {
                 v: 1;
@@ -94,7 +54,7 @@ export type BoardsActionInputById = {
                             submitLabel?: string | undefined;
                             fields?: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -291,7 +251,7 @@ export type BoardsActionInputById = {
                             submitLabel?: string | undefined;
                             fields?: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -374,6 +334,46 @@ export type BoardsActionInputById = {
                     number
                 ] | null | undefined;
             } | undefined;
+        } | {
+            kind: 'widget_move';
+            boardId: string;
+            ref: {
+                surface: {
+                    serverId: string;
+                    accountId: string;
+                    owner: {
+                        kind: 'home';
+                    } | {
+                        kind: 'sessionBoard';
+                        sessionId: string;
+                    } | {
+                        kind: 'companion';
+                        sessionId: string;
+                    } | {
+                        kind: 'workBoard';
+                        boardId: string;
+                    } | {
+                        kind: 'project';
+                        projectId: string;
+                        layoutId?: string | undefined;
+                    } | {
+                        kind: 'pluginArea';
+                        pluginId: string;
+                        pageId: string;
+                        area: string;
+                        layoutId?: string | undefined;
+                    } | {
+                        kind: 'corePage';
+                        pageId: string;
+                        area: string;
+                        layoutId?: string | undefined;
+                    };
+                    artifactId?: string | undefined;
+                };
+                instanceId: string;
+            };
+            toIndex?: number | undefined;
+            nativeIndex?: number | undefined;
         } | {
             kind: 'widget_size';
             size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
@@ -837,7 +837,7 @@ export type BoardsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -896,9 +896,7 @@ export type BoardsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;
@@ -1037,7 +1035,7 @@ export type BoardsActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -1096,9 +1094,7 @@ export type BoardsActionResultById = {
                     };
                     bindings: Record<string, {
                         kind: 'value';
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'context';
                         slot: string;

@@ -120,7 +120,10 @@ function reconcileAttemptId(snapshot: VoiceSessionSnapshot, binding?: VoiceSessi
           endedAt: Date.now(),
           reason: requestedEndReason ?? ({ kind: 'disconnected' } satisfies VoiceSessionEndReason),
           conversationSessionAddress: activeAttemptBinding?.conversationSessionAddress ?? null,
-          targetSessionAddress: activeAttemptConversationContext?.targetSessionAddress ?? activeAttemptBinding?.targetSessionAddress ?? null,
+          // A continued carrier's admitted binding owns its effective coding target, including null for Voice home.
+          targetSessionAddress: activeAttemptBinding
+            ? activeAttemptBinding.targetSessionAddress
+            : activeAttemptConversationContext?.targetSessionAddress ?? null,
           transcriptMode: activeAttemptBinding?.transcriptMode ?? null,
           ...(activeAttemptBinding?.lifetime ? { lifetime: activeAttemptBinding.lifetime } : {}),
           accountScope: activeAttemptConversationContext?.accountScope ?? null,

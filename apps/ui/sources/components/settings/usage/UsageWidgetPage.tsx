@@ -62,7 +62,7 @@ import {
   useUsageWidgetBatchSlices,
   useUsageWidgetBatchInventorySlice,
 } from './widgets/usageWidgetBatch';
-import { describeUsagePagePendingSources } from './widgets/usageBodyKit';
+import { describeUsagePagePendingSources, readUsagePageAsOfMs } from './widgets/usageBodyKit';
 
 const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   overview: 'squares-four',
@@ -545,12 +545,7 @@ function UsagePageHeader(
       (slice) => slice.accounting,
     )?.accounting;
     if (!accounting) return reading;
-    const asOf = props.slices.flatMap((slice) =>
-      slice.sources.flatMap((source) =>
-        source.asOfMs === undefined ? [] : [source.asOfMs],
-      ),
-    );
-    const latest = asOf.length ? Math.min(...asOf) : null;
+    const latest = readUsagePageAsOfMs(props.slices);
     const machines = accounting.breakdowns?.machine?.length ?? null;
     const agents = accounting.breakdowns?.agent?.length ?? null;
     return [

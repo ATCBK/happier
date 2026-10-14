@@ -1,13 +1,20 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMockSession, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createMockSession, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { encodeBase64, encrypt } from '@/api/encryption';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
-import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { createSessionScopedSocket, createSessionScopedSocketConnection } from './sockets';
 import { ApiSessionClient } from './sessionClient';
 import { publishServerHttpRuntimeOrigin, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { configuration } from '@/configuration';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { createInitialHostRuntimeActivityMutation } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { waitForNextPermissionModeMessage } from '@/agent/runtime/waitForNextPermissionModeMessage';
+import { fetchSessionSnapshotUpdateFromServer } from './snapshotSync';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 const { mockIo, readStoredCredentials } = vi.hoisted(() => ({
     mockIo: vi.fn(),
@@ -32,8 +39,133 @@ describe('ApiSessionClient injected transport', () => {
     });
     afterEach(async () => {
         await client?.close();
+        vi.useRealTimers();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it.each(['owner', 'shared_editor'] as const)('keeps an idle input waiter parked across unchanged layout-one snapshot reads (%s)', async authority => {
+        const token = 'idle-owner-token';
+        const credentials = { token, encryption: null };
+        const metadata = createTestMetadata({ path: '/idle', host: 'idle-host' });
+        const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain',
+            metadata, agentState: null, storedContentMode: 'plain' });
+        const raw = createSessionRecordFixture({ id: 'idle-session', encryptionMode: 'plain',
+            metadataLayoutVersion: 1, metadataVersion: 7, agentStateVersion: 4,
+            metadata: fields.sharedMetadata.ciphertext, ownerMetadata: fields.ownerMetadata, agentState: fields.agentState, share: null });
+        const reads: string[] = [];
+        vi.mocked(axios.get).mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            reads.push(path);
+            if (path === '/v1/account/encryption/currentness') return { status: 200,
+                data: createAccountEncryptionCurrentnessFixture({ mode: 'plain', version: 1, settingsVersion: 7 }) };
+            if (path === '/v2/sessions/idle-session') return { status: 200, data: { session: raw } };
+            return { status: 404, data: {} };
+        });
+        // The real producer must cross the real strict tuple reader before exercising its wake carrier.
+        await fetchSessionSnapshotUpdateFromServer({ token, sessionId: 'idle-session', credentials,
+            accountEncryptionCurrentness: createAccountEncryptionCurrentnessFixture({ mode: 'plain', version: 1, settingsVersion: 7 }),
+            mode: 'plain', ctx: null, currentMetadataLayoutVersion: 1, currentMetadataVersion: 7,
+            currentAgentStateVersion: 4, currentMetadata: metadata, currentAgentState: null });
+        client = new ApiSessionClient(token, createMockSession({ id: 'idle-session', encryptionMode: 'plain',
+            metadataLayoutVersion: 1, metadata, metadataVersion: 7, ownerMetadata: null,
+            agentState: null, agentStateVersion: 4 }), {
+            metadataAuthority: authority === 'owner' ? { kind: 'owner', credentials } : { kind: 'shared_editor' },
+            transport: { serverId: 'idle-home', serverUrl: 'https://idle-home.test',
+                createSessionSocketTransport: () => {
+                    const socket = createApiSessionSocketStub();
+                    return { socket: socket as never, transport: createSocketTransportAdapter(socket as never) };
+                } },
+        });
+        await client.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
+        const session = client;
+        const abort = new AbortController();
+        const queue = new MessageQueue2<string>(() => 'idle');
+        let reResolutions = 0;
+        const waiting = waitForNextPermissionModeMessage({ messageQueue: queue, session,
+            abortSignal: abort.signal, onMetadataUpdate: async () => {
+                reResolutions += 1;
+                await session.refreshSessionSnapshotFromServerRequired({ reason: 'primaryTurnRuntimeState' });
+            } });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            reads.length = 0;
+            const startedAt = Date.now();
+            vi.useFakeTimers({ toFake: ['Date'] });
+            for (let second = 0; second < 25; second += 1) {
+                vi.setSystemTime(startedAt + (second + 1) * 1_000);
+                await session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
+            expect({ reResolutions, currentness: reads.filter(path => path === '/v1/account/encryption/currentness').length,
+                sessions: reads.filter(path => path === '/v2/sessions/idle-session').length }).toEqual({
+                reResolutions: 0, currentness: authority === 'owner' ? 25 : 0, sessions: 25,
+            });
+            raw.metadataVersion += 1;
+            await session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
+            await vi.waitFor(() => expect(reResolutions).toBe(1));
+            await new Promise<void>(resolve => setImmediate(resolve));
+            const repaired = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain',
+                metadata: { ...metadata, summary: { text: 'Repaired authoritative content', updatedAt: 2 } },
+                agentState: null, storedContentMode: 'plain' });
+            raw.metadata = repaired.sharedMetadata.ciphertext;
+            raw.ownerMetadata = repaired.ownerMetadata;
+            const repairWake = session.waitForMetadataUpdate(abort.signal);
+            await session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
+            expect(session.getMetadataSnapshot()?.summary?.text).toBe('Repaired authoritative content');
+            await expect(repairWake).resolves.toBe(true);
+        } finally {
+            abort.abort();
+            await waiting;
+        }
+    });
+
+    it('renews established startup presence before native runtime readiness and retires renewal on close', async () => {
+        const home = createSessionRuntimeActivityHomeStub({ machineId: 'startup-machine' });
+        const socket = createApiSessionSocketStub({ connected: true,
+            emitWithAck: (event, payload) => home.answer(event, payload) ?? { ok: false } });
+        const features = FeaturesResponseSchema.parse({ features: { sharing: { pendingQueueV2: { enabled: true } } },
+            capabilities: { session: { runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 3 },
+                publisherAuthority: { protocolVersion: 1 } } } });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(features), { status: 200,
+            headers: { 'content-type': 'application/json' } })));
+        client = new ApiSessionClient('startup-token', createMockSession({ id: 'startup-session', encryptionMode: 'plain' }), {
+            metadataAuthority: { kind: 'shared_editor' },
+            localMachineId: 'startup-machine',
+            durableMutationDeliveryInitiallyActive: false,
+            initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({
+                sessionId: 'startup-session', agentRuntimeApplicability: 'supported' })],
+            transport: { serverId: 'startup-home', serverUrl: 'https://startup-home.example.test',
+                createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
+        });
+        await vi.waitFor(() => expect(socket.getHandler('session')).toBeTypeOf('function'));
+        vi.useFakeTimers();
+        const observations: number[] = [];
+        const observe = (event: string) => {
+            if (event === 'session-alive') observations.push(Date.now());
+        };
+        socket.emit.mockImplementation(observe);
+        socket.volatile.emit.mockImplementation(observe);
+        await expect(client.claimCurrentSessionPublisherAuthorityForStartup()).resolves.toEqual({ status: 'claimed' });
+        await vi.advanceTimersByTimeAsync(11 * 60_000);
+        expect(observations.length).toBeGreaterThan(1);
+        expect(Date.now() - observations.at(-1)!).toBeLessThanOrEqual(configuration.sessionKeepAliveIdleMs);
+        // Clock corrections cannot retire a live publisher's renewal.
+        vi.setSystemTime(Date.now() - configuration.sessionKeepAliveIdleMs * 2);
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveIdleMs);
+        expect(observations.at(-1)).toBe(Date.now());
+        client.keepAlive(true, 'remote');
+        const thinkingStartedAt = Date.now();
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveThinkingMs);
+        expect(observations.at(-1)).toBe(thinkingStartedAt + configuration.sessionKeepAliveThinkingMs);
+        client.keepAlive(false, 'local');
+        const settledAt = Date.now();
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveIdleMs);
+        expect(observations.at(-1)).toBe(settledAt + configuration.sessionKeepAliveIdleMs);
+        await client.close();
+        const before = [...observations];
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveIdleMs * 2);
+        expect(observations).toEqual(before);
     });
 
     it('reads an E2EE shared-editor follow snapshot without Account lookup or owner-state disclosure', async () => {

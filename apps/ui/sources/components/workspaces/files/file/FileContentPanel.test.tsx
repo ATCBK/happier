@@ -1,8 +1,10 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { findTestInstanceByTypeContainingText, renderScreen } from '@/dev/testkit';
 import { installSessionFileViewCommonModuleMocks } from './sessionFileViewTestHelpers';
+import { resolveThemeStyleScales } from '@/theme/themeStyleScales';
 
 
 // Required for React 18+ act() semantics with react-test-renderer.
@@ -54,20 +56,22 @@ vi.mock('@/components/ui/code/diff/useInlineDiffVirtualizationThresholds', () =>
 const diffViewerPropsState: { current: any | null } = { current: null };
 const codeLinesViewPropsState: { current: any | null } = { current: null };
 const markdownViewPropsState: { current: any | null } = { current: null };
+// Install boundaries above, then collect the real owner before the test's interaction deadline.
+const fileContentPanelModule = await import('./FileContentPanel');
 
 describe('FileContentPanel', () => {
     afterEach(() => vi.useRealTimers());
-    const theme = {
+    const theme = createThemeFixture({
         colors: {
             textSecondary: '#999',
             text: {
                 secondary: '#999',
             },
         },
-    };
+    });
 
     it('treats equivalent theme token objects as stable for memoized file content props', async () => {
-        const { areFileContentPanelPropsEqual } = await import('./FileContentPanel');
+        const { areFileContentPanelPropsEqual } = fileContentPanelModule;
         expect(areFileContentPanelPropsEqual).toBeTypeOf('function');
 
         const baseProps = {
@@ -85,19 +89,25 @@ describe('FileContentPanel', () => {
 
         expect(areFileContentPanelPropsEqual(baseProps as any, {
             ...baseProps,
-            theme: {
+            theme: createThemeFixture({
                 colors: {
                     textSecondary: '#999',
                     text: {
                         secondary: '#999',
                     },
                 },
-            },
+            }),
         } as any)).toBe(true);
         expect(areFileContentPanelPropsEqual(baseProps as any, {
             ...baseProps,
             fileContent: 'const a = 2;',
         })).toBe(false);
+        const compactTheme = createThemeFixture({ ...theme, space: resolveThemeStyleScales({ density: 'compact' }).space });
+        expect(areFileContentPanelPropsEqual(baseProps as any, { ...baseProps, theme: compactTheme })).toBe(false);
+        expect(areFileContentPanelPropsEqual(baseProps as any, {
+            ...baseProps,
+            theme: createThemeFixture({ ...theme, space: { ...theme.space } }),
+        })).toBe(true);
     });
 
     it('renders diff view when diff mode is selected and diff exists', async () => {
@@ -347,7 +357,7 @@ describe('FileContentPanel', () => {
         });
 
         await act(async () => {
-            panel.tree.update(<FileContentPanel
+            await panel.update(<FileContentPanel
                 theme={theme as any}
                 displayMode={'markdown' as any}
                 sessionId="s1"

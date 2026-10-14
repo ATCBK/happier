@@ -1,27 +1,12 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 
 import { ensureMinimalMonorepoLayout } from './core/minimal_monorepo_layout.mjs';
 import { writeStubCliDistBuildManifest, writeStubHappierCliFiles } from './core/stub_happier_cli_files.mjs';
 import { createTempFixture } from './core/temp_fixture.mjs';
+import { allocateAvailableLocalhostPort } from './core/ephemeral_port.mjs';
 import { readHappyCliRuntimeInputFreshness } from '../utils/proc/cli_runtime_inputs.mjs';
 import { sanitizeStackTestRunnerEnv } from '../utils/test/test_env.mjs';
-
-async function allocateAvailableLocalhostPort() {
-  const server = createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    await new Promise((resolve) => server.close(resolve));
-    throw new Error('expected an allocated localhost TCP port');
-  }
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return address.port;
-}
 
 export async function createStackHappierCliCommandFixture(
   t,

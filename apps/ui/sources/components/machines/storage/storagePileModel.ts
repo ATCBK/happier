@@ -54,7 +54,8 @@ export type StoragePileBar =
       kind: 'held';
       batchId: string;
       count: number;
-      inTrashBytes: number;
+      /** Null when the remaining entries do not prove a physical allocation union. */
+      inTrashBytes: number | null;
       notActed: number;
       emptiesAt: number | null;
     }>

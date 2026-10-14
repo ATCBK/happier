@@ -2,6 +2,7 @@ import { Modal } from '@/modal';
 import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
 
 import { ScmCommitMessageEditorModal, type ScmCommitMessageGenerateResult } from './ScmCommitMessageEditorModal';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export async function showScmCommitMessageEditorModal(params: Readonly<{
     initialMessage?: string;
@@ -26,7 +27,7 @@ export async function showScmCommitMessageEditorModal(params: Readonly<{
             kind: 'card',
             testID: 'scm-commit-message-editor-modal',
             bodyScroll: 'auto',
-            dimensions: { width: 520, maxHeightRatio: 0.92, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },
         closeOnBackdrop: true,
     });

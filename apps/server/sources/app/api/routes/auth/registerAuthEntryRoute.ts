@@ -1,4 +1,4 @@
-import { AuthEntryProjectionV1Schema, AuthEntryRequestV1Schema } from '@happier-dev/protocol';
+import { AuthEntryProjectionV1Schema, AuthEntryRequestV1Schema } from '@happier-dev/protocol/auth/entry';
 import { z } from 'zod';
 
 import type { Fastify } from '@/app/api/types';

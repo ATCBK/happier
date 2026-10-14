@@ -23,7 +23,7 @@ import {
   resolveSavedSecretReference,
 } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { mutateScopedAccountVoiceCredentialSource, resolveAccountVoiceCredentialApprovalDigest } from './accountVoiceCredential';
-import { ConnectedAccountCatalogRowMutationV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { ConnectedAccountCatalogRowMutationV1Schema, ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import {
   applyConnectedAccountCatalogSnapshot,
   resetConnectedAccountCatalogSnapshotsForTests,
@@ -141,7 +141,7 @@ const accountFixture = {
     credentialFixture = value;
     const { connectedPurposes, ...settings } = value.settings;
     if (value.settingsScope) applyConnectedAccountCatalogSnapshot(value.settingsScope, 'purposes', {
-      status: 'ready', revision: 1, record: { key: 'purposes', value: connectedPurposes ?? { v: 1, bindings: [] } },
+      status: 'ready', revision: 1, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse(connectedPurposes ?? { v: 1, bindings: [] }) },
     }, true);
     storage.setState({
       settingsScope: value.settingsScope,
@@ -568,7 +568,7 @@ describe('account Voice operation service', () => {
     const selectedRef = 'happier:shared-secret:v1:resource-voice-bound';
     let persistedSettings: Readonly<Record<string, unknown>> = {};
     let purposeRevision = 1;
-    catalogBoundary.readMaterials.mockImplementationOnce(() => Response.json({ resources: [{
+    catalogBoundary.readMaterials.mockImplementationOnce(async () => Response.json({ resources: [{
       resourceId: 'resource-voice-bound', encryptionMode: 'plain', recipientEnvelope: null,
       storedContent: { t: 'plain', v: { v: 1, name: 'Voice key', kind: 'apiKey', value: 'private-voice-key' } },
       entry: { ref: selectedRef, source: 'shared_resource', relationship: 'owner',
@@ -681,6 +681,7 @@ describe('account Voice operation service', () => {
         owner: {
           kind: 'account',
           accountId: 'owner-1',
+          name: 'Owner',
           firstName: 'Owner',
           lastName: null,
           username: 'owner',

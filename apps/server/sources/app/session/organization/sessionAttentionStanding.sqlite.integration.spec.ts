@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { SessionOrganizationSnapshotResponseSchema } from "@happier-dev/protocol";
 import { Expo, type ExpoPushMessage } from "expo-server-sdk";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { registerSessionOrganizationRoutes } from "@/app/api/routes/session/registerSessionOrganizationRoutes";
 import { createRouteTestBuilder } from "@/app/api/testkit/routeTestBuilder";
@@ -119,10 +119,10 @@ describe("session attention standings on SQLite", () => {
         // Pinned ui-web-v0.2.11 (98ea8fb76733b1dd785d38c31360179cafa84824):
         // packages/protocol/src/sessionOrganization/{standings,snapshot,constants}.ts.
         // Keep this released strict vector independent of the current unrestricted schema.
-        const releasedStandings = z.array(z.object({
-            sessionId: z.string().trim().min(1).max(191),
-            standing: z.boolean(), updatedAt: z.number().int().nonnegative(),
-        }).strict()).max(500);
+        const releasedStandings = z.array(z.strictObject({
+            sessionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(191)),
+            standing: z.boolean(), updatedAt: z.number().check(z.int(), z.nonnegative()),
+        })).check(z.maxLength(500));
         const withinSnapshot = SessionOrganizationSnapshotResponseSchema.parse(withinLimit.response).snapshot;
         expect(releasedStandings.parse(withinSnapshot.attentionStandings)).toHaveLength(500);
 

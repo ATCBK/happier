@@ -1,29 +1,18 @@
 import { z } from "zod";
 import type { RouteShorthandOptions } from "fastify";
-import {
-    DIRECT_ROUTE_GRANT_TTL_MS,
-    DirectRouteGrantScopeV1Schema,
-    DirectRouteGrantRequestV2Schema,
-    VoiceMediaGrantScopeV1Schema,
-    LiveStreamGrantScopeV1Schema,
-    MachineLiveStreamCapsV1Schema,
-    MachineLiveStreamCodecIdV1Schema,
-    PeerTcpTunnelDestinationV1Schema,
-    PEER_MEDIATION_RECEIPTS,
-    PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH,
-    TcpTunnelGrantScopeV1Schema,
-    clampDirectRouteGrantTtlMs,
-    resolvePeerRouteFeatureId,
-    DAEMON_VOICE_AUDIO_RELAY_CAP_PROFILE_ID,
-    type FeatureId,
-    type DirectRouteGrantScopeV1,
-    type DirectRouteGrantScopeV2,
-    type IrohPeerRouteBindingV2,
-    type MachineIrohEndpointAuthorityV1,
-    type LiveStreamGrantScopeV1,
-    type MachineLiveStreamCapsV1,
-    type PeerFlowKindV1,
-} from "@happier-dev/protocol";
+import { DIRECT_ROUTE_GRANT_TTL_MS, clampDirectRouteGrantTtlMs } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { DirectRouteGrantScopeV1Schema, VoiceMediaGrantScopeV1Schema, LiveStreamGrantScopeV1Schema, TcpTunnelGrantScopeV1Schema, type DirectRouteGrantScopeV1, type LiveStreamGrantScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantScopesV1';
+import { DirectRouteGrantRequestV2Schema, type DirectRouteGrantScopeV2, type IrohPeerRouteBindingV2 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
+import { MachineLiveStreamCapsV1Schema, type MachineLiveStreamCapsV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { MachineLiveStreamCodecIdV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
+import { PeerTcpTunnelDestinationV1Schema } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v1';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
+import { resolvePeerRouteFeatureId } from '@happier-dev/protocol/machines/peer/mediation/routeFeature';
+import { DAEMON_VOICE_AUDIO_RELAY_CAP_PROFILE_ID } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
+import { type FeatureId } from '@happier-dev/protocol/features/catalog';
+import { type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { type PeerFlowKindV1 } from '@happier-dev/protocol/machines/peer/mediation/flowKind';
 
 import { readMachineLiveStreamFeatureEnv, readMachineTunnelFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import {

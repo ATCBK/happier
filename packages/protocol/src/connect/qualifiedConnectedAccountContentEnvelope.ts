@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   openAccountScopedBlobCiphertext,
@@ -43,19 +43,17 @@ function isStrictCredentialValues(
   return true;
 }
 
-const QualifiedConnectedAccountCredentialValuesV1Schema = lazyZodSchema(() => z
+const QualifiedConnectedAccountCredentialValuesV1Schema = lazyZodSchema(() => z.pipe(z
   .custom<Readonly<Record<string, string>>>(isStrictCredentialValues, {
     message: 'Qualified Connected Account credentials must be strict plain string data',
-  })
-  .pipe(z.record(
-    z.string().min(1).max(128),
-    z.string().max(500_000),
-  ))
-  .superRefine((values, context) => {
+  }), z.record(
+    z.string().check(z.minLength(1), z.maxLength(128)),
+    z.string().check(z.maxLength(500_000)),
+  )).check(z.superRefine((values, context) => {
     const entries = Object.entries(values);
     if (entries.length > 64) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Qualified Connected Account credentials exceed the 64-field limit',
       });
     }
@@ -65,16 +63,16 @@ const QualifiedConnectedAccountCredentialValuesV1Schema = lazyZodSchema(() => z
     );
     if (totalCharacters > 1_000_000) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Qualified Connected Account credentials exceed the total size limit',
       });
     }
-  }));
+  })));
 
-export const QualifiedConnectedAccountCredentialPayloadV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountCredentialPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   values: QualifiedConnectedAccountCredentialValuesV1Schema,
-}).strict());
+}));
 
 export type QualifiedConnectedAccountCredentialPayloadV1 = z.infer<
   typeof QualifiedConnectedAccountCredentialPayloadV1Schema

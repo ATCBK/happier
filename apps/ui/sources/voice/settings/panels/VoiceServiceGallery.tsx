@@ -173,7 +173,7 @@ const styles = StyleSheet.create((theme) => ({
   footer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 6,
+    gap: theme.space.s6,
   },
   footerDot: {
     height: happierPageTextMetrics('rowDescription').lineHeight,

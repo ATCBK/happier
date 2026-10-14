@@ -1,14 +1,14 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { assertModelPackFilePathPortable } from './pathSafety.js';
 
-const Sha256HexSchema = lazyZodSchema(() => z.string().regex(/^[0-9a-f]{64}$/i));
+const Sha256HexSchema = lazyZodSchema(() => z.string().check(z.regex(/^[0-9a-f]{64}$/i)));
 
 export const ModelPackVoiceCatalogEntrySchema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  subtitle: z.string().min(1).optional(),
-  sid: z.number().int().min(0).optional(),
+  id: z.string().check(z.minLength(1)),
+  title: z.string().check(z.minLength(1)),
+  subtitle: z.optional(z.string().check(z.minLength(1))),
+  sid: z.optional(z.number().check(z.int(), z.minimum(0))),
 }));
 export type ModelPackVoiceCatalogEntry = z.infer<typeof ModelPackVoiceCatalogEntrySchema>;
 
@@ -29,34 +29,33 @@ export const ModelPackRuntimeFamilySchema = lazyZodSchema(() => z.enum([
 export type ModelPackRuntimeFamily = z.infer<typeof ModelPackRuntimeFamilySchema>;
 
 export const ModelPackManifestSchema = lazyZodSchema(() => z.object({
-  packId: z.string().min(1),
+  packId: z.string().check(z.minLength(1)),
   kind: ModelPackKindSchema,
-  model: z.string().min(1),
-  version: z.string().min(1),
-  buildId: z.string().min(1).optional(),
-  publishedAt: z.string().min(1).optional(),
-  licenseNotices: z.array(z.string().min(1)).optional(),
-  voices: z.array(ModelPackVoiceCatalogEntrySchema).optional(),
+  model: z.string().check(z.minLength(1)),
+  version: z.string().check(z.minLength(1)),
+  buildId: z.optional(z.string().check(z.minLength(1))),
+  publishedAt: z.optional(z.string().check(z.minLength(1))),
+  licenseNotices: z.optional(z.array(z.string().check(z.minLength(1)))),
+  voices: z.optional(z.array(ModelPackVoiceCatalogEntrySchema)),
   /** Explicit catalog default. Omitted legacy manifests use the first declared voice. */
-  defaultVoiceId: z.string().min(1).optional(),
+  defaultVoiceId: z.optional(z.string().check(z.minLength(1))),
   /** Model-owned phonemizer configuration, consumed by every sherpa host. */
-  frontend: z.object({
+  frontend: z.optional(z.strictObject({
     lang: z.string(),
-    lexicon: z.string().min(1).optional(),
-  }).strict().refine((frontend) => Boolean(frontend.lang.trim() || frontend.lexicon), {
+    lexicon: z.optional(z.string().check(z.minLength(1))),
+  }).check(z.refine((frontend) => Boolean(frontend.lang.trim() || frontend.lexicon), {
     message: 'Kokoro requires a language or lexicon.',
-  }).optional(),
+  }))),
   files: z
     .array(
       z.object({
-        path: z.string().min(1),
-        url: z.string().url(),
+        path: z.string().check(z.minLength(1)),
+        url: z.string().check(z.url()),
         sha256: Sha256HexSchema,
-        sizeBytes: z.number().int().min(0),
+        sizeBytes: z.number().check(z.int(), z.minimum(0)),
       }),
-    )
-    .min(1),
-}).superRefine((manifest, ctx) => {
+    ).check(z.minLength(1)),
+}).check(z.superRefine((manifest, ctx) => {
   if (manifest.frontend?.lexicon) {
     const lexicon = manifest.frontend.lexicon;
     try {
@@ -76,7 +75,7 @@ export const ModelPackManifestSchema = lazyZodSchema(() => z.object({
       message: 'The default voice must identify a declared voice.',
     });
   }
-}));
+})));
 export type ModelPackManifest = z.infer<typeof ModelPackManifestSchema>;
 
 export function parseModelPackManifest(input: unknown): ModelPackManifest {

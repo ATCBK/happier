@@ -96,7 +96,7 @@ export function buildPluginsHomeRoute(host: PluginsSurfaceHost, options?: Readon
         open.plugin ? `plugin=${encodeURIComponent(open.plugin)}` : null,
         open.source ? `source=${encodeURIComponent(open.source)}` : null,
     ].filter((part): part is string => part !== null);
-    return query.length > 0 ? `${base}?${query.join('&')}` : base;
+    return query.length > 0 ? `${base}?${query.join('&')}` as const : base;
 }
 
 /** Whether `pathname` is the Plugins home itself (where a plugin opens in place beside the page). */

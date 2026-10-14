@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
@@ -33,6 +34,10 @@ export const UsageObservationCostSchema = lazyZodSchema(() => z.object({
   /** Query projection only; never the authority for vendor-reported or stored estimated costs. */
   apiEquivalentUsd: NonNegativeNumberSchema.optional(),
   pricingSource: z.string().trim().min(1).optional(),
+  /** Query-only overlap witness: this row's fallback money is covered by that reported total. */
+  reportedTotalId: z.string().trim().min(1).optional(),
+  /** Query-only scope of a money-only reported total; subsets cannot apportion this charge. */
+  reportedTotalContributionIds: z.array(z.string().trim().min(1)).optional(),
   invoiceUsd: NonNegativeNumberSchema.optional(),
   billingContext: z.enum([
     'api_usage',
@@ -94,7 +99,7 @@ export const UsageRequestAttributionSchema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   turnId: z.string().trim().min(1),
   source: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('native'), connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable() }).strict(),
+    z.object({ kind: z.literal('native'), connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)) }).strict(),
     z.object({ kind: z.literal('provider'), providerId: ProviderContributionKeySchema.nullable(), providerConnectionId: ProviderConnectionIdSchema }).strict(),
   ]),
 }).strict());
@@ -151,6 +156,9 @@ export const UsageAnalyticsGranularitySchema = lazyZodSchema(() => z.enum([
 ]));
 export type UsageAnalyticsGranularity = z.infer<typeof UsageAnalyticsGranularitySchema>;
 
+/** The one cost-mode vocabulary of the usage query, its presentation and Team credential usage. */
+export const UsageAnalyticsCostModeSchema = lazyZodSchema(() => z.enum(['auto', 'reported', 'estimated', 'api_equivalent']));
+
 export const UsageAnalyticsBreakdownDimensionSchema = lazyZodSchema(() => z.enum([
   'agent',
   'model',
@@ -182,7 +190,7 @@ export const UsageAnalyticsQueryRequestSchema = lazyZodSchema(() => z.object({
   }).strict().optional(),
   granularity: UsageAnalyticsGranularitySchema.default('day'),
   timeZoneOffsetMinutes: z.number().int().min(-840).max(840).default(0),
-  costMode: z.enum(['auto', 'reported', 'estimated', 'api_equivalent']).optional(),
+  costMode: UsageAnalyticsCostModeSchema.optional(),
   breakdowns: z.array(UsageAnalyticsBreakdownDimensionSchema).max(8).optional(),
   filters: UsageAnalyticsQueryFiltersSchema.optional(),
   includeSeries: z.boolean().default(true),
@@ -325,7 +333,7 @@ const UsageAnalyticsMessageStatsSchema = lazyZodSchema(() => z.object({
 }).strict());
 
 const UsageAnalyticsCostPresentationSchema = lazyZodSchema(() => z.object({
-  mode: z.enum(['auto', 'reported', 'estimated', 'api_equivalent']),
+  mode: UsageAnalyticsCostModeSchema,
   effectiveUsd: NonNegativeNumberSchema,
   currency: z.string().trim().min(1),
   source: z.string().trim().min(1),
@@ -431,7 +439,7 @@ export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.object({
   /** Response-bound source certainty; absent and current-metadata-only dimensions are unknown. */
   providerAttribution: z.enum(['known', 'unknown']).optional(),
   providerSource: z.enum(['native', 'provider', 'unknown']).optional(),
-  connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable().optional(),
+  connectedAccount: zMini.optional(zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema))),
   machineId: z.string().trim().min(1).nullable(),
   projectKey: z.string().trim().min(1).nullable(),
   workspaceId: z.string().trim().min(1).nullable(),
@@ -462,6 +470,13 @@ export const UsageAnalyticsQueryResponseSchema = lazyZodSchema(() => z.object({
   tokenCategories: UsageObservationTokensSchema.optional(),
 }).strict());
 export type UsageAnalyticsQueryResponse = z.infer<typeof UsageAnalyticsQueryResponseSchema>;
+
+/** Opened machine labels belong to authorized client reads, never the server accounting response. */
+export const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
+  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
+    displayLocation: z.string().trim().min(1).optional(),
+  }).strict()) }).strict().optional(),
+}));
 
 export const ServerUsageAnalyticsCapabilitiesSchema = lazyZodSchema(() => z.object({
   version: z.literal(1),

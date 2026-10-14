@@ -791,7 +791,7 @@ async function spawnMetroLikeServer({ includeNeedle = '' } = {}) {
   };
 }
 
-test('dev restart preflight follows the canonical local-versus-external server topology', async (t) => {
+test('dev restart delegates source preparation to the development owner for every server topology', async (t) => {
   const temp = await withTempDir();
   const storageDir = join(temp.dir, 'storage');
   const rootDir = join(temp.dir, 'repo');
@@ -827,25 +827,21 @@ test('dev restart preflight follows the canonical local-versus-external server t
         name: 'no-server-env',
         args: ['--no-server'],
         env: ['HAPPIER_SERVER_URL=https://external.example.test'],
-        expectsPreflight: false,
       },
       {
         name: 'explicit-server-url',
         args: ['--server-url=https://external.example.test'],
         env: [],
-        expectsPreflight: false,
       },
       {
         name: 'local-server',
         args: [],
         env: [],
-        expectsPreflight: true,
       },
       {
         name: 'local-server-watch-admits-prior-outputs',
         args: ['--watch'],
         env: ['PREFLIGHT_FAIL=1'],
-        expectsPreflight: false,
       },
     ];
     for (const scenario of cases) {
@@ -877,11 +873,7 @@ test('dev restart preflight follows the canonical local-versus-external server t
         /exited \(code=17/,
       );
       assert.equal(await readFile(devStartMarkerPath, 'utf8'), 'started\n');
-      if (scenario.expectsPreflight) {
-        assert.equal(await readFile(markerPath, 'utf8'), 'ran\n');
-      } else {
-        await assert.rejects(readFile(markerPath, 'utf8'), { code: 'ENOENT' });
-      }
+      await assert.rejects(readFile(markerPath, 'utf8'), { code: 'ENOENT' });
     }
   } finally {
     restore();
@@ -1324,6 +1316,53 @@ test('inspectExistingStartLikeRuntime does not short-circuit run when only Expo-
   assert.equal(status.uiRunning, false);
   assert.equal(status.wasRunning, true);
   assert.equal(status.canShortCircuit, false);
+});
+
+test('local source restart attests an admitted replacement to the inner run owner', async (t) => {
+  const temp = await withTempDir();
+  const storageDir = join(temp.dir, 'storage');
+  const rootDir = join(temp.dir, 'repo');
+  const stackName = 'prepared-local-source-restart';
+  const baseDir = join(storageDir, stackName);
+  const markerPath = join(temp.dir, 'inner-run.json');
+  const restore = withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: storageDir });
+
+  try {
+    await Promise.all([
+      mkdir(join(rootDir, 'scripts'), { recursive: true }),
+      mkdir(join(rootDir, 'apps', 'server'), { recursive: true }),
+      mkdir(join(rootDir, 'apps', 'cli'), { recursive: true }),
+      mkdir(join(rootDir, 'apps', 'ui'), { recursive: true }),
+      mkdir(baseDir, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(rootDir, 'package.json'), '{"private":true}\n', 'utf8'),
+      writeFile(join(rootDir, 'apps', 'server', 'package.json'), '{"name":"@happier-dev/server","private":true}\n', 'utf8'),
+      writeFile(join(rootDir, 'apps', 'cli', 'package.json'), '{"name":"@happier-dev/cli","private":true}\n', 'utf8'),
+      writeFile(join(rootDir, 'apps', 'ui', 'package.json'), '{"name":"@happier-dev/app","private":true}\n', 'utf8'),
+      writeFile(join(rootDir, 'scripts', 'run.mjs'), `import {writeFile} from 'node:fs/promises';
+        await writeFile(${JSON.stringify(markerPath)}, JSON.stringify({args:process.argv.slice(2),prepared:process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD??null}));\n`, 'utf8'),
+      writeFile(join(baseDir, 'env'), [
+        `HAPPIER_STACK_REPO_DIR=${rootDir}`,
+        'HAPPIER_STACK_SERVER_COMPONENT=happier-server-light',
+        'HAPPIER_STACK_DAEMON=0',
+      ].join('\n') + '\n', 'utf8'),
+    ]);
+
+    await runStackScriptWithStackEnv({
+      rootDir,
+      stackName,
+      scriptPath: 'run.mjs',
+      args: ['--runtime=source', '--restart', '--no-dev-targets', '--no-server',
+        '--server-url=http://fixture.invalid', '--no-daemon', '--no-ui', '--no-browser'],
+    });
+    const observed = JSON.parse(await readFile(markerPath, 'utf8'));
+    assert.equal(observed.prepared, '1');
+    assert.equal(observed.args.includes('--reuse-source-runtime'), true);
+  } finally {
+    restore();
+    await temp.cleanup();
+  }
 });
 
 test('inspectExistingStartLikeRuntime does not short-circuit run for an untrusted live server pid', async () => {

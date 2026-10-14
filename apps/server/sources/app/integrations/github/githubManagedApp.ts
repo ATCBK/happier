@@ -1,9 +1,6 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
-import {
-    AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS,
-    AuthTokenAuthenticationEvidenceV1Schema,
-} from "@happier-dev/protocol";
+import { AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS, AuthTokenAuthenticationEvidenceV1Schema } from '@happier-dev/protocol/auth/authToken';
 
 import { decryptString, encryptString } from "@/modules/encrypt";
 
@@ -16,23 +13,21 @@ import { decryptString, encryptString } from "@/modules/encrypt";
  * facts the server observed on the initiating request. It is never a claim the
  * client can author: the attempt value is server-written and signed-state bound.
  */
-export const GitHubAppManagementAuthenticationV1Schema = z.object({
+export const GitHubAppManagementAuthenticationV1Schema = z.strictObject({
     authenticationAuthority: z.enum(["present_user", "account_automation"]),
-    authenticationEvidence: z.array(AuthTokenAuthenticationEvidenceV1Schema)
-        .max(AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS)
-        .optional(),
-}).strict();
+    authenticationEvidence: z.optional(z.array(AuthTokenAuthenticationEvidenceV1Schema).check(z.maxLength(AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS))),
+});
 
 export type GitHubAppManagementAuthenticationV1 = z.infer<typeof GitHubAppManagementAuthenticationV1Schema>;
 
-const GitHubAppRegistrationConfigV1Schema = z.object({
+const GitHubAppRegistrationConfigV1Schema = z.strictObject({
     v: z.literal(1),
-    secretHealth: z.object({
+    secretHealth: z.optional(z.strictObject({
         clientSecretConfigured: z.boolean(),
         privateKeyConfigured: z.boolean(),
         webhookSecretConfigured: z.boolean(),
-    }).strict().optional(),
-}).strict();
+    })),
+});
 
 export type GitHubAppRegistrationConfigV1 = z.infer<typeof GitHubAppRegistrationConfigV1Schema>;
 
@@ -40,12 +35,12 @@ export function parseGitHubAppRegistrationConfigV1(value: unknown): GitHubAppReg
     return GitHubAppRegistrationConfigV1Schema.parse(value);
 }
 
-const GitHubAppRegistrationSecretsV1Schema = z.object({
+const GitHubAppRegistrationSecretsV1Schema = z.strictObject({
     v: z.literal(1),
-    clientSecret: z.string().min(1).optional(),
-    privateKey: z.string().min(1).optional(),
-    webhookSecret: z.string().min(1).optional(),
-}).strict();
+    clientSecret: z.optional(z.string().check(z.minLength(1))),
+    privateKey: z.optional(z.string().check(z.minLength(1))),
+    webhookSecret: z.optional(z.string().check(z.minLength(1))),
+});
 
 export type GitHubAppRegistrationSecretsV1 = z.infer<typeof GitHubAppRegistrationSecretsV1Schema>;
 
@@ -135,7 +130,7 @@ export function projectGitHubAppSecretHealthV1(
 
 const GitHubPermissionLevelV1Schema = z.enum(["read", "write"]);
 const GitHubPermissionsV1Schema = z.record(
-    z.string().min(1),
+    z.string().check(z.minLength(1)),
     GitHubPermissionLevelV1Schema,
 );
 export type GitHubPermissionsV1 = z.infer<typeof GitHubPermissionsV1Schema>;
@@ -143,19 +138,19 @@ export type GitHubPermissionsV1 = z.infer<typeof GitHubPermissionsV1Schema>;
 export function parseGitHubPermissionsV1(value: unknown): GitHubPermissionsV1 {
     return GitHubPermissionsV1Schema.parse(value);
 }
-const GitHubEventsV1Schema = z.array(z.string().min(1));
+const GitHubEventsV1Schema = z.array(z.string().check(z.minLength(1)));
 const GitHubRepositorySelectionV1Schema = z.enum(["all", "selected"]);
 
-const GitHubAppInstallationEvidenceV1Schema = z.object({
-    githubAppId: z.bigint().positive(),
-    githubInstallationId: z.bigint().positive(),
-    githubOrganizationId: z.bigint().positive(),
-    githubOrganizationLogin: z.string().trim().min(1).max(256),
+const GitHubAppInstallationEvidenceV1Schema = z.strictObject({
+    githubAppId: z.bigint().check(z.positive()),
+    githubInstallationId: z.bigint().check(z.positive()),
+    githubOrganizationId: z.bigint().check(z.positive()),
+    githubOrganizationLogin: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     suspended: z.boolean(),
     permissions: GitHubPermissionsV1Schema,
     events: GitHubEventsV1Schema,
     repositorySelection: GitHubRepositorySelectionV1Schema,
-}).strict();
+});
 
 export type GitHubAppInstallationEvidenceV1 = z.infer<typeof GitHubAppInstallationEvidenceV1Schema>;
 

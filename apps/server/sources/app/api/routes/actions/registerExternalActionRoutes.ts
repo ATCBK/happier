@@ -3,29 +3,8 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-import {
-    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HTTP_PATH_TEMPLATE_V1,
-    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1,
-    EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1,
-    ExternalActionActionIdV1Schema,
-    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
-    ExternalActionExecutionAuthorizationRequestV1Schema,
-    externalActionExecutionAuthorizationRequestSchemaForActionV1,
-    ExternalActionExecutionAuthorizationVerifyRequestV1Schema,
-    computeExternalActionRequestEnvelopeDigestV1,
-    ExternalActionRequestEnvelopeSchema,
-    isExternalActionRequestWithinLimit,
-    isExternalActionRequestVersionAllowedForAccountModeV1,
-    type ExternalActionServerPrincipalV1,
-    type ExternalActionExecutionAuthorizationBindingV1,
-    type ExternalActionRequestEnvelope,
-    type PreparedExternalActionResponseEnvelope,
-    projectExternalActionHttpError,
-    projectExternalActionResponseEnvelopeV1,
-    type ExternalActionHttpErrorCode,
-    prepareExternalActionResponseEnvelopeV1,
-    readExternalActionProtectedRequestId,
-} from "@happier-dev/protocol/actions";
+import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HTTP_PATH_TEMPLATE_V1, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionActionIdV1Schema, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationRequestV1Schema, externalActionExecutionAuthorizationRequestSchemaForActionV1, ExternalActionExecutionAuthorizationVerifyRequestV1Schema, ExternalActionRequestEnvelopeSchema, isExternalActionRequestWithinLimit, isExternalActionRequestVersionAllowedForAccountModeV1, type ExternalActionServerPrincipalV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionRequestEnvelope, type PreparedExternalActionResponseEnvelope, projectExternalActionHttpError, projectExternalActionResponseEnvelopeV1, type ExternalActionHttpErrorCode, prepareExternalActionResponseEnvelopeV1, readExternalActionProtectedRequestId } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import {
@@ -38,9 +17,12 @@ import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGua
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { db } from "@/storage/db";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
-import { ManagedMachineActionIdV1Schema, projectApiTokenSessionSpawnAdmissionV1, resolveCredentialActionAdmissionV1,
-    SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1, MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol';
-import { ActionIdSchema, getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions';
+import { ManagedMachineActionIdV1Schema, MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { resolveCredentialActionAdmissionV1 } from '@happier-dev/protocol/actions/decisionAuthority';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { SessionRequesterHandoffBootstrapRpcRequestV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { hasCurrentSessionActionRpcSourceBinding } from '@/app/api/socket/sessionScopedBinding';

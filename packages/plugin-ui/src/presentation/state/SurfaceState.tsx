@@ -125,6 +125,8 @@ export type HappierSurfaceStateProps = Readonly<{
   actionSlot?: ReactNode;
   /** A quiet line under the actions: a prerequisite or a reassurance. */
   note?: string;
+  /** Caller-owned controls that belong with the action: a choice it affects, or why it cannot proceed. Lines omit it. */
+  actionFooter?: ReactNode;
   learnMore?: HappierSurfaceStateAction;
   /** Raw machine code: a collapsed disclosure on a failure, a testID marker otherwise. Never the sentence. */
   diagnosticCode?: string | null;
@@ -237,9 +239,12 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
   ) : diagnosticMarker;
 
   if (props.size === 'line') {
+    // One block (final-acceptance 10): the cause on the leading edge and its recovery at the trailing
+    // end. A line is not a card: it never grows a Details disclosure under it (the raw code stays on
+    // the QA marker), so a narrow card never stacks three alignments.
     const lineActions = actions.some(Boolean) ? (
       <View
-        style={{ flexDirection: 'row', gap: HAPPIER_STATE_LINE_METRICS.gapPx }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: HAPPIER_STATE_LINE_METRICS.gapPx }}
       >
         {actions.map((action, index) =>
           action ? (
@@ -298,7 +303,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
             })}
           </HappierStateLine>
         </View>
-        {diagnosticDetails}
+        {diagnosticMarker}
       </View>
     );
   }
@@ -401,6 +406,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
     ) : null;
   const supplemental = (
     <>
+      {props.actionFooter}
       {quietLine}
       {diagnosticDetails}
     </>

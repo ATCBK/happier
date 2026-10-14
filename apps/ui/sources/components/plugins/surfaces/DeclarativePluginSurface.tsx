@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { SurfaceStateAction } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -612,7 +613,7 @@ export function DeclarativePluginSurface(props: Readonly<{
      */
     documentSourcePresentation?: Readonly<{
         presentation: PluginSurfaceStatePresentation;
-        retry: () => void;
+        action?: SurfaceStateAction;
     }> | null;
     /**
      * The one live target-local presentation bridge. A destination parent
@@ -1424,10 +1425,11 @@ export function DeclarativePluginSurface(props: Readonly<{
     if (!visible || !root) return null;
     const documentSourceNotice = props.documentSourcePresentation?.presentation.contentNotice ?? null;
     const documentSourceState = props.documentSourcePresentation?.presentation.state;
-    const documentSourceRetryable = documentSourceState === 'stale'
+    const documentSourceFailed = documentSourceState === 'stale'
         || documentSourceState === 'offline'
         || documentSourceState === 'unavailable'
         || documentSourceState === 'failedRetry';
+    const documentSourceAction = documentSourceFailed ? props.documentSourcePresentation?.action : undefined;
     const body = (
         <>
             {settingsError ? (
@@ -1447,19 +1449,19 @@ export function DeclarativePluginSurface(props: Readonly<{
             {documentSourceNotice ? (
                 <View testID={`plugin-declarative-document-source-status:${documentSourceState}`}>
                     <HappierValidationMessage
-                        testID={documentSourceRetryable
+                        testID={documentSourceFailed
                             ? 'plugin-declarative-document-source-error'
                             : undefined}
                         message={`${documentSourceNotice.title}. ${documentSourceNotice.reason}`}
                         accessibilityLiveRegion="polite"
                         theme={presentationTheme}
                     />
-                    {documentSourceRetryable ? (
+                    {documentSourceAction ? (
                         <HappierPressable
                             testID="plugin-declarative-document-source-retry"
                             accessibilityRole="button"
-                            accessibilityLabel={t('common.retry')}
-                            onPress={props.documentSourcePresentation!.retry}
+                            accessibilityLabel={documentSourceAction.label}
+                            onPress={documentSourceAction.onPress}
                             style={(state) => ({
                                 minWidth: minimumTouchTarget,
                                 minHeight: minimumTouchTarget,
@@ -1473,7 +1475,7 @@ export function DeclarativePluginSurface(props: Readonly<{
                             })}
                         >
                             <HappierText style={{ color: presentationTheme.colors.onAccent }}>
-                                {t('common.retry')}
+                                {documentSourceAction.label}
                             </HappierText>
                         </HappierPressable>
                     ) : null}
@@ -1496,7 +1498,7 @@ export function DeclarativePluginSurface(props: Readonly<{
             ) : (
                 <HappierScreen testID="plugin-declarative-surface">
                     {rootOwnsScroll ? (
-                        <HappierScrollArea contentContainerStyle={{ gap: 12 }}>
+                        <HappierScrollArea contentContainerStyle={{ gap: theme.space.s12 }}>
                             {body}
                         </HappierScrollArea>
                     ) : (

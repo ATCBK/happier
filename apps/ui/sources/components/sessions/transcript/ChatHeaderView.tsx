@@ -7,7 +7,7 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { Typography } from '@/constants/Typography';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
-import { ChatHeaderCompactContext } from './chatHeaderCompact';
+import { ChatHeaderCompactContext, ChatHeaderTitleAccessoryCompactContext } from './chatHeaderCompact';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -95,6 +95,18 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
         setCompactActions((current) => current === next ? current : next);
     }, [bandWidth, fullActionsWidth]);
 
+    // The title line: the title keeps its natural width when it can; the accessory is whole or compact.
+    // Its full width is measured only in the full form, so taking the compact form never flips back.
+    const [titleRowWidth, setTitleRowWidth] = React.useState(0);
+    const [titleNaturalWidth, setTitleNaturalWidth] = React.useState(0);
+    const [fullAccessoryWidth, setFullAccessoryWidth] = React.useState(0);
+    const compactAccessory = titleAccessory != null && titleRowWidth > 0 && titleNaturalWidth > 0 && fullAccessoryWidth > 0
+        && titleNaturalWidth + TITLE_ROW_GAP_PX + fullAccessoryWidth > titleRowWidth;
+    const measureWidth = (set: React.Dispatch<React.SetStateAction<number>>) => (event: LayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        if (width > 0) set((current) => current === width ? current : width);
+    };
+
     // Which identity leads the header is the user's call. `agentLogo` with no resolvable agent
     // renders nothing rather than silently falling back to the avatar — that would answer a question
     // the user already answered.
@@ -160,7 +172,20 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
 
                 <View style={styles.titleContainer}>
                     {lineage}
-                    <View style={styles.titleRow}>
+                    <View style={styles.titleRow} testID="session-header-title-row" onLayout={titleAccessory ? measureWidth(setTitleRowWidth) : undefined}>
+                        {titleAccessory ? (
+                            <Text
+                                testID="session-header-title-measure"
+                                numberOfLines={1}
+                                aria-hidden
+                                accessibilityElementsHidden
+                                importantForAccessibility="no-hide-descendants"
+                                onLayout={measureWidth(setTitleNaturalWidth)}
+                                style={[styles.title, styles.titleMeasure, Typography.default('semiBold')]}
+                            >
+                                {title}
+                            </Text>
+                        ) : null}
                         <Text
                             numberOfLines={1}
                             ellipsizeMode="tail"
@@ -174,7 +199,17 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
                         >
                             {title}
                         </Text>
-                        {titleAccessory ? <View style={styles.titleAccessory}>{titleAccessory}</View> : null}
+                        {titleAccessory ? (
+                            <View
+                                testID="session-header-title-accessory"
+                                style={styles.titleAccessory}
+                                onLayout={compactAccessory ? undefined : measureWidth(setFullAccessoryWidth)}
+                            >
+                                <ChatHeaderTitleAccessoryCompactContext.Provider value={compactAccessory}>
+                                    {titleAccessory}
+                                </ChatHeaderTitleAccessoryCompactContext.Provider>
+                            </View>
+                        ) : null}
                         {badges && badges.length > 0 ? (
                             badges.map((badge, index) => (
                                 <View
@@ -268,6 +303,8 @@ function HeaderPullTarget(props: Readonly<{
     return <SessionHeaderPullTarget style={props.style}>{props.children}</SessionHeaderPullTarget>;
 }
 
+const TITLE_ROW_GAP_PX = 6;
+
 const styles = StyleSheet.create(() => ({
     container: {
         position: 'relative',
@@ -303,15 +340,24 @@ const styles = StyleSheet.create(() => ({
     titleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: TITLE_ROW_GAP_PX,
         width: '100%',
+    },
+    // Measures the title's natural width off-flow; never drawn, never read aloud.
+    titleMeasure: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        opacity: 0,
+        pointerEvents: 'none',
+        flexShrink: 0,
     },
     title: {
         ...HEADER_BAND_TITLE_TEXT,
         flexShrink: 1,
     },
-    // The title owns the row. Its accessory (role chip) and badges give up their space first —
-    // ellipsizing, then collapsing — so a narrow pane never cuts the session's name to "Pa…".
+    // The title owns the row. Its accessory (role chip) takes its compact form when it no longer fits
+    // whole, and badges give up their space first, so a narrow pane never cuts the name to "Pa…".
     titleAccessory: {
         flexShrink: 100,
         minWidth: 0,

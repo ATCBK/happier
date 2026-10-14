@@ -69,6 +69,11 @@ export type WorkflowLifecyclePresentation = Readonly<{
     attention: boolean;
     /** Settled: this row will not change again without an explicit new attempt. */
     terminal: boolean;
+    /**
+     * The row's Stop cause is the whole Run's: the page already says it once, so the row keeps its
+     * mark and leaves the sentence to the page. A standalone step Stop (no pending Run stop) speaks for itself.
+     */
+    inheritsRunStop: boolean;
 }>;
 
 type WorkflowLifecycleShape = Readonly<{
@@ -142,6 +147,8 @@ export function describeWorkflowInvocationLifecycle(
         marker: shape.marker,
         attention: status.bucket === 'needs_you',
         terminal: isTerminalWorkflowInvocationLifecycle(lifecycle),
+        inheritsRunStop: context?.runStopPending === true
+            && (lifecycle === 'cancel_requested' || !isTerminalWorkflowInvocationLifecycle(lifecycle)),
     };
 }
 

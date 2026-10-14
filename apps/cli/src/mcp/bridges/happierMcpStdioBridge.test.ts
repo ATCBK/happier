@@ -11,20 +11,29 @@ import { describe, expect, it } from 'vitest';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 
 describe('Happier MCP stdio bridge', () => {
-  it('forwards the upstream catalog and title tool call after initialize', async () => {
+  it.each([undefined, 40])('preserves current upstream discovery and dispatch with tool-name budget %s', async (maxToolNameLength) => {
+    let names = ['change_title', 'plugin_' + 'very_long_name_'.repeat(8), 'file.read', 'file_read', '日本語工具'];
+    const forwarded: string[] = [];
+    let discoveryAvailable = true;
     const upstream = createServer(async (request, response) => {
       const mcp = new McpServer({ name: 'test-title-upstream', version: '1.0.0' });
       mcp.server.registerCapabilities({ tools: {} });
-      mcp.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-        tools: [{
-          name: 'change_title',
+      mcp.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+        if (!discoveryAvailable) throw new Error('discovery unavailable');
+        const selected = request.params?.cursor === 'later-page' ? names.slice(1) : names;
+        return {
+        tools: selected.map(name => ({
+          name,
+          title: name,
           description: 'Change the title',
           inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
-        }],
-      }));
-      mcp.server.setRequestHandler(CallToolRequestSchema, async (call) => ({
-        content: [{ type: 'text', text: String(call.params.arguments?.title) }],
-      }));
+        })),
+      };
+      });
+      mcp.server.setRequestHandler(CallToolRequestSchema, async (call) => {
+        forwarded.push(call.params.name);
+        return { content: [{ type: 'text', text: String(call.params.arguments?.title) }] };
+      });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       response.once('close', () => {
         void transport.close();
@@ -39,7 +48,7 @@ describe('Happier MCP stdio bridge', () => {
     const config = await resolveNodeBackedMcpServerCommand({
       distEntrypointSegments: ['mcp', 'bridges', 'happierMcpStdioBridge.mjs'],
       sourceEntrypointSegments: ['mcp', 'bridges', 'happierMcpStdioBridge.ts'],
-      args: ['--url', `http://127.0.0.1:${port}/`],
+      args: ['--url', `http://127.0.0.1:${port}/`, ...(maxToolNameLength === undefined ? [] : ['--tool-name-max-length', String(maxToolNameLength)])],
       preferSourceEntrypoint: true,
     });
     const client = new Client({ name: 'happier-bridge-title-test', version: '1.0.0' }, { capabilities: {} });
@@ -47,8 +56,31 @@ describe('Happier MCP stdio bridge', () => {
       await client.connect(new StdioClientTransport(config));
       const catalog = await client.listTools();
       expect(catalog.tools.map((tool) => tool.name)).toContain('change_title');
-      const result = await client.callTool({ name: 'change_title', arguments: { title: 'Claude MCP Title QA' } });
-      expect(result).toMatchObject({ content: [{ type: 'text', text: 'Claude MCP Title QA' }] });
+      if (maxToolNameLength === undefined) {
+        expect(catalog.tools.map(tool => tool.name)).toEqual(names);
+      } else {
+        expect(catalog.tools.every(tool => tool.name.length <= maxToolNameLength && /^[A-Za-z0-9_-]+$/.test(tool.name))).toBe(true);
+        expect(new Set(catalog.tools.map(tool => tool.name)).size).toBe(names.length);
+      }
+      for (const tool of catalog.tools) {
+        const result = await client.callTool({ name: tool.name, arguments: { title: 'MCP Title QA' } });
+        expect(result).toMatchObject({ content: [{ type: 'text', text: 'MCP Title QA' }] });
+      }
+      expect(forwarded).toEqual(names);
+      const page = await client.listTools({ cursor: 'later-page' });
+      expect(page.tools.map(tool => tool.title)).toEqual(names.slice(1));
+      discoveryAvailable = false;
+      const ordinary = await client.callTool({ name: 'change_title', arguments: { title: 'Still available' } });
+      expect(ordinary).toMatchObject({ content: [{ type: 'text', text: 'Still available' }] });
+      discoveryAvailable = true;
+      const retained = catalog.tools.find(tool => tool.title === names[1])!.name;
+      names = [names[0]!, names[1]!, 'refreshed_' + 'long_tool_'.repeat(8)];
+      const refreshed = await client.listTools();
+      expect(refreshed.tools.find(tool => tool.title === names[1])!.name).toBe(retained);
+      if (maxToolNameLength !== undefined) expect(refreshed.tools.every(tool => tool.name.length <= maxToolNameLength)).toBe(true);
+      const added = refreshed.tools.find(tool => tool.title === names[2])!;
+      await client.callTool({ name: added.name, arguments: { title: 'Refreshed' } });
+      expect(forwarded.at(-1)).toBe(names[2]);
     } finally {
       await client.close().catch(() => undefined);
       upstream.closeAllConnections();

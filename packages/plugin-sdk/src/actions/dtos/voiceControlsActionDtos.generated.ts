@@ -111,7 +111,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -156,7 +156,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -201,7 +201,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -246,7 +246,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -291,7 +291,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -336,7 +336,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -381,7 +381,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -426,7 +426,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -471,7 +471,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -516,7 +516,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -561,7 +561,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -606,7 +606,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -651,7 +651,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -696,7 +696,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -741,7 +741,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -786,7 +786,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -831,7 +831,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -876,7 +876,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -921,7 +921,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -966,7 +966,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1027,7 +1027,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1072,7 +1072,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1117,7 +1117,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1162,7 +1162,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1207,7 +1207,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1252,7 +1252,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1297,7 +1297,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1342,7 +1342,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1387,7 +1387,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1432,7 +1432,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1477,7 +1477,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1522,7 +1522,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1567,7 +1567,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1612,7 +1612,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1657,7 +1657,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1702,7 +1702,7 @@ export type VoiceControlsActionResultById = {
             attemptId: string | null;
             adapterId: string | null;
             sessionId: string | null;
-            status: 'error' | 'disconnected' | 'connecting' | 'connected';
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
             mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
             target: {
                 kind: 'global';
@@ -1773,10 +1773,6 @@ export type VoiceControlsActionResultById = {
         status: 'unavailable';
         code: 'dictation_field_unmounted' | 'dictation_field_unavailable' | 'dictation_consent_required' | 'dictation_microphone_unavailable' | 'dictation_capture_unavailable' | 'dictation_state_changed' | 'dictation_cancelled' | 'dictation_failed';
     };
-    readonly "ui.voice_global.reset": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "ui.voice_agent.teleport": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "ui.voice_global.reset": JsonValue;
+    readonly "ui.voice_agent.teleport": JsonValue;
 };

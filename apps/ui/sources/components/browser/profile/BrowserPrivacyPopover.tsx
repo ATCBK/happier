@@ -13,7 +13,7 @@ import { BrowserProfileStatus, type BrowserProfileStatusModel } from './BrowserP
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        padding: 10,
+        padding: theme.space.s10,
         minWidth: 0,
     },
 }));

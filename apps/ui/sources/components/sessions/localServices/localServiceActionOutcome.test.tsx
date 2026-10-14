@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { LocalServiceNativePrerequisiteV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 const modalSpies = vi.hoisted(() => ({ alert: vi.fn() }));
 
@@ -15,10 +16,37 @@ vi.mock('@/modal', async () => {
 
 import {
     readLocalServiceActionOutcome,
+    presentLocalServiceActionFailure,
     useLocalServiceActionRunner,
 } from './localServiceActionOutcome';
 
 describe('readLocalServiceActionOutcome', () => {
+    it('retains a strict establishment cause for existing Details and rejects extra output fields', () => {
+        const establishmentFailure = { cause: 'port_in_use', port: 5173, exitCode: 1,
+            sameProject: true, lastStderrLine: 'Error: listen EADDRINUSE: address already in use :::5173' };
+        const result = { status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed', establishmentFailure };
+        const outcome = readLocalServiceActionOutcome(result);
+        expect(outcome).toEqual({ kind: 'failed', reasonCode: result.reasonCode, establishmentFailure });
+        expect(readLocalServiceActionOutcome({ ...result, establishmentFailure: { ...establishmentFailure, stdout: 'private' } }))
+            .toEqual({ kind: 'failed', reasonCode: result.reasonCode });
+        if (outcome.kind !== 'failed') throw new Error('Missing failure');
+        modalSpies.alert.mockClear();
+        presentLocalServiceActionFailure({ title: 'Could not start', ...outcome });
+        expect(modalSpies.alert.mock.calls[0]?.[1]).toContain('5173');
+        expect(modalSpies.alert.mock.calls[0]?.[1]).toContain('project');
+        const buttons = modalSpies.alert.mock.calls[0]?.[2] as import('@/modal/types').AlertButton[];
+        buttons.find(button => button.onPress)?.onPress?.();
+        expect(modalSpies.alert.mock.calls[1]?.[1]).toContain(establishmentFailure.lastStderrLine);
+        expect(modalSpies.alert.mock.calls[1]?.[1]).toContain('1');
+    });
+    it('retains only strict Docker prerequisite details for the failure presenter', () => {
+        const prerequisite = LocalServiceNativePrerequisiteV1Schema.parse({ tool: 'docker', machineName: 'nl1', cause: 'permission_denied' });
+        expect(readLocalServiceActionOutcome({ status: 'denied', reasonCode: 'native_tool_unavailable', prerequisite }))
+            .toEqual({ kind: 'failed', reasonCode: 'native_tool_unavailable', prerequisite });
+        expect(readLocalServiceActionOutcome({ status: 'denied', reasonCode: 'native_tool_unavailable',
+            prerequisite: { ...prerequisite, stderr: 'private native output' } }))
+            .toEqual({ kind: 'failed', reasonCode: 'native_tool_unavailable' });
+    });
     it('retains the local-services refusal detail instead of its generic Action wrapper', () => {
         expect(readLocalServiceActionOutcome({ ok: false, errorCode: 'runtime_action_disabled',
             error: 'runtime_action_disabled:localServices:local_services_inventory_request_failed' }))
@@ -66,6 +94,43 @@ function renderRunner() {
 describe('useLocalServiceActionRunner', () => {
     afterEach(standardCleanup);
     beforeEach(() => modalSpies.alert.mockReset());
+
+    it.each(['not_installed', 'not_running', 'permission_denied', 'unavailable'])('shows the named machine and Docker prerequisite through the existing failure dialog (%s)', async cause => {
+        const { value, Harness } = renderRunner();
+        await renderScreen(<Harness />);
+        await act(async () => {
+            expect(await value.current?.run({ id: 'docker', failureTitle: 'Could not start api',
+                action: async () => ({ status: 'denied', reasonCode: 'native_tool_unavailable',
+                    prerequisite: LocalServiceNativePrerequisiteV1Schema.parse({ tool: 'docker', machineName: 'nl1', cause }) }) })).toBe(false);
+        });
+        const body = String(modalSpies.alert.mock.calls[0]?.[1]);
+        expect(body).toContain('nl1');
+        expect(body).toContain('Docker');
+        if (cause !== 'unavailable') expect(body).not.toContain(cause);
+        const buttons = modalSpies.alert.mock.calls[0]?.[2] as import('@/modal/types').AlertButton[];
+        buttons.find(button => button.onPress)?.onPress?.();
+        expect(modalSpies.alert.mock.calls[1]?.[1]).toContain('native_tool_unavailable');
+    });
+
+    it('keeps an inline failure for the owner to render instead of opening a dialog, until the next run or a dismissal', async () => {
+        const value: { current: ReturnType<typeof useLocalServiceActionRunner> | null } = { current: null };
+        function Harness() { value.current = useLocalServiceActionRunner({ presentation: 'inline' }); return React.createElement('View'); }
+        await renderScreen(<Harness />);
+        const action = vi.fn(async () => ({ status: 'denied', reasonCode: 'native_tool_unavailable',
+            prerequisite: LocalServiceNativePrerequisiteV1Schema.parse({ tool: 'docker', machineName: 'nl1', cause: 'permission_denied' }) }));
+        await act(async () => { await value.current?.run({ id: 'row:inline', failureTitle: 'Could not start api', action }); });
+        expect(modalSpies.alert).not.toHaveBeenCalled();
+        expect(value.current?.failure).toMatchObject({ title: 'Could not start api', reasonCode: 'native_tool_unavailable' });
+        expect(value.current?.failure?.body).toContain('Docker');
+        expect(value.current?.failure?.details).toContain('native_tool_unavailable');
+        await act(async () => { value.current?.failure?.retry(); });
+        expect(action).toHaveBeenCalledTimes(2);
+        expect(value.current?.failure).not.toBeNull();
+        await act(async () => { value.current?.dismissFailure(); });
+        expect(value.current?.failure).toBeNull();
+        await act(async () => { await value.current?.run({ id: 'row:inline', failureTitle: 'Could not start api', action: async () => ({ status: 'succeeded' }) }); });
+        expect(value.current?.failure).toBeNull();
+    });
 
     it('does not trigger success affordances or a failure alert for a pending policy approval', async () => {
         const { value, Harness } = renderRunner();
@@ -125,14 +190,21 @@ describe('useLocalServiceActionRunner', () => {
         expect(modalSpies.alert).toHaveBeenCalledTimes(1);
         const [title, body] = modalSpies.alert.mock.calls[0] ?? [];
         expect(title).toBe('Could not start Vite');
-        // The existing diagnostic-copy format keeps the typed cause, never private error text.
+        // Failure copy remains readable; diagnostic enum codes do not appear in the primary body.
         expect(typeof body).toBe('string');
         expect(String(body).length).toBeGreaterThan(0);
-        expect(String(body)).toContain('policy_forbids_action');
+        expect(String(body)).not.toContain('policy_forbids_action');
+        const buttons = modalSpies.alert.mock.calls[0]?.[2] as import('@/modal/types').AlertButton[];
+        buttons.find(button => button.onPress)?.onPress?.();
+        expect(modalSpies.alert.mock.calls[1]?.[1]).toContain('policy_forbids_action');
         expect(value.current?.pendingId).toBeNull();
     });
 
-    it('treats a thrown transport error as the same visible failure as a returned refusal', async () => {
+    it.each([
+        new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN),
+        'private transport detail',
+        { code: RPC_ERROR_CODES.FORBIDDEN, message: 'private transport detail' },
+    ])('treats a thrown transport error as the same visible failure as a returned refusal (%s)', async error => {
         const { value, Harness } = renderRunner();
         await renderScreen(<Harness />);
 
@@ -141,13 +213,13 @@ describe('useLocalServiceActionRunner', () => {
             outcome = await value.current?.run({
                 id: 'row-a:inline',
                 failureTitle: 'Could not open Vite',
-                action: async () => { throw new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN); },
+                action: async () => { throw error; },
             });
         });
 
         expect(outcome).toBe(false);
         expect(modalSpies.alert).toHaveBeenCalledTimes(1);
-        expect(modalSpies.alert.mock.calls[0]?.[1]).toContain(RPC_ERROR_CODES.FORBIDDEN);
+        expect(modalSpies.alert.mock.calls[0]?.[1]).not.toContain(RPC_ERROR_CODES.FORBIDDEN);
         expect(modalSpies.alert.mock.calls[0]?.[1]).not.toContain('private transport detail');
         expect(value.current?.pendingId).toBeNull();
     });

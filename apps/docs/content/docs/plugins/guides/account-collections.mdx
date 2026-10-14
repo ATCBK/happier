@@ -116,14 +116,25 @@ A few rules keep that claim predictable:
   it updates, a machine running an older version receives no webhook
   deliveries, admits no Events, and cannot write. It reads a Collection only
   when its declaration already lists the newer version in
-  `readableSchemaVersions`.
-- Any schema, index, or query change needs a new `schemaVersion`. A changed
-  declaration under the same `schemaVersion` is refused and the current writer
-  stays in place. This includes changes to JSON Schemas imported from another
-  package. In 0.3 development source, the daemon retains the typed
+  `readableSchemaVersions`. A compatible retained contract at the same schema
+  version can read but cannot write after another digest becomes current.
+- In 0.3 development source, a compatible schema widening needs no new
+  `schemaVersion`: the server proves that source values remain valid, including
+  nested optional fields and wider value domains, while projection, index, query,
+  relation, identity and quota semantics stay unchanged. Stored readers ignore
+  unknown fields recursively while validating known fields. The server adopts the
+  new contract atomically without changing payload bytes or row revisions.
+  Incompatible changes, such as a newly required field or a narrowed type, remain
+  refused under the same version; use a new schema version and migration. This
+  includes removing a declared field from a closed object: tolerant reads can ignore its retained
+  value, but the new writer schema rejects values the old writer accepted. This
+  decision also applies to JSON Schemas imported from another package.
+  The daemon retains the typed
   `plugin_collection_contract_conflict` for unchanged claim inputs, so repeated
-  Collection operations do not resend the manifest or make an unavailable
-  Collection look empty. Update the plugin's `schemaVersion` and migration,
+  mutations do not resend the manifest. Reads still ask the server to admit the
+  exact retained contract: compatible readers can read without reclaiming the
+  writer; refused reads retain the typed conflict instead of looking empty.
+  For incompatible changes, update the plugin's `schemaVersion` and migration,
   then reload the corrected plugin. Changed declarations, plugin occurrences,
   Accounts or Account Availability invalidations allow a fresh claim; network
   and 5xx server failures still retry on the next operation.
@@ -136,8 +147,8 @@ A few rules keep that claim predictable:
   succeeds, the old writer remains admitted. Missing callbacks, changed source
   rows, cancellation or failed validation leave the writer and retained data
   unchanged; a later operation can retry. Data erasure is not an upgrade step.
-  The existing release-path shortcut for optional private-field additions can
-  adopt the new identity directly after validating retained rows.
+  Schema-proven widenings use the same atomic identity adoption for release and
+  daemon claims. An older narrower declaration cannot reclaim the writer.
 
 ## Portable migration entries
 

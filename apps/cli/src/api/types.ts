@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { z as mini } from 'zod/mini'
 import { UsageSchema } from './usage'
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { SocketRpcRequestPayload as ProtocolSocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc'
@@ -373,8 +374,8 @@ export const MachineRegistrationIdentitySchema = z.object({
   installationPublicKey: MachineInstallationPublicKeySchema,
   installationProof: MachineInstallationProofV1Schema,
   replacesMachineId: z.string().trim().min(1).optional(),
-  replacementReason: MachineReplacementReasonSchema.optional(),
-  contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema.optional(),
+  replacementReason: mini.optional(MachineReplacementReasonSchema),
+  contentPublicKeyFingerprint: mini.optional(ContentPublicKeyFingerprintSchema),
   replacementCandidateAccountId: z.string().trim().min(1).optional(),
 })
 
@@ -458,7 +459,7 @@ export type SessionMessage = z.infer<typeof SessionMessageSchema>
  * Message metadata schema
  */
 export const MessageMetaSchema = z.object({
-  sentFrom: SentFromSchema.optional(), // Source identifier
+  sentFrom: mini.optional(SentFromSchema), // Source identifier
   /**
    * High-level origin of the message. This is used to prevent reliability features
    * (ACK, retries, local mirroring) from accidentally turning self-sent CLI writes
@@ -483,7 +484,7 @@ export type MessageMeta = z.infer<typeof MessageMetaSchema>
  */
 export const CreateSessionResponseSchema = z.object({
   created: z.boolean().optional(),
-  organizationPlacement: SessionOrganizationPlacementV1Schema.optional(),
+  organizationPlacement: mini.optional(SessionOrganizationPlacementV1Schema),
   session: z.object({
     id: z.string(),
     tag: z.string(),
@@ -501,7 +502,7 @@ export const CreateSessionResponseSchema = z.object({
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 
 export const UserMessageSchema = z.object({
-  callerInputConstraints: CallerInputConstraintsV1Schema.optional(),
+  callerInputConstraints: mini.optional(CallerInputConstraintsV1Schema),
   role: z.literal('user'),
   content: z.object({
     type: z.literal('text'),

@@ -1,30 +1,30 @@
 import type { ProviderAccountUsageSnapshotV1 } from './providerAccountUsagePrimitives.js';
 import { ProviderAccountUsageRecordIdSchema } from './providerAccountUsagePrimitives.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { isConnectedServiceQuotaObservationFresh } from './quotaObservationTime.js';
 import type { ConnectedServiceQuotaMeterV1 } from './connectedServiceSchemas.js';
 
-export const ProviderAccountUsagePaceWindowV1Schema = lazyZodSchema(() => z.object({
-  recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().min(1),
-  resetAtMs: z.number().int().nonnegative(), windowStartAtMs: z.number().int().nonnegative(), windowDurationMs: z.number().int().positive(),
-}).strict());
+export const ProviderAccountUsagePaceWindowV1Schema = lazyZodSchema(() => z.strictObject({
+  recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().check(z.minLength(1)),
+  resetAtMs: z.number().check(z.int(), z.nonnegative()), windowStartAtMs: z.number().check(z.int(), z.nonnegative()), windowDurationMs: z.number().check(z.int(), z.positive()),
+}));
 export type ProviderAccountUsagePaceWindowV1 = z.infer<typeof ProviderAccountUsagePaceWindowV1Schema>;
 export const ProviderAccountUsagePaceV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available'), window: ProviderAccountUsagePaceWindowV1Schema, usedFraction: z.number().finite().nonnegative(), elapsedFraction: z.number().finite().positive().max(1), evenPaceFraction: z.number().finite().positive().max(1), pace: z.number().finite().nonnegative(), projectedResetUtilizationFraction: z.number().finite().nonnegative(), qualification: z.enum(['confirmed', 'estimated']), sampleCount: z.number().int().positive(), empiricalRange: z.object({ min: z.number().finite().nonnegative(), max: z.number().finite().nonnegative() }).strict().optional(),
-    observedCurve: z.array(z.object({ observedAtMs: z.number().int().nonnegative(), usedFraction: z.number().finite().nonnegative() }).strict()).optional(),
-    depletesAtMs: z.number().int().nonnegative().nullable().optional(),
-  }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.enum(['not_loaded','stale','unknown_window','zero_elapsed','outside_window','unknown_utilization','inconsistent_counters','counter_reset','reset_changed','denominator_changed','entitlement_changed','non_renewing_end']) }).strict(),
+  z.strictObject({ status: z.literal('available'), window: ProviderAccountUsagePaceWindowV1Schema, usedFraction: z.number().check(z.nonnegative()), elapsedFraction: z.number().check(z.positive(), z.maximum(1)), evenPaceFraction: z.number().check(z.positive(), z.maximum(1)), pace: z.number().check(z.nonnegative()), projectedResetUtilizationFraction: z.number().check(z.nonnegative()), qualification: z.enum(['confirmed', 'estimated']), sampleCount: z.number().check(z.int(), z.positive()), empiricalRange: z.optional(z.strictObject({ min: z.number().check(z.nonnegative()), max: z.number().check(z.nonnegative()) })),
+    observedCurve: z.optional(z.array(z.strictObject({ observedAtMs: z.number().check(z.int(), z.nonnegative()), usedFraction: z.number().check(z.nonnegative()) }))),
+    depletesAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+  }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['not_loaded','stale','unknown_window','zero_elapsed','outside_window','unknown_utilization','inconsistent_counters','counter_reset','reset_changed','denominator_changed','entitlement_changed','non_renewing_end']) }),
 ]));
 export type ProviderAccountUsagePaceV1 = z.infer<typeof ProviderAccountUsagePaceV1Schema>;
-export const ProviderAccountUsageUnusedCapacityV1Schema = lazyZodSchema(() => z.object({
+export const ProviderAccountUsageUnusedCapacityV1Schema = lazyZodSchema(() => z.strictObject({
   historyStatus: z.enum(['not_loaded', 'unavailable', 'partial', 'returned_page']),
-  windows: z.array(z.object({ window: ProviderAccountUsagePaceWindowV1Schema, value: z.discriminatedUnion('status', [
-    z.object({ status: z.literal('available'), unusedAmount: z.number().finite().nonnegative(), unusedFraction: z.number().finite().min(0).max(1), unit: z.string().min(1), observedAtMs: z.number().int().nonnegative(), sampleCount: z.number().int().positive(), qualification: z.enum(['confirmed', 'estimated']), method: z.enum(['terminal_observation', 'linear_pace_at_last_observation']) }).strict(),
-    z.object({ status: z.literal('insufficient_basis'), reason: z.string().min(1) }).strict(),
-  ]) }).strict()),
-}).strict());
+  windows: z.array(z.strictObject({ window: ProviderAccountUsagePaceWindowV1Schema, value: z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('available'), unusedAmount: z.number().check(z.nonnegative()), unusedFraction: z.number().check(z.minimum(0), z.maximum(1)), unit: z.string().check(z.minLength(1)), observedAtMs: z.number().check(z.int(), z.nonnegative()), sampleCount: z.number().check(z.int(), z.positive()), qualification: z.enum(['confirmed', 'estimated']), method: z.enum(['terminal_observation', 'linear_pace_at_last_observation']) }),
+    z.strictObject({ status: z.literal('insufficient_basis'), reason: z.string().check(z.minLength(1)) }),
+  ]) })),
+}));
 
 export function resolveProviderAccountUsagePaceWindow(snapshot: ProviderAccountUsageSnapshotV1, meterId: string): ProviderAccountUsagePaceWindowV1 | null {
   const meter = snapshot.meters.find(value => value.meterId === meterId);

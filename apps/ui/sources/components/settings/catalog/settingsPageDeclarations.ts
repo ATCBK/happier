@@ -31,9 +31,9 @@ import { PROFILES_SETTINGS } from '@/components/settings/profiles/profilesSettin
 import { PROVIDERS_SETTINGS, PROVIDER_DETAIL_SETTINGS, PROVIDER_GATEWAY_SETTINGS } from '@/components/settings/providers/providersSettings';
 import { AGENT_SETTINGS } from '@/components/settings/agents/agentsSettings';
 import { DELEGATION_SETTINGS } from '@/components/settings/delegation/delegationSettings';
-import { MCP_ON_MACHINE_SETTINGS, MCP_PREVIEW_SETTINGS } from '@/components/settings/mcpServers/mcpSettings';
+import { MCP_FOUND_DESTINATION_SETTINGS, MCP_FOUND_SETTINGS } from '@/components/settings/mcpServers/mcpSettings';
+import { SKILLS_SETTINGS } from '@/components/settings/skills/skillsSettings';
 import { PLUGINS_SETTINGS } from '@/components/settings/plugins/pluginsSettings';
-import { PROMPTS_SETTINGS } from '@/components/settings/prompts/promptsSettings';
 import { PROMPTS_CONTEXT_SETTINGS } from '@/components/settings/prompts/context/promptsContextSettings';
 import { MEMORY_SETTINGS } from '@/components/settings/memory/memorySettings';
 import { SEARCH_SETTINGS } from '@/components/settings/search/searchSettings';
@@ -153,15 +153,15 @@ export const SETTINGS_PAGE_DECLARATIONS: readonly SettingsPageDeclaration[] = [
     PROVIDER_GATEWAY_SETTINGS,
     AGENT_SETTINGS,
     DELEGATION_SETTINGS,
-    MCP_ON_MACHINE_SETTINGS,
-    MCP_PREVIEW_SETTINGS,
+    MCP_FOUND_DESTINATION_SETTINGS,
+    MCP_FOUND_SETTINGS,
+    ...SKILLS_SETTINGS,
     PLUGINS_SETTINGS,
     MEMORY_SETTINGS,
     SEARCH_SETTINGS,
     ACTIONS_CREATE_SESSION_SETTINGS,
     ACTIONS_PROMPT_DOCUMENT_SETTINGS,
     EXTERNAL_SESSIONS_SETTINGS,
-    PROMPTS_SETTINGS,
     PROMPTS_CONTEXT_SETTINGS,
     TRANSCRIPT_SETTINGS,
     TRANSCRIPT_ADVANCED_SETTINGS,

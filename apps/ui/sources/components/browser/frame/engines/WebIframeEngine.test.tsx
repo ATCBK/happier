@@ -154,6 +154,8 @@ describe('WebIframeEngine diagnostics wiring', () => {
         />, { createNodeMock: (element) => element.type === 'iframe' ? { contentWindow: {} } : null });
         await act(async () => screen.findByType('iframe').props.onLoad());
         expect(rejection).toHaveBeenCalledWith(state);
+        expect(screen.findAllByType('iframe')).toHaveLength(1);
+        expect(screen.findHostByTestId('blocked-unavailable')).toBeNull();
         const probe = new URL(fetchBoundary.mock.calls[0]![0]);
         expect(probe.origin).toBe('https://preview.example.test');
         expect(probe.searchParams.get('__happierCollectorState')).toBe('1');

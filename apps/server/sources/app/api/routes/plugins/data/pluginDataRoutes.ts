@@ -1,40 +1,7 @@
-import {
-    AccountStoredContentUpgradeRequiredV1Schema,
-    PLUGIN_ACCOUNT_DATA_ERASE_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_CONTRACT_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_GET_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_FORGET_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1,
-    PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1,
-    PluginAccountDataEraseActionInputV1Schema,
-    PluginAccountDataEraseServerErrorV1Schema,
-    PluginAccountDataEraseServerOutputV1Schema,
-    PluginCollectionContractReadRequestV1Schema,
-    PluginCollectionContractReadResultV1Schema,
-    PluginCollectionCandidatePreparationErrorV1Schema,
-    PluginCollectionCandidatePreparationRetireRequestV1Schema,
-    PluginCollectionCandidatePreparationRetireResultV1Schema,
-    PluginCollectionCandidatePreparationSourcePageRequestV1Schema,
-    PluginCollectionCandidatePreparationSourcePageResultV1Schema,
-    PluginCollectionCandidatePreparationStageRequestV1Schema,
-    PluginCollectionCandidatePreparationStageResultV1Schema,
-    PluginCollectionGetRequestV1Schema,
-    PluginCollectionGetResultV1Schema,
-    PluginCollectionForgetRequestV1Schema,
-    PluginCollectionForgetResultV1Schema,
-    PluginCollectionMutationErrorV1Schema,
-    PluginCollectionMutationRequestV1Schema,
-    PluginCollectionMutationResultV1Schema,
-    PluginCollectionQueryRequestV1Schema,
-    PluginCollectionQueryResultV1Schema,
-    PluginCollectionReadErrorV1Schema,
-    PluginCollectionUiQueryErrorV1Schema,
-    PluginCollectionUiQueryRequestV1Schema,
-    PluginCollectionUiQueryTransportResultV1Schema,
-} from "@happier-dev/protocol";
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
+import { PLUGIN_ACCOUNT_DATA_ERASE_HTTP_PATH_V1, PluginAccountDataEraseActionInputV1Schema, PluginAccountDataEraseServerErrorV1Schema, PluginAccountDataEraseServerOutputV1Schema } from '@happier-dev/protocol/plugins/data/accountEraseV1';
+import { PLUGIN_COLLECTION_CONTRACT_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_GET_HTTP_PATH_V1, PLUGIN_COLLECTION_FORGET_HTTP_PATH_V1, PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1, PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1, PluginCollectionContractReadRequestV1Schema, PluginCollectionContractReadResultV1Schema, PluginCollectionCandidatePreparationErrorV1Schema, PluginCollectionCandidatePreparationRetireRequestV1Schema, PluginCollectionCandidatePreparationRetireResultV1Schema, PluginCollectionCandidatePreparationSourcePageRequestV1Schema, PluginCollectionCandidatePreparationSourcePageResultV1Schema, PluginCollectionCandidatePreparationStageRequestV1Schema, PluginCollectionCandidatePreparationStageResultV1Schema, PluginCollectionGetRequestV1Schema, PluginCollectionGetResultV1Schema, PluginCollectionForgetRequestV1Schema, PluginCollectionForgetResultV1Schema, PluginCollectionMutationErrorV1Schema, PluginCollectionMutationRequestV1Schema, PluginCollectionMutationResultV1Schema, PluginCollectionQueryRequestV1Schema, PluginCollectionQueryResultV1Schema, PluginCollectionReadErrorV1Schema, PluginCollectionUiQueryTransportResultV1Schema } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { PluginCollectionUiQueryErrorV1Schema, PluginCollectionUiQueryRequestV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
 
 import {
     PluginCollectionMutationOperationError,

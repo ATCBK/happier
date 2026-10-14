@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import { z } from 'zod/mini';
 
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
@@ -30,7 +31,7 @@ import {
 } from './runnerConnectedServices.js';
 
 /** Review records contain semantic input, never transfer-local content handles. */
-const ReviewedComposerAttachmentV1Schema = ComposerAttachmentViewV1Schema.omit({ availability: true, content: true }).strict();
+const ReviewedComposerAttachmentV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.omit(ComposerAttachmentViewV1Schema, { availability: true, content: true })));
 
 /**
  * Runner commitments require a closed policy document root. Delegate all
@@ -38,38 +39,38 @@ const ReviewedComposerAttachmentV1Schema = ComposerAttachmentViewV1Schema.omit({
  * Action ids and forward-compatible override fields keep their canonical
  * semantics without making the signed Runner document itself open.
  */
-const RunnerActionsSettingsV1Schema = z.object({
+const RunnerActionsSettingsV1Schema = z.pipe(z.strictObject({
   v: z.literal(1),
-  actions: z.record(z.string(), z.unknown()).default({}),
-  approvalWaivedSurfaces: z.unknown().optional(),
-}).strict().transform((value, context) => {
+  actions: z._default(z.record(z.string(), z.unknown()), {}),
+  approvalWaivedSurfaces: z.optional(z.unknown()),
+}), z.transform((value, context) => {
   const parsed = ActionsSettingsV1Schema.safeParse(value);
   if (parsed.success) return parsed.data;
   for (const issue of parsed.error.issues) {
-    context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+    context.issues.push({ code: 'custom', path: issue.path, message: issue.message, input: context.value });
   }
   return z.NEVER;
-});
+}));
 
-export const RunnerReviewedFileV1Schema = z.object({
+export const RunnerReviewedFileV1Schema = z.strictObject({
   id: RunnerResourceIdSchema,
   name: ComposerContentDisplayNameV1Schema,
-  mimeType: z.string().min(1).nullable(),
-  sizeBytes: z.number().int().nonnegative().safe(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
+  mimeType: z.nullable(z.string().check(z.minLength(1))),
+  sizeBytes: z.number().check(z.int(), z.nonnegative(), z.int()),
+  sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+});
 export type RunnerReviewedFileV1 = z.infer<typeof RunnerReviewedFileV1Schema>;
 
 /** Exact existing attachment-upload behavior; uploadLocation is the copy-to-workspace fact. */
-export const RunnerAttachmentDestinationV1Schema = z.object({
+export const RunnerAttachmentDestinationV1Schema = z.strictObject({
   uploadLocation: z.enum(['workspace', 'os_temp']),
   // Same path-size boundary as the Account attachment setting; transfer owns path normalization.
-  workspaceRelativeDir: z.string().min(1).max(4 * 1024),
+  workspaceRelativeDir: z.string().check(z.minLength(1), z.maxLength(4 * 1024)),
   vcsIgnoreStrategy: z.enum(['git_info_exclude', 'gitignore', 'none']),
   vcsIgnoreWritesEnabled: z.boolean(),
-}).strict();
+});
 
-const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
+const RunnerStrictAuthoringV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(SessionAuthoringValueV1Schema, {
   targetType: true,
   executionTarget: true,
   agentTarget: true,
@@ -90,72 +91,72 @@ const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
   access: true,
   primaryTeamId: true,
   organizationPlacement: true,
-}).extend({
+}), {
   // The synchronized document owns defaults; a reviewed launch must spell out
   // these runtime selections so omission cannot be reinterpreted downstream.
-  profileId: z.unknown().transform((value, context): string | null => {
+  profileId: z.pipe(z.unknown(), z.transform((value, context): string | null => {
     if (value === undefined) {
-      context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
+      context.issues.push({ code: 'custom', message: 'Reviewed authoring field is required', input: context.value });
       return z.NEVER;
     }
     const parsed = SessionAuthoringValueV1Schema.shape.profileId.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed profile selection' });
+      context.issues.push({ code: 'custom', message: 'Invalid reviewed profile selection', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
-  transcriptStorage: z.unknown().transform((value, context): 'persisted' | 'direct' | null => {
+  })),
+  transcriptStorage: z.pipe(z.unknown(), z.transform((value, context): 'persisted' | 'direct' | null => {
     if (value === undefined) {
-      context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
+      context.issues.push({ code: 'custom', message: 'Reviewed authoring field is required', input: context.value });
       return z.NEVER;
     }
     const parsed = SessionAuthoringValueV1Schema.shape.transcriptStorage.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed transcript-storage selection' });
+      context.issues.push({ code: 'custom', message: 'Invalid reviewed transcript-storage selection', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
-  capabilitySelection: z.unknown().transform((value, context): SessionCapabilitySelectionV1 | null => {
+  })),
+  capabilitySelection: z.pipe(z.unknown(), z.transform((value, context): SessionCapabilitySelectionV1 | null => {
     if (value === undefined) {
-      context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
+      context.issues.push({ code: 'custom', message: 'Reviewed authoring field is required', input: context.value });
       return z.NEVER;
     }
     if (value === null) return null;
     const parsed = SessionCapabilitySelectionAuthoringV1Schema.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed capability selection' });
+      context.issues.push({ code: 'custom', message: 'Invalid reviewed capability selection', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
-  connectedServices: z.unknown().transform((value, context): ConnectedServiceBindingsV2 | null => {
+  })),
+  connectedServices: z.pipe(z.unknown(), z.transform((value, context): ConnectedServiceBindingsV2 | null => {
     if (value === undefined) {
-      context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
+      context.issues.push({ code: 'custom', message: 'Reviewed authoring field is required', input: context.value });
       return z.NEVER;
     }
     if (value === null) return null;
     const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed Connected Service selection' });
+      context.issues.push({ code: 'custom', message: 'Invalid reviewed Connected Service selection', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
-  acpSessionModeId: z.unknown().transform((value, context): string | null => {
+  })),
+  acpSessionModeId: z.pipe(z.unknown(), z.transform((value, context): string | null => {
     if (value === undefined) {
-      context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
+      context.issues.push({ code: 'custom', message: 'Reviewed authoring field is required', input: context.value });
       return z.NEVER;
     }
     const parsed = SessionAuthoringValueV1Schema.shape.acpSessionModeId.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed Session mode selection' });
+      context.issues.push({ code: 'custom', message: 'Invalid reviewed Session mode selection', input: context.value });
       return z.NEVER;
     }
     return parsed.data;
-  }),
-}).strict().superRefine((authoring, context) => {
+  })),
+})).check(z.superRefine((authoring, context) => {
   for (const key of [
     'access',
     'primaryTeamId',
@@ -191,14 +192,14 @@ const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
   if (authoring.permissionMode === null) {
     context.addIssue({ code: 'custom', path: ['permissionMode'], message: 'Permission mode is required' });
   }
-});
+})));
 
-export const RunnerPreparedAuthoringV1Schema = z.object({
+export const RunnerPreparedAuthoringV1Schema = z.strictObject({
   v: z.literal(1),
   /** Creator-reviewed launch policy; the endpoint cannot replace it with environment or Account settings. */
   actionsSettings: RunnerActionsSettingsV1Schema,
   /** Exact creator-resolved MCP material; null is the simple no-managed-server case. */
-  mcpMaterial: RunnerMcpMaterialV1Schema.nullable(),
+  mcpMaterial: z.nullable(RunnerMcpMaterialV1Schema),
   authoring: RunnerStrictAuthoringV1Schema,
   /**
    * The exact reviewed distribution the endpoint must acquire before the
@@ -212,21 +213,21 @@ export const RunnerPreparedAuthoringV1Schema = z.object({
    * covered by `computeRunnerAuthoringCommitmentV1` and therefore by the
    * activation binding the endpoint compares before consent.
    */
-  agentPluginDistribution: ExpectedMarketplaceListingV1Schema.nullable().default(null),
-  composer: ComposerSnapshotV1Schema.pick({ text: true, references: true }).extend({
-    attachments: z.array(ReviewedComposerAttachmentV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-  }).strict(),
-  reviewComments: z.object({
-    workspace: z.object({
-      serverId: z.string().min(1),
-      machineId: z.string().min(1),
-      rootPath: z.string().min(1),
-    }).strict(),
+  agentPluginDistribution: z._default(z.nullable(ExpectedMarketplaceListingV1Schema), null),
+  composer: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(ComposerSnapshotV1Schema, { text: true, references: true }), {
+    attachments: z.array(ReviewedComposerAttachmentV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+  }))),
+  reviewComments: z.optional(z.nullable(z.strictObject({
+    workspace: z.strictObject({
+      serverId: z.string().check(z.minLength(1)),
+      machineId: z.string().check(z.minLength(1)),
+      rootPath: z.string().check(z.minLength(1)),
+    }),
     comments: z.array(ReviewCommentDraftMessageV1Schema),
-  }).strict().nullable().optional(),
-  files: z.array(RunnerReviewedFileV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
+  }))),
+  files: z.array(RunnerReviewedFileV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
   attachmentDestination: RunnerAttachmentDestinationV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const ids = new Set<string>();
   for (const file of value.files) {
     if (ids.has(file.id)) context.addIssue({ code: 'custom', path: ['files'], message: 'Reviewed file identities must be unique' });
@@ -252,7 +253,7 @@ export const RunnerPreparedAuthoringV1Schema = z.object({
       message: 'Reviewed plugin distribution must not select an endpoint registry profile',
     });
   }
-});
+}));
 export type RunnerPreparedAuthoringV1 = z.infer<typeof RunnerPreparedAuthoringV1Schema>;
 
 /** One hash for creator custody, activation creation and the later reviewed manifest. */
@@ -261,14 +262,14 @@ export function computeRunnerAuthoringCommitmentV1(input: unknown): string {
   return computeCanonicalDomainSeparatedDigest('happier.ephemeral-session-runner.authoring.v1', [createCanonicalJsonSigningInput(prepared)]);
 }
 
-export const RunnerLaunchManifestV1Schema = z.object({
+export const RunnerLaunchManifestV1Schema = z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-session-runner.launch-manifest'),
   binding: RunnerActivationBindingV1Schema,
   preparedAuthoring: RunnerPreparedAuthoringV1Schema,
   authoringCommitment: RunnerSha256CommitmentSchema,
   endpointFacts: RunnerEndpointFactsContentV1Schema,
-  machineContentKeyBinding: RunnerMachineContentKeyBindingV1Schema.nullable(),
+  machineContentKeyBinding: z.nullable(RunnerMachineContentKeyBindingV1Schema),
   credentialSelectionBinding: RunnerCredentialSelectionBindingV1Schema,
   /** Home-authenticated presentation facts committed with this exact review. */
   displayFacts: RunnerConsentDisplayFactsV1Schema,
@@ -276,7 +277,7 @@ export const RunnerLaunchManifestV1Schema = z.object({
   reviewedProviderModel: TeamCredentialProviderModelCatalogEntryV1Schema,
   /** Credential-free, creator-resolved identities/revisions for the exact selected services. */
   connectedServiceReviewBindings: RunnerConnectedServiceReviewBindingsV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const computed = computeRunnerAuthoringCommitmentV1(value.preparedAuthoring);
   if (computed !== value.authoringCommitment || computed !== value.binding.authoringCommitment) {
     context.addIssue({ code: 'custom', path: ['authoringCommitment'], message: 'Authoring commitment does not match the prepared submission and activation binding' });
@@ -340,7 +341,7 @@ export const RunnerLaunchManifestV1Schema = z.object({
     || authoredModel?.agentTargetKey !== selected.selection.agentTargetKey
     || authoredModel?.modelId !== selected.selection.modelId
   ) context.addIssue({ code: 'custom', path: ['reviewedProviderModel'], message: 'Reviewed Provider model must match the credential selection binding' });
-});
+}));
 export type RunnerLaunchManifestV1 = z.infer<typeof RunnerLaunchManifestV1Schema>;
 
 /**

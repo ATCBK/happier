@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { applyReachRulesChangeV1, reachRulesToDraftsV1, ReachRulesChangeV1Schema, type ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import { McpRulesSetOutputV1Schema, SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
+import { readReachRulesAcknowledgment } from './reachRulesAcknowledgment';
 import { projectMcpServerActionFailureV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { randomUUID } from '@/platform/randomUUID';
 
@@ -81,23 +81,15 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
                     const receipt = source.kind === 'skill'
                         ? await operation.execute('skills.rules.set', { items: [{ skillId: source.itemId }], change: operation.change })
                         : await operation.execute('mcp.rules.set', { items: [{ serverId: source.itemId }], change: operation.change });
-                    if (!receipt.ok) result = { ok: false, message: receipt.errorCode ?? receipt.error };
+                    const acknowledgment = readReachRulesAcknowledgment(source.kind, source.itemId, receipt);
+                    if (!acknowledgment.ok) result = acknowledgment;
                     else {
-                        const parsed = (source.kind === 'skill' ? SkillsRulesSetOutputV1Schema : McpRulesSetOutputV1Schema).safeParse(receipt.result);
-                        if (!parsed.success) result = { ok: false, message: 'invalid_action_output' };
-                        else if (!parsed.data.ok) result = { ok: false, message: parsed.data.code };
-                        else {
-                            const item = parsed.data.items.find(item => ('skillId' in item ? item.skillId : item.serverId) === source.itemId);
-                            if (!item) result = { ok: false, message: 'invalid_action_output' };
-                            else {
-                                if (current.revision === 'absent' || parsed.data.revision >= current.revision) {
-                                    current.written = item.rules;
-                                    current.revision = parsed.data.revision;
-                                }
-                                current.previous = item.previous;
-                                result = { ok: true };
-                            }
+                        if (current.revision === 'absent' || acknowledgment.revision >= current.revision) {
+                            current.written = acknowledgment.item.rules;
+                            current.revision = acknowledgment.revision;
                         }
+                        current.previous = acknowledgment.item.previous;
+                        result = { ok: true };
                     }
                 } catch (error) {
                     const refusal = projectMcpServerActionFailureV1(error);

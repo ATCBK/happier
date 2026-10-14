@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { extname, join, relative, resolve, sep } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
@@ -20,14 +21,24 @@ import { assertWebArtifactPayload } from '../shared/web_payload.mjs';
 /** Probe the emitted graph, never the live Stack database, daemon lock or
  * Machine identity. Resource admission belongs to the calling source worker.
  */
-export async function smokeSourceRuntimeReload({ components, ui, env = process.env, signal }) {
+export async function smokeSourceRuntimeReload({ components, ui, env = process.env, signal, logger = console }) {
   signal?.throwIfAborted();
   const server = components.server;
   if (!server) {
     if (ui) throw new Error('[reload] a web boot smoke requires its replacement server');
     return;
   }
-  const dbProvider = server.env?.HAPPIER_DB_PROVIDER ?? env.HAPPIER_DB_PROVIDER ?? 'sqlite';
+  // Preparation resolves the provider on the actual server host. A worker's
+  // inherited env is not the authority for this admitted replacement graph.
+  const dbProvider = server.dbProvider;
+  if (dbProvider === 'postgres') {
+    logger.log('[reload] PostgreSQL emitted code is provider-specific; skipping its database-backed migration and health smoke because the shared DATABASE_URL is forbidden');
+    if (ui) {
+      await assertWebArtifactPayload({ payloadDir: ui.uiDir, entrypoint: ui.entrypoint ?? 'index.html' });
+      await serveSourceWebArtifactForSmoke({ ui, env, signal });
+    }
+    return;
+  }
   if (dbProvider !== 'sqlite' && dbProvider !== 'pglite') {
     throw new Error(`[reload] cannot smoke ${dbProvider} without a separately authorized scratch database; incumbent retained`);
   }
@@ -87,6 +98,45 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
       if (child.exitCode == null && child.signalCode == null) await killProcessTree(child, 'SIGTERM');
     }
     await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+async function serveSourceWebArtifactForSmoke({ ui, env, signal }) {
+  const root = resolve(ui.uiDir);
+  const entrypoint = ui.entrypoint ?? 'index.html';
+  const server = createServer(async (request, response) => {
+    try {
+      const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname);
+      const requested = pathname === '/' ? entrypoint : pathname.replace(/^\/+/, '');
+      const file = resolve(root, requested);
+      const fromRoot = relative(root, file);
+      if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`)) {
+        response.writeHead(403).end();
+        return;
+      }
+      const body = await readFile(file);
+      const contentType = new Map([
+        ['.css', 'text/css'], ['.html', 'text/html'], ['.js', 'text/javascript'],
+        ['.json', 'application/json'], ['.svg', 'image/svg+xml'], ['.wasm', 'application/wasm'],
+      ]).get(extname(file));
+      if (contentType) response.setHeader('content-type', contentType);
+      response.end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  const cancel = () => server.close();
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const port = await pickNextFreeTcpPort(40_000);
+    await new Promise((resolveReady, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', resolveReady);
+    });
+    await smokeSourceWebBoot({ repoDir: env.HAPPIER_STACK_REPO_DIR, url: `http://127.0.0.1:${port}`, env, signal });
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    await new Promise(resolveClosed => server.close(resolveClosed));
   }
 }
 

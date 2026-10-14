@@ -129,7 +129,7 @@ export function createMachineShareAdapter(input: Readonly<{
 
 // Grant details read as row descriptions (pending keys, incompatible members, inherited access).
 const styles = StyleSheet.create((theme) => ({
-    details: { gap: 4 },
+    details: { gap: theme.space.s4 },
     detail: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),

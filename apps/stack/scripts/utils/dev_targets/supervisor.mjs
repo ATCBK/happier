@@ -457,7 +457,9 @@ export async function startStackDevTargets(
   const startedRemoteTargets = new Set();
   const tunnelsByTarget = new Map();
   const servicePortsByTarget = new Map();
+  // Only verified loaded identities can authorize retained-runtime recovery.
   const sourceRuntimeObservationsByTarget = new Map();
+  const sourcePreparationsByTarget = new Map();
   const targetFailuresByTarget = new Map();
   const provisionedTargets = new Set();
   const deferredCompanionPreparationsByTarget = new Map();
@@ -474,9 +476,7 @@ export async function startStackDevTargets(
   });
   const publishTargetState = (plan, status, details = {}) => {
     if (status !== 'starting') {
-      const observation = sourceRuntimeObservationsByTarget.get(plan.target.name);
-      if (observation?.sourcePreparation) sourceRuntimeObservationsByTarget.set(plan.target.name,
-        { ...observation, sourcePreparation: null });
+      sourcePreparationsByTarget.delete(plan.target.name);
     }
     if (sourceSnapshot) {
       const nextPhase = status === 'running' ? 'running' : details.phase;
@@ -510,6 +510,7 @@ export async function startStackDevTargets(
         ? { runtimeSnapshotId: resolvePlanRuntime(plan).snapshot.snapshotId } : {}),
       ...(sourceSnapshot && sourceRuntimeObservationsByTarget.has(plan.target.name)
         ? sourceRuntimeObservationsByTarget.get(plan.target.name) : {}),
+      ...(sourceSnapshot ? { sourcePreparation: sourcePreparationsByTarget.get(plan.target.name) ?? null } : {}),
       ...(status === 'running' ? { sourcePreparation: null } : {}),
       ...details,
     };
@@ -1046,8 +1047,7 @@ export async function startStackDevTargets(
           onLine: ({ stream, line }) => {
             const preparation = sourceSnapshot && stream === 'stdout' ? parseSourcePreparationPhaseLine(line) : null;
             if (!preparation || closed) return;
-            const previous = sourceRuntimeObservationsByTarget.get(target.name);
-            sourceRuntimeObservationsByTarget.set(target.name, { ...previous, sourcePreparation: preparation });
+            sourcePreparationsByTarget.set(target.name, preparation);
             publishTargetState(plan, 'starting', { phase: preparation.phase, sourcePreparation: preparation });
           },
         });
@@ -1119,7 +1119,7 @@ export async function startStackDevTargets(
         let expoReady = !services.expo;
         let daemonReady = !services.daemon;
         const readinessPhase = () => {
-          const preparation = sourceRuntimeObservationsByTarget.get(target.name)?.sourcePreparation;
+          const preparation = sourcePreparationsByTarget.get(target.name);
           if (preparation && preparation.phase !== 'prepared') return preparation.phase;
           if (!serverReady) return 'server-readiness';
           if (!companionPreparationReady) return 'bootstrap';

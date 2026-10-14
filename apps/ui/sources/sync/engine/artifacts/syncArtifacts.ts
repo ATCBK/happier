@@ -51,7 +51,7 @@ function prepareArtifactBody(input: ArtifactBodyInput): ArtifactBodyV1 | null {
     if (input !== null && typeof input === 'object' && 'bytes' in input) return ArtifactBlobReferenceV1Schema.parse({
         blobId: randomUUID(), mime: input.mime, sizeBytes: input.bytes.length, sha256: hashArtifactBinaryContent(input.bytes),
     });
-    return ArtifactBodyV1Schema.nullable().parse(input);
+    return input === null ? null : ArtifactBodyV1Schema.parse(input);
 }
 
 function requireArtifactBodyKind(header: Readonly<Record<string, unknown>>, body: ArtifactBodyV1 | null): void {

@@ -8,6 +8,7 @@ import type { UsageWorkEvidence } from '@happier-dev/protocol/usage/usageOutcome
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, readUiUsageQueryBatch } from './usageQueryResource';
 import { storage } from '@/sync/domains/state/storage';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sync/runtime/orchestration/changesPlanner';
 // These source-adapter tests do not register unrelated Settings surfaces.
 // Keep the canonical helpers without the presentation harness barrel graph.
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -19,7 +20,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedAccountQuotaResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { QualifiedProviderAccountUsageHistoryRequestV4Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
@@ -40,7 +41,14 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { act } from 'react-test-renderer';
 import * as platformDigest from '@/platform/digest';
 import { projectUsagePlans } from '@/components/settings/usage/widgets/plans/usagePlansModel';
+import { usageCoverageSummary } from '@/components/settings/usage/widgets/usageBodyKit';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { createUiUsageActionPorts } from '@/sync/ops/actions/usageActionDeps';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const scmTransport = vi.hoisted(() => vi.fn());
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -72,9 +80,25 @@ const ownerSessionAccess = {
 };
 
 async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) {
+  // HTTP persistence boundary; the real B producer, protection, Resource and
+  // Plans projection remain in-process. Server admission has its SQLite suite.
+  const projections = new Map<string, ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>>();
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch.test', accountId: 'account-a' }],
     route: async request => {
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history' && request.method === 'PUT') {
+        const projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body);
+        projections.set(projection.recordId, projection);
+        return Response.json({ success: true });
+      }
       const response = await route(request);
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history' && response?.ok) {
+        const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+          request.url.searchParams.get('query'));
+        if ('projection' in query) {
+          const projection = projections.get(query.recordId) ?? null;
+          return Response.json({ projection, complete: projection !== null });
+        }
+      }
       if (response) return response;
       // This harness supplies a plain Account token; storage reads also need
       // its canonical currentness response, not just the legacy mode route.
@@ -95,6 +119,317 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) 
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('keeps one Capacity and Usage allowance timeline across arrivals, navigation, rereads and failure', async () => {
+    const { readPlanAccountsStatement, readPendingPlanAccountCount } = await import('@/components/settings/usage/widgets/plans/UsagePlanParts');
+    const { useUsagePlans } = await import('@/components/settings/usage/widgets/plans/useUsagePlans');
+    const { UsageCapacityWidget } = await import('@/components/settings/usage/widgets/UsageCapacityWidget');
+    const { installConnectedAccountDescriptorProjection } = await import('@/sync/domains/connectedServices/connectedServiceRegistry');
+    const now = Date.now();
+    const services = [{ pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+      { pluginId: 'acme.email', localId: 'email' }];
+    const refs = ['work', 'personal', 'mail'].map((accountId, index) => ({ service: services[index === 2 ? 1 : 0]!, accountId }));
+    const sources = refs.map(ref => ({ bindingKind: 'account' as const, ref }));
+    const gates = refs.map(() => createDeferred<void>());
+    const records = refs.map((ref, index) => {
+      const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+      return ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+        providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId },
+        observedAtMs: index === 2 ? 0 : now, fetchedAtMs: index === 2 ? 0 : now, staleAfterMs: 600_000,
+        source: 'providerHttp', confidence: 'confirmed', state: index === 2 ? 'not_loaded' : 'loaded_data',
+        meters: index === 2 ? [] : [{ meterId: 'session', label: 'Session', used: 40 + index * 10, limit: 100,
+          remaining: 60 - index * 10, utilizationPct: 40 + index * 10, unit: 'requests', status: 'ok',
+          resetsAt: now + 1800_000, windowDurationMs: 3600_000, details: {} }] });
+    });
+    let holdHistory = false;
+    let failHistory = false;
+    let historyGate = createDeferred<void>();
+    let historyHeld = 0;
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v4/connect/qualified/quotas') {
+        const ref = refs[2]!, record = records[2]!;
+        return Response.json(QualifiedConnectedAccountQuotaResponseV4Schema.parse({ ref,
+          sourceResolution: { source: sources[2], recordId: record.recordId, providerAccountId: ref.accountId,
+            fetchedAt: 0, staleAfterMs: 600_000 },
+          content: { t: 'plain', v: { v: 1, ref, activeAccountId: ref.accountId, fetchedAt: 0,
+            staleAfterMs: 600_000, planLabel: null, accountLabel: null, meters: [] } },
+          metadata: { fetchedAt: 0, staleAfterMs: 600_000, status: 'unavailable' } }));
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        const raw = JSON.parse(request.url.searchParams.get('source')!);
+        const index = refs.findIndex(ref => ref.accountId === raw.ref.accountId);
+        await gates[index]!.promise;
+        return Response.json({ source: sources[index], recordId: records[index]!.recordId,
+          providerAccountId: refs[index]!.accountId, fetchedAt: now, staleAfterMs: 600_000 });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
+        const record = records.find(record => record.recordId === request.url.searchParams.get('recordId'))!;
+        return Response.json({ content: { t: 'plain', v: record },
+          metadata: { fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+        if (holdHistory) { historyHeld++; await historyGate.promise; }
+        if (failHistory) return new Response('unavailable', { status: 404 });
+        const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+          request.url.searchParams.get('query'));
+        const record = records.find(record => record.recordId === query.recordId)!;
+        return Response.json({ entries: record.state === 'not_loaded' ? [] : [900_000, 600_000].map((age, index) => {
+          const observedAtMs = now - age;
+          return { id: `${record.recordKey.accountSubjectId}-${index}`, observedAtMs, record: {
+            content: { t: 'plain', v: { ...record, observedAtMs, fetchedAtMs: observedAtMs,
+              meters: record.meters.map(meter => ({ ...meter, used: 10 + index * 10, remaining: 90 - index * 10, utilizationPct: 10 + index * 10 })) } },
+            metadata: { fetchedAt: observedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources } };
+        }), nextCursor: null });
+      }
+      if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
+      return undefined;
+    });
+    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+      connectedAccountsV4: refs.map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) }) });
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    const query = normalizeUsageQuery({ period: { startMs: now - 86_400_000, endMs: now }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const store = getUsageQueryResourceStore(captured);
+    const homeEntry = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const releaseHome = homeEntry.subscribe(() => {}, false);
+    const sliceOf = (entry: typeof homeEntry) => decodeUsageQueryResource(entry.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
+    const projectionOf = (entry: typeof homeEntry) => { const slice = sliceOf(entry); return projectUsagePlans(slice.quota, now, slice.pools, slice.sources); };
+    const renderBody = async (entry: typeof homeEntry) => {
+      const slice = sliceOf(entry);
+      const model = { requestedQuery: null, shownQuery: null, slice, pending: false, error: null, freshness: 'fresh',
+        updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel;
+      return await renderScreen(React.createElement(InjectedAuthProvider, { credentials: captured.credentials,
+        children: React.createElement(UsageCapacityWidget, { id: 'usage_capacity', model, slice, query,
+          serverId: captured.accountLifetime.scope.serverId, testID: 'timeline' }) }));
+    };
+    try {
+      await expect.poll(() => homeEntry.getSnapshot().value && projectionOf(homeEntry).accounts.length).toBe(3);
+      expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(3);
+      const cold = await renderBody(homeEntry);
+      expect(cold.findHostByTestId('timeline.reading')).not.toBeNull();
+      refs.forEach(ref => expect(cold.findHostByTestId(`timeline.cell.${ref.accountId}`)).not.toBeNull());
+      gates[0]!.resolve();
+      await expect.poll(() => projectionOf(homeEntry).accounts[0]?.observedAtMs).toBe(now);
+      expect(projectionOf(homeEntry).tightest).toBeNull();
+      expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(2);
+      expect((await renderBody(homeEntry)).findHostByTestId('timeline.reading')).not.toBeNull();
+      gates[1]!.resolve();
+      await expect.poll(() => projectionOf(homeEntry).accounts[1]?.observedAtMs).toBe(now);
+      expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(1);
+      // Live L22: current facts arrive before history; a Home rebind aborts
+      // that read, then opens an unhydrated-cache revision before new HTTP
+      // current/history pages. The unanswered Email source must not disappear
+      // and briefly fabricate a settled headline between those revisions.
+      holdHistory = true;
+      gates[2]!.resolve(); // The host answers with an addressable placeholder; the vendor never observed this account.
+      await expect.poll(() => historyHeld).toBe(1);
+      await expect.poll(() => sliceOf(homeEntry).quota?.length).toBe(3);
+      expect(projectionOf(homeEntry).tightest).toBeNull();
+      releaseHome();
+      const resumedProjections: ReturnType<typeof projectionOf>[] = [];
+      const releaseResumedHome = homeEntry.subscribe(() => {
+        if (homeEntry.getSnapshot().value) resumedProjections.push(projectionOf(homeEntry));
+      }, false);
+      await expect.poll(() => historyHeld).toBeGreaterThan(1);
+      expect(resumedProjections.length).toBeGreaterThan(0);
+      for (const revision of resumedProjections) {
+        expect.soft(revision.tightest, 'an unanswered source cannot vanish during a Home rebind').toBeNull();
+        expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
+      }
+      releaseResumedHome();
+      // Usage can hydrate the same cache with an addressable but unobserved
+      // Email placeholder. That is still no replacement for its pending read.
+      const basis = getActiveServerSnapshot();
+      const credentialsKey = resolveAuthCredentialsScopeKey(captured.credentials);
+      const quotaContext = { credentials: captured.credentials, ref: refs[2]!,
+        serverBasis: { serverId: basis.serverId, generation: basis.generation },
+        credentialScope: [basis.serverId, String(basis.generation), credentialsKey].join('\u0000') };
+      const quotaKey = buildQualifiedQuotaSnapshotScopeKey(quotaContext);
+      loadQualifiedQuotaSnapshotOnce(quotaKey, quotaContext);
+      await expect.poll(() => getQualifiedQuotaSnapshotEntry(quotaKey).usageRecordId).toBe(records[2]!.recordId);
+      const providerScope = buildProviderAccountUsageScopeKey({ serverId: basis.serverId,
+        generation: basis.generation, credentialScope: credentialsKey });
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [records[2]!.recordId]: {
+        snapshot: records[2]!, loading: false, hadError: false, nextFetchAtMs: now + 600_000, consecutiveErrors: 0 } }));
+      const placeholderProjections: typeof resumedProjections = [];
+      const releasePlaceholderHome = homeEntry.subscribe(() => {
+        if (homeEntry.getSnapshot().value) placeholderProjections.push(projectionOf(homeEntry));
+      }, false);
+      const heldBeforePlaceholder = historyHeld;
+      await expect.poll(() => historyHeld).toBeGreaterThan(heldBeforePlaceholder);
+      expect(placeholderProjections.length).toBeGreaterThan(0);
+      for (const revision of placeholderProjections) {
+        expect.soft(revision.tightest, 'an unobserved cache row cannot settle a pending Action read').toBeNull();
+        expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
+      }
+      holdHistory = false; historyGate.resolve();
+      await expect.poll(() => homeEntry.getSnapshot().pending).toBe('idle');
+      const settled = projectionOf(homeEntry);
+      expect.soft(settled.tightest?.window.remainingFraction).toBe(0.5);
+      const plans = await renderHook(() => useUsagePlans(sliceOf(homeEntry), { refreshing: false, refresh: async () => {} }), {
+        wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials: captured.credentials, children }),
+      });
+      expect.soft(readPlanAccountsStatement(settled.accounts, plans.getCurrent().nameOf)?.kind).toBe('partial');
+      expect.soft(usageCoverageSummary(sliceOf(homeEntry), ['quota'])).toBe('Partial history');
+      installConnectedAccountDescriptorProjection({ scopeKey: 'timeline', status: 'ready', conflicts: [], errorReason: null,
+        descriptors: [{ id: 'email', serviceId: 'email', pluginId: 'acme.email', title: 'Email IMAP + SMTP', provenance: 'external',
+          sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
+            outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] }, captured.accountLifetime);
+      await plans.rerender();
+      expect.soft(plans.getCurrent().nameOf(settled.accounts[2]!).serviceLabel).toBe('Email IMAP + SMTP');
+      expect.soft(plans.getCurrent().nameOf(settled.accounts[2]!).title).toBe('Email IMAP + SMTP account');
+      expect.soft((await renderBody(homeEntry)).findHostByTestId('timeline.state')).not.toBeNull();
+      const paces = settled.accounts.map(account => account.windows.map(window => window.pace));
+      expect(paces[0]?.[0]).not.toBeNull();
+      releasePlaceholderHome();
+      // Usage's batch has different accounting demand, but exactly the same Account allowance sources.
+      holdHistory = true;
+      historyGate = createDeferred<void>();
+      const usage = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query, { ...query, machines: ['other'] }] }) });
+      const releaseUsage = usage.subscribe(() => {}, false);
+      try {
+        await expect.poll(() => historyHeld).toBeGreaterThan(0);
+        await expect.poll(() => usage.getSnapshot().value !== undefined).toBe(true);
+        expect.soft(projectionOf(usage).tightest?.window.remainingFraction).toBe(0.5);
+        expect.soft(projectionOf(usage).accounts.map(account => account.windows.map(window => window.pace))).toEqual(paces);
+        expect.soft((await renderBody(usage)).findHostByTestId('timeline.tightest')).not.toBeNull();
+        holdHistory = false; historyGate.resolve();
+        await expect.poll(() => usage.getSnapshot().pending).toBe('idle');
+        failHistory = true;
+        const refreshing = usage.refresh();
+        await refreshing;
+        expect.soft(projectionOf(usage).accounts.map(account => account.windows.map(window => window.pace))).toEqual(paces);
+        expect.soft(projectionOf(usage).accounts[0]?.observedAtMs).toBe(now);
+        expect.soft(projectionOf(usage).accounts[0]?.state.status).toBe('stale');
+      } finally { releaseUsage(); }
+      const returnHome = homeEntry.subscribe(() => {}, false);
+      await homeEntry.refresh();
+      expect.soft(projectionOf(homeEntry).tightest?.window.remainingFraction).toBe(0.5);
+      failHistory = false;
+      await homeEntry.refresh();
+      expect.soft(projectionOf(homeEntry).accounts[0]?.state.status).toBe('available');
+      expect.soft(usageCoverageSummary(sliceOf(homeEntry), ['quota'])).toBe('Partial history');
+      returnHome();
+      // The phone Home route mounts a new single-query batch after the main
+      // pane has released every subscriber. It keeps the same Account owner.
+      const phoneContext = captureUiUsageQueryAccountContext(captured.credentials)!;
+      expect(getUsageQueryResourceStore(phoneContext)).toBe(store);
+      const phoneQuery = normalizeUsageQuery({ ...query, granularity: 'hour' });
+      const phone = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [phoneQuery] }) });
+      holdHistory = true; historyGate = createDeferred<void>();
+      const releasePhone = phone.subscribe(() => {}, false);
+      const phoneProjection = () => {
+        const slice = decodeUsageQueryResource(phone.getSnapshot().value!).results[0]!;
+        return projectUsagePlans(slice.quota, now, slice.pools, slice.sources);
+      };
+      try {
+        await expect.poll(() => phone.getSnapshot().value !== undefined).toBe(true);
+        expect.soft(phoneProjection().tightest?.window.remainingFraction, 'settled / to /home keeps the first headline').toBe(0.5);
+        expect.soft(readPendingPlanAccountCount(phoneProjection().accounts)).toBe(0);
+        expect.soft(phoneProjection().accounts.slice(0, 2).map(account => account.observedAtMs)).toEqual([now, now]);
+        holdHistory = false; historyGate.resolve();
+        await expect.poll(() => phone.getSnapshot().pending).toBe('idle');
+        // An addressable record with no witnessed replacement is not an
+        // observation of zero, and cannot erase the previous last-read date.
+        records[0] = ProviderAccountUsageSnapshotV1Schema.parse({ ...records[0], state: 'not_loaded',
+          observedAtMs: 0, fetchedAtMs: 0, meters: [] });
+        await phone.refresh();
+        expect.soft(phoneProjection().accounts[0]?.observedAtMs, 'unobserved replacement retains the last witnessed read').toBe(now);
+        expect.soft(phoneProjection().accounts[0]?.windows.map(window => window.pace)).toEqual(paces[0]);
+        holdHistory = true; historyGate = createDeferred<void>();
+        const nextHome = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+          queries: [normalizeUsageQuery({ ...query, granularity: 'month' })] }) });
+        const releaseNextHome = nextHome.subscribe(() => {}, false);
+        try {
+          await expect.poll(() => nextHome.getSnapshot().value !== undefined).toBe(true);
+          const nextSlice = decodeUsageQueryResource(nextHome.getSnapshot().value!).results[0]!;
+          const nextPlans = projectUsagePlans(nextSlice.quota, now, nextSlice.pools, nextSlice.sources);
+          expect.soft(nextPlans.tightest?.window.remainingFraction, 'a later route inherits the witnessed allowance, not an unobserved replacement').toBe(0.5);
+          expect.soft(readPendingPlanAccountCount(nextPlans.accounts)).toBe(0);
+          expect.soft(nextPlans.accounts[0]?.observedAtMs).toBe(now);
+        } finally { releaseNextHome(); holdHistory = false; historyGate.resolve(); }
+      } finally { releasePhone(); }
+    } finally { gates.forEach(gate => gate.resolve()); historyGate.resolve(); releaseHome(); }
+  });
+  it('exports selected calendar facts while the displayed Resource has accounting ready and quota pending', async () => {
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'calendar-work' };
+    const source = { bindingKind: 'account' as const, ref };
+    const now = Date.now();
+    const resetAtMs = now + 86_400_000;
+    const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account' as const, quotaScope: 'account' as const };
+    const current = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now,
+      fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+      meters: [{ meterId: 'session', label: 'Session', used: null, limit: null, usedPct: 42, utilizationPct: 42,
+        unit: 'count', status: 'ok', resetAtMs, resetsAt: resetAtMs }] });
+    const quotaGate = createDeferred<void>();
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        await quotaGate.promise;
+        return Response.json({ source, recordId: current.recordId, providerAccountId: ref.accountId, fetchedAt: now, staleAfterMs: 60_000 });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') return Response.json({ content: { t: 'plain', v: current },
+        metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') return Response.json({ entries: [], nextCursor: null });
+      if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
+      return undefined;
+    });
+    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+      connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    const query = normalizeUsageQuery({ period: { relative: '7days' }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const release = entry.subscribe(() => {}, false);
+    const account = await captureLazyActionAccountContext(captured.accountLifetime.scope.serverId);
+    try {
+      await expect.poll(() => {
+        const content = entry.getSnapshot().value;
+        return content && decodeUsageQueryResource(content).results[0]?.accounting?.totals;
+      }).toEqual(value.totals);
+      const slice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect(slice.quota).toBeUndefined();
+      expect(slice.sources).toContainEqual(expect.objectContaining({ source: 'quota', status: 'pending' }));
+      const executor = createActionExecutor(createActionExecutorBoundaryFixture({ usageActions: createUiUsageActionPorts(account) }));
+      const exporting = executor.execute('usage.calendar.export', { query, selectedEvents: [{ account: ref, kind: 'reset', meterId: 'session' }] },
+        { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+      await flushHookEffects();
+      quotaGate.resolve();
+      const result = await exporting;
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      const file = UsageFileResultSchema.parse(result.ok ? result.result : undefined);
+      expect(file.mediaType).toBe('text/calendar');
+      expect(new TextDecoder().decode(decodeBase64(file.base64))).toContain('BEGIN:VEVENT\r\n');
+      expect(home!.requests.some(request => request.path.includes('refresh'))).toBe(false);
+    } finally { quotaGate.resolve(); account.dispose(); release(); }
+  });
+  it('delivers JSON and CSV export bytes from the real client Resource and Action with authorized machine labels', async () => {
+    const observed: UsageAnalyticsQueryResponse = { ...value, coverage: { status: 'partial', reasons: [], missingDimensions: [],
+      range: { complete: false }, ranked: [], sources: [{ source: 'native-history', path: 'native', status: 'available',
+        eventCount: 1, machineId: 'work-machine', captureKind: 'from_logs', asOfMs: 100 }] } };
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(observed) : undefined);
+    const machine = createMachineFixture({ id: 'work-machine' });
+    storage.getState().applyMachines([{ ...machine, metadata: { ...machine.metadata!, displayName: 'Private workstation', homeDir: '/private/home' } }]);
+    const account = await captureLazyActionAccountContext(captured.accountLifetime.scope.serverId);
+    try {
+      const executor = createActionExecutor(createActionExecutorBoundaryFixture({ usageActions: createUiUsageActionPorts(account) }));
+      const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeSessionEvidence: false, includeWorkEvidence: false });
+      for (const format of ['json', 'csv'] as const) {
+        const result = await executor.execute('usage.export', { query, format, fields: ['coverage'] },
+          { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+        expect(result.ok, JSON.stringify(result)).toBe(true);
+        const file = UsageFileResultSchema.parse(result.ok ? result.result : undefined);
+        const content = new TextDecoder().decode(decodeBase64(file.base64));
+        expect(content).toContain('Private workstation');
+        expect(content).not.toContain('/private/home');
+        expect(file.fields).toEqual(['coverage']);
+        expect(file.mediaType).toBe(format === 'json' ? 'application/json' : 'text/csv');
+      }
+    } finally { account.dispose(); }
+  });
   it('settles accounting-only demand without private Session or SCM acquisition', async () => {
     const captured = await context(request => request.path === '/v2/usage/query' ? Response.json({ ...value,
       contributions: [workContribution] }) : undefined);
@@ -110,10 +445,36 @@ describe('usage query captured Resource adapter', () => {
       expect(entry.getSnapshot().error?.code).toBeUndefined();
       const slice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
       expect(slice.accounting?.totals).toMatchObject(value.totals);
+      expect(slice.accounting?.contributions).toMatchObject([workContribution]);
+      expect(slice.work).toBeUndefined();
       expect(slice.sources).toContainEqual({ source: 'work', status: 'not_loaded' });
       expect(slice.sources).toContainEqual({ source: 'how_you_work', status: 'not_loaded' });
       expect(slice.pending).toBe(false);
       expect(home!.requests.filter(request => /\/sessions\//.test(request.path))).toEqual([]);
+    } finally { release(); }
+  });
+
+  it('does not re-encode identical progressive and terminal content', async () => {
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(value) : undefined);
+    const submitted: string[] = [];
+    const originalDigest = platformDigest.digest;
+    vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
+      submitted.push(new TextDecoder().decode(bytes));
+      return await originalDigest(algorithm, bytes);
+    });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
+      input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } })] }) });
+    const release = entry.subscribe(() => {}, false);
+    try {
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      const admitted = entry.getSnapshot().value;
+      expect(admitted).toBeDefined();
+      expect(decodeUsageQueryResource(admitted!).results[0]?.accounting).toMatchObject(value);
+      expect(entry.getSnapshot().error).toBeUndefined();
+      // This system boundary sees every byte submitted for SHA-256. The
+      // terminal snapshot must reuse an identical admitted progress value.
+      expect(submitted.length).toBeGreaterThan(0);
+      expect(new Set(submitted).size).toBe(submitted.length);
     } finally { release(); }
   });
 
@@ -161,6 +522,7 @@ describe('usage query captured Resource adapter', () => {
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting).toMatchObject(value);
     } finally { digestGate.resolve(); release(); }
   });
+
 
   it('publishes last-known admitted allowances on first mount while all refresh transports are held', async () => {
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'retained-l3' };
@@ -668,7 +1030,10 @@ describe('usage query captured Resource adapter', () => {
       expect(screen.findByTestId('quota-capacity.cell.ready')).toBeTruthy();
       expect(screen.findByTestId('quota-capacity.cell.slow')).toBeTruthy();
       expect(screen.findByTestId('quota-fit.plan.slow')).toBeTruthy();
-      if (!failureFirst) expect(screen.findHostByTestId('quota-capacity.state')).toBeTruthy();
+      if (!failureFirst) {
+        expect(screen.findByTestId('quota-capacity.reading')).toBeTruthy();
+        expect(screen.findHostByTestId('quota-capacity.state')).toBeNull();
+      }
       slow.resolve(Response.json({ error: 'snapshot_read_failed' }, { status: 503 }));
       await expect.poll(slowState).toMatchObject({ status: 'error', errorCode: 'snapshot_read_failed' });
       await screen.update(body());
@@ -812,7 +1177,6 @@ describe('usage query captured Resource adapter', () => {
         const content = entry.getSnapshot().value;
         return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.current;
       }).toEqual(snapshot);
-      pending.resolve(Response.json({ entries: [] }));
       await expect.poll(() => {
         const content = entry.getSnapshot().value;
         return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.history?.entries.length;
@@ -821,8 +1185,19 @@ describe('usage query captured Resource adapter', () => {
       expect(entry.getSnapshot().pending).toBe('initial');
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]).toMatchObject({ accounting: value,
         quota: [{ source, current: snapshot, history: { nextCursor: { id: 'first-use-page' } }, unusedCapacity: { historyStatus: 'partial' } }] });
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'pending' }));
       later.resolve(Response.json({ entries: [], nextCursor: null }));
+      // Capacity history has answered even while the independent Pending-work
+      // facet is still outstanding. It cannot keep every account "Still reading".
+      await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources
+        .find(source => source.source.startsWith('quota:'))?.status).toBe('available');
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
+      pending.resolve(Response.json({ entries: [] }));
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'available' }));
       sourceRefusal = 500;
       await entry.refresh();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.current).toEqual(snapshot);
@@ -832,9 +1207,9 @@ describe('usage query captured Resource adapter', () => {
       await entry.refresh();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.current).toBeNull();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
-        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'available' }));
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'partial' }));
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
-        .toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
+        .toContainEqual(expect.objectContaining({ source: 'quota', status: 'partial' }));
       await entry.refresh();
       expect(entry.getSnapshot().error).toBeUndefined();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.current).toBeNull();
@@ -850,6 +1225,8 @@ describe('usage query captured Resource adapter', () => {
     let laterHistoryUnavailable = false;
     let laterHistoryDenied = false;
     let holdLaterHistory = false;
+    let heldSource: ReturnType<typeof createDeferred<void>> | null = null;
+    let admittedRecordId: string | null = null;
     let accountingResponse = value;
     const laterHistory = createDeferred<Response>();
     let heldHistoryResponse: Response | undefined;
@@ -858,25 +1235,32 @@ describe('usage query captured Resource adapter', () => {
     const snapshot = { v: 1 as const, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
       providerId: 'codex', accountSubject: { kind: 'providerSubject' as const, id: 'provider-work' },
       observedAtMs: now, fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp' as const,
-      confidence: 'confirmed' as const, state: 'loaded_empty' as const, meters: [] };
+      confidence: 'confirmed' as const, state: 'loaded_data' as const, meters: [{ meterId: 'current', label: 'Current',
+        used: 40, limit: 100, remaining: 60, utilizationPct: 40, unit: 'requests', status: 'ok' as const,
+        resetsAt: now + 1000, windowDurationMs: 1000, details: {} }] };
     const quota = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000,
       planLabel: null, accountLabel: null, meters: [] };
     ProviderAccountUsageSnapshotV1Schema.parse(snapshot);
     const quotaResponse = QualifiedConnectedAccountQuotaResponseV4Schema.parse({ ref,
       sourceResolution: { source, recordId: snapshot.recordId, providerAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000 },
       content: { t: 'plain', v: quota }, metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' } });
-    const captured = await context(request => {
+    const captured = await context(async request => {
       if (request.path === '/v2/usage/query') return Response.json(accountingResponse);
       if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ features: {
         connectedServices: { enabled: true, quotas: { enabled: quotaEnabled } },
       } }));
       if (request.path === '/v4/connect/qualified/quotas') return quotaRefusal
-        ? new Response('read refused', { status: quotaRefusal }) : Response.json(quotaResponse);
+        ? new Response('read refused', { status: quotaRefusal }) : Response.json({ ...quotaResponse,
+          sourceResolution: { ...quotaResponse.sourceResolution, recordId: admittedRecordId ?? snapshot.recordId } });
       if (request.path === '/v4/connect/qualified/provider-account-usage/record') return Response.json({
-        content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
-      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return quotaRefusal === 403
-        ? new Response('source refused', { status: 403 }) : Response.json({ source, recordId: snapshot.recordId,
+        content: { t: 'plain', v: admittedRecordId ? { ...snapshot, recordId: admittedRecordId,
+          recordKey: { ...recordKey, accountSubjectId: 'replacement-work' } } : snapshot },
+        metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        if (heldSource) await heldSource.promise;
+        return quotaRefusal === 403 ? new Response('source refused', { status: 403 }) : Response.json({ source, recordId: admittedRecordId ?? snapshot.recordId,
           providerAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000 });
+      }
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
         const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
           request.url.searchParams.get('query'));
@@ -886,7 +1270,8 @@ describe('usage query captured Resource adapter', () => {
         const id = later ? 'second' : 'first';
         const observedAtMs = now - (later ? 200 : 700);
         const used = later ? 70 : 20;
-        const historical = { ...snapshot, observedAtMs, fetchedAtMs: observedAtMs, state: 'loaded_data',
+        const historical = { ...snapshot, ...(admittedRecordId ? { recordId: admittedRecordId,
+          recordKey: { ...recordKey, accountSubjectId: 'replacement-work' } } : {}), observedAtMs, fetchedAtMs: observedAtMs, state: 'loaded_data',
           meters: [{ meterId: 'ended', label: 'Ended', used, remaining: 100 - used, limit: 100, unit: 'requests',
             utilizationPct: used, resetsAt: now - 200, windowDurationMs: 1000, status: 'ok', details: {} }] };
         const response = Response.json({ entries: [{ id, observedAtMs, record: {
@@ -904,6 +1289,25 @@ describe('usage query captured Resource adapter', () => {
         credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
     const serverBasis = getActiveServerSnapshot();
     expect((await getServerFeaturesSnapshot({ serverId: serverBasis.serverId, force: true })).status).toBe('ready');
+    // A Usage Action can settle before any legacy quota-cache consumer mounts.
+    // Its next read starts with identity/pending progress, not cache hydration.
+    const unhydratedQuery = normalizeUsageQuery({});
+    const unhydratedSettled = await readUiUsageQueryBatch(captured, { queries: [unhydratedQuery] });
+    const unhydratedSlice = unhydratedSettled.results[0]!;
+    const unhydratedPlans = projectUsagePlans(unhydratedSlice.quota ?? [], now, unhydratedSlice.pools, unhydratedSlice.sources);
+    expect(unhydratedPlans.tightest?.window.remainingFraction).toBe(0.6);
+    const unhydratedRevisions: typeof unhydratedSettled[] = [];
+    await readUiUsageQueryBatch(captured, { queries: [unhydratedQuery] }, undefined, unhydratedSettled,
+      { onProgress: batch => { unhydratedRevisions.push(batch); } });
+    expect(unhydratedRevisions.length).toBeGreaterThan(0);
+    for (const revision of unhydratedRevisions) {
+      const slice = revision.results[0]!;
+      const plans = projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources);
+      expect.soft(plans.tightest).toEqual(unhydratedPlans.tightest);
+      expect.soft(plans.accounts[0]?.observedAtMs).toBe(now);
+      expect.soft(usageCoverageSummary(slice, ['quota'])).toBe(usageCoverageSummary(unhydratedSlice, ['quota']));
+      expect.soft(slice.quota?.[0]?.history).toEqual(unhydratedSlice.quota?.[0]?.history);
+    }
     const credentialScope = [captured.accountLifetime.scope.serverId, String(serverBasis.generation), resolveAuthCredentialsScopeKey(captured.credentials)].join('\u0000');
     const readContext = { credentials: captured.credentials, credentialScope, ref,
       serverBasis: { serverId: captured.accountLifetime.scope.serverId, generation: serverBasis.generation },
@@ -946,16 +1350,50 @@ describe('usage query captured Resource adapter', () => {
       expect(fullRead?.unusedCapacity).toMatchObject({ historyStatus: 'returned_page', windows: [{ value: {
         status: 'available', method: 'terminal_observation', qualification: 'confirmed', sampleCount: 2 } }] });
       expect(fullRead?.unusedCapacity?.windows[0]?.value).toHaveProperty('unusedAmount', expect.closeTo(30));
+      const settledSlice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      const settledPlans = projectUsagePlans(settledSlice.quota ?? [], now, settledSlice.pools, settledSlice.sources);
+      expect(settledPlans.tightest?.window.remainingFraction).toBe(0.6);
+      // The Usage page's vendor reread marks the admitted cache row loading
+      // before the history reader answers. Every published revision, including
+      // the initial cache observation, must retain the settled allowance.
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+        ...entries[snapshot.recordId]!, loading: true } }));
+      const revisions: Parameters<NonNullable<NonNullable<Parameters<typeof readUiUsageQueryBatch>[4]>['onProgress']>>[0][] = [];
+      const settledBatch = decodeUsageQueryResource(entry.getSnapshot().value!);
+      await readUiUsageQueryBatch(captured, { queries: [query] }, undefined, settledBatch,
+        { onProgress: batch => { revisions.push(batch); } });
+      expect(revisions.length).toBeGreaterThan(0);
+      for (const revision of revisions) {
+        const slice = revision.results[0]!;
+        expect.soft(projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources).tightest).toEqual(settledPlans.tightest);
+        expect.soft(slice.quota?.[0]?.history).toEqual(settledSlice.quota?.[0]?.history);
+      }
+      // Usage can acquire a new batch entry while Home's single-query entry is
+      // warm. The admitted cache reading is still settled for that new entry.
+      const newlyBatchedRevisions: typeof revisions = [];
+      await readUiUsageQueryBatch(captured, { queries: [query] }, undefined, undefined,
+        { onProgress: batch => { newlyBatchedRevisions.push(batch); } });
+      for (const revision of newlyBatchedRevisions) {
+        const slice = revision.results[0]!;
+        expect.soft(projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources).tightest?.window.remainingFraction).toBe(0.6);
+      }
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+        ...entries[snapshot.recordId]!, loading: false } }));
       holdLaterHistory = true;
       accountingResponse = { ...value, totals: { ...value.totals, eventCount: 2 } };
       const refreshingHistory = entry.refresh();
       await expect.poll(() => {
         const slice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0];
-        return slice?.accounting?.totals.eventCount === 2 && slice.quota?.[0]?.history?.entries.length === 1;
+        return slice?.accounting?.totals.eventCount === 2 && heldHistoryResponse !== undefined;
       }).toBe(true);
       expect(entry.getSnapshot().pending).toBe('refresh');
-      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]).toMatchObject({ current: snapshot,
-        history: { nextCursor: { id: 'first' } }, unusedCapacity: { historyStatus: 'partial' } });
+      const refreshingSlice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect.soft(refreshingSlice.sources.filter(state => state.source.startsWith('quota')))
+        .toEqual(settledSlice.sources.filter(state => state.source.startsWith('quota')));
+      expect.soft(projectUsagePlans(refreshingSlice.quota ?? [], now, refreshingSlice.pools, refreshingSlice.sources).tightest)
+        .toEqual(settledPlans.tightest);
+      expect.soft(usageCoverageSummary(refreshingSlice, ['quota'])).toBe(usageCoverageSummary(settledSlice, ['quota']));
+      expect(refreshingSlice.quota?.[0]).toEqual(settledSlice.quota?.[0]);
       holdLaterHistory = false;
       laterHistory.resolve(heldHistoryResponse!);
       await refreshingHistory;
@@ -999,8 +1437,39 @@ describe('usage query captured Resource adapter', () => {
       await reloadQualifiedQuotaSnapshotAfterRecovery({ ref, serverBasis: readContext.serverBasis });
       expect.soft(getQualifiedQuotaSnapshotEntry(qualifiedKey)).toMatchObject({ supported: false, snapshot: null, usageRecordId: null });
       expect.soft((await readUiUsageQueryBatch(captured, { queries: [query] })).results[0]?.quota).toBeUndefined();
+      // R4A-01: a held replacement cannot reseed protected previous facts
+      // after either explicit refusal or an admitted different record.
+      for (const transition of ['refusal', 'replacement'] as const) {
+        quotaRefusal = transition === 'refusal' ? 403 : 0;
+        admittedRecordId = transition === 'replacement'
+          ? buildProviderAccountUsageRecordId({ ...recordKey, accountSubjectId: 'replacement-work' }) : null;
+        await reloadQualifiedQuotaSnapshotAfterRecovery({ ref, serverBasis: readContext.serverBasis });
+        expect(getQualifiedQuotaSnapshotEntry(qualifiedKey)).toMatchObject(transition === 'refusal'
+          ? { supported: false } : { usageRecordId: admittedRecordId });
+        heldSource = createDeferred<void>();
+        const protectedRevisions: typeof revisions = [];
+        const reads = [query, normalizeUsageQuery({ ...query, granularity: 'hour' })].map(nextQuery =>
+          readUiUsageQueryBatch(captured, { queries: [nextQuery] }, undefined, settledBatch,
+            { onProgress: batch => { protectedRevisions.push(batch); } }));
+        try {
+          await expect.poll(() => protectedRevisions.length).toBeGreaterThanOrEqual(2);
+          await flushHookEffects({ cycles: 20 });
+          for (const revision of protectedRevisions) {
+            expect.soft(revision.results.flatMap(slice => slice.quota ?? [])
+              .some(read => read.current?.recordId === snapshot.recordId), `${transition} never republishes old protected facts`).toBe(false);
+          }
+        } finally {
+          heldSource.resolve();
+          const completed = await Promise.all(reads);
+          heldSource = null;
+          for (const revision of [...protectedRevisions, ...completed]) {
+            expect.soft(revision.results.flatMap(slice => slice.quota ?? [])
+              .some(read => read.current?.recordId === snapshot.recordId), `${transition} cannot restore protected facts at settle`).toBe(false);
+          }
+        }
+      }
       expect(home!.requests.some(request => request.path.endsWith('/refresh'))).toBe(false);
-    } finally { laterHistory.resolve(heldHistoryResponse ?? Response.json({ error: 'not_found' }, { status: 404 })); release(); unwatchQualified(); }
+    } finally { heldSource?.resolve(); laterHistory.resolve(heldHistoryResponse ?? Response.json({ error: 'not_found' }, { status: 404 })); release(); unwatchQualified(); }
   });
 
   it('opens the quota host read through the captured plain Account and retires late provider facts', async () => {
@@ -1613,6 +2082,15 @@ describe('usage query captured Resource adapter', () => {
         accounting: value, sources: expect.arrayContaining([{ source: 'native-history', status: 'pending' }]), pending: true,
       });
       pending = false;
+      const readsBeforeUnrelatedWake = home!.requests.filter(request => request.path === '/v2/usage/query').length;
+      const workflowPlan = planSyncActionsFromChanges([{ cursor: 1, kind: 'account', entityId: 'workflow-run:run-42', changedAt: 1, hint: null }]);
+      publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['workflow-run:run-42'], {
+        changeKinds: ['account'], usageQueryAffects: plannedChangesAffectUsageQuery(workflowPlan),
+      });
+      await flushHookEffects({ cycles: 20 });
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual({ source: 'native-history', status: 'pending' });
+      expect(home!.requests.filter(request => request.path === '/v2/usage/query')).toHaveLength(readsBeforeUnrelatedWake);
       publishHomeAccountChange('a-different-home');
       await flushHookEffects();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
@@ -1742,7 +2220,7 @@ describe('usage query Work composition', () => {
     expect(workSlice.sources).toContainEqual({ source: 'how_you_work', status: 'not_loaded' });
     const accountingSlice = result.results.find(slice => slice.key === getUsageQueryKey(accountingOnly))!;
     expect(accountingSlice.accounting?.totals.tokens.total).toBe(15);
-    expect(accountingSlice.work?.allocations[0]?.reason).toBe('missing_evidence');
+    expect(accountingSlice.work).toBeUndefined();
     expect(accountingSlice.sources).toContainEqual({ source: 'work', status: 'not_loaded' });
     expect(home.requests.filter(request => request.path === '/v1/sessions/session/messages')).toHaveLength(1);
     const merged = { ...witness, pullRequest: { ...witness.pullRequest, state: 'merged' as const } };
@@ -1756,11 +2234,14 @@ describe('usage query Work composition', () => {
     const branchWitness = { ...checkpoint, branch: { ref: 'refs/heads/standalone', headSha: 'b'.repeat(40) } };
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => request.payload.state === undefined
       ? { success: true, branches: [], branchEvidence: [branchWitness], branchEvidenceStatus: 'partial' }
-      : { success: true, pullRequests: [], workEvidence: [], workEvidenceStatus: 'partial' });
+      : { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'No hosting provider for this local repository' });
     const standalone = await readUiUsageQueryBatch(context, { queries: [query] });
     expect(standalone.results[0]?.work?.branchAllocations[0]).toMatchObject({ reason: 'allocated', contribution,
       branch: { repositoryKey: 'repo', branch: { ref: 'refs/heads/standalone' }, contributionIds: ['cost'] } });
     expect(standalone.results[0]?.work?.outcomes).toEqual([]);
+    // A local branch remains readable without a remote. Unsupported hosting
+    // does not become a failed Work read or poison its exact branch evidence.
+    expect(standalone.results[0]?.sources).toContainEqual({ source: 'work', status: 'partial' });
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => request.payload.state === 'closed'
       ? { success: false, errorCode: 'COMMAND_FAILED', error: 'Native hosting read failed' }
       : { success: true, pullRequests: [merged.pullRequest], workEvidence: [merged], workEvidenceStatus: 'partial' });
@@ -1771,6 +2252,9 @@ describe('usage query Work composition', () => {
     const unsupported = await readUiUsageQueryBatch(context, { queries: [query] });
     expect(unsupported.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported' });
     expect(unsupported.results[0]?.work?.allocations[0]).toMatchObject({ reason: 'missing_evidence', outcome: null, evidence: [] });
+    scmTransport.mockResolvedValue({ success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'No supported backend' });
+    const unavailableBackend = await readUiUsageQueryBatch(context, { queries: [query] });
+    expect(unavailableBackend.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported' });
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => request.payload.state === 'closed'
       ? { success: false, errorCode: 'INVALID_REQUEST', workEvidence: [merged] }
       : { success: true, pullRequests: [merged.pullRequest], workEvidence: [merged], workEvidenceStatus: 'partial' });

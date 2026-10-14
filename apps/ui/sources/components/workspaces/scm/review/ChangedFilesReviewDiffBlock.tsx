@@ -266,11 +266,11 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
     if (state.status === 'loading' || state.status === 'idle') {
         return (
-            <View testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor]}>
+            <View testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor]}>
                 <View
                     style={[
                         props.flat
-                            ? { alignItems: 'center', justifyContent: 'center', paddingVertical: 12 }
+                            ? { alignItems: 'center', justifyContent: 'center', paddingVertical: theme.space.s12 }
                             : {
                                 borderRadius: 12,
                                 overflow: 'hidden',
@@ -289,8 +289,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     }
     if (state.status === 'error') {
         return (
-            <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+            <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
+                <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                     {state.error ?? t('files.reviewUnableToLoadDiff')}
                 </Text>
             </View>
@@ -300,7 +300,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         if (fileIsImage) {
             if (imagePreview.status === 'loading') {
                 return (
-                    <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
+                    <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
                         <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                     </View>
                 );
@@ -308,7 +308,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
             if (imagePreview.status === 'loaded') {
                 return (
-                    <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12, gap: 10 }, noOverflowAnchor]}>
+                    <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s10 }, noOverflowAnchor]}>
                         <View
                             style={{
                                 width: '100%',
@@ -328,7 +328,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                                 accessibilityLabel={t('files.binaryFile')}
                             />
                         </View>
-                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                             {t('files.binaryFile')}
                         </Text>
                     </View>
@@ -337,8 +337,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
             if (imagePreview.status === 'error') {
                 return (
-                    <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                    <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
+                        <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                             {imagePreview.error}
                         </Text>
                     </View>
@@ -348,8 +348,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
         if (fileIsBinary) {
             return (
-                <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                    <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
+                    <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                         {t('files.binaryFile')}
                     </Text>
                 </View>
@@ -357,8 +357,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         }
 
         return (
-            <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+            <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
+                <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                     {state.emptyFile ? t('files.emptyFile') : t('files.noChanges')}
                 </Text>
             </View>
@@ -367,7 +367,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
     if (props.reviewCommentsEnabled) {
         return (
-            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
+            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
@@ -392,7 +392,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     }
 
     return (
-            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
+            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
             <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     findActive={props.findActive}

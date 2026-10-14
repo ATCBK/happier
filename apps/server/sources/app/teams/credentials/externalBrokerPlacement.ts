@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from "@happier-dev/protocol/teams";
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import { inTx, type Tx } from "@/storage/inTx";

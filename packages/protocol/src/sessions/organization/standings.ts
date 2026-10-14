@@ -1,32 +1,26 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SESSION_ORGANIZATION_MAX_ID_LENGTH } from './constants.js';
 
-const SessionOrganizationSessionIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(SESSION_ORGANIZATION_MAX_ID_LENGTH));
+const SessionOrganizationSessionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_ORGANIZATION_MAX_ID_LENGTH)));
 
-export const SessionAttentionStandingSchema = lazyZodSchema(() => z
-  .object({
+export const SessionAttentionStandingSchema = lazyZodSchema(() => z.strictObject({
     sessionId: SessionOrganizationSessionIdSchema,
     standing: z.boolean(),
-    remindAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .strict());
+    remindAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionAttentionStanding = z.infer<typeof SessionAttentionStandingSchema>;
 
-export const SetSessionAttentionStandingRequestSchema = lazyZodSchema(() => z
+export const SetSessionAttentionStandingRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z
   .object({
-    standing: z.boolean().nullable().optional(),
-    remindAt: z.number().int().nonnegative().nullable().optional(),
-  })
-  .refine((value) => (value.standing === undefined) !== (value.remindAt === undefined), { message: 'Change exactly one attention field' })
-  .strict());
+    standing: z.optional(z.nullable(z.boolean())),
+    remindAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+  }).check(z.refine((value) => (value.standing === undefined) !== (value.remindAt === undefined), { message: 'Change exactly one attention field' }))));
 export type SetSessionAttentionStandingRequest = z.infer<typeof SetSessionAttentionStandingRequestSchema>;
 
-export const SetSessionAttentionStandingResponseSchema = lazyZodSchema(() => z
-  .object({
-    standing: SessionAttentionStandingSchema.nullable(),
-  })
-  .strict());
+export const SetSessionAttentionStandingResponseSchema = lazyZodSchema(() => z.strictObject({
+    standing: z.nullable(SessionAttentionStandingSchema),
+  }));
 export type SetSessionAttentionStandingResponse = z.infer<typeof SetSessionAttentionStandingResponseSchema>;

@@ -100,6 +100,24 @@ describe('protocol base64 helpers', () => {
     expect(readCanonicalPaddedBase64DecodedLength(' AA==')).toBeNull();
   });
 
+  it('rejects invalid alphabet and padding while checking every unused padding-bit value', () => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    for (const [value, character] of [...alphabet].entries()) {
+      expect(readCanonicalPaddedBase64DecodedLength(`A${character}==`))
+        .toBe(value % 16 === 0 ? 1 : null);
+      expect(readCanonicalPaddedBase64DecodedLength(`AA${character}=`))
+        .toBe(value % 4 === 0 ? 2 : null);
+    }
+    for (const malformed of ['====', 'A===', '=AAA', 'AA=A', 'AAA\n', 'AA-_', 'AA\u0000A', 'AAéA', 'AA😀']) {
+      expect(readCanonicalPaddedBase64DecodedLength(malformed)).toBeNull();
+    }
+    // Prefix-only admission must not miss malformed data at the far end.
+    const largePrefix = 'A'.repeat(65_536);
+    expect(readCanonicalPaddedBase64DecodedLength(`${largePrefix}!AAA`)).toBeNull();
+    expect(readCanonicalPaddedBase64DecodedLength(`${largePrefix}AB==`)).toBeNull();
+    expect(readCanonicalPaddedBase64DecodedLength(`${largePrefix}AAAA`)).toBe(49_155);
+  });
+
   it('decodes base64 leniently (whitespace, invalid chars, missing padding)', () => {
     expect(() => decodeBase64('Zm9v\n', 'base64')).not.toThrow();
     expect(new TextDecoder().decode(decodeBase64('Zm9v\n', 'base64'))).toBe('foo');

@@ -34,7 +34,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     featureCard: {
         minWidth: 116,
@@ -44,18 +44,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.surface,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     featureCardActive: {
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.selected,
     },
     featureTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
     },
     activeFrame: {
         minHeight: 128,
@@ -63,18 +61,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     activeCard: {
         width: '100%',
-        gap: 8,
+        gap: theme.space.s8,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 8,
-        padding: 16,
+        padding: theme.space.s16,
     },
     activeTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 20,
-        lineHeight: 26,
+        ...Typography.variant('title'),
     },
     activeBody: {
         ...Typography.default('regular'),
@@ -86,17 +82,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'flex-start',
         borderRadius: 8,
         backgroundColor: theme.colors.button.primary.background,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
     },
     setupButtonPressed: {
         opacity: motionTokens.press.opacitySubtle,
     },
     setupButtonText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.button.primary.tint,
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'semiBold'),
     },
 }));
 

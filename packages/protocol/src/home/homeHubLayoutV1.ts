@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1 } from '../actions/anchoredListOrderV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -12,41 +12,41 @@ import { isSameWidgetDefinitionV1, readBuiltinWidgetDescriptorV1, widgetCandidat
 import { proposeWidgetInputDefaultBindingsV1 } from '../widgets/widgetInputAdmissionV1.js';
 import { WidgetGridSizeV1Schema, WIDGET_SIZE_POLICY_V1, normalizeWidgetSizeForSurfaceV1, type WidgetSizeDeclarationV1, type WidgetSizeV1 } from '../widgets/widgetPresentationV1.js';
 
-const id = z.string().min(1);
-const sectionSchema = lazyZodSchema(() => z.object({ frameStyle: z.enum(['card', 'plain']).optional() }));
+const id = z.string().check(z.minLength(1));
+const sectionSchema = lazyZodSchema(() => z.object({ frameStyle: z.optional(z.enum(['card', 'plain'])) }));
 const layoutShape = {
     v: z.literal(1), order: z.array(id), hidden: z.array(id), items: WidgetLayoutItemsV1Schema,
-    sections: z.record(id, sectionSchema.strict()).optional(),
+    sections: z.optional(z.record(id, lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(sectionSchema)))),
 };
-export const HomeHubLayoutV1Schema = lazyZodSchema(() => z.object(layoutShape).strict());
+export const HomeHubLayoutV1Schema = lazyZodSchema(() => z.strictObject(layoutShape));
 const storedLayoutSchema = createStoredReadSchema(z.object({
     ...layoutShape,
-    v: layoutShape.v.default(1),
-    order: layoutShape.order.default([]),
-    hidden: layoutShape.hidden.default([]),
-    items: layoutShape.items.default([]),
-    sections: z.record(id, sectionSchema).optional(),
+    v: z._default(layoutShape.v, 1),
+    order: z._default(layoutShape.order, []),
+    hidden: z._default(layoutShape.hidden, []),
+    items: z._default(layoutShape.items, []),
+    sections: z.optional(z.record(id, sectionSchema)),
 }));
 export type HomeHubLayoutValue = z.infer<typeof HomeHubLayoutV1Schema>;
 export type HomeHubLayoutV1 = HomeHubLayoutValue;
-const positionSchema = lazyZodSchema(() => z.union([AnchoredListPositionV1Schema, z.object({ nativeIndex: z.number().int().nonnegative() }).strict()]));
+const positionSchema = lazyZodSchema(() => z.union([AnchoredListPositionV1Schema, z.strictObject({ nativeIndex: z.number().check(z.int(), z.nonnegative()) })]));
 const homeIntentSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('move'), sectionId: id, step: z.union([z.literal(-1), z.literal(1)]) }).strict(),
-    z.object({ kind: z.literal('move_to'), sectionId: id, position: positionSchema }).strict(),
-    z.object({ kind: z.literal('reorder'), sectionIds: z.array(id) }).strict(),
-    z.object({ kind: z.literal('visibility'), sectionId: id, hidden: z.boolean() }).strict(),
-    z.object({ kind: z.literal('frameStyle'), sectionId: id, frameStyle: z.enum(['card', 'plain']).nullable() }).strict(),
-    z.object({ kind: z.literal('setup_visibility'), stepId: z.string().trim().min(1), hidden: z.boolean() }).strict(),
-    z.object({ kind: z.literal('restore_setup') }).strict(), z.object({ kind: z.literal('reset') }).strict(),
-    z.object({ kind: z.literal('widget_add'), instance: WidgetInstanceV1Schema, position: positionSchema.optional(),
-        size: WidgetGridSizeV1Schema.optional(), frameStyle: z.enum(['card', 'plain']).optional(), groupId: id.optional() }).strict(),
-    z.object({ kind: z.literal('widget_remove'), instanceId: id, expectedInstance: WidgetInstanceV1Schema.optional(),
-        expectedPresentation: z.object({ size: WidgetGridSizeV1Schema.optional(), frameStyle: z.enum(['card', 'plain']).nullable(),
-            nativeIndex: z.number().int().nonnegative(), hidden: z.boolean().optional(), groupId: id.nullable().optional() }).strict().optional() }).strict(),
-    z.object({ kind: z.literal('widget_rename'), instanceId: id, displayName: z.string().trim().min(1).optional() }).strict(),
-    z.object({ kind: z.literal('widget_inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema, paths: z.array(InputPathSchema).optional() }).strict(),
-    z.object({ kind: z.literal('widget_inputs_reset'), instanceId: id, paths: z.array(InputPathSchema).optional() }).strict(),
-    z.object({ kind: z.literal('widget_size'), instanceId: id, size: WidgetGridSizeV1Schema }).strict(),
+    z.strictObject({ kind: z.literal('move'), sectionId: id, step: z.union([z.literal(-1), z.literal(1)]) }),
+    z.strictObject({ kind: z.literal('move_to'), sectionId: id, position: positionSchema }),
+    z.strictObject({ kind: z.literal('reorder'), sectionIds: z.array(id) }),
+    z.strictObject({ kind: z.literal('visibility'), sectionId: id, hidden: z.boolean() }),
+    z.strictObject({ kind: z.literal('frameStyle'), sectionId: id, frameStyle: z.nullable(z.enum(['card', 'plain'])) }),
+    z.strictObject({ kind: z.literal('setup_visibility'), stepId: z.string().check(z.trim(), z.minLength(1)), hidden: z.boolean() }),
+    z.strictObject({ kind: z.literal('restore_setup') }), z.strictObject({ kind: z.literal('reset') }),
+    z.strictObject({ kind: z.literal('widget_add'), instance: WidgetInstanceV1Schema, position: z.optional(positionSchema),
+        size: z.optional(WidgetGridSizeV1Schema), frameStyle: z.optional(z.enum(['card', 'plain'])), groupId: z.optional(id) }),
+    z.strictObject({ kind: z.literal('widget_remove'), instanceId: id, expectedInstance: z.optional(WidgetInstanceV1Schema),
+        expectedPresentation: z.optional(z.strictObject({ size: z.optional(WidgetGridSizeV1Schema), frameStyle: z.nullable(z.enum(['card', 'plain'])),
+            nativeIndex: z.number().check(z.int(), z.nonnegative()), hidden: z.optional(z.boolean()), groupId: z.optional(z.nullable(id)) })) }),
+    z.strictObject({ kind: z.literal('widget_rename'), instanceId: id, displayName: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
+    z.strictObject({ kind: z.literal('widget_inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema, paths: z.optional(z.array(InputPathSchema)) }),
+    z.strictObject({ kind: z.literal('widget_inputs_reset'), instanceId: id, paths: z.optional(z.array(InputPathSchema)) }),
+    z.strictObject({ kind: z.literal('widget_size'), instanceId: id, size: WidgetGridSizeV1Schema }),
 ]));
 export const HomeHubLayoutIntentSchema = lazyZodSchema(() => z.union([homeIntentSchema, WidgetLayoutItemIntentV1Schema]));
 export type HomeHubLayoutIntent = z.infer<typeof HomeHubLayoutIntentSchema>;

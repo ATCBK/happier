@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PUSH_NOTIFICATION_SOUND_IDS } from '../../push/pushNotificationActions.js';
 
@@ -114,41 +114,30 @@ function rekeyEventRecord(raw: unknown): Record<string, unknown> {
   return result;
 }
 
-export const AttentionDeliveryEventConfigSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().default(true),
-    quietHoursBehavior: AttentionQuietHoursBehaviorSchema.optional().catch(undefined),
-    previewBehavior: AttentionPreviewBehaviorSchema.optional().catch(undefined),
-    soundId: z.string().trim().min(1).optional().catch(undefined),
-  })
-  .passthrough()
-  .catch({ enabled: true }));
+export const AttentionDeliveryEventConfigSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    enabled: z._default(z.boolean(), true),
+    quietHoursBehavior: z.catch(z.optional(AttentionQuietHoursBehaviorSchema), undefined),
+    previewBehavior: z.catch(z.optional(AttentionPreviewBehaviorSchema), undefined),
+    soundId: z.catch(z.optional(z.string().check(z.trim(), z.minLength(1))), undefined),
+  }), { enabled: true }));
 
 export type AttentionDeliveryEventConfig = z.infer<typeof AttentionDeliveryEventConfigSchema>;
 
-const EventMapSchema = lazyZodSchema(() => z
-  .preprocess(
-    rekeyEventRecord,
-    z.record(z.string(), AttentionDeliveryEventConfigSchema).catch({}),
-  )
-  .transform((events) => {
+const EventMapSchema = lazyZodSchema(() => z.pipe(z.pipe(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), AttentionDeliveryEventConfigSchema), {})), z.transform((events) => {
     const withDefaults: Record<string, AttentionDeliveryEventConfig> = { ...events };
     for (const id of CANONICAL_EVENT_IDS) {
       withDefaults[id] = AttentionDeliveryEventConfigSchema.parse(withDefaults[id]);
     }
     return withDefaults;
-  }));
+  })));
 
-export const AttentionDeliveryChannelConfigSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().default(true),
-    events: EventMapSchema.default({}),
-    quietHoursBehavior: AttentionQuietHoursBehaviorSchema.optional().catch(undefined),
-    previewBehavior: AttentionPreviewBehaviorSchema.optional().catch(undefined),
-    soundId: z.string().trim().min(1).optional().catch(undefined),
-  })
-  .passthrough()
-  .catch({
+export const AttentionDeliveryChannelConfigSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    enabled: z._default(z.boolean(), true),
+    events: z._default(EventMapSchema, {}),
+    quietHoursBehavior: z.catch(z.optional(AttentionQuietHoursBehaviorSchema), undefined),
+    previewBehavior: z.catch(z.optional(AttentionPreviewBehaviorSchema), undefined),
+    soundId: z.catch(z.optional(z.string().check(z.trim(), z.minLength(1))), undefined),
+  }), {
     enabled: true,
     events: EventMapSchema.parse({}),
   }));
@@ -167,12 +156,7 @@ export const ATTENTION_DELIVERY_CHANNEL_DEFAULT_QUIET_HOURS_BEHAVIOR = {
   home_widget: 'silent',
 } as const satisfies Record<AttentionDeliveryChannelId, AttentionQuietHoursBehavior>;
 
-const ChannelMapSchema = lazyZodSchema(() => z
-  .preprocess(
-    (raw) => (isRecord(raw) ? raw : {}),
-    z.record(z.string(), AttentionDeliveryChannelConfigSchema).catch({}),
-  )
-  .transform((channels) => {
+const ChannelMapSchema = lazyZodSchema(() => z.pipe(z.pipe(z.transform((raw) => (isRecord(raw) ? raw : {})), z.catch(z.record(z.string(), AttentionDeliveryChannelConfigSchema), {})), z.transform((channels) => {
     const withDefaults: Record<string, AttentionDeliveryChannelConfig> = { ...channels };
     for (const id of CANONICAL_CHANNEL_IDS) {
       withDefaults[id] = {
@@ -183,68 +167,51 @@ const ChannelMapSchema = lazyZodSchema(() => z
       };
     }
     return withDefaults;
-  }));
+  })));
 
-const LocalTimeSchema = lazyZodSchema(() => z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/));
+const LocalTimeSchema = lazyZodSchema(() => z.string().check(z.regex(/^([01]\d|2[0-3]):[0-5]\d$/)));
 
-const QuietHoursWindowSchema = lazyZodSchema(() => z
-  .object({
+const QuietHoursWindowSchema = lazyZodSchema(() => z.looseObject({
     startLocalTime: LocalTimeSchema,
     endLocalTime: LocalTimeSchema,
-    days: z.array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])).optional().catch(undefined),
-  })
-  .passthrough());
+    days: z.catch(z.optional(z.array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']))), undefined),
+  }));
 
-const QuietHoursSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().default(false),
-    timezone: z.string().trim().min(1).default('UTC'),
-    windows: z.array(QuietHoursWindowSchema).default([]),
-  })
-  .passthrough()
-  .catch({
+const QuietHoursSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    enabled: z._default(z.boolean(), false),
+    timezone: z._default(z.string().check(z.trim(), z.minLength(1)), 'UTC'),
+    windows: z._default(z.array(QuietHoursWindowSchema), []),
+  }), {
     enabled: false,
     timezone: 'UTC',
     windows: [],
   }));
 
-const SoundsSchema = lazyZodSchema(() => z
-  .object({
-    defaultSoundId: z.string().trim().min(1).default(PUSH_NOTIFICATION_SOUND_IDS.soft),
-    eventSoundIds: z.preprocess(
-      rekeyEventRecord,
-      z.record(z.string(), z.string().trim().min(1)).catch({}),
-    ).default({}),
-    volume: z.number().min(0).max(1).default(1).catch(1),
-  })
-  .passthrough()
-  .catch({
+const SoundsSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    defaultSoundId: z._default(z.string().check(z.trim(), z.minLength(1)), PUSH_NOTIFICATION_SOUND_IDS.soft),
+    eventSoundIds: z._default(z.pipe(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), z.string().check(z.trim(), z.minLength(1))), {})), {}),
+    volume: z.catch(z._default(z.number().check(z.minimum(0), z.maximum(1)), 1), 1),
+  }), {
     defaultSoundId: PUSH_NOTIFICATION_SOUND_IDS.soft,
     eventSoundIds: {},
     volume: 1,
   }));
 
-const PrivacySchema = lazyZodSchema(() => z
-  .object({
-    defaultPreviewBehavior: AttentionPreviewBehaviorSchema.default('include_preview'),
-    surfaces: z.record(z.string(), AttentionPreviewBehaviorSchema).default({}).catch({}),
-  })
-  .passthrough()
-  .catch({
+const PrivacySchema = lazyZodSchema(() => z.catch(z.looseObject({
+    defaultPreviewBehavior: z._default(AttentionPreviewBehaviorSchema, 'include_preview'),
+    surfaces: z.catch(z._default(z.record(z.string(), AttentionPreviewBehaviorSchema), {}), {}),
+  }), {
     defaultPreviewBehavior: 'include_preview',
     surfaces: {},
   }));
 
-const LiveActivityRemoteUpdatesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().default(true),
-    preferredMode: LiveActivityRemoteUpdateModeSchema.default('local_only'),
-    allowBackgroundWakeFallback: z.boolean().default(false),
-    defaultStaleAfterSeconds: z.number().int().positive().max(86_400).default(1800).catch(1800),
-    quietHoursBehavior: AttentionQuietHoursBehaviorSchema.default('silent'),
-  })
-  .passthrough()
-  .catch({
+const LiveActivityRemoteUpdatesSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    enabled: z._default(z.boolean(), true),
+    preferredMode: z._default(LiveActivityRemoteUpdateModeSchema, 'local_only'),
+    allowBackgroundWakeFallback: z._default(z.boolean(), false),
+    defaultStaleAfterSeconds: z.catch(z._default(z.number().check(z.int(), z.positive(), z.maximum(86_400)), 1800), 1800),
+    quietHoursBehavior: z._default(AttentionQuietHoursBehaviorSchema, 'silent'),
+  }), {
     enabled: true,
     preferredMode: 'local_only',
     allowBackgroundWakeFallback: false,
@@ -252,19 +219,17 @@ const LiveActivityRemoteUpdatesSchema = lazyZodSchema(() => z
     quietHoursBehavior: 'silent',
   }));
 
-export const AttentionDeliveryPolicyV1Schema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    events: EventMapSchema.default(EventMapSchema.parse({})),
-    channels: ChannelMapSchema.default(ChannelMapSchema.parse({})),
-    quietHours: QuietHoursSchema.default(QuietHoursSchema.parse({})),
-    foregroundBehavior: z.enum(['full', 'silent', 'off']).default('full'),
-    mutePhoneWhenComputerFocused: z.boolean().optional().catch(undefined),
-    privacy: PrivacySchema.default(PrivacySchema.parse({})),
-    sounds: SoundsSchema.default(SoundsSchema.parse({})),
-    liveActivityRemoteUpdates: LiveActivityRemoteUpdatesSchema.default(LiveActivityRemoteUpdatesSchema.parse({})),
-  })
-  .passthrough());
+export const AttentionDeliveryPolicyV1Schema = lazyZodSchema(() => z.looseObject({
+    v: z._default(z.literal(1), 1),
+    events: z._default(EventMapSchema, EventMapSchema.parse({})),
+    channels: z._default(ChannelMapSchema, ChannelMapSchema.parse({})),
+    quietHours: z._default(QuietHoursSchema, QuietHoursSchema.parse({})),
+    foregroundBehavior: z._default(z.enum(['full', 'silent', 'off']), 'full'),
+    mutePhoneWhenComputerFocused: z.catch(z.optional(z.boolean()), undefined),
+    privacy: z._default(PrivacySchema, PrivacySchema.parse({})),
+    sounds: z._default(SoundsSchema, SoundsSchema.parse({})),
+    liveActivityRemoteUpdates: z._default(LiveActivityRemoteUpdatesSchema, LiveActivityRemoteUpdatesSchema.parse({})),
+  }));
 
 export type AttentionDeliveryPolicyV1 = z.infer<typeof AttentionDeliveryPolicyV1Schema>;
 

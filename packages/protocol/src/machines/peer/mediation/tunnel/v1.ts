@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PeerRouteNonceProofV1Schema, type PeerRouteNonceProofV1 } from '../directRouteGrantNonceV1.js';
 import { SignedDirectRouteGrantV1Schema, type SignedDirectRouteGrantV1 } from '../directRouteGrantV1.js';
@@ -27,8 +27,8 @@ export const PeerTcpTunnelRouteKindV1Schema = lazyZodSchema(() => z.enum(['loopb
 export type PeerTcpTunnelRouteKindV1 = z.infer<typeof PeerTcpTunnelRouteKindV1Schema>;
 
 export const PeerTcpTunnelDestinationV1Schema = lazyZodSchema(() => z.object({
-  host: z.string().trim().min(1),
-  port: z.number().int().min(1).max(65_535),
+  host: z.string().check(z.trim(), z.minLength(1)),
+  port: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
 }));
 export type PeerTcpTunnelDestinationV1 = z.infer<typeof PeerTcpTunnelDestinationV1Schema>;
 
@@ -36,21 +36,20 @@ export const PeerTcpTunnelOpenV1Schema = lazyZodSchema(() => z
   .object({
     v: z.literal(1),
     kind: z.literal('open'),
-    tunnelId: z.string().min(1),
-    targetMachineId: z.string().min(1),
+    tunnelId: z.string().check(z.minLength(1)),
+    targetMachineId: z.string().check(z.minLength(1)),
     routeKind: PeerTcpTunnelRouteKindV1Schema,
-    destination: PeerTcpTunnelDestinationV1Schema.optional(),
-    grant: SignedDirectRouteGrantV1Schema.optional(),
-    nonceProof: PeerRouteNonceProofV1Schema.optional(),
-    relayAuthorization: PeerTcpTunnelRelayAuthorizationSchema.optional(),
-    supportedEncodings: z.array(PeerTcpTunnelEncodingSchema).min(1).optional(),
-    selectedEncoding: PeerTcpTunnelEncodingSchema.optional(),
-  })
-  .superRefine((open, ctx) => {
+    destination: z.optional(PeerTcpTunnelDestinationV1Schema),
+    grant: z.optional(SignedDirectRouteGrantV1Schema),
+    nonceProof: z.optional(PeerRouteNonceProofV1Schema),
+    relayAuthorization: z.optional(PeerTcpTunnelRelayAuthorizationSchema),
+    supportedEncodings: z.optional(z.array(PeerTcpTunnelEncodingSchema).check(z.minLength(1))),
+    selectedEncoding: z.optional(PeerTcpTunnelEncodingSchema),
+  }).check(z.superRefine((open, ctx) => {
     if (open.routeKind !== 'server_relay') {
       if (open.relayAuthorization !== undefined) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['relayAuthorization'],
           message: 'TCP tunnel relay authorization is only valid for server relay opens',
         });
@@ -61,7 +60,7 @@ export const PeerTcpTunnelOpenV1Schema = lazyZodSchema(() => z
     const authorization = open.relayAuthorization;
     if (authorization === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['relayAuthorization'],
         message: 'TCP tunnel server relay opens require relay authorization',
       });
@@ -71,14 +70,14 @@ export const PeerTcpTunnelOpenV1Schema = lazyZodSchema(() => z
     const payload = authorization.payload;
     if (payload.targetMachineId !== open.targetMachineId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['relayAuthorization', 'payload', 'targetMachineId'],
         message: 'TCP tunnel relay authorization target machine does not match the open frame',
       });
     }
     if (payload.tunnelId !== open.tunnelId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['relayAuthorization', 'payload', 'tunnelId'],
         message: 'TCP tunnel relay authorization tunnel does not match the open frame',
       });
@@ -86,7 +85,7 @@ export const PeerTcpTunnelOpenV1Schema = lazyZodSchema(() => z
     if (payload.flowKind === 'provider_broker') {
       if (open.destination !== undefined) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['destination'],
           message: 'Provider broker application relay cannot carry a TCP destination',
         });
@@ -96,21 +95,21 @@ export const PeerTcpTunnelOpenV1Schema = lazyZodSchema(() => z
     if (!payload.destination || !open.destination
       || payload.destination.host !== open.destination.host || payload.destination.port !== open.destination.port) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['relayAuthorization', 'payload', 'destination'],
         message: 'TCP tunnel relay authorization destination does not match the open frame',
       });
     }
-  }));
+  })));
 export type PeerTcpTunnelOpenV1 = z.infer<typeof PeerTcpTunnelOpenV1Schema>;
 
 export const PeerTcpTunnelOpenResponseV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
-  tunnelId: z.string().min(1),
+  tunnelId: z.string().check(z.minLength(1)),
   streamPath: z.literal(PEER_TCP_TUNNEL_STREAM_PATH),
   encoding: PeerTcpTunnelEncodingSchema,
-  initialWindowBytes: z.number().int().min(PEER_TCP_TUNNEL_MIN_WINDOW_BYTES).max(PEER_TCP_TUNNEL_MAX_WINDOW_BYTES),
-  maxFrameBytes: z.number().int().positive().max(PEER_TCP_TUNNEL_MAX_FRAME_BYTES),
+  initialWindowBytes: z.number().check(z.int(), z.minimum(PEER_TCP_TUNNEL_MIN_WINDOW_BYTES), z.maximum(PEER_TCP_TUNNEL_MAX_WINDOW_BYTES)),
+  maxFrameBytes: z.number().check(z.int(), z.positive(), z.maximum(PEER_TCP_TUNNEL_MAX_FRAME_BYTES)),
 }));
 export type PeerTcpTunnelOpenResponseV1 = z.infer<typeof PeerTcpTunnelOpenResponseV1Schema>;
 
@@ -124,28 +123,28 @@ export type PeerTcpTunnelOpenFrameV1 = z.infer<typeof PeerTcpTunnelOpenFrameV1Sc
 export const PeerTcpTunnelAckFrameV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   kind: z.literal('ack'),
-  tunnelId: z.string().min(1),
+  tunnelId: z.string().check(z.minLength(1)),
   direction: PeerTcpTunnelDirectionV1Schema,
-  nextSequence: z.number().int().nonnegative(),
-  windowBytes: z.number().int().nonnegative().max(PEER_TCP_TUNNEL_MAX_WINDOW_BYTES),
+  nextSequence: z.number().check(z.int(), z.nonnegative()),
+  windowBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(PEER_TCP_TUNNEL_MAX_WINDOW_BYTES)),
 }));
 export type PeerTcpTunnelAckFrameV1 = z.infer<typeof PeerTcpTunnelAckFrameV1Schema>;
 
 export const PeerTcpTunnelCloseFrameV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   kind: z.literal('close'),
-  tunnelId: z.string().min(1),
-  direction: PeerTcpTunnelDirectionV1Schema.optional(),
-  halfClose: z.boolean().optional().default(false),
-  reasonCode: z.string().min(1),
+  tunnelId: z.string().check(z.minLength(1)),
+  direction: z.optional(PeerTcpTunnelDirectionV1Schema),
+  halfClose: z._default(z.optional(z.boolean()), false),
+  reasonCode: z.string().check(z.minLength(1)),
 }));
 export type PeerTcpTunnelCloseFrameV1 = z.infer<typeof PeerTcpTunnelCloseFrameV1Schema>;
 
 export const PeerTcpTunnelAbortFrameV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   kind: z.literal('abort'),
-  tunnelId: z.string().min(1),
-  reasonCode: z.string().min(1),
+  tunnelId: z.string().check(z.minLength(1)),
+  reasonCode: z.string().check(z.minLength(1)),
 }));
 export type PeerTcpTunnelAbortFrameV1 = z.infer<typeof PeerTcpTunnelAbortFrameV1Schema>;
 

@@ -1,12 +1,8 @@
 import type { Prisma } from "@prisma/client";
 
-import {
-    AccountPetOriginV1Schema,
-    PET_PACKAGE_FORMAT_CODEX_ATLAS_V1,
-    PetAssetMediaTypeV1Schema,
-    PetPackageManifestV1Schema,
-    type AccountPetLibraryEntryV1,
-} from "@happier-dev/protocol";
+import { AccountPetOriginV1Schema, PetAssetMediaTypeV1Schema, type AccountPetLibraryEntryV1 } from '@happier-dev/protocol/pets/accountLibrary';
+import { PET_PACKAGE_FORMAT_CODEX_ATLAS_V1 } from '@happier-dev/protocol/pets/constants';
+import { PetPackageManifestV1Schema } from '@happier-dev/protocol/pets/manifest';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

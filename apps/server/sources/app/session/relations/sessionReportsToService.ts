@@ -1,7 +1,7 @@
 import { inTx, type Tx } from '@/storage/inTx';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import type { SessionReportsToSetResultV1, SessionReportsToOptionsV1 } from '@happier-dev/protocol';
+import type { SessionReportsToSetResultV1, SessionReportsToOptionsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 import { resolveEffectiveSessionAccess, resolveEffectiveSessionAccessForSessionsInTx, type EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx, mayInjectSessionContextForDestinationsInTx } from '@/app/session/access/sessionContextInjection';
 import { acquireSessionReportsToHomeFenceInTx } from './sessionReportsToFence';

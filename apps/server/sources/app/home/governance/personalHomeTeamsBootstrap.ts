@@ -1,4 +1,4 @@
-import type { HomeAuthenticationPolicyV1 } from "@happier-dev/protocol";
+import type { HomeAuthenticationPolicyV1 } from '@happier-dev/protocol/home/governance';
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { createTeamInTx, type CreateTeamError } from "@/app/teams/lifecycle";

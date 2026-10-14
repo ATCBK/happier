@@ -24,24 +24,24 @@ import { WorkflowFieldSelect } from './WorkflowStepDataEditor';
 import { workflowEditorStyles } from './workflowEditorStyles';
 
 const styles = StyleSheet.create((theme) => ({
-    root: { gap: theme.margins.sm },
-    heading: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
-    title: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
+    root: { gap: theme.space.s8 },
+    heading: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    title: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
     // The section's quiet trailing action ("+ Add input"), on the title's line at its end.
-    addTarget: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: theme.margins.xs, paddingHorizontal: theme.margins.xs },
-    add: { ...Typography.default('semiBold'), color: theme.colors.text.secondary },
+    addTarget: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, paddingHorizontal: theme.space.s4 },
+    add: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.secondary },
     row: {
-        gap: theme.margins.sm,
-        paddingVertical: theme.margins.md,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s12,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
-    line: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.sm },
+    line: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s8 },
     nameField: { flexGrow: 1, flexBasis: 140, minWidth: 0 },
     defaultInput: { flex: 1, minWidth: 0 },
-    required: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
-    requiredLabel: { ...Typography.default('regular'), color: theme.colors.text.primary },
-    defaultField: { flexGrow: 1, flexBasis: 200, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
+    required: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    requiredLabel: { ...Typography.variant('label', 'regular'), color: theme.colors.text.primary },
+    defaultField: { flexGrow: 1, flexBasis: 200, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
 }));
 
 const VALUE_TYPES = ['string', 'number', 'boolean', 'json'] as const;

@@ -1,7 +1,8 @@
 import { readLocalServicesFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { resolveLocalServiceHostOrigin } from "@/app/local/services/preview/origin";
 import { resolveConfiguredPublicServerUrl } from "@/app/serverUrls/effectiveServerUrls";
-import { readServerConfig, SERVER_CONFIG } from "@happier-dev/protocol";
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 
 /** Private previews and raw local services never acquire the public viewer fallback. */
 export function resolveIsolatedStoredContentPublicShareOrigin(shareId: string, env: NodeJS.ProcessEnv = process.env): string | null {

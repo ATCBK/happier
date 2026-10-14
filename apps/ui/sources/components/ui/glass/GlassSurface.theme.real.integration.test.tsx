@@ -22,8 +22,8 @@ it('follows repeated adaptive scheme changes in concrete card paint and number i
         const existing = queries.get(media);
         if (existing) return existing;
         const target = Object.assign(new EventTarget(), { media, onchange: null,
-            addListener(listener: EventListener) { this.addEventListener('change', listener); },
-            removeListener(listener: EventListener) { this.removeEventListener('change', listener); } });
+            addListener(this: EventTarget, listener: EventListener) { this.addEventListener('change', listener); },
+            removeListener(this: EventTarget, listener: EventListener) { this.removeEventListener('change', listener); } });
         Object.defineProperty(target, 'matches', { get: () => media === `(prefers-color-scheme: ${mode})` });
         const query = target as MediaQueryList;
         queries.set(media, query);

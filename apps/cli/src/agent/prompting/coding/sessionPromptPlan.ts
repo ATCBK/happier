@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
 import type { AgentSessionStartupInstructionsV1, SessionRolePromptContextV1, CodingPromptBehaviorV1 } from '@happier-dev/protocol';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
@@ -12,13 +13,54 @@ import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { resolvePluginPromptAssetBlocks, resolvePluginToolPromptContributions } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import { resolveEffectiveCodingPromptPlan } from './resolveEffectiveCodingPrompt';
 import { prepareSessionPromptStackInputs } from './sessionPromptStack';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources, readAccountProfilePromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PromptStackAdmittedEntryV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { createPromptCompositionScope, type PromptPlanComposition } from '../promptComposition';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { configuration } from '@/configuration';
 import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, SessionCapabilityNoticeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { logger } from '@/ui/logger';
+
+type PromptPreparationAccountSnapshot = ReturnType<typeof getActiveAccountSettingsSnapshot>;
+
+type PromptPreparationAccountChange = 'account-snapshot-unavailable' | 'account-scope-changed'
+  | 'account-availability-changed' | 'account-settings-changed' | 'account-keys-changed' | 'account-profile-changed';
+export type SessionPromptPlanWithdrawalReason = 'plan-unprepared' | 'account-lifetime-changed'
+  | `active-${PromptPreparationAccountChange}` | `captured-${PromptPreparationAccountChange}`
+  | 'prepared-settings-changed' | 'profile-selection-changed';
+
+function readPromptPreparationProfileBasis(snapshot: NonNullable<PromptPreparationAccountSnapshot>, profileId: string | null) {
+  if (!profileId) return null;
+  const catalog = snapshot.profileCatalog;
+  return {
+    sources: readAccountProfilePromptStackSources(snapshot, { profileId }),
+    catalog: catalog?.status === 'ready' ? {
+      status: catalog.status, authority: catalog.authority, source: catalog.source,
+      controlPhase: catalog.control?.record.phase ?? null,
+      // The canonical source reader chooses native rows only after activation.
+      // Another Profile's row and the census revision cannot change this layer.
+      selectedRows: catalog.authority === 'active' || catalog.source === 'destination'
+        ? catalog.records.filter(({ record }) => record.id === profileId) : [],
+    } : catalog,
+  };
+}
+
+function readPromptPreparationAccountChange(prepared: PromptPreparationAccountSnapshot,
+  current: PromptPreparationAccountSnapshot, profileId: string | null): PromptPreparationAccountChange | null {
+  if (prepared === current) return null;
+  if (!prepared || !current) return 'account-snapshot-unavailable';
+  if (prepared.scopeKey !== current.scopeKey) return 'account-scope-changed';
+  // First network confirmation of equal Settings is hydration, not retirement.
+  // Losing previously admitted availability still withdraws the plan.
+  if (prepared.source !== 'none' && current.source === 'none') return 'account-availability-changed';
+  if (!isDeepStrictEqual(prepared.settings, current.settings)) return 'account-settings-changed';
+  if (!isDeepStrictEqual(prepared.settingsSecretsReadKeys, current.settingsSecretsReadKeys)) return 'account-keys-changed';
+  if (!isDeepStrictEqual(readPromptPreparationProfileBasis(prepared, profileId),
+    readPromptPreparationProfileBasis(current, profileId))) return 'account-profile-changed';
+  // Prompt rows are retained for this dispatch. Independent catalog hydration
+  // and source/history bookkeeping do not change its prompt authority facts.
+  return null;
+}
 
 type SessionPromptPlanResolveArgs = Readonly<{
   baseOverride?: string | null;
@@ -174,6 +216,9 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     preparedBehavior = { accountSnapshot: currentAccount, settings, profileId, behavior: plan.codingPromptBehavior, operationContext,
       activeAccountSnapshot: operationContext ? activeAccountSnapshot : getActiveAccountSettingsSnapshot() };
     assertPreparedPlanCurrent();
+    // Keep the confirmed authority basis after accepting initial hydration, so
+    // a later loss of availability still withdraws this admitted preparation.
+    preparedBehavior = { ...preparedBehavior, activeAccountSnapshot: getActiveAccountSettingsSnapshot() };
     composition = plan.composition;
     if (text !== resolvedText) {
       if (resolvedText !== null) revision += 1;
@@ -184,19 +229,30 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     }
     return includeAdmittedInventory ? { text, admittedEntries: plan.admittedEntries } : text;
   }
-  const isPreparedPlanCurrent = () => preparedBehavior !== null
-    && (!accountScopeKey || (preparedBehavior.activeAccountSnapshot === getActiveAccountSettingsSnapshot()
-      && (preparedBehavior.operationContext
-      ? preparedBehavior.accountSnapshot === preparedBehavior.operationContext.readSnapshot()
-      : preparedBehavior.accountSnapshot === getActiveAccountSettingsSnapshot())
-      && getActiveAccountSettingsSnapshotLifetimeToken() === accountLifetimeToken))
-    && preparedBehavior.settings === (preparedBehavior.operationContext ? preparedBehavior.operationContext.readSnapshot()?.settings
-      : accountScopeKey ? getActiveAccountSettingsSnapshot()?.settings : params.opts.accountSettingsContext?.settings ?? null)
-    && preparedBehavior.profileId === (params.session.getMetadataSnapshot()?.profileId ?? null);
+  const readPreparedPlanWithdrawalReason = (): SessionPromptPlanWithdrawalReason | null => {
+    if (!preparedBehavior) return 'plan-unprepared';
+    const activeAccount = getActiveAccountSettingsSnapshot();
+    const capturedAccount = preparedBehavior.operationContext?.readSnapshot();
+    if (accountScopeKey) {
+      if (getActiveAccountSettingsSnapshotLifetimeToken() !== accountLifetimeToken) return 'account-lifetime-changed';
+      const activeChange = readPromptPreparationAccountChange(preparedBehavior.activeAccountSnapshot, activeAccount, preparedBehavior.profileId);
+      if (activeChange) return `active-${activeChange}`;
+      const capturedChange = readPromptPreparationAccountChange(preparedBehavior.accountSnapshot,
+        preparedBehavior.operationContext ? capturedAccount ?? null : activeAccount, preparedBehavior.profileId);
+      if (capturedChange) return `captured-${capturedChange}`;
+    }
+    const currentSettings = preparedBehavior.operationContext ? capturedAccount?.settings
+      : accountScopeKey ? activeAccount?.settings : params.opts.accountSettingsContext?.settings ?? null;
+    if (!isDeepStrictEqual(preparedBehavior.settings, currentSettings)) return 'prepared-settings-changed';
+    if (preparedBehavior.profileId !== (params.session.getMetadataSnapshot()?.profileId ?? null)) return 'profile-selection-changed';
+    return null;
+  };
+  const isPreparedPlanCurrent = () => readPreparedPlanWithdrawalReason() === null;
   const assertPreparedPlanCurrent = () => {
-    if (!isPreparedPlanCurrent()) {
+    const reason = readPreparedPlanWithdrawalReason();
+    if (reason) {
       throw Object.assign(new Error('context_source_unavailable'), {
-        code: 'context_source_unavailable', status: 'preparation_pending', reason: 'prepared-plan-withdrawn',
+        code: 'context_source_unavailable', status: 'preparation_pending', reason,
       });
     }
   };

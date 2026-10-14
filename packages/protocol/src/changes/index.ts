@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema } from '../sessions/idsV1.js';
 import { formatSharedSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
@@ -60,32 +60,32 @@ export const PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'provider-acco
 export const EPHEMERAL_RUNNER_ACTIVATION_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'ephemeral-runner-activation' as const;
 
 /** Additive-open advisory hint for the canonical Session Organization owner. */
-export const SessionOrganizationChangeHintSchema = lazyZodSchema(() => z.object({
+export const SessionOrganizationChangeHintSchema = lazyZodSchema(() => z.looseObject({
   sessionOrganization: z.literal(true),
   scope: z.enum(['pins', 'folders', 'folderAssignments', 'tags', 'tagAssignments', 'order', 'labels', 'attentionStandings']),
-  sessionIds: z.array(z.string().trim().min(1)).optional(),
-  folderIds: z.array(z.string().trim().min(1)).optional(),
-  tagIds: z.array(z.string().trim().min(1)).optional(),
-  deletedTagIds: z.array(z.string().trim().min(1)).optional(),
-  scopeKeys: z.array(z.string().trim().min(1)).optional(),
-  orderScopes: z.array(z.object({
+  sessionIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  folderIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  tagIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  deletedTagIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  scopeKeys: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  orderScopes: z.optional(z.array(z.object({
     scopeKind: z.enum(['pinned', 'folder', 'tag', 'workspace', 'group']),
-    scopeKey: z.string().trim().min(1),
-  })).optional(),
-}).passthrough());
+    scopeKey: z.string().check(z.trim(), z.minLength(1)),
+  }))),
+}));
 
 export type SessionOrganizationChangeHint = z.infer<typeof SessionOrganizationChangeHintSchema>;
 
-export const ChangeEntrySchema = lazyZodSchema(() => z.object({
-  cursor: z.number().int().min(0),
-  kind: z.string().trim().min(1),
+export const ChangeEntrySchema = lazyZodSchema(() => z.strictObject({
+  cursor: z.number().check(z.int(), z.minimum(0)),
+  kind: z.string().check(z.trim(), z.minLength(1)),
   entityId: z.string(),
-  changedAt: z.number().int().min(0),
-  hint: z.unknown().nullable().optional(),
-}).strict().superRefine((entry, context) => {
+  changedAt: z.number().check(z.int(), z.minimum(0)),
+  hint: z.optional(z.nullable(z.unknown())),
+}).check(z.superRefine((entry, context) => {
   if (entry.kind === 'pluginDomain' && !PluginDomainChangeEntrySchema.safeParse(entry).success) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Invalid pluginDomain AccountChange entry.',
     });
   }
@@ -94,18 +94,18 @@ export const ChangeEntrySchema = lazyZodSchema(() => z.object({
       formatSharedSavedSecretRefV1(entry.entityId);
     } catch {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Invalid savedSecretResource AccountChange entityId.',
       });
     }
     if (entry.hint !== null && entry.hint !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'savedSecretResource AccountChange does not carry a hint.',
       });
     }
   }
-}));
+})));
 
 export type ChangeEntry = z.infer<typeof ChangeEntrySchema>;
 
@@ -144,10 +144,10 @@ export function readSessionUpdatedMessageChangeHintV1(
  * physical Session deletion. Ordinary Account-relative unavailability (for
  * example share revocation) deliberately carries no such hint.
  */
-export const SessionDeletedChangeHintV1Schema = lazyZodSchema(() => z.object({
+export const SessionDeletedChangeHintV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   lifecycle: z.literal('deleted'),
-}).strict());
+}));
 
 export type SessionDeletedChangeHintV1 = z.infer<
   typeof SessionDeletedChangeHintV1Schema
@@ -182,11 +182,11 @@ export type SessionAccessWitnessStatusV1 = z.infer<
   typeof SessionAccessWitnessStatusV1Schema
 >;
 
-export const SessionAccessWitnessEntryV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  cursor: z.number().int().min(0),
+export const SessionAccessWitnessEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  cursor: z.number().check(z.int(), z.minimum(0)),
   status: SessionAccessWitnessStatusV1Schema,
-}).strict());
+}));
 
 export type SessionAccessWitnessEntryV1 = z.infer<
   typeof SessionAccessWitnessEntryV1Schema
@@ -198,28 +198,28 @@ export type SessionAccessWitnessEntryV1 = z.infer<
  * page. It is intentionally optional for supported older servers; callers
  * decide which scoped operation must fail closed when it is absent.
  */
-export const SessionAccessWitnessV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessWitnessV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  throughCursor: z.number().int().min(0),
-  entries: z.array(SessionAccessWitnessEntryV1Schema).max(500),
-}).strict().superRefine((witness, context) => {
+  throughCursor: z.number().check(z.int(), z.minimum(0)),
+  entries: z.array(SessionAccessWitnessEntryV1Schema).check(z.maxLength(500)),
+}).check(z.superRefine((witness, context) => {
   const sessionIds = new Set<string>();
   for (const entry of witness.entries) {
     if (entry.cursor > witness.throughCursor) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Session access witness entry exceeds its captured cursor.',
       });
     }
     if (sessionIds.has(entry.sessionId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Session access witness has duplicate Session entries.',
       });
     }
     sessionIds.add(entry.sessionId);
   }
-}));
+})));
 
 export type SessionAccessWitnessV1 = z.infer<typeof SessionAccessWitnessV1Schema>;
 
@@ -228,27 +228,27 @@ export type SessionAccessWitnessV1 = z.infer<typeof SessionAccessWitnessV1Schema
  * change carrier. Callers use it for admission only and never acknowledge its
  * cursor as a consumed change-feed page.
  */
-export const SessionAccessProbeV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessProbeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: ChangeSessionIdSchema,
-  throughCursor: z.number().int().min(0),
+  throughCursor: z.number().check(z.int(), z.minimum(0)),
   status: SessionAccessWitnessStatusV1Schema,
-}).strict());
+}));
 
 export type SessionAccessProbeV1 = z.infer<typeof SessionAccessProbeV1Schema>;
 
-export const ChangesResponseSchema = lazyZodSchema(() => z.object({
+export const ChangesResponseSchema = lazyZodSchema(() => z.strictObject({
   changes: z.array(ChangeEntrySchema),
-  nextCursor: z.number().int().min(0),
-  sessionAccessWitness: SessionAccessWitnessV1Schema.optional(),
-  sessionAccessProbe: SessionAccessProbeV1Schema.optional(),
-}).strict().superRefine((response, context) => {
+  nextCursor: z.number().check(z.int(), z.minimum(0)),
+  sessionAccessWitness: z.optional(SessionAccessWitnessV1Schema),
+  sessionAccessProbe: z.optional(SessionAccessProbeV1Schema),
+}).check(z.superRefine((response, context) => {
   if (
     response.sessionAccessWitness !== undefined
     && response.sessionAccessWitness.throughCursor !== response.nextCursor
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Session access witness must be captured through nextCursor.',
     });
   }
@@ -259,25 +259,25 @@ export const ChangesResponseSchema = lazyZodSchema(() => z.object({
       || response.sessionAccessWitness !== undefined
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Session access probe must be the sole fact captured through nextCursor.',
       });
     }
   }
-}));
+})));
 
 export type ChangesResponse = z.infer<typeof ChangesResponseSchema>;
 
-export const CurrentCursorResponseSchema = lazyZodSchema(() => z.object({
-  cursor: z.number().int().min(0),
-  changesFloor: z.number().int().min(0),
-}).strict());
+export const CurrentCursorResponseSchema = lazyZodSchema(() => z.strictObject({
+  cursor: z.number().check(z.int(), z.minimum(0)),
+  changesFloor: z.number().check(z.int(), z.minimum(0)),
+}));
 
 export type CurrentCursorResponse = z.infer<typeof CurrentCursorResponseSchema>;
 
-export const CursorGoneErrorSchema = lazyZodSchema(() => z.object({
+export const CursorGoneErrorSchema = lazyZodSchema(() => z.strictObject({
   error: z.literal('cursor-gone'),
-  currentCursor: z.number().int().min(0),
-}).strict());
+  currentCursor: z.number().check(z.int(), z.minimum(0)),
+}));
 
 export type CursorGoneError = z.infer<typeof CursorGoneErrorSchema>;

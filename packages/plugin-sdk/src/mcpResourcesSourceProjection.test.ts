@@ -29,33 +29,7 @@ const MCP_DTO_EXPORTS = [
     'McpToolPageOptions',
 ] as const;
 
-const RESOURCE_PROMPT_EXPORTS = [
-    'PromptAssetAdapter',
-    'PromptAssetBundleRecord',
-    'PromptAssetCapabilities',
-    'PromptAssetContribution',
-    'PromptAssetDefaultRoot',
-    'PromptAssetDeleteRequest',
-    'PromptAssetDiscoverRequest',
-    'PromptAssetDiscoverResult',
-    'PromptAssetDiscoveryItem',
-    'PromptAssetDocRecord',
-    'PromptAssetExternalRef',
-    'PromptAssetInstallMode',
-    'PromptAssetLibraryKind',
-    'PromptAssetListTypesResult',
-    'PromptAssetMutationErrorCode',
-    'PromptAssetMutationPreview',
-    'PromptAssetMutationResult',
-    'PromptAssetReadRequest',
-    'PromptAssetReadResult',
-    'PromptAssetScope',
-    'PromptAssetSupportsScope',
-    'PromptAssetTypeDescriptor',
-    'PromptAssetWriteBundleRequest',
-    'PromptAssetWriteDocRequest',
-    'PromptAssetWriteRequest',
-] as const;
+const RESOURCE_PROMPT_EXPORTS = ['PromptAssetContribution'] as const;
 
 function mcpPredecessorExport(
     name: (typeof MCP_DTO_EXPORTS)[number],
@@ -186,9 +160,7 @@ describe('pre-publication MCP and resources source projections', () => {
         expect(serviceIndexSource).not.toMatch(/(?:PluginPromptAssetContributionV1|PromptAsset|PromptRegistry)/u);
         expect(runtimePromptExports).toEqual(
             RESOURCE_PROMPT_EXPORTS
-                .filter((name) => name !== 'PromptAssetCapabilities'
-                    && name !== 'PromptAssetContribution'
-                    && name !== 'PromptAssetTypeDescriptor')
+                .filter((name) => name !== 'PromptAssetContribution')
                 .map((name) => ({ name, specifier: '../resources.js' })),
         );
     }, 45_000);

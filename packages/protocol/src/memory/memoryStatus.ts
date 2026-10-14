@@ -1,32 +1,32 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MemorySourceV1Schema, MemoryExternalTranscriptSourceV1Schema } from './memorySearch.js';
 import { ArtifactRevisionV1Schema } from '../artifacts/artifactRevisionV1.js';
 import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
 
 /** Fresh scope admission and exact-revision index coverage, never an accepted historical turn. */
 export const MemoryDocumentStatusV1Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
-  z.object({ state: z.literal('ready'), facts: z.array(z.object({
-    ref: PromptDocArtifactRefV1Schema.extend({ serverId: z.string().min(1) }),
+  z.strictObject({ state: z.literal('ready'), facts: z.array(z.strictObject({
+    ref: z.extend(PromptDocArtifactRefV1Schema, { serverId: z.string().check(z.minLength(1)) }),
     revision: ArtifactRevisionV1Schema,
-    indexedFactCount: z.number().int().nonnegative(),
+    indexedFactCount: z.number().check(z.int(), z.nonnegative()),
     // Global scope has no single prepared Session. Omission is unavailable, not zero.
-    loadedFactCount: z.number().int().nonnegative().optional(),
-  }).strict()) }).strict(),
-  z.object({ state: z.literal('pending') }).strict(),
-  z.object({ state: z.literal('unavailable') }).strict(),
+    loadedFactCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  })) }),
+  z.strictObject({ state: z.literal('pending') }),
+  z.strictObject({ state: z.literal('unavailable') }),
 ]));
 export type MemoryDocumentStatusV1 = z.infer<typeof MemoryDocumentStatusV1Schema>;
 
 /** Read projection: external readiness covers a configured source, not one native conversation. */
-export const MemoryIndexSourceStatusV1Schema = lazyZodSchema(() => z.object({
+export const MemoryIndexSourceStatusV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.union([
-    MemorySourceV1Schema.options[0],
-    MemoryExternalTranscriptSourceV1Schema.omit({ nativeSessionId: true }),
+    MemorySourceV1Schema._zod.def.options[0],
+    z.omit(MemoryExternalTranscriptSourceV1Schema, { nativeSessionId: true }),
   ]),
   state: z.enum(['ready', 'indexing', 'disabled', 'error']),
-  indexedThroughMs: z.number().int().nonnegative().optional(),
-}).strict());
+  indexedThroughMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type MemoryIndexSourceStatusV1 = z.infer<typeof MemoryIndexSourceStatusV1Schema>;
 
 import {
@@ -34,103 +34,93 @@ import {
   MemoryEmbeddingsPresetIdSchema,
 } from './memorySettings.js';
 
-export const MemoryIndexContentStatusV1Schema = lazyZodSchema(() => z
-  .object({
-    lightShardCount: z.number().int().nonnegative().default(0),
-    lightTermCount: z.number().int().nonnegative().default(0),
-    deepChunkCount: z.number().int().nonnegative().default(0),
-    deepEmbeddingCount: z.number().int().nonnegative().default(0),
-    searchableSessionCount: z.number().int().nonnegative().default(0),
-    lastIndexedAtMs: z.number().int().nonnegative().nullable().default(null),
-    latestIndexedMessageAtMs: z.number().int().nonnegative().nullable().default(null),
-  })
-  .passthrough());
+export const MemoryIndexContentStatusV1Schema = lazyZodSchema(() => z.looseObject({
+    lightShardCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    lightTermCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    deepChunkCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    deepEmbeddingCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    searchableSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    lastIndexedAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+    latestIndexedMessageAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+  }));
 export type MemoryIndexContentStatusV1 = z.infer<typeof MemoryIndexContentStatusV1Schema>;
 
-export const MemoryWorkerStatusV1Schema = lazyZodSchema(() => z
-  .object({
-    state: z.enum(['disabled', 'idle', 'inventorying', 'indexing', 'waiting', 'backoff', 'error']).default('idle'),
-    lastTickAtMs: z.number().int().nonnegative().nullable().default(null),
-    lastInventoryAtMs: z.number().int().nonnegative().nullable().default(null),
-    currentSessionId: z.string().min(1).nullable().default(null),
-    currentPhase: z.string().min(1).nullable().default(null),
-  })
-  .passthrough());
+export const MemoryWorkerStatusV1Schema = lazyZodSchema(() => z.looseObject({
+    state: z._default(z.enum(['disabled', 'idle', 'inventorying', 'indexing', 'waiting', 'backoff', 'error']), 'idle'),
+    lastTickAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+    lastInventoryAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+    currentSessionId: z._default(z.nullable(z.string().check(z.minLength(1))), null),
+    currentPhase: z._default(z.nullable(z.string().check(z.minLength(1))), null),
+  }));
 export type MemoryWorkerStatusV1 = z.infer<typeof MemoryWorkerStatusV1Schema>;
 
-export const MemoryIndexQueueStatusV1Schema = lazyZodSchema(() => z
-  .object({
-    selectedSessionCount: z.number().int().nonnegative().default(0),
-    queuedSessionCount: z.number().int().nonnegative().default(0),
-    indexingSessionCount: z.number().int().nonnegative().default(0),
-    indexedSessionCount: z.number().int().nonnegative().default(0),
-    emptySessionCount: z.number().int().nonnegative().default(0),
-    failedSessionCount: z.number().int().nonnegative().default(0),
-    waitingSessionCount: z.number().int().nonnegative().default(0),
-    oldestQueuedAtMs: z.number().int().nonnegative().nullable().default(null),
-  })
-  .passthrough());
+export const MemoryIndexQueueStatusV1Schema = lazyZodSchema(() => z.looseObject({
+    selectedSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    queuedSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    indexingSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    indexedSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    emptySessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    failedSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    waitingSessionCount: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    oldestQueuedAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+  }));
 export type MemoryIndexQueueStatusV1 = z.infer<typeof MemoryIndexQueueStatusV1Schema>;
 
-export const MemoryIndexLastRunStatusV1Schema = lazyZodSchema(() => z
-  .object({
-    startedAtMs: z.number().int().nonnegative().nullable().default(null),
-    finishedAtMs: z.number().int().nonnegative().nullable().default(null),
-    sessionsConsidered: z.number().int().nonnegative().default(0),
-    sessionsProcessed: z.number().int().nonnegative().default(0),
-    rawRowsFetched: z.number().int().nonnegative().default(0),
-    semanticRowsFound: z.number().int().nonnegative().default(0),
-    lightShardsCreated: z.number().int().nonnegative().default(0),
-    deepChunksCreated: z.number().int().nonnegative().default(0),
-    failures: z.number().int().nonnegative().default(0),
-    skipReasons: z.record(z.string().min(1), z.number().int().nonnegative()).default({}),
-  })
-  .passthrough());
+export const MemoryIndexLastRunStatusV1Schema = lazyZodSchema(() => z.looseObject({
+    startedAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+    finishedAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
+    sessionsConsidered: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    sessionsProcessed: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    rawRowsFetched: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    semanticRowsFound: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    lightShardsCreated: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    deepChunksCreated: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    failures: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    skipReasons: z._default(z.record(z.string().check(z.minLength(1)), z.number().check(z.int(), z.nonnegative())), {}),
+  }));
 export type MemoryIndexLastRunStatusV1 = z.infer<typeof MemoryIndexLastRunStatusV1Schema>;
 
-export const MemoryStatusV1Schema = lazyZodSchema(() => z
-  .object({
+export const MemoryStatusV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
     enabled: z.boolean(),
     indexMode: z.enum(['hints', 'deep']),
     hintsIndexReady: z.boolean(),
-    hintsIndexHasContent: z.boolean().default(false),
+    hintsIndexHasContent: z._default(z.boolean(), false),
     deepIndexReady: z.boolean(),
-    deepIndexHasContent: z.boolean().default(false),
+    deepIndexHasContent: z._default(z.boolean(), false),
     activeIndexReady: z.boolean(),
-    activeIndexSearchable: z.boolean().default(false),
+    activeIndexSearchable: z._default(z.boolean(), false),
     embeddingsEnabled: z.boolean(),
     embeddingsMode: MemoryEmbeddingsModeSchema,
-    embeddingsPresetId: MemoryEmbeddingsPresetIdSchema.nullable(),
-    embeddingsProviderKind: z.enum(['local_transformers', 'openai_compatible']).nullable(),
-    embeddingsModelId: z.string().trim().min(1).nullable(),
+    embeddingsPresetId: z.nullable(MemoryEmbeddingsPresetIdSchema),
+    embeddingsProviderKind: z.nullable(z.enum(['local_transformers', 'openai_compatible'])),
+    embeddingsModelId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     embeddingsRuntimeState: z.enum(['ready', 'downloading', 'unavailable', 'error']),
     embeddingsUsingFallback: z.boolean(),
-    tier1DbPath: z.string().min(1).nullable(),
-    deepDbPath: z.string().min(1).nullable(),
-    tier1DbBytes: z.number().int().nonnegative().nullable(),
-    deepDbBytes: z.number().int().nonnegative().nullable(),
-    indexContent: MemoryIndexContentStatusV1Schema.nullable().prefault(null),
-    worker: MemoryWorkerStatusV1Schema.nullable().prefault(null),
-    queue: MemoryIndexQueueStatusV1Schema.nullable().prefault(null),
-    lastRun: MemoryIndexLastRunStatusV1Schema.nullable().prefault(null),
+    tier1DbPath: z.nullable(z.string().check(z.minLength(1))),
+    deepDbPath: z.nullable(z.string().check(z.minLength(1))),
+    tier1DbBytes: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    deepDbBytes: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    indexContent: z.prefault(z.nullable(MemoryIndexContentStatusV1Schema), null),
+    worker: z.prefault(z.nullable(MemoryWorkerStatusV1Schema), null),
+    queue: z.prefault(z.nullable(MemoryIndexQueueStatusV1Schema), null),
+    lastRun: z.prefault(z.nullable(MemoryIndexLastRunStatusV1Schema), null),
     /**
      * Archived-eligibility actually applied by this daemon. Absence means the
      * daemon does not advertise implementation support for
      * `MemorySettingsV1.includeArchivedSessions`, so a client must present an
      * update/unsupported state rather than claim the desired setting applies.
      */
-    includeArchivedSessionsEffective: z.boolean().optional(),
+    includeArchivedSessionsEffective: z.optional(z.boolean()),
     /**
      * Optional corpus negotiation for memory.search. Only explicit true permits
      * a document request; omission preserves old daemon transcript operation.
      */
-    documentSearchSupported: z.boolean().optional(),
+    documentSearchSupported: z.optional(z.boolean()),
     /** Scoped status only. Older daemons omit this projection and ignore the scope request. */
-    documents: MemoryDocumentStatusV1Schema.optional(),
+    documents: z.optional(MemoryDocumentStatusV1Schema),
     /** Omission is an older daemon, never proof that native sources are current. */
-    sources: z.array(MemoryIndexSourceStatusV1Schema).optional(),
-  })
-  .passthrough());
+    sources: z.optional(z.array(MemoryIndexSourceStatusV1Schema)),
+  }));
 
 export type MemoryStatusV1 = z.infer<typeof MemoryStatusV1Schema>;

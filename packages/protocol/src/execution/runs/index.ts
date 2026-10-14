@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { ExecutionRunResultContractV1Schema } from './resultContractV1.js';
@@ -221,27 +221,27 @@ export {
   type ExecutionRunResultObservation,
 } from './resultContract.js';
 
-export const ExecutionRunSendRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  message: z.string().min(1),
-  localInputId: z.string().trim().min(1).optional(),
-  resultContract: ExecutionRunResultContractV1Schema.optional(),
+export const ExecutionRunSendRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+  localInputId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  resultContract: z.optional(ExecutionRunResultContractV1Schema),
   /** Canonical host-owned structured input for this native turn. */
-  structuredInput: HappierStructuredInputV1Schema.optional(),
-  resume: z.boolean().optional(),
-  delivery: z.enum(['prompt', 'steer_if_supported', 'interrupt']).optional(),
-}).passthrough().superRefine((value, ctx) => {
+  structuredInput: z.optional(HappierStructuredInputV1Schema),
+  resume: z.optional(z.boolean()),
+  delivery: z.optional(z.enum(['prompt', 'steer_if_supported', 'interrupt'])),
+}).check(z.superRefine((value, ctx) => {
   if (value.resultContract && !value.localInputId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['localInputId'],
       message: 'resultContract requires exact localInputId correspondence',
     });
   }
-}));
+})));
 export type ExecutionRunSendRequest = z.infer<typeof ExecutionRunSendRequestSchema>;
 
-export const ExecutionRunStopRequestSchema = lazyZodSchema(() => z.object({ runId: z.string().min(1) }).passthrough());
+export const ExecutionRunStopRequestSchema = lazyZodSchema(() => z.looseObject({ runId: z.string().check(z.minLength(1)) }));
 export type ExecutionRunStopRequest = z.infer<typeof ExecutionRunStopRequestSchema>;
 
 export {
@@ -251,43 +251,43 @@ export {
   type ExecutionRunCancelTurnResponse,
 } from './cancelTurn.js';
 
-export const ExecutionRunEnsureRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  resume: z.boolean().optional(),
-}).passthrough());
+export const ExecutionRunEnsureRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  resume: z.optional(z.boolean()),
+}));
 export type ExecutionRunEnsureRequest = z.infer<typeof ExecutionRunEnsureRequestSchema>;
 
 export const ExecutionRunEnsureResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).passthrough(),
-  z.object({ ok: z.literal(false), error: z.string().min(1), errorCode: z.string().min(1).optional() }).passthrough(),
+  z.looseObject({ ok: z.literal(true) }),
+  z.looseObject({ ok: z.literal(false), error: z.string().check(z.minLength(1)), errorCode: z.optional(z.string().check(z.minLength(1))) }),
 ]));
 export type ExecutionRunEnsureResponse = z.infer<typeof ExecutionRunEnsureResponseSchema>;
 
-export const ExecutionRunEnsureOrStartRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1).nullable().optional(),
-  start: ExecutionRunStartRequestSchema.optional(),
-  resume: z.boolean().optional(),
-}).passthrough().superRefine((value, ctx) => {
+export const ExecutionRunEnsureOrStartRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  start: z.optional(ExecutionRunStartRequestSchema),
+  resume: z.optional(z.boolean()),
+}).check(z.superRefine((value, ctx) => {
   const runId = typeof value.runId === 'string' ? value.runId.trim() : '';
   if (!runId) {
     if (!value.start) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'start is required when runId is missing' });
+      ctx.addIssue({ code: "custom", message: 'start is required when runId is missing' });
     }
   }
-}));
+})));
 export type ExecutionRunEnsureOrStartRequest = z.infer<typeof ExecutionRunEnsureOrStartRequestSchema>;
 
 export const ExecutionRunEnsureOrStartResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), runId: z.string().min(1), created: z.boolean() }).passthrough(),
-  z.object({ ok: z.literal(false), error: z.string().min(1), errorCode: z.string().min(1).optional() }).passthrough(),
+  z.looseObject({ ok: z.literal(true), runId: z.string().check(z.minLength(1)), created: z.boolean() }),
+  z.looseObject({ ok: z.literal(false), error: z.string().check(z.minLength(1)), errorCode: z.optional(z.string().check(z.minLength(1))) }),
 ]));
 export type ExecutionRunEnsureOrStartResponse = z.infer<typeof ExecutionRunEnsureOrStartResponseSchema>;
 
-export const ExecutionRunActionRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  actionId: z.string().min(1),
-  input: z.unknown().optional(),
-}).passthrough());
+export const ExecutionRunActionRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  actionId: z.string().check(z.minLength(1)),
+  input: z.optional(z.unknown()),
+}));
 export type ExecutionRunActionRequest = z.infer<typeof ExecutionRunActionRequestSchema>;
 
 /** Runtime admission reasons for asking a retained reviewer a follow-up question. */
@@ -301,10 +301,10 @@ export const ReviewFollowUpFailureCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type ReviewFollowUpFailureCode = z.infer<typeof ReviewFollowUpFailureCodeSchema>;
 
-export const ExecutionRunActionResponseSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunActionResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.boolean(),
-  updatedToolResult: z.unknown().optional(),
-}).passthrough());
+  updatedToolResult: z.optional(z.unknown()),
+}));
 export type ExecutionRunActionResponse = z.infer<typeof ExecutionRunActionResponseSchema>;
 
 export * from './streaming.js';

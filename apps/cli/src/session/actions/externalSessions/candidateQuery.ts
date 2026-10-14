@@ -2266,14 +2266,21 @@ export async function executeExternalSessionCandidateQuery(params: Readonly<{
     };
 
     if (params.searchTarget === 'content' || params.searchTerm || (params.cursor && !indexCursor)) {
-        return publishCandidatePage(await listCandidates({
-            ...(params.cursor ? { cursor: params.cursor } : {}),
-            limit,
-            ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
-            ...(params.searchMode ? { searchMode: params.searchMode } : {}),
-            ...(params.searchTarget ? { searchTarget: params.searchTarget } : {}),
-            readCandidateIndexState,
-        }), limit, maxBytes);
+        try {
+            return publishCandidatePage(await listCandidates({
+                ...(params.cursor ? { cursor: params.cursor } : {}),
+                limit,
+                ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
+                ...(params.searchMode ? { searchMode: params.searchMode } : {}),
+                ...(params.searchTarget ? { searchTarget: params.searchTarget } : {}),
+                readCandidateIndexState,
+            }), limit, maxBytes);
+        } catch (error) {
+            if (params.cursor && error instanceof ExternalSessionProviderFailureError && error.code === 'source_invalid') {
+                invalidCursor();
+            }
+            throw error;
+        }
     }
 
     if (indexCursor) {

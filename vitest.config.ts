@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { fileURLToPath } from 'node:url'
 
 import { resolveVitestFeatureTestExcludeGlobs } from './scripts/testing/featureTestGating.ts'
 import { resolveVitestWorkers } from './scripts/testing/vitestWorkers.ts'
@@ -12,6 +13,7 @@ export default defineConfig({
         ...resolveVitestWorkers(),
         globals: false,
         environment: 'node',
+        setupFiles: [fileURLToPath(new URL('./packages/protocol/src/test/zodLocaleSetup.ts', import.meta.url))],
         env: {
             HAPPIER_FEATURE_POLICY_ENV: '',
         },

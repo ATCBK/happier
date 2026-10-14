@@ -41,6 +41,7 @@ function serviceDotTone(status: ServiceRowStatus): ServiceDotTone {
         case 'failed':
             return 'failed';
         case 'stale':
+        case 'loading':
             return 'idle';
         case 'stopped':
         case 'unavailable':

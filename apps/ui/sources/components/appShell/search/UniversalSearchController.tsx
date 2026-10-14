@@ -195,7 +195,7 @@ function settingsPageNodesById(nodes: readonly ResolvedSettingsPageNode[]): Read
     return result;
 }
 
-function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: string, title: string): UniversalSearchResult {
+function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: string, title: string, query: string): UniversalSearchResult {
     const sessionId = normalizeMemorySearchSessionId(hit.sessionId);
     return {
         id: `${sessionId}:${hit.seqFrom}:${hit.seqTo}`,
@@ -204,7 +204,8 @@ function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: st
         kind: 'message',
         title,
         subtitle: hit.summary,
-        target: { kind: 'session', serverId, accountId, sessionId, seq: hit.seqFrom },
+        target: { kind: 'session', serverId, accountId, sessionId, seq: hit.seqFrom,
+            find: { query, options: { matchCase: false, regex: false }, target: { kind: 'seq', seq: hit.seqFrom } } },
     };
 }
 
@@ -498,7 +499,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                     const title = (freshRow ? getSessionName(freshRow, canonicalScopeServerId) : '')
                         || sessionNameByTarget.get(buildUniversalSearchSessionTitleKey(lifetime.accountId, canonicalScopeServerId, hit.sessionId));
                     return [{ ...memoryHitResult(hit, canonicalScopeServerId, lifetime.accountId,
-                        title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel')),
+                        title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel'), value),
                         conversation: { snippet: hit.summary, query: value, atMs: hit.createdAtToMs } }];
                 });
                 // Which machines were not fully covered, by name and reason. A machine whose index is off
@@ -972,7 +973,15 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                                 }),
                             });
                         },
-                        navigateToSession,
+                        navigateToSession: (sessionId, options) => {
+                            const { find, ...destination } = options ?? {};
+                            return openChatWithFindSeed({
+                                handoff: paneContext?.fileFindSeedHandoff,
+                                destination: { sessionId, serverId: destination.serverId ?? '' }, seed: find,
+                                authority: credentialBindings.get(resolveServerProfileScopeIdForIdentifier(destination.serverId)),
+                                open: () => navigateToSession(sessionId, destination),
+                            });
+                        },
                         push: (path) => { router.push(path as never); },
                         openProject,
                         stageFileFindSeed: (target, seed) => {
@@ -1027,7 +1036,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     } : undefined, [selectSource, source]);
     const activeFilters = terminalJump ? terminalScopeChrome.filters : combinedFilters;
     // Aa and .* read as the Find bar's toggles (lab G1s): quiet mono glyphs, no well at rest, the accent ink when on.
-    const optionGlyph = (glyph: string, on: boolean) => <Text style={[Typography.mono(), Typography.rowMeta(), { fontWeight: '600', color: on ? theme.colors.state.active.foreground : theme.colors.text.secondary }]}>{glyph}</Text>;
+    const optionGlyph = (glyph: string, on: boolean) => <Text style={[Typography.mono(), Typography.variant('meta'), { fontWeight: '600', color: on ? theme.colors.state.active.foreground : theme.colors.text.secondary }]}>{glyph}</Text>;
     const inputSuffix = source === 'fileContent' && !terminalJump ? <View style={{ flexDirection: 'row', gap: theme.space.s4 }}>
         <IconButton testID="universal-search:match-case" variant="plain" icon={optionGlyph('Aa', matchCase)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.matchCase')} tooltip={t('universalSearch.content.matchCase')} checked={matchCase} onPress={() => setMatchCase((value) => !value)} />
         <IconButton testID="universal-search:regex" variant="plain" icon={optionGlyph('.*', regex)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.regex')} tooltip={t('universalSearch.content.regex')} checked={regex} onPress={() => setRegex((value) => !value)} />

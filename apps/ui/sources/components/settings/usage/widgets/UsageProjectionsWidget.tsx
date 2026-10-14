@@ -26,6 +26,7 @@ import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
+  useUsageMeterListFirstReadReserve,
   UsageBodyInsufficient,
   UsageShowAllRows,
   useUsagePluginTheme,
@@ -52,6 +53,8 @@ import {
   UsagePlanLegend,
   UsagePlanAccountStates,
   UsagePlansNothingRead,
+  readPendingPlanAccountCount,
+  readUsageKnownQuotaAccountCount,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { readUsagePersonalPaceTarget, selectUsageWindowsAboveTarget } from './plans/usagePacingTarget';
@@ -200,12 +203,22 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       })),
     [paced, nameOf, nowMs],
   );
+  // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
+  // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
+  // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
+  const firstReadReserve = useUsageMeterListFirstReadReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice),
+    projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0,
+    width !== null && width < STACKED_BELOW_PX);
+  const reserve = list ? firstReadReserve : undefined;
+  const readingShape = reserve?.shape;
+  const bodyStyle = reserve ? [styles.body, { minHeight: reserve.minHeight }] : styles.body;
   if (projection.accounts.length === 0) {
     return (
-      <View style={styles.body}>
+      <View style={bodyStyle}>
         <UsagePlansNothingRead
           testID={`${props.testID}.none`}
           slice={props.slice}
+          {...(readingShape ? { readingShape } : {})}
           onRetry={props.model.refresh}
         />
       </View>
@@ -258,7 +271,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     const reasons = lead.rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
     const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
     return (
-      <View style={styles.body} testID={`${props.testID}.projections`}>
+      <View style={bodyStyle} testID={`${props.testID}.projections`}>
         {rows.length ? (
           <UsageMeterStack testID={`${props.testID}.windows`}>
             {lead.rows.map((row) => (
@@ -292,6 +305,8 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
         {/* The legend explains pace marks; without any pace it explains nothing. */}
         {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
         <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice} onRetry={props.model.refresh}
+          replacesContent={!rows.length && !unreported.length && !depletingNote}
+          {...(readingShape ? { readingShape } : {})}
           testID={`${props.testID}.state`} />
       </View>
     );

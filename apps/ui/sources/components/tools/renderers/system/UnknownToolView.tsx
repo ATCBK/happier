@@ -126,10 +126,10 @@ export const UnknownToolView = React.memo<ToolViewProps>(({ tool, detailLevel, m
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 10,
+        gap: theme.space.s10,
     },
     title: {
         fontSize: 12,
@@ -142,7 +142,7 @@ const styles = StyleSheet.create((theme) => ({
         fontFamily: 'Menlo',
     },
     section: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     sectionTitle: {
         fontSize: 12,

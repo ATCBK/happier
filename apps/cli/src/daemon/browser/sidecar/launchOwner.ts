@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
@@ -67,10 +68,12 @@ function defaultSpawnSidecarProcess(executablePath: string, args: readonly strin
         env: Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) };
     const launch = scope ? buildCgroupProcessLaunchSpec({ launchSpec, scope,
         unit: createHappierLinuxScopeName(environment.HAPPIER_PROCESS_OWNER) }) : launchSpec;
-    return spawn(launch.filePath, launch.args, {
+    const child = spawn(launch.filePath, launch.args, {
         env: launch.env,
         stdio: ['ignore', 'ignore', 'pipe'],
     });
+    observeProcessLaunch(child);
+    return child;
 }
 
 async function defaultCleanupProfileDirectory(profileDirectory: string): Promise<void> {

@@ -151,7 +151,7 @@ describe('WalkthroughView (lab WT1-A)', () => {
     it('admits a first walkthrough only on START and keeps the model choice visible', async () => {
         const start = vi.fn();
         const screen = await renderScreen(<WalkthroughView reading={EMPTY_WALKTHROUGH_READING} scopeLabel="This session" layout="wide"
-            start={{ modelPicker: <View testID="walkthrough-model-choice" />, onStart: start }} />);
+            start={{ options: <View testID="walkthrough-model-choice" />, onStart: start }} />);
         expect(start).not.toHaveBeenCalled();
         expect(screen.findByTestId('walkthrough-model-choice')).toBeTruthy();
         await screen.pressByTestIdAsync('walkthrough-start');

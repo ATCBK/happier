@@ -16,6 +16,8 @@ import {
     encodeQualifiedConnectedAccountV4StructuredQueryValue,
     type QualifiedConnectedAccountGroupV4,
 } from "@happier-dev/protocol";
+import { buildProviderAccountUsagePageProjectionV1, sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { readProviderAccountUsageHistory } from '../providerAccountUsage/recordStorage';
 
 import { db } from "@/storage/db";
 import { prismaRuntime } from "@/storage/prisma";
@@ -144,6 +146,82 @@ describe("qualified Connected Account V4 route family (integration)", () => {
         await db.connectedServiceAuthGroup.deleteMany().catch(() => {});
         await db.serviceAccountToken.deleteMany().catch(() => {});
         await db.account.deleteMany().catch(() => {});
+    });
+
+    it('admits mode-protected page projections only for complete accepted coverage and preserves exact history', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const stranger = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const headers = { 'x-test-user-id': account.id };
+        const first = createUsageSnapshot({ fetchedAt: Date.now() - 3000, recordKey: createProviderAccountUsageRecordKey({ accountSubjectId: 'projection-account' }) });
+        const route = '/v4/connect/qualified/provider-account-usage/history';
+        await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
+            const credential = await app.inject({ method: 'POST', url: '/v4/connect/qualified/credential', headers, payload: {
+                ref, authenticationModeId: 'api-key', expectedCredentialRevision: null, content: { t: 'plain', v: { token: 'test' } },
+                metadata: { scopes: [], providerIdentity: { accountId: 'projection-account' } },
+            } });
+            expect(credential.statusCode, credential.body).toBe(200);
+            const write = async (snapshot: typeof first) => {
+                const result = await app.inject({ method: 'POST', url: '/v4/connect/qualified/provider-account-usage', headers, payload: {
+                    source, expectedCredentialRevision: credential.json().credentialRevision, recordId: first.recordId, recordKey: first.recordKey,
+                    payloadMode: 'plain_json_v1', status: 'ok', snapshot, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs,
+                } });
+                expect(result.statusCode, result.body).toBe(200);
+            };
+            await write(first);
+            const range = { startAtMs: first.fetchedAtMs, endAtMs: first.fetchedAtMs + 1000 };
+            const demand = { range, resolution: 'accepted_observations' as const };
+            const read = (projection = demand, readHeaders: Record<string, string> = headers) => app.inject({ method: 'GET', url: route + '?query=' + encodeURIComponent(JSON.stringify({ recordId: first.recordId, projection })), headers: readHeaders });
+            const missing = await read();
+            expect(missing.statusCode, missing.body).toBe(200);
+            expect(missing.json()).toEqual({ projection: null, complete: false });
+            const history = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId, history: { range, pageSize: 100 } });
+            const witness = history.entries[0]!;
+            const projection = { recordId: first.recordId, demand, observationCount: 1,
+                frontier: { id: witness.id, observedAtMs: witness.observedAtMs },
+                content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                    recordId: first.recordId, range, history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null },
+                }) }) };
+            const put = (payload: unknown = projection, putHeaders: Record<string, string> = headers) => app.inject({ method: 'PUT', url: route, headers: putHeaders, payload });
+            expect((await put(projection, {})).statusCode).toBe(401);
+            expect((await put(projection, { 'x-test-user-id': stranger.id })).statusCode).toBe(404);
+            const invalidCount = await put({ ...projection, observationCount: 0, frontier: null,
+                content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                    recordId: first.recordId, range, history: { entries: [], nextCursor: null },
+                }) }) });
+            expect(invalidCount.statusCode, invalidCount.body).toBe(409);
+            expect(invalidCount.json()).toEqual({ error: 'provider_account_usage_projection_conflict' });
+            const invalidFrontier = await put({ ...projection, frontier: { ...projection.frontier, id: 'absent' },
+                content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                    recordId: first.recordId, range, history: { entries: [{ id: 'absent', observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null },
+                }) }) });
+            expect(invalidFrontier.statusCode).toBe(409);
+            const modeMismatch = await put({ ...projection, content: { t: 'encrypted', c: 'opaque' } });
+            expect(modeMismatch.statusCode).toBe(409);
+            expect(modeMismatch.json()).toEqual({ error: 'provider_account_usage_storage_mode_mismatch' });
+            const written = await put();
+            expect(written.statusCode, written.body).toBe(200);
+            expect(written.json()).toEqual({ success: true });
+            const widerDemand = { ...demand, range: { ...range, endAtMs: range.endAtMs + 5000 } };
+            expect((await read(widerDemand)).json()).toEqual({ projection, complete: true });
+            expect((await read({ ...demand, range: { startAtMs: range.startAtMs - 1, endAtMs: range.endAtMs } })).json())
+                .toEqual({ projection: null, complete: false });
+            await write({ ...first, planLabel: 'new plan', fetchedAtMs: first.fetchedAtMs + 2000, observedAtMs: first.observedAtMs + 2000 });
+            expect((await read(widerDemand)).json()).toEqual({ projection, complete: false });
+            expect((await read()).json()).toEqual({ projection, complete: true });
+            const stale = await put({ ...projection, demand: widerDemand, content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain',
+                projection: buildProviderAccountUsagePageProjectionV1({ recordId: first.recordId, range: widerDemand.range,
+                    history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null } }) }) });
+            expect(stale.statusCode).toBe(409);
+            const exact = await app.inject({ method: 'GET', url: route + '?query=' + encodeURIComponent(JSON.stringify({ recordId: first.recordId, witness: projection.frontier })), headers });
+            expect(exact.statusCode, exact.body).toBe(200);
+            expect(exact.json().entries[0]).toMatchObject({ id: witness.id, observedAtMs: witness.observedAtMs, record: { content: { t: 'plain', v: first } } });
+            await db.providerAccountUsageRecord.update({ where: { accountId_recordId: { accountId: account.id, recordId: first.recordId } },
+                data: { metadata: { pageProjection: { ...projection, content: { t: 'encrypted', c: 'opaque' } } } } });
+            expect((await read()).statusCode).toBe(409);
+            await db.connectedServiceUsageSource.deleteMany({ where: { accountId: account.id } });
+            expect((await put()).statusCode).toBe(404);
+            expect((await read()).statusCode).toBe(404);
+        });
     });
 
     it("rejects record-id operations when the record has no qualified account source", async () => {

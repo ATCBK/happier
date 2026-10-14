@@ -1,16 +1,16 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 
-export const ConnectedAccountPurposeIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(128));
+export const ConnectedAccountPurposeIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 export type ConnectedAccountPurposeId = z.infer<typeof ConnectedAccountPurposeIdSchema>;
 
-export const QualifiedConnectedAccountPurposeV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountPurposeV1Schema = lazyZodSchema(() => z.strictObject({
   consumer: asProtocolZod(PluginContributionIdentityV1Schema),
   purpose: ConnectedAccountPurposeIdSchema,
-}).strict());
+}));
 export type QualifiedConnectedAccountPurposeV1 = z.infer<
   typeof QualifiedConnectedAccountPurposeV1Schema
 >;

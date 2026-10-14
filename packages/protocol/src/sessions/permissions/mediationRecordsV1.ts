@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
@@ -37,16 +37,12 @@ const SESSION_PERMISSION_MEDIATION_RECORD_LOCATOR_V1_DOMAIN =
   'happier.session.permission-mediation-record-locator.v1';
 
 function boundedNfcIdentifier(maxBytes: number, label: string) {
-  return z.string()
-    .refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`)
-    .refine((value) => value === value.trim() && value.length > 0, `${label} must be trimmed and nonempty`)
-    .refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`);
+  return z.string().check(z.refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`), z.refine((value) => value === value.trim() && value.length > 0, `${label} must be trimmed and nonempty`), z.refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`));
 }
 
 const SessionPermissionToolIdentifierV1Schema = boundedNfcIdentifier(1_024, 'Permission tool identifiers');
 
-export const SessionPermissionMediationRecordLocatorV1Schema = lazyZodSchema(() => z.string()
-  .regex(/^pmr1\.[A-Za-z0-9_-]{43}$/u, 'Expected a canonical mediation row locator'));
+export const SessionPermissionMediationRecordLocatorV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^pmr1\.[A-Za-z0-9_-]{43}$/u, 'Expected a canonical mediation row locator')));
 export type SessionPermissionMediationRecordLocatorV1 = z.infer<
   typeof SessionPermissionMediationRecordLocatorV1Schema
 >;
@@ -57,11 +53,11 @@ export type SessionPermissionMediationRecordLocatorV1 = z.infer<
  * turn/request portion; the host route and Session-system-record row carry
  * the Session scope.
  */
-export const SessionPermissionMediationRecordIdentityV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionMediationRecordIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   turnId: TurnIdSchema,
   requestId: SessionPermissionRequestIdV1Schema,
-}).strict());
+}));
 export type SessionPermissionMediationRecordIdentityV1 = z.infer<
   typeof SessionPermissionMediationRecordIdentityV1Schema
 >;
@@ -84,40 +80,40 @@ export function deriveSessionPermissionMediationRecordLocatorV1(
 }
 
 export const SessionPermissionRemoteRevocationActorV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('accountUser'),
     accountId: boundedNfcIdentifier(191, 'Account ids'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('mediatorPlugin'),
     pluginId: asProtocolZod(PluginIdSchema),
-  }).strict(),
+  }),
 ]));
 export type SessionPermissionRemoteRevocationActorV1 = z.infer<
   typeof SessionPermissionRemoteRevocationActorV1Schema
 >;
 
 const SessionPermissionRemoteMediationEffectV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('allowOnce') }).strict(),
-  z.object({ kind: z.literal('deny') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('allowOnce') }),
+  z.strictObject({ kind: z.literal('deny') }),
+  z.strictObject({
     kind: z.literal('sessionGrant'),
     grantId: SessionPermissionGrantIdV1Schema,
-    rule: z.object({
+    rule: z.strictObject({
       kind: z.literal('exactTool'),
       identifier: SessionPermissionToolIdentifierV1Schema,
-    }).strict(),
-  }).strict(),
+    }),
+  }),
 ]));
 export type SessionPermissionRemoteMediationEffectV1 = z.infer<
   typeof SessionPermissionRemoteMediationEffectV1Schema
 >;
 
 const SessionPermissionRemoteMediationRecordBaseV1Schema = (
-  SessionPermissionMediationRecordIdentityV1Schema.pick({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(SessionPermissionMediationRecordIdentityV1Schema, {
     turnId: true,
     requestId: true,
-  }).extend({
+  }), {
   version: z.literal(1),
   settlementId: SessionPermissionSettlementIdV1Schema,
   mediatorPluginId: asProtocolZod(PluginIdSchema),
@@ -127,28 +123,28 @@ const SessionPermissionRemoteMediationRecordBaseV1Schema = (
   decision: z.enum(['allow', 'deny']),
   requestedScope: z.enum(['request', 'session']),
   effect: SessionPermissionRemoteMediationEffectV1Schema,
-  createdAtMs: z.number().int().nonnegative(),
-  revoked: z.object({
-    atMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
+  revoked: z.optional(z.strictObject({
+    atMs: z.number().check(z.int(), z.nonnegative()),
     actor: SessionPermissionRemoteRevocationActorV1Schema,
-  }).strict().optional(),
-}).strict()
+  })),
+})))
 );
 
 function addRemoteMediationInvariantIssues(
   value: z.infer<typeof SessionPermissionRemoteMediationRecordBaseV1Schema>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (value.sourceAuthority.mediatorPluginId !== value.mediatorPluginId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sourceAuthority', 'mediatorPluginId'],
       message: 'Remote permission source authority must match the stamped mediator plugin',
     });
   }
   if (value.actor.assertedBy.pluginId !== value.mediatorPluginId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['actor', 'assertedBy', 'pluginId'],
       message: 'Remote permission actor must be asserted by the stamped mediator plugin',
     });
@@ -158,7 +154,7 @@ function addRemoteMediationInvariantIssues(
     && value.sourceAuthority.remoteApprovalMaxScope === 'off'
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sourceAuthority', 'remoteApprovalMaxScope'],
       message: 'Remote permission allow records require remote approval to be enabled',
     });
@@ -166,19 +162,18 @@ function addRemoteMediationInvariantIssues(
   const encoded = UTF8_ENCODER.encode(JSON.stringify(value));
   if (encoded.byteLength > SESSION_REMOTE_PERMISSION_MEDIATION_ROW_BYTES_MAX) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Remote permission mediation record exceeds its byte limit',
     });
   }
 }
 
 export const SessionPermissionRemoteSettlementRecordV1Schema = (
-  SessionPermissionRemoteMediationRecordBaseV1Schema
-    .superRefine((value, context) => {
+  lazyZodSchema(() => SessionPermissionRemoteMediationRecordBaseV1Schema.check(z.superRefine((value, context) => {
       addRemoteMediationInvariantIssues(value, context);
       if (value.revoked) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['revoked'],
           message: 'Remote settlement records cannot carry grant revocation state',
         });
@@ -186,27 +181,26 @@ export const SessionPermissionRemoteSettlementRecordV1Schema = (
       if (value.decision === 'allow') {
         if (value.requestedScope !== 'request' || value.effect.kind !== 'allowOnce') {
           context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ['effect'],
             message: 'Request-scoped remote allow must have the allow-once effect',
           });
         }
       } else if (value.effect.kind !== 'deny') {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['effect'],
           message: 'Remote deny must have the deny effect',
         });
       }
-    })
+    })))
 );
 export type SessionPermissionRemoteSettlementRecordV1 = z.infer<
   typeof SessionPermissionRemoteSettlementRecordV1Schema
 >;
 
 export const SessionPermissionRemoteGrantRecordV1Schema = (
-  SessionPermissionRemoteMediationRecordBaseV1Schema
-    .superRefine((value, context) => {
+  lazyZodSchema(() => SessionPermissionRemoteMediationRecordBaseV1Schema.check(z.superRefine((value, context) => {
       addRemoteMediationInvariantIssues(value, context);
       if (
         value.decision !== 'allow'
@@ -214,19 +208,19 @@ export const SessionPermissionRemoteGrantRecordV1Schema = (
         || value.effect.kind !== 'sessionGrant'
       ) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['effect'],
           message: 'Remote grant records require a session-scoped allow with one exact tool grant',
         });
       }
       if (value.sourceAuthority.remoteApprovalMaxScope !== 'session') {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['sourceAuthority', 'remoteApprovalMaxScope'],
           message: 'Remote session grants require a source authority that permits session scope',
         });
       }
-    })
+    })))
 );
 export type SessionPermissionRemoteGrantRecordV1 = z.infer<
   typeof SessionPermissionRemoteGrantRecordV1Schema

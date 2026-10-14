@@ -23,6 +23,17 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
 
+    it('preserves root metrics beside diagnostic snapshot queries', async () => {
+        harness.resetEnv({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev-test' });
+        expect(await db.$metrics.json()).toMatchObject({
+            counters: expect.any(Array), gauges: expect.any(Array), histograms: expect.any(Array),
+        });
+        const account = await db.account.create({ data: { publicKey: 'diagnostic-snapshot-fixture' } });
+        expect(await withSqliteReadSnapshot(tx => tx.account.findUnique({
+            where: { id: account.id }, select: { id: true },
+        }))).toEqual({ id: account.id });
+    });
+
     it.each([
         { code: 'P2021', change: 'ALTER TABLE "Machine" RENAME TO "MissingMachine"', restore: 'ALTER TABLE "MissingMachine" RENAME TO "Machine"' },
         { code: 'P2022', change: 'ALTER TABLE "Machine" RENAME COLUMN "installationPublicKey" TO "missingInstallationPublicKey"', restore: 'ALTER TABLE "Machine" RENAME COLUMN "missingInstallationPublicKey" TO "installationPublicKey"' },
@@ -49,6 +60,7 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
             for (const execute of [
                 query,
                 () => db.$transaction([query()]),
+                () => withSqliteReadSnapshot(tx => tx.machine.findFirst({ select: { id: true, installationPublicKey: true } })),
             ]) {
                 const error = await execute().then(() => { throw new Error('Query unexpectedly succeeded'); }, error => error);
                 expect(error).toMatchObject({ code });

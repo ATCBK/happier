@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionViewerProjectionV1Schema } from '../personal/viewer.js';
 
 /**
@@ -22,9 +22,9 @@ export const SESSION_READ_STATE_HTTP_METHOD_V1 = 'POST' as const;
  * plus the exact `sessionId` address; the shared binder lifts the path param
  * into the URL and sends only `{ state }` as JSON body.
  */
-export const SessionReadStateRouteRequestBodyV1Schema = lazyZodSchema(() => z.object({
+export const SessionReadStateRouteRequestBodyV1Schema = lazyZodSchema(() => z.strictObject({
   state: z.enum(['read', 'unread']),
-}).strict());
+}));
 export type SessionReadStateRouteRequestBodyV1 = z.infer<typeof SessionReadStateRouteRequestBodyV1Schema>;
 
 /**
@@ -32,38 +32,38 @@ export type SessionReadStateRouteRequestBodyV1 = z.infer<typeof SessionReadState
  * the transport-level `success` flag and retains the optional canonical
  * private viewer projection so interactive hosts can converge immediately.
  */
-export const SessionReadStateRouteSuccessResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionReadStateRouteSuccessResponseV1Schema = lazyZodSchema(() => z.strictObject({
   success: z.literal(true),
   state: z.enum(['read', 'unread', 'empty']),
-  lastViewedSessionSeq: z.number().int().min(0).nullable(),
+  lastViewedSessionSeq: z.nullable(z.number().check(z.int(), z.minimum(0))),
   didChange: z.boolean(),
-  viewer: SessionViewerProjectionV1Schema.optional(),
-}).strict());
+  viewer: z.optional(SessionViewerProjectionV1Schema),
+}));
 export type SessionReadStateRouteSuccessResponseV1 = z.infer<typeof SessionReadStateRouteSuccessResponseV1Schema>;
 
 /**
  * Exact existing route failures. They remain transport vocabulary; the one
  * Action failure projector maps them to the closed Action error codes below.
  */
-export const SessionReadStateRouteInvalidRequestResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionReadStateRouteInvalidRequestResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('invalid-read-state'),
-}).strict());
-export const SessionReadStateRouteForbiddenResponseV1Schema = lazyZodSchema(() => z.object({
+}));
+export const SessionReadStateRouteForbiddenResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('Forbidden'),
-}).strict());
-export const SessionReadStateRoutePresentUserRequiredResponseV1Schema = lazyZodSchema(() => z.object({
+}));
+export const SessionReadStateRoutePresentUserRequiredResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('present_user_required'),
-}).strict());
-export const SessionReadStateRouteNotTrackedResponseV1Schema = lazyZodSchema(() => z.object({
+}));
+export const SessionReadStateRouteNotTrackedResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('session_not_tracked'),
-  viewer: SessionViewerProjectionV1Schema.optional(),
-}).strict());
-export const SessionReadStateRouteNotFoundResponseV1Schema = lazyZodSchema(() => z.object({
+  viewer: z.optional(SessionViewerProjectionV1Schema),
+}));
+export const SessionReadStateRouteNotFoundResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('Session not found'),
-}).strict());
-export const SessionReadStateRouteFailureResponseV1Schema = lazyZodSchema(() => z.object({
+}));
+export const SessionReadStateRouteFailureResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('Failed to update session read state'),
-}).strict());
+}));
 
 export const SESSION_READ_STATE_ACTION_ERROR_CODES_V1 = Object.freeze([
   'invalid_parameters',

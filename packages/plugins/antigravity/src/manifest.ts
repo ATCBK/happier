@@ -117,7 +117,7 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
                 darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'] }],
                 linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'] }],
                 win32: [{
-                  cmd: 'powershell',
+                  cmd: 'powershell.exe',
                   args: [
                     '-NoProfile',
                     '-ExecutionPolicy',

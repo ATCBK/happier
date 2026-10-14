@@ -122,7 +122,7 @@ function headingMark(layout: Awaited<ReturnType<typeof measureWebLayout>>, label
 }
 
 const centre = (rect: Readonly<{ top: number; height: number }>) => rect.top + rect.height / 2;
-/** A lane caption's line (`Typography.rowMeta`, web). */
+/** A lane caption's line (the meta type role, web). */
 const LANE_LINE = 16;
 
 async function measureRhythm(width: number) {

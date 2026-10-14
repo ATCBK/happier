@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { HomeIdentityActionIdV1 } from '../../teams/identity/actionIds.js';
 import * as home from '../../home/identity.js';
@@ -38,7 +38,7 @@ export const HOME_IDENTITY_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
   'home.identity.workos.connection.create': home.HomeIdentityWorkosConnectionCreateInputV1Schema,
   'home.identity.workos.reconcile': home.HomeIdentityWorkosReconcileInputV1Schema,
   'home.identity.workos.connection.set': home.HomeIdentityWorkosConnectionSetInputV1Schema,
-} satisfies Record<HomeIdentityActionIdV1, z.ZodType>);
+} satisfies Record<HomeIdentityActionIdV1, z.ZodMiniType>);
 
 export const HOME_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'home.identity.connections.list': home.HomeIdentityConnectionListResultV1Schema,
@@ -54,7 +54,7 @@ export const HOME_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'home.identity.workos.connection.create': home.HomeIdentityConnectionMutationResultV1Schema,
   'home.identity.workos.reconcile': home.HomeIdentityWorkosReconcileResultV1Schema,
   'home.identity.workos.connection.set': home.HomeIdentityConnectionMutationResultV1Schema,
-} satisfies Record<HomeIdentityActionIdV1, z.ZodType>);
+} satisfies Record<HomeIdentityActionIdV1, z.ZodMiniType>);
 
 type SharedIdentitySpec<TId extends HomeIdentityActionIdV1> = Extract<
   (typeof TEAM_ACTION_SPECS)[number],

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { router } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { createActionApprovalContinuationObserver, type ActionApprovalRegistration } from './actionApprovalContinuation';
 import { useApprovalArtifact } from './useApprovalArtifact';
@@ -18,6 +18,7 @@ export function useActionApprovalContinuation(input: Readonly<{
     /** Direct controls without an inline decision surface open the existing Inbox review. */
     openOnRequest?: boolean;
 }>) {
+    const router = useRouter();
     const onExecutedRef = React.useRef(input.onExecuted);
     onExecutedRef.current = input.onExecuted;
     const observer = React.useMemo(() => createActionApprovalContinuationObserver({
@@ -45,9 +46,9 @@ export function useActionApprovalContinuation(input: Readonly<{
         const registered = observer.getSnapshot().approval;
         if (input.openOnRequest && registered && registered.artifactId !== previous) {
             const serverId = registered.continuation?.scope?.serverId ?? input.serverId;
-            router.push(buildApprovalHref(registered.artifactId, serverId) as Parameters<typeof router.push>[0]);
+            router.pushRetainingCurrent(buildApprovalHref(registered.artifactId, serverId));
         }
-    }, [observer, input.openOnRequest, input.serverId]);
+    }, [observer, input.openOnRequest, input.serverId, router]);
     const { approval, settlement } = React.useSyncExternalStore(observer.subscribe, observer.getSnapshot, observer.getSnapshot);
     const approvalId = approval?.artifactId ?? null;
     const artifactScope = approval?.continuation?.scope;

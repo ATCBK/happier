@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
@@ -21,8 +21,8 @@ export const MAX_PACKAGE_ASSET_ARCHIVE_TOTAL_BYTES_V1 = 64 * 1024 * 1024;
 const MAX_PACKAGE_ASSET_ARCHIVE_BASE64_BYTES_V1 = Math.ceil(
   MAX_PACKAGE_ASSET_ARCHIVE_RESOURCE_BYTES_V1 / 3,
 ) * 4;
-const PackageAssetResourceIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const PackageAssetMimeTypeSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const PackageAssetResourceIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const PackageAssetMimeTypeSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 export const PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1 = 'plugin.package-assets.archive' as const;
 export const PLUGIN_PACKAGE_ASSET_ARCHIVE_VERSION_V1 = 1 as const;
@@ -31,13 +31,13 @@ export const PLUGIN_PACKAGE_ASSET_ARCHIVE_VERSION_V1 = 1 as const;
  * The immutable portable descriptor binds each exact manifest-declared asset
  * before the surrounding generic Artifact envelope receives any bytes.
  */
-export const PackageAssetArchiveResourceV1Schema = lazyZodSchema(() => z.object({
+export const PackageAssetArchiveResourceV1Schema = lazyZodSchema(() => z.strictObject({
   resourceId: PackageAssetResourceIdSchema,
   path: PluginUiArtifactRelativePathV1Schema,
   mimeType: PackageAssetMimeTypeSchema,
-  byteSize: z.number().int().nonnegative().max(MAX_PACKAGE_ASSET_ARCHIVE_RESOURCE_BYTES_V1),
+  byteSize: z.number().check(z.int(), z.nonnegative(), z.maximum(MAX_PACKAGE_ASSET_ARCHIVE_RESOURCE_BYTES_V1)),
   digestSha256: PluginUiArtifactDigestV1Schema,
-}).strict());
+}));
 export type PackageAssetArchiveResourceV1 = z.infer<typeof PackageAssetArchiveResourceV1Schema>;
 
 function resourceKey(resource: Pick<PackageAssetArchiveResourceV1, 'resourceId' | 'path'>): string {
@@ -62,25 +62,25 @@ function hasBoundedResourceSet(resources: readonly PackageAssetArchiveResourceV1
   return true;
 }
 
-export const PackageAssetArchiveDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const PackageAssetArchiveDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   archiveDigestSha256: PluginUiArtifactDigestV1Schema,
   resources: z.array(PackageAssetArchiveResourceV1Schema),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (!isCanonicalResourceOrder(value.resources)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['resources'],
       message: 'Package Asset archive resources must use canonical resource-id/path ordering.',
     });
   }
   if (!hasBoundedResourceSet(value.resources)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['resources'],
       message: 'Package Asset archive resources must be unique and stay within the bounded archive capacity.',
     });
   }
-}));
+})));
 export type PackageAssetArchiveDescriptorV1 = z.infer<typeof PackageAssetArchiveDescriptorV1Schema>;
 
 /** Produces the one comparison shape release facts persist and rejoin against. */
@@ -94,32 +94,32 @@ export function normalizePackageAssetArchiveDescriptorV1(
   });
 }
 
-export const PackageAssetArchiveHeaderV1Schema = lazyZodSchema(() => z.object({
+export const PackageAssetArchiveHeaderV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(PLUGIN_PACKAGE_ASSET_ARCHIVE_VERSION_V1),
   kind: z.literal(PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1),
   title: z.null(),
   descriptor: PackageAssetArchiveDescriptorV1Schema,
-}).strict());
+}));
 export type PackageAssetArchiveHeaderV1 = z.infer<typeof PackageAssetArchiveHeaderV1Schema>;
 
-export const PackageAssetArchiveBodyResourceV1Schema = lazyZodSchema(() => PackageAssetArchiveResourceV1Schema.extend({
+export const PackageAssetArchiveBodyResourceV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PackageAssetArchiveResourceV1Schema, {
   /** Canonical padded base64 for the exact admitted resource bytes. */
-  bytesBase64: z.string().max(MAX_PACKAGE_ASSET_ARCHIVE_BASE64_BYTES_V1),
-}).strict());
+  bytesBase64: z.string().check(z.maxLength(MAX_PACKAGE_ASSET_ARCHIVE_BASE64_BYTES_V1)),
+})));
 export type PackageAssetArchiveBodyResourceV1 = z.infer<typeof PackageAssetArchiveBodyResourceV1Schema>;
 
-export const PackageAssetArchiveBodyV1Schema = lazyZodSchema(() => z.object({
+export const PackageAssetArchiveBodyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(PLUGIN_PACKAGE_ASSET_ARCHIVE_VERSION_V1),
   resources: z.array(PackageAssetArchiveBodyResourceV1Schema),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (!isCanonicalResourceOrder(value.resources) || !hasBoundedResourceSet(value.resources)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['resources'],
       message: 'Package Asset archive body resources must be canonical, unique, and bounded.',
     });
   }
-}));
+})));
 export type PackageAssetArchiveBodyV1 = z.infer<typeof PackageAssetArchiveBodyV1Schema>;
 
 export type PackageAssetArchiveOpenedV1 = Readonly<{

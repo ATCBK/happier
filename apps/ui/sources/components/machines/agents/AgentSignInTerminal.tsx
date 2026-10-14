@@ -35,7 +35,6 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
     const machine = useMachine(props.machineId);
     const presence = useMachinePresenceSummary(props.serverId, props.machineId);
     const terminalRef = React.useRef<EmbeddedTerminalRendererHandle | null>(null);
-    const didStartRef = React.useRef(false);
     const notifiedExitTerminalRef = React.useRef<string | null>(null);
     const terminalKey = signIn.terminalKey ?? agentSignInTerminalKey(props.machineId, props.agentId);
     const launch = React.useMemo(() => ({ kind: 'agent_login' as const, agentId: props.agentId }), [props.agentId]);
@@ -52,11 +51,6 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
         closeOnUnmount: false,
     });
     React.useEffect(() => {
-        if (didStartRef.current || !signIn.available) return;
-        didStartRef.current = true;
-        if (signIn.phase === 'idle') fireAndForget(signIn.start(), { tag: 'AgentSignInTerminal.start' });
-    }, [signIn.available, signIn.phase, signIn.start]);
-    React.useEffect(() => {
         signIn.reportTerminalUrl(controller.detectedUrl);
     }, [controller.detectedUrl, signIn.reportTerminalUrl]);
     React.useEffect(() => {
@@ -69,8 +63,11 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
         if (controller.status === 'error' && controller.error) signIn.reportTerminalFailure(controller.error);
     }, [controller.error, controller.status, signIn.reportTerminalFailure]);
     const close = React.useCallback(() => {
-        fireAndForget(signIn.cancel(), { tag: 'AgentSignInTerminal.close' });
-        props.onClose();
+        // Keep the mounted Action's confirmation and request alive until cancellation settles.
+        fireAndForget((async () => {
+            const result = await signIn.cancel();
+            if (!result || result.ok) props.onClose();
+        })(), { tag: 'AgentSignInTerminal.close' });
     }, [props, signIn]);
     const terminal = (
         <EmbeddedTerminalPane

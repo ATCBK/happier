@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { z } from "zod";
+import { z } from "zod/mini";
 import { applyEnvValues, snapshotEnv, restoreEnv } from "../testkit/env";
 import { enableErrorHandlers } from './enableErrorHandlers';
 import { InactiveAccountError } from '@/app/auth/accountStatus';
@@ -198,7 +198,7 @@ describe('enableErrorHandlers', () => {
 
         typed.post("/schema-validation-error", {
             schema: {
-                body: z.object({ value: z.string().min(1) }).strict(),
+                body: z.strictObject({ value: z.string().check(z.minLength(1)) }),
                 response: {
                     400: z.object({ error: z.literal("invalid-params") }),
                     200: z.object({ success: z.literal(true) }),

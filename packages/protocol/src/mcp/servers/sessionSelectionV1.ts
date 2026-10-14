@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 function dedupeStrings(values: ReadonlyArray<string>): string[] {
   const seen = new Set<string>();
@@ -13,10 +13,10 @@ function dedupeStrings(values: ReadonlyArray<string>): string[] {
 }
 
 const SESSION_MCP_SELECTION_V1_FIELDS = {
-  v: z.literal(1).default(1),
-  managedServersEnabled: z.boolean().default(true),
-  forceIncludeServerIds: z.array(z.string().min(1)).default([]),
-  forceExcludeServerIds: z.array(z.string().min(1)).default([]),
+  v: z._default(z.literal(1), 1),
+  managedServersEnabled: z._default(z.boolean(), true),
+  forceIncludeServerIds: z._default(z.array(z.string().check(z.minLength(1))), []),
+  forceExcludeServerIds: z._default(z.array(z.string().check(z.minLength(1))), []),
 } as const;
 
 function normalizeSessionMcpSelectionV1(value: {
@@ -33,31 +33,23 @@ function normalizeSessionMcpSelectionV1(value: {
 }
 
 /** Closed current authoring/executable-declaration input. */
-export const SessionMcpSelectionAuthoringV1Schema = lazyZodSchema(() => z
-  .object(SESSION_MCP_SELECTION_V1_FIELDS)
-  .strict()
-  .transform(normalizeSessionMcpSelectionV1));
+export const SessionMcpSelectionAuthoringV1Schema = lazyZodSchema(() => z.pipe(z.strictObject(SESSION_MCP_SELECTION_V1_FIELDS), z.transform(normalizeSessionMcpSelectionV1)));
 
 export type SessionMcpSelectionAuthoringV1 = z.infer<typeof SessionMcpSelectionAuthoringV1Schema>;
 
 /** Permissive legacy Session ingress retained for supported stored/session inputs. */
-export const SessionMcpSelectionV1Schema = lazyZodSchema(() => z
-  .preprocess(
-    (raw) => {
+export const SessionMcpSelectionV1Schema = lazyZodSchema(() => z.pipe(z.pipe(z.transform((raw) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
       return raw;
-    },
-    z.object(SESSION_MCP_SELECTION_V1_FIELDS),
-  )
-  .transform(normalizeSessionMcpSelectionV1));
+    }), z.object(SESSION_MCP_SELECTION_V1_FIELDS)), z.transform(normalizeSessionMcpSelectionV1)));
 
 export type SessionMcpSelectionV1 = z.infer<typeof SessionMcpSelectionV1Schema>;
 
 /** Closed metadata writes; the stored marker reader below keeps the released shape. */
-export const SessionMcpSelectionRestartRequiredAuthoringV1Schema = lazyZodSchema(() => z.object({
+export const SessionMcpSelectionRestartRequiredAuthoringV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   appliedSelection: SessionMcpSelectionAuthoringV1Schema,
-}).strict());
+}));
 
 export const SessionMcpSelectionRestartRequiredV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),

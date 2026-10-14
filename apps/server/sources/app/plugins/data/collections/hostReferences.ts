@@ -1,4 +1,4 @@
-import type { PluginCollectionRelationV1 } from "@happier-dev/protocol";
+import type { PluginCollectionRelationV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 
 import type { Tx } from "@/storage/inTx";
 

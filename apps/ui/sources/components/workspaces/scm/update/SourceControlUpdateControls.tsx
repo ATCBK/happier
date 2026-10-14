@@ -58,9 +58,8 @@ export function SourceControlUpdateSection(props: Readonly<{
         >
             <Text
                 style={{
-                    fontSize: 12,
+                    ...Typography.variant('meta', 'semiBold'),
                     color: props.theme.colors.text.secondary,
-                    ...Typography.default('semiBold'),
                 }}
             >
                 {props.title}

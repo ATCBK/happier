@@ -24,6 +24,7 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ pathname: '/settings/prompts' }).module;
 });
+installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { Item } = await import('@/components/ui/lists/Item');
 const { applyPromptLibraryCatalogSnapshot, beginPromptLibraryCatalogLoad, resetPromptLibraryCatalogSnapshotsForTests }
@@ -36,7 +37,7 @@ const { t } = await import('@/text');
 const scope = { serverId: 'counts-server', accountId: 'counts-account' };
 const emptyProfiles = { status: 'ready' as const, records: [], diagnostics: [], source: 'destination' as const,
     authority: 'inactive' as const, control: null, controlRevision: 'absent' as const, referenceGuardRevision: 1 };
-const rowIds = ['settings-prompts-library-prompts', 'settings-prompts-library-skills',
+const rowIds = ['settings-prompts-library-prompts',
     'settings-prompts-templates', 'settings-prompts-stacks', 'settings-prompts-folders'];
 let previousState = storage.getState();
 
@@ -78,7 +79,7 @@ describe('PromptsSettingsHome catalog counts', () => {
             storage.setState({ settingsScope: scope, artifactsLoaded: true, isDataReady: true });
         });
         const count = (value: number) => t('promptLibrary.surface.itemCount', { count: value });
-        for (const id of rowIds.slice(0, 4)) expect(detail(id), id).toBe(count(0));
+        for (const id of rowIds.slice(0, 3)) expect(detail(id), id).toBe(count(0));
         expect(detail('settings-prompts-folders')).toBe(count(1));
         expect(screen.getTextContent()).toContain(count(1));
 
@@ -88,7 +89,8 @@ describe('PromptsSettingsHome catalog counts', () => {
                     headerVersion: 1, createdAt: 1, updatedAt: 1, seq: 1, isDecrypted: true });
             }
         });
-        for (const id of rowIds.slice(0, 2)) expect(detail(id), id).toBe(count(1));
+        expect(detail('settings-prompts-library-prompts')).toBe(count(1));
+        expect(detail('settings-prompts-templates')).toBe(count(0));
 
         await act(async () => {
             const record = ProfileRecordV1Schema.parse({ v: 1, id: 'profile-counts', enabled: true, secretBindings: {},
@@ -109,6 +111,6 @@ describe('PromptsSettingsHome catalog counts', () => {
                 catalog: { status: 'unavailable', reason: 'unauthorized' }, rawSettings: {}, sourceSettingsVersion: 1,
             }, true);
         });
-        for (const id of rowIds.slice(2)) expect(detail(id), id).toBeUndefined();
+        for (const id of rowIds.slice(1)) expect(detail(id), id).toBeUndefined();
     });
 });

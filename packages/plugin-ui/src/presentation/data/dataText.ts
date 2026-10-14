@@ -33,6 +33,8 @@ export const HAPPIER_DATA_METRICS = Object.freeze({
   coreGapPx: 3,
   coreHeightPx: 32,
   barRadiusPx: 3,
+  /** A chart column's widest reading: a plot shared by few buckets keeps slim columns, never slabs. */
+  barMaxWidthPx: 28,
   /** A zero still reads as a point in the series. */
   barStubPx: 4,
   lineStrokePx: 2,

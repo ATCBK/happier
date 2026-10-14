@@ -2,18 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HappierSession } from '@happier-dev/embed/react';
 import type { EmbedCredential, EmbedCredentialRequest } from '@happier-dev/embed';
+import { request } from './hostRequest';
 
 type Lead = { id: string; name: string; contact: string; notes: string; stage: string; sessionId: string | null;
   analysis: { score: number; summary: string; nextStep: string } | null; stageUpdates: number };
 type State = { userId: string; happierUrl: string; leads: Lead[]; copilotSessionId: string | null };
-
-async function request<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, body === undefined ? undefined : {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
-  return response.json();
-}
 
 const getCredential = (input: EmbedCredentialRequest) => request<EmbedCredential>('/api/happier/credential', input);
 

@@ -120,7 +120,7 @@ export function resolvePreferredGeneratedClientEntrypoint(
         : resolveGeneratedClientEntrypoint("../../generated/sqlite-client");
 }
 
-function withSharedQaSchemaDiagnostics(client: PrismaClientType) {
+function withSharedQaSchemaDiagnostics(client: PrismaClientType): PrismaClientType {
     if (!process.env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK?.trim()) return client;
     const extended = client.$extends({
         query: {

@@ -7,7 +7,7 @@ import {
     deleteLegacyConnectedServiceVendorToken,
     mutateLegacyConnectedServiceVendorToken,
 } from "./credentials/mutation";
-import { ConnectedServiceCloudVendorKeySchema } from "@happier-dev/protocol";
+import { ConnectedServiceCloudVendorKeySchema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { collectLegacyConnectedServiceVendorKeysFromRows } from "./legacyConnectedServiceVendors";
 import {
     listAllQualifiedConnectedAccountsInTx,

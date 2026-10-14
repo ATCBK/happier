@@ -200,9 +200,11 @@ part; omit it for internal pointing, or pass `null` for no pointed part.
 view own selection, drilling and collection. `renderTooltip(key)` adds context;
 `testID` identifies the chart. No callback performs a storage operation itself.
 
-The chart has one keyboard stop: arrows move between parts, Enter opens, Space
-collects, and Backspace/Escape goes up. Keep an equivalent labelled list beside
-the picture for exact values and actions; a tooltip alone is insufficient.
+The chart has one keyboard stop: arrows move between parts, including folded
+smaller-items groups, Enter opens the pointed part or folded group with the same
+key as pointer activation, Space collects, and Backspace/Escape goes up. Keep an
+equivalent labelled list beside the picture for exact values and actions; a
+tooltip alone is insufficient.
 `reducedMotion` overrides the environment preference; reduced motion replaces
 the level immediately rather than cross-fading it.
 
@@ -237,6 +239,8 @@ Keyboard arrows traverse the rings and their hierarchy, Enter opens, Space
 collects, and Backspace/Escape goes up. Keep the same exact-value list as for a
 Treemap. `reducedMotion` uses a short cross-fade instead of the normal geometry
 morph; it does not mean every transition is instantaneous.
+Pointer and touch hit tests follow the currently drawn arcs throughout a morph,
+including when another drill retargets a transition already in progress.
 
 ```tsx
 <Sunburst theme={theme} items={parts} width={400} height={408} minArcDegrees={2}
@@ -1259,6 +1263,14 @@ scale, reduced motion, screen-reader state, and safe-area insets from the
 semantic surface context rather than copying host state. Support Dynamic Type,
 RTL and long strings, high contrast, reduced motion, and 44×44-point iOS or
 48×48-dp Android targets.
+
+In the 0.3 development author API, `HappierPressable` from
+`@happier-dev/plugin-ui/components` accepts `checked?: boolean | 'mixed'` in its
+exported `HappierPressableProps`. For a checkbox group, pass `false` when none
+are checked, `'mixed'` when some are checked, and `true` when all are checked.
+The same value becomes web `aria-checked` and native
+`accessibilityState.checked`; keep the visible mark in agreement. Use `'mixed'`
+with checkbox or checkbox-menu-item roles, not radio buttons or switches.
 
 The host owns occurrence currentness. Do not retain a competing currentness
 flag. If a host operation becomes unavailable, preserve useful rendered state

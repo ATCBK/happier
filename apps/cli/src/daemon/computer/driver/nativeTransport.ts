@@ -1,4 +1,3 @@
-import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { z } from 'zod';
 
 export class ComputerDriverError extends Error {
@@ -20,6 +19,8 @@ export function nativeRefusalCode(result: NativeToolResult): string {
 
 /** Private pinned MCP codec; host Actions retain all approval and target authority. */
 export async function openNativeComputerTransport(executablePath: string, displayId: string, context?: Readonly<{ signal?: AbortSignal }>) {
+  if (context?.signal?.aborted) throw new ComputerDriverError('driver_unavailable');
+  const { getDefaultEnvironment, StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
   if (context?.signal?.aborted) throw new ComputerDriverError('driver_unavailable');
   const desktopEnvironment: Record<string, string> = {};
   if (process.platform === 'linux') {

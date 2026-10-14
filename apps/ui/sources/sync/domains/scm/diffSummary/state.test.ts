@@ -122,6 +122,13 @@ describe('SCM diff summary state', () => {
         });
     });
 
+    it('projects a saved output failure even when capture and result admission succeeded', () => {
+        const output = { ...pending, outputs: { walkthrough: { state: 'failed', reason: 'Native model provisioning failed' } } } satisfies ScmDiffSummaryGenerateSuccess;
+        expect(selectScmDiffSummaryViewModel(observe(output), 'progressive')).toMatchObject({
+            status: 'failed', error: { message: 'Native model provisioning failed' }, comparison,
+        });
+    });
+
     it('completes the requested output while its retained run remains running and other coverage remains incomplete', () => {
         const output = { ...pending, comparison: { ...comparison, inventory: { ...comparison.inventory, state: 'incomplete', reasons: ['missing page'] } },
             outputs: { walkthrough: { state: 'complete', value: { title: 'Walkthrough', intro: '', stops: [], otherChangeRefs: ['change_1'] } } },

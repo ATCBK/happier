@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "清除账户前请先查看这些资源。清除 Happier 数据不会在提供方删除它们。",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `他们还可以读取此会话使用的登录信息：${purposes}，以及此会话的 Happier 访问权限。`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service}（原生登录）`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `在 ${owner} 的 ${machine} 上运行`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier 会为 ${machine} 提供仅适用于此会话的登录凭据。`,
         fullSignIn: ({ machine }: { machine: string }) => `此会话运行期间，你的 Happier 登录凭据会存储在 ${machine} 上。在那里拥有终端或代理访问权限的人可能会用它访问你的 Happier 账户。`,

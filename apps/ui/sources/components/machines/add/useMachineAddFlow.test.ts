@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -174,7 +175,7 @@ describe('machine add flow lifetime', () => {
         const pending = new Promise<string>(resolve => { finishStart = resolve; });
         const originalStart = manual.bridge.start.getMockImplementation()!;
         manual.bridge.start.mockImplementation(spec => spec.kind === 'remote.ssh.bootstrapMachine.v1' ? pending : originalStart(spec));
-        const policy = { ...sshPolicy, actions: { 'machines.add.ssh.cancel': { enabled: false } } };
+        const policy = ActionsSettingsV1Schema.parse({ ...sshPolicy, actions: { 'machines.add.ssh.cancel': { enabled: false } } });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: policy } }, version: 1 } });
         storage.getState().applySettingsForScope({ serverId, accountId: 'alice' }, { ...storage.getState().settings, actionsSettingsV1: policy }, 1);
         try {
@@ -207,7 +208,7 @@ describe('machine add flow lifetime', () => {
         const serverId = await harness.addHome({ serverUrl: 'https://disabled-ssh.example.test', name: 'Disabled SSH', accountId: 'alice' });
         vi.stubGlobal('isTauri', true);
         const manual = createManualSystemTaskRunner('native');
-        const actionsSettingsV1 = { v: 1 as const, actions: { 'machines.add.ssh.start': { enabled: false } } };
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'machines.add.ssh.start': { enabled: false } } });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 } });
         storage.setState({ settingsScope: { serverId, accountId: 'alice' }, profileScope: { serverId, accountId: 'alice' }, settings: { ...previous.settings, actionsSettingsV1 }, machineListByServerId: { [serverId]: [] } });
         try {
@@ -289,7 +290,7 @@ describe('machine add flow lifetime', () => {
             expect(resumed.getCurrent().path).toBe('anotherComputer');
             expect(resumed.getCurrent().watch).toMatchObject({ status: 'arrived', startedAtMs });
             expect(resumed.getCurrent().arrived?.machineId).toBe('new-computer');
-            await act(async () => resumed.getCurrent().discard());
+            await act(async () => { await resumed.getCurrent().discard(); });
             expect(resumed.getCurrent().watch.status).toBe('idle');
             await resumed.unmount();
         } finally {
@@ -312,7 +313,7 @@ describe('machine add flow lifetime', () => {
             expect(hook.getCurrent().watch.notSeeing).toBe(false);
             await act(async () => { vi.advanceTimersByTime(1); });
             expect(hook.getCurrent().watch).toMatchObject({ status: 'watching', notSeeing: true });
-            await act(async () => hook.getCurrent().discard());
+            await act(async () => { await hook.getCurrent().discard(); });
             expect(hook.getCurrent().watch).toMatchObject({ status: 'idle', notSeeing: false });
             await act(async () => storage.setState({ machineListByServerId: { [home.id]: [createMachineFixture({ id: 'late', activeAt: Date.now() })] } }));
             expect(hook.getCurrent().watch.status).toBe('idle');

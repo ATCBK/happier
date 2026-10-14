@@ -1,9 +1,15 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { SessionReportsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionReportsV1Schema, type SessionReportsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { selectSessionReportSubtree } from '@/components/sessions/work/reportSubtree';
+import { readSessionWorkStatusFacts, readSessionWorkStalled } from '@/components/work/status/sessionWorkStatusFacts';
+import { projectWork, groupWorkByState, readWorkWorkingCount } from '@/components/sessions/work/workProjection';
+import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import {
   SessionRowReportsChip,
@@ -15,6 +21,27 @@ const REPORTS: SessionReportsV1 = { total: 3, needsYou: 1, working: 1, stalled: 
 describe('SessionRowReportsChip', () => {
   afterEach(() => {
     standardCleanup();
+  });
+
+  it('agrees with real Work projection for the same offline in-progress list facts', async () => {
+    const now = Date.now();
+    const child = createSessionFixture({ id: 'child', serverId: 'home', reportsTo: { sessionId: 'lead' },
+      active: false, activeAt: now, presence: 'offline', latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now });
+    const row = buildSessionListRenderableFromSession(child);
+    const reports = selectSessionReportSubtree({}, 'lead', 'home', { home: { child: row } });
+    const status = readSessionAwarenessWorkStatusV1({ awareness: readSessionWorkStatusFacts(row, now).awareness });
+    const stalled = readSessionWorkStalled(row, now);
+    const counts = SessionReportsV1Schema.parse({ total: 1, working: Number(status.bucket === 'working'), needsYou: Number(status.bucket === 'needs_you'), stalled: Number(stalled) });
+    const work = projectWork({ sessionId: 'lead', reportSessions: reports.map(session => ({
+      sessionId: session.id, leadSessionId: 'lead', title: 'Payment retries', agentId: null, facts: [],
+      statusFacts: readSessionWorkStatusFacts(session, now), stalled: readSessionWorkStalled(session, now), archived: false,
+    })), agentEntries: [], workflowHeadlineRuns: [], managedRuns: [], ownTriggerRunIds: new Set(),
+      describeAgentStatus: () => '', describeProgress: () => '' });
+    expect(groupWorkByState(work).recent.map(item => item.status.bucket)).toEqual(['offline']);
+    expect(readWorkWorkingCount(work.summary)).toBe(0);
+    const screen = await renderScreen(<SessionRowReportsChip sessionId="lead" reports={counts} />);
+    expect(screen.getTextContent().toLowerCase()).not.toContain('working');
+    expect(screen.getTextContent().toLowerCase()).toContain('offline');
   });
 
   it('keeps a folded lead quiet but truthful: the reports count, and the needs-you dot while one waits', async () => {

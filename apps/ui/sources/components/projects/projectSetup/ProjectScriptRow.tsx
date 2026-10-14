@@ -142,25 +142,11 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const openDetail = () => {
     if (props.operation) void openOutput(props.operation, { title: outputTitle });
   };
-  // A Run started here also opens its tab once that new run has a terminal (lab `s-scripts` RAIL).
-  // `previous` is the operation the row showed when Run was pressed; no clock comparison.
-  const runRequest = React.useRef<Readonly<{ previous: string | null }> | null>(null);
-  const terminalId = attachment?.terminalId ?? null;
-  React.useEffect(() => {
-    const operation = props.operation;
-    const request = runRequest.current;
-    if (!operation || !terminalId || !request || operation.snapshot.operationId === request.previous) return;
-    runRequest.current = null;
-    void openOutput(operation, { title: outputTitle, fallbackToDetail: false });
-  }, [openOutput, outputTitle, props.operation, terminalId]);
-  // A refused Run has no new operation to open.
-  React.useEffect(() => {
-    if (props.failureCode || props.workerRefusal) runRequest.current = null;
-  }, [props.failureCode, props.workerRefusal]);
+  // A Run never opens the terminal by itself: the row owns the running state (elapsed time and the
+  // producer's latest output line) and the output stays one press away.
   const run = (choice?: ProjectExecutionChoiceV1, managed?: ManagedMachineSelectionDraft) => {
     const target = managed ? null : choice ?? props.defaultChoice ?? null;
     setRunTarget(target?.kind === 'workers' && target.destination.kind === 'machine' ? target.destination.machineId : null);
-    if (output.opensInTerminal) runRequest.current = { previous: props.operation?.snapshot.operationId ?? null };
     props.onRun(choice, managed);
   };
   // Desktop page rows open into their output; phone and compact rows open it directly (the host's
@@ -280,6 +266,22 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   ) : null;
   const notices = <>{refusal}{managedNotice}</>;
 
+  const outputBody = expanded && props.operation && attachment?.terminalId ? (
+    <ProjectCommandOutputPane
+      operation={props.operation}
+      title={props.name}
+      {...(output.opensInTerminal ? { onOpenInTerminal: openDetail } : { onOpenDetail: openDetail })}
+    />
+  ) : expanded && !presentation.live ? (
+    // A live run without a terminal has said what it is doing in the row; only a run with nothing to read says so.
+    <SurfaceStateCard
+      size="line"
+      kind="empty"
+      title={t('projects.scripts.output.empty')}
+      testID={`${props.testID}.noOutput`}
+    />
+  ) : null;
+
   if (!discloses) return <>{header()}{notices}</>;
   return (
     <>
@@ -292,22 +294,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
         header(headerProps as Readonly<Record<string, unknown>>)
       }
     >
-      <ProjectCommandOutputFrame>
-        {expanded && props.operation && attachment?.terminalId ? (
-          <ProjectCommandOutputPane
-            operation={props.operation}
-            title={props.name}
-            {...(output.opensInTerminal ? { onOpenInTerminal: openDetail } : { onOpenDetail: openDetail })}
-          />
-        ) : expanded ? (
-          <SurfaceStateCard
-            size="line"
-            kind="empty"
-            title={presentation.live ? presentation.text : t('projects.scripts.output.empty')}
-            testID={`${props.testID}.noOutput`}
-          />
-        ) : null}
-      </ProjectCommandOutputFrame>
+      {outputBody ? <ProjectCommandOutputFrame>{outputBody}</ProjectCommandOutputFrame> : null}
     </ExpandableItem>
     {notices}
     </>

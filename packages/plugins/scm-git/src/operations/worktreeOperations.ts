@@ -24,6 +24,8 @@ import { canonicalAbsolutePathsEqual } from '@happier-dev/cli-common/path';
 import { inspectGitCheckoutIdentity } from '../checkoutIdentity.js';
 import { parseGitWorktreeListPorcelain } from '../worktreeListParser.js';
 import { withGitWorktreeMutation } from './worktreeMutationQueue.js';
+import { readGitRetentionKind } from './worktreeRetentionFacts.js';
+import { readCurrentBackendRuntimeServices } from '@happier-dev/plugin-sdk/scm/backend';
 
 function normalizeBaseRef(value: string | null | undefined): string | null {
     const trimmed = String(value ?? '').trim();
@@ -211,6 +213,15 @@ export async function gitWorktreeRemove(input: {
         const path = validatedPath.value;
         input.context.assertFilesystemPathAuthorized?.(path);
         const before = await readPathIdentity(path);
+        if (before?.isDirectory() && !before.isSymbolicLink() && input.context.beforeFilesystemMutation
+            && await readGitRetentionKind(path, input.context.cwd, input.context.retainedSourcePath ?? path)) {
+            const remove = readCurrentBackendRuntimeServices()?.removeRetainedPath;
+            if (!remove) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+                error: 'The host does not support retained SCM deletion' };
+            await remove({ path, expectedIdentity: { dev: String(before.dev), ino: String(before.ino) },
+                beforeEffect: input.context.beforeFilesystemMutation });
+            return { success: true };
+        }
         if (!before && input.context.beforeFilesystemMutation) {
             const listed = await runScmCommand({ bin: 'git', cwd: input.context.cwd,
                 args: ['worktree', 'list', '--porcelain', '-z'], env: buildScmNonInteractiveEnv() });
@@ -292,7 +303,7 @@ export async function gitWorktreeRemove(input: {
 }
 
 async function readPathIdentity(path: string) {
-    try { return await lstat(toNamespacedPath(path)); }
+    try { return await lstat(toNamespacedPath(path), { bigint: true }); }
     catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null; throw error; }
 }
 

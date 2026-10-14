@@ -78,7 +78,7 @@ export type BrowserDiagnosticsActionResultById = {
         v: 1;
         machineId: string;
         generatedAt: number;
-        refreshState: 'error' | 'idle' | 'refreshing';
+        refreshState: 'idle' | 'refreshing' | 'error';
         events: {
             v: 1;
             eventId: string;

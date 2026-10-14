@@ -5,7 +5,7 @@ import {
     COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1,
     MAX_COMPOSER_CONTROL_STATE_RESOURCE_BYTES_V1,
 } from '@happier-dev/protocol';
-import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
+import type { PluginUiResourceReference, PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 
 import type { PluginContextualResourceBinding } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { log } from '@/log';
@@ -347,6 +347,52 @@ describe('ComposerControlResourceState', () => {
             tree?.update(<Probe binding={secondBinding} snapshot={invalidAfterRetirement} />);
         });
         expect(observed.current).toEqual({ state: null, resource: invalidAfterRetirement });
+
+        await act(async () => { tree?.unmount(); });
+    });
+
+    it('scopes retained state to the exact host-read reference, not a shared plugin/local id', async () => {
+        const observed: { current: ComposerControlResourceStateProjection | null } = { current: null };
+        const binding = createBinding();
+        const first = resourceSnapshot({
+            contentType: COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1,
+            document: JSON.stringify({ label: 'Week' }),
+            digest: `sha256:${'a'.repeat(64)}`,
+        });
+        const weekRead: PluginUiResourceReference = {
+            hostRead: 'usage.query',
+            input: { queries: [{ period: { startMs: 0, endMs: 1 }, metric: 'tokens' }] },
+        };
+        const monthRead: PluginUiResourceReference = {
+            hostRead: 'usage.query',
+            input: { queries: [{ period: { startMs: 0, endMs: 2 }, metric: 'tokens' }] },
+        };
+
+        function Probe(props: Readonly<{
+            resource: PluginUiResourceReference;
+            snapshot: PluginUiResourceSnapshot | null;
+        }>): null {
+            observed.current = useComposerControlResourceState({
+                binding,
+                resource: props.resource,
+                snapshot: props.snapshot,
+                isCurrent: () => true,
+            });
+            return null;
+        }
+
+        let tree: ReturnType<typeof create> | null = null;
+        await act(async () => {
+            tree = create(<Probe resource={weekRead} snapshot={first} />);
+        });
+        expect(observed.current?.state).toEqual({ label: 'Week' });
+
+        // A different host read is a different Resource: the prior control's
+        // retained value must not be shown while the new read has no snapshot.
+        await act(async () => {
+            tree?.update(<Probe resource={monthRead} snapshot={null} />);
+        });
+        expect(observed.current).toEqual({ state: null, resource: null });
 
         await act(async () => { tree?.unmount(); });
     });

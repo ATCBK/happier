@@ -5,8 +5,8 @@ import {
     type VerifiedAccountContentKeyBinding,
 } from "@/app/encryption/accountContentKeyAdmission";
 
-import type { AccountRecipientEnvelopeUnavailableReason } from "@happier-dev/protocol";
-export type { AccountRecipientEnvelopeUnavailableReason } from "@happier-dev/protocol";
+import type { AccountRecipientEnvelopeUnavailableReason } from '@happier-dev/protocol/account/encryptionMode';
+export type { AccountRecipientEnvelopeUnavailableReason } from '@happier-dev/protocol/account/encryptionMode';
 
 export type AccountRecipientEnvelopeReadiness =
     | Readonly<{

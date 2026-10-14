@@ -232,30 +232,30 @@ const styles = StyleSheet.create((theme) => ({
     // The map band runs edge to edge, so the sheet clips it to its own corners.
     sheet: { flexGrow: 1, minWidth: 0, overflow: 'hidden' },
     card: { flexGrow: 1, minWidth: 0 },
-    copy: { gap: theme.margins.xs, padding: theme.margins.md },
-    titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.xs },
-    title: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
-    description: { ...Typography.default(), color: theme.colors.text.secondary },
+    copy: { gap: theme.space.s4, padding: theme.space.s12 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s4 },
+    title: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
+    description: { ...Typography.variant('body'), color: theme.colors.text.secondary },
     // The example itself, on the card's paper (lab nav-N3); the footer's hairline closes it. A short map
     // beside a taller neighbour sits in the middle of the paper it is given, not on top of an empty well
     // (DESIGN-9 P5 "Ask once").
     preview: {
         flexGrow: 1,
         justifyContent: 'center',
-        paddingHorizontal: theme.margins.md,
-        paddingBottom: theme.margins.md,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s12,
     },
     footer: {
         marginTop: 'auto',
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.md,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.subtle,
     },
-    meta: { ...Typography.default(), flexShrink: 1, color: theme.colors.text.tertiary },
-    chooser: { flexShrink: 1, minWidth: 0, alignItems: 'flex-end', gap: theme.margins.xs },
+    meta: { ...Typography.variant('meta'), flexShrink: 1, color: theme.colors.text.tertiary },
+    chooser: { flexShrink: 1, minWidth: 0, alignItems: 'flex-end', gap: theme.space.s4 },
 }));

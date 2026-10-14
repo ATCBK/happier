@@ -1,4 +1,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// Runtime consumers below are static imports; install their transport boundary before evaluation.
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';

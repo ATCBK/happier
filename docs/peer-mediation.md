@@ -56,8 +56,9 @@ Transport selection defaults to automatic. The 0.3 client-local Standard-only se
 or `HAPPIER_HOME_CARRIER_POLICY=standard_only` in the CLI/daemon process environment, prevents
 new Home and finite Machine Iroh acquisitions; descriptor-declared HTTPS remains usable, as do
 independently eligible current Standard Machine RPC routes. The mandatory `machine/1` prepared
-finite-transfer path has no Standard carrier and is unavailable in this mode; it does not probe an
-older daemon or switch to `legacy_machine_rpc`. An Iroh-only Home or Machine with no Standard route
+finite-transfer path remains Iroh-only on native hosts. Browser finite Machine transfers instead
+use the current Home RPC baseline in this mode; they do not probe an older daemon or switch to
+`legacy_machine_rpc`. An Iroh-only Home or Machine with no Standard route
 is likewise unavailable. The setting does not change the Home server's published descriptor and
 does not cancel a finite transfer already in progress. On the UI, focused Home recovery reselects
 and releases its prior Iroh Home carrier. The managed daemon service installer persists an explicit
@@ -78,8 +79,8 @@ stand in for its authenticated identity. Diagnostics may describe a proven nativ
 or `Secure relay`, while an unproven path stays `unknown`.
 
 Browser Iroh carries **Home HTTP, Socket.IO, and finite Machine transfers in the current development
-source**. Finite transfers use `happier/machine/1`, the canonical signed route grant, and no ordinary
-user-socket fallback; the production direct-import/direct-export path passed in loaded Chromium
+source**. Finite transfers prefer `happier/machine/1` with the canonical signed route grant;
+the production direct-import/direct-export path passed in loaded Chromium
 against the stock local relay and real Machine acceptor on 2026-09-03. That current-source result is
 not stable/preview availability, multi-browser evidence, target certification, or Lane 09
 certification. Browser Mutagen/workspace sync remains excluded. A browser cannot bind the native
@@ -94,7 +95,7 @@ In unreleased 0.3 development source, finite workspace Action drivers share
 authenticated Account/client grant, ephemeral proof and exact target recheck.
 The headless CLI uses the native ephemeral endpoint contract; it does not reuse
 the daemon's persistent Machine endpoint identity. Both still use the prepared
-`happier/machine/1` carrier and its existing transfer capabilities. Preparation
+`happier/machine/1` carrier and its existing transfer capabilities when Iroh is selected. Preparation
 or export resource release is not proof of successful destination completion.
 
 When the client-local policy permits Iroh, selection is automatic and narrow. The browser carrier is chosen only on a plain browser host
@@ -139,20 +140,38 @@ an unavailable native endpoint active.
 
 Finite Machine selection and Home selection have different descriptor inputs. The browser Home
 carrier above requires the Home's Iroh descriptor; browser finite transfers instead require the
-target Machine's current `irohMachineEndpoint` with a non-empty relay set.
+target Machine's current `irohMachineEndpoint` with a non-empty relay set for the Iroh fast path.
 `resolveMachineCarrierPreselection.ts#resolveMachineCarrierPreselection` also requires an
 application-carrier policy that permits Iroh, enabled transfer/direct-peer/peer-mediation bits and the Machine's
 declared finite-transfer application. A Home descriptor is not an additional Machine-transfer
-predicate when Home control requests use an independently reachable Standard route. Missing
-Machine endpoint publication refuses the transfer before any relay dial.
+predicate when Home control requests use an independently reachable Standard route.
+
+Under IR-105 (2026-10-13), a browser with current declared finite-transfer support
+and the enabled transfer feature selects the Home's server-mediated encrypted
+RPC phases when Iroh is unusable (including absent endpoint or relay hints).
+`machineCarrierHttpLease.ts#resolveMachineCarrierRoute` captures that decision
+before preparation for every finite Machine family. Its Home requester sends
+only the canonical init/chunk/finalize/abort phases to the existing daemon
+prepared-transfer handler in-process, retaining the same capability, encrypted
+chunk schemas, import state and filesystem destination settlement. The Home
+verifies the operation root, exact installed target and signed phase body;
+an undeclared daemon remains unavailable. This creates neither a second byte
+store nor a raw filesystem RPC bypass. Like the HH Machine-RPC policy, it may
+fall back after a failed Iroh acquisition only when custody cleanup succeeds
+and no transfer HTTP phase was sent. It consumes the shared request-disposition
+classification; cancellation and Account retirement remain refused. An HTTP
+request failure never switches carriers or replays an unknown-delivery phase.
+Disabling the optional direct listener leaves this Home prepared-transfer owner
+available, but does not admit finite Iroh traffic through an endpoint used by
+other Machine applications.
 
 Bounded viewer reads are a separate operation in current unreleased 0.3 source.
 `fileReadWrite.ts#workspaceReadFile` invokes `daemon.filesystem.readFile` through the existing
 filesystem Action admission and guarded Machine RPC, validates the response and enforces the
 caller's inline byte ceiling. `refreshWorkspaceFileDetails.ts#refreshWorkspaceFileDetails`
 consumes that owner. This read needs neither a finite-transfer lease nor an Iroh relay; workspace
-Search likewise reads through its own authorized Machine RPC. Downloads and other prepared finite
-operations still use `happier/machine/1` without a Standard fallback. A served UI built before the
+Search likewise reads through its own authorized Machine RPC. Browser downloads and other prepared
+finite operations use the selection contract above. A served UI built before the
 bounded-read change can therefore still show the transfer refusal until its UI export is rebuilt
 and loaded.
 
@@ -503,9 +522,13 @@ Generic TCP opens still require their signed destination and the operator's port
 Preview HTTP and WebSocket adapters use native HTTP framing over the same PMS-backed Duplex.
 HTTPS targets layer native TLS over that Duplex with normal certificate and hostname verification;
 there is no insecure certificate fallback. Native HTTP decodes chunked responses before forwarding
-body bytes, including SSE. Private and public preview application routes each use an encapsulated
-raw stream parser to preserve request bytes and methods; registration, status and revoke control
-routes retain ordinary API JSON parsing in their parent scope.
+body bytes, including SSE. Isolated-origin application traffic shares one host-route registration,
+dispatching through the private preview or public exposure runtime for the requested host. This
+also covers absolute application assets, navigation and origin-root public WebSockets. The public
+viewer cookie covers the isolated host's root; API-origin exchange cookies retain their prefix
+scope. Public application traffic is bound to the exposure's host, including prefixed links.
+Application routes use an encapsulated raw stream parser to preserve request bytes and methods;
+registration, status and revoke control routes retain ordinary API JSON parsing in their parent scope.
 
 Both adapters use `buildPreviewRequestHeaders` for application credentials and origin policy:
 application cookies pass unless the preview explicitly drops them, while Happier authority cookies,
@@ -581,6 +604,10 @@ that origin; native direct access does not weaken this server-origin boundary.
 `hostOriginAvailable` is derived from the actual HTTPS/domain resolver; `pathModeAvailable` is false.
 One-use URL admissions have a short expiry. An exchanged viewer cookie has no elapsed-time
 expiry: the server authorizes it against the live registration until that resource is unregistered.
+Every server HTTP admission and WebSocket upgrade also checks the current Home preview feature
+decision before exchange or forwarding. Disabling it refuses fresh admissions and subsequent
+cookie-authenticated requests without retiring registrations. A failed Home configuration read
+during an upgrade closes that request's socket; its rejection never escapes the preview ingress.
 Private and public viewer cookies share `app/local/services/viewerCookie.ts`: host-only,
 HttpOnly, Secure, `SameSite=None; Partitioned`, with each route's existing path scope.
 The cross-site Browser frame can retain its exchanged admission, while browsers supporting

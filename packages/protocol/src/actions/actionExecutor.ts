@@ -1,4 +1,9 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import * as z from 'zod/mini';
+import { actionStartTargetUnavailableV1 } from './executor/actionStartDiagnostics.js';
 import { resolveInputOptions, resolveTypedInputFieldOptions, normalizeResolvedOptions, tryNormalizeExecutionBackendOptionValue, readReviewNarratorOptions, buildAgentInventorySelectionArgs } from '../inputs/inputOptions.js';
+import { ProjectDefinitionInspectOutputSchema } from './projectDefinitionActionFamily.js';
+import { ProjectPrepareInputV1Schema } from './projectActionFamily.js';
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from './pluginExecutionOriginActionFamily.js';
 import { readWidgetActionAccountScopeAdmissionV1 } from '../widgets/widgetActionScopeV1.js';
 import { LOCAL_DAEMON_SERVICE_ACTION_IDS, LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS, type LocalDaemonServiceActionId } from './specs/localDaemonService.js';
@@ -51,6 +56,8 @@ import { AccountHomeContinuationInputV1Schema } from './accountHomeContinuationV
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 import { resolveProjectActionMachineV1 } from './executor/projectActionPlacement.js';
 import type { PublicActionInputById } from './actionSpecs.js';
+import type { SessionResumeRequestV1 } from '../sessions/control/sessionResumeRequestV1.js';
+import type { SessionGoalSetRequestV1 } from '../sessions/work/state/sessionWorkStateRpc.js';
 import { WaitActionInputV1Schema } from './specs/wait.js';
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from './specs/actionOperations.js';
 import { readActionFailureEnvelope, readFailureEnvelopeDetails } from './executor/actionFailureEnvelope.js';
@@ -122,7 +129,7 @@ import { admitWidgetActionSurfaceV1, readWidgetActionSurfaceAdmissionV1 } from '
 import { setWidgetInputBindingsV1 } from '../widgets/widgetInstanceV1.js';
 import { executeWidgetDefinitionActionV1 } from '../widgets/executeWidgetDefinitionActionV1.js';
 import { WidgetLayoutFragmentActionIdV1Schema } from '../widgets/fragmentActionIdsV1.js';
-import { readWidgetLayoutFragmentActionAccountV1 } from '../widgets/fragmentActionsV1.js';
+import { readWidgetLayoutFragmentActionAccountV1, readWidgetLayoutFragmentApprovalNameV1 } from '../widgets/fragmentActionsV1.js';
 import { executeWidgetLayoutFragmentActionV1 } from '../widgets/executeWidgetLayoutFragmentActionV1.js';
 import { executeWidgetSnapshotPostV1 } from '../widgets/executeWidgetSnapshotPostV1.js';
 import { prepareWidgetDefinitionPublicationV1 } from '../widgets/widgetDefinitionPublicationV1.js';
@@ -818,7 +825,7 @@ function buildSessionSpawnNewArgs(
   return args as Parameters<ActionExecutorDeps['sessionSpawnNew']>[0];
 }
 
-const ActionSurfaceKeySchema = ActionSurfaceSchema.keyof();
+const ActionSurfaceKeySchema = lazyZodSchema(() => z.keyof(ActionSurfaceSchema));
 
 function parseActionSurfaceKey(value: unknown): keyof ActionSurfaces | null {
   const parsed = ActionSurfaceKeySchema.safeParse(value);
@@ -1196,8 +1203,11 @@ function mapApprovalCreatedBySurface(surface: ActionExecutorContext['surface']):
  * The approval's human title. The target Session travels as the request's own `sessionId` (readers
  * name it from there), so it is never appended to the title as a raw id.
  */
-function buildApprovalSummary(spec: ActionSpec, input?: unknown): string {
+function buildApprovalSummary(spec: ActionSpec, input?: unknown, preview?: unknown): string {
   const summary = String(spec.title ?? '').trim() || String(spec.id);
+  const fragmentName = WidgetLayoutFragmentActionIdV1Schema.safeParse(spec.id).success
+    ? readWidgetLayoutFragmentApprovalNameV1(input, preview) : null;
+  if (fragmentName) return `${summary} · ${fragmentName}`;
   const disclosure = machineAccessApprovalDisclosure(spec.id, input);
   return disclosure ? `${summary}\n\n${disclosure.description}` : summary;
 }
@@ -1206,15 +1216,15 @@ function sentenceTerminated(value: string): string {
   return /[.!?…]$/u.test(value) ? value : `${value}.`;
 }
 
-/** One canonical summary source for every approval; domain presenters refine exact effects. */
-function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
+/** One canonical summary source for every approval and present-user confirmation; domain presenters refine exact effects. */
+export function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
   let domainSummary: string | null = null;
   try {
     domainSummary = spec.approvalPresentation?.summary(input)?.trim() || null;
   } catch {
     // Presentation cannot become a second effect-admission failure.
   }
-  const fallback = String(spec.inputHints?.description ?? spec.description ?? spec.title ?? spec.id).trim();
+  const fallback = String(spec.inputHints?.description ?? spec.title ?? spec.id).trim();
   return sentenceTerminated(domainSummary ?? (fallback || String(spec.id)));
 }
 
@@ -1258,7 +1268,7 @@ async function prepareApprovalRequest(params: Readonly<{
   actionArgs: unknown;
   context: ActionExecutorContext;
   computerApprovalDisplay?: ComputerApprovalDisplayV1;
-}>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | null> {
+}>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | ActionExecuteFailure | null> {
   const spec = getActionSpec(params.actionId);
   let computerApprovalDisplay = params.computerApprovalDisplay;
   if (!computerApprovalDisplay && (params.actionId === 'computer.target.select'
@@ -1273,10 +1283,24 @@ async function prepareApprovalRequest(params: Readonly<{
   const observedInput = spec.projectObservationInput
     ? spec.projectObservationInput(params.input)
     : params.input;
+  const fragmentAction = WidgetLayoutFragmentActionIdV1Schema.safeParse(params.actionId);
+  if (fragmentAction.success) {
+    const account = readWidgetLayoutFragmentActionAccountV1(params.input);
+    if (!account) return { ok: false, errorCode: 'widget_scope_unavailable', error: 'widget_scope_unavailable' };
+    const failure = await admitWidgetActionSurfaceV1(params.deps, { ...account, owner: { kind: 'home' } }, params.context);
+    if (failure) return failure;
+  }
+  const libraryItem = fragmentAction.success && ['widgets.fragment.update', 'widgets.fragment.delete', 'widgets.fragment.duplicate'].includes(params.actionId)
+    && typeof readRecord(params.input).artifactId === 'string' && params.deps.widgetLayoutFragmentArtifacts
+    ? await params.deps.widgetLayoutFragmentArtifacts.get(String(readRecord(params.input).artifactId), params.context.signal) : null;
+  const widgetLibraryName = fragmentAction.success
+    ? libraryItem?.name ?? readWidgetLayoutFragmentApprovalNameV1(params.input) : null;
+  const summaryInput = libraryItem ? { ...readRecord(params.input), fragment: { name: libraryItem.name } } : params.input;
   const defaultPreview = {
     actionId: params.actionId,
     actionArgs: observedInput,
-    summary: buildApprovalPreviewSummary(spec, params.input),
+    summary: buildApprovalPreviewSummary(spec, summaryInput),
+    ...(widgetLibraryName ? { widgetLibraryName } : {}),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {
     return { actionArgs: observedInput, preview: { actionId: params.actionId, actionArgs: observedInput } };
@@ -1288,15 +1312,34 @@ async function prepareApprovalRequest(params: Readonly<{
     defaultPreview,
   }) ?? defaultPreview;
   const customizedRecord = readRecord(customized);
+  // The target's passive inspection owns setup review. Caller-provided preview
+  // fields cannot become commands, consent, or an independent effect calculator.
+  const setupInput = params.actionId === 'projects.prepare' ? ProjectPrepareInputV1Schema.safeParse(params.input) : null;
+  const inspectedSetup = setupInput?.success && setupInput.data.phase === 'setup' && params.deps.projectDefinitionAction
+    ? ProjectDefinitionInspectOutputSchema.safeParse(await params.deps.projectDefinitionAction({ actionId: 'projects.inspect',
+      input: { workspace: setupInput.data.workspace }, context: params.context })) : null;
+  const setupReview = inspectedSetup?.success ? inspectedSetup.data.setupReview : undefined;
+  if (setupReview && setupInput?.success && setupInput.data.expectedEffectDigest
+    && setupInput.data.expectedEffectDigest !== setupReview.reviewedEffectDigest) return {
+      ok: false, errorCode: 'project_setup_effect_changed', error: 'project_setup_effect_changed',
+      details: { kind: 'pendingApproval', code: 'project_setup_effect_changed', ...setupReview,
+        ...(setupInput.data.consentScope ? { consentScope: setupInput.data.consentScope } : {}) },
+    };
   const customizedSummary = typeof customizedRecord.summary === 'string'
     ? customizedRecord.summary.trim()
     : '';
   const preview = {
     ...customizedRecord,
     actionId: params.actionId,
-    actionArgs: observedInput,
+    // This private preview is distinct from shared observations. A declared
+    // review schema validates its safe projection, including live-only inputs
+    // whose raw operands stay with the originating waiter.
+    actionArgs: spec.approvalPresentation?.inputSchema && spec.approvalPresentation.projectInput
+      ? spec.approvalPresentation.inputSchema.parse(spec.approvalPresentation.projectInput(params.input)) : observedInput,
     summary: customizedSummary || defaultPreview.summary,
+    ...(widgetLibraryName ? { widgetLibraryName } : {}),
     ...(computerApprovalDisplay ? { computerApprovalDisplay } : {}),
+    ...(setupReview ? { setupReview } : {}),
     ...(machineAccessApprovalDisclosure(params.actionId, params.input)
       ? { machineAccessDisclosure: machineAccessApprovalDisclosure(params.actionId, params.input) } : {}),
   };
@@ -1460,6 +1503,7 @@ function refuseUnmappedApprovalCaller(_caller: never): null {
 export function buildApprovalExecutionOriginV1(params: Readonly<{
   actionId: ActionId;
   input: unknown;
+  admittedInput?: unknown;
   context: ActionExecutorContext;
   targetSessionId: string | null;
 }>): ApprovalExecutionOriginV1 | null {
@@ -1537,7 +1581,8 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     ? settingsTarget.kind === 'daemon' ? settingsTarget.machineId : ''
     : normalizeId(params.context.executionRunTargetMachineId)
     || externalAuthorization?.binding.machineId
-    || (resolveActionExecutionPlacementForInput(getActionSpec(params.actionId), params.input) === 'machine'
+    // Placement parses the admitted payload; durable approval input may omit live-only values.
+    || (resolveActionExecutionPlacementForInput(getActionSpec(params.actionId), params.admittedInput ?? params.input) === 'machine'
       ? normalizeId(inputRecord.machineId) : '')
     || readLocalServiceControlActionRequest(params.actionId, params.input)?.target.machineId
     || normalizeId(params.context.defaultSessionMachineId)
@@ -2454,11 +2499,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const target = sessionId ? { kind: 'session' as const, sessionId } : widgetSurface || definitionAction ? null : ctx.externalActionTarget
       ?? (ctx.defaultSessionId ? { kind: 'session' as const, sessionId: ctx.defaultSessionId } : null);
     const result = evaluateApiTokenGrantV1({
-      grant: discovery ? { ...grant, targets: null, create: null }
+      grant: discovery ? { ...grant, targets: null, create: null, automationIds: null }
         : actionId === 'approval.request.decide' ? { ...grant, targets: null } : grant,
       actionId: contributedQualifiedId && actionId !== 'action.invoke' ? 'action.invoke' : actionId,
       ...(contributedQualifiedId ? { contributedQualifiedId } : {}),
       ...(actionId === 'session.spawn_new' && input !== undefined ? { spawnInput: input } : {}),
+      ...(actionId === 'workflow.trigger.run_now' ? { automationId: readRecord(input).automationId } : {}),
       target, targetMachineId: (sessionId ? sourceMachineIds?.get(sessionId) : undefined) ?? (sessionId && sessionId !== ctx.defaultSessionId ? undefined : ctx.defaultSessionMachineId
         ?? (ctx.externalActionTarget?.kind === 'machine' ? ctx.externalActionTarget.machineId : undefined)),
     });
@@ -2905,7 +2951,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const appOwnedReplay = actionId !== null && origin?.success && originIsCurrent
       && !requiresExactDaemonApprovalReplay(request)
       && (replayPlacement === 'account' || replayPlacement === 'client')
-      && args.ctx.surface === 'ui' && resolveHostStampedAuthority(args.ctx) === 'present_user'
+      && (args.ctx.surface === 'ui' || args.ctx.surface === 'cli') && resolveHostStampedAuthority(args.ctx) === 'present_user'
       && (!args.ctx.actionCaller || args.ctx.actionCaller.kind === 'host')
       && !args.ctx.externalActionCredential && !args.ctx.externalActionExecutionAuthorization
       && !args.ctx.rpcSessionAuthorization;
@@ -2926,7 +2972,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(args.ctx.operationCancellation ? { operationCancellation: args.ctx.operationCancellation } : {}),
       } : {}),
       ...(appOwnedReplay && origin?.success ? {
-        authority: 'present_user' as const, surface: 'ui' as const,
+        authority: 'present_user' as const, surface: args.ctx.surface === 'cli' ? 'cli' as const : 'ui' as const,
         serverId: replayServerId,
         ...(origin.data.serverIdentityId ? { serverIdentityId: origin.data.serverIdentityId } : {}),
         ...(args.ctx.runtimeAccountId ? { runtimeAccountId: args.ctx.runtimeAccountId } : {}),
@@ -3337,6 +3383,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     legacyMetadataLabel?: string,
     options?: Readonly<{
       prepareOnly?: boolean;
+      /** Only public execute offers the host's transient UI default confirmation. */
+      confirmUiDefault?: boolean;
       prepared?: PreparedCoreAdmission;
       hostInternal?: boolean;
       approvalReplay?: boolean;
@@ -3526,16 +3574,21 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // approval custody as native starts. Replay resolves current baseline and
     // policy while retaining the original host-admitted caller depth.
     if (isAgentCaller(ctx) && requiresActionAgentStartDepthV1(actionId) && !isAgentStartActionV1(actionId)) {
-      const resolved = await resolveActionAgentStartContextV1(deps, ctx);
       const permission = resolveAgentEffectivePermission(ctx);
       if (!permission.ok) return permission.error;
       const ceiling = typeof permission.effectiveCallerMode === 'string'
         ? parseAgentPermissionIntentV1Alias(permission.effectiveCallerMode) : null;
+      // Materialization consumes the permission owner's effective fact. Keep
+      // the original context intact for its signed origination/approval proof.
+      const resolved = ceiling ? await resolveActionAgentStartContextV1(deps,
+        { ...ctx, callerPermissionMode: permission.effectiveCallerMode }) : null;
       if (!resolved || !ceiling) {
         return actionId.startsWith('workflow.definition.')
           ? { ok: false, errorCode: 'definition_exceeds_authority', error: 'definition_exceeds_authority',
-              details: { code: 'definition_exceeds_authority', cause: { code: 'target_unavailable' } } }
-          : { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+              details: { code: 'definition_exceeds_authority', cause: { code: 'target_unavailable',
+                reason: !ceiling ? 'caller_permission_unavailable' : 'agent_start_context_unavailable' } } }
+          : actionStartTargetUnavailableV1(ctx, 'agent_start_context', !ceiling
+            ? 'caller_permission_unavailable' : 'agent_start_context_unavailable');
       }
       ctx = { ...ctx, agentStartContext: { ...resolved, callerPermissionCeiling: ceiling } };
     }
@@ -3547,12 +3600,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && Boolean(ctx.agentStartContext);
     if ((isAgentCaller(ctx) && (agentStartAction || roleTargetAction)) || userRoleStart) {
       const roleTarget = roleTargetAction ? readRecord(admittedInput).sessionId : undefined;
-      const resolved = await resolveActionAgentStartContextV1(deps, ctx, typeof roleTarget === 'string' ? roleTarget : undefined);
       const caller = userRoleStart ? { ok: true as const, effectiveCallerMode: 'yolo' } : resolveAgentEffectivePermission(ctx);
       if (!caller.ok) return classifyExecutionRunStartPreDispatchFailure(actionId, caller.error);
       const ceiling = typeof caller.effectiveCallerMode === 'string'
         ? parseAgentPermissionIntentV1Alias(caller.effectiveCallerMode) : null;
       if (!ceiling) return classifyExecutionRunStartPreDispatchFailure(actionId, causalPermissionAuthorityFailure());
+      const resolved = await resolveActionAgentStartContextV1(deps,
+        { ...ctx, callerPermissionMode: caller.effectiveCallerMode }, typeof roleTarget === 'string' ? roleTarget : undefined);
       // This fact comes from the authenticated Action caller, never authored input.
       const startContext = resolved ? { ...resolved, callerPermissionCeiling: ceiling,
         initiator: userRoleStart ? 'user' as const : undefined } : null;
@@ -3560,6 +3614,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (roleTargetAction) {
         const admission = admitActionAgentStartV1(ctx, { kind: 'session_target', targetSessionId: String(request.sessionId) }, startContext);
         if (!admission.ok) return admission.error;
+        ctx = { ...ctx, agentStartContext: startContext ?? undefined };
       } else {
         const starts = resolveActionAgentStartRequestsV1({ actionId, input: request, context: ctx,
           baseline: startContext?.baseline ?? { machineId: '', directory: '' } });
@@ -3778,7 +3833,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       : actionId === 'widgets.item.network.set' ? 'danger' as const
       : actionId === 'widgets.definition.create' && readRecord(readRecord(readRecord(admittedInput).definition).body).kind === 'html' ? 'danger' as const
       : !existingAdmission && memoryAdmission ? memoryAdmission.safety
-      : sharedWidgetWrite ? 'danger' as const : !existingAdmission && actionId === 'session.reports_to.set'
+      : sharedWidgetWrite ? 'danger' as const
+      : !existingAdmission && widgetTarget && ctx.surface === 'ui' && resolveHostStampedAuthority(ctx) === 'present_user'
+        && spec.approvalPolicy?.uiConfirmationForInput?.(admittedInput) === false ? 'safe' as const
+      : !existingAdmission && actionId === 'session.reports_to.set'
       ? isAgentCaller(ctx)
         && (normalizeId(ctx.defaultSessionId) === String(readRecord(admittedInput).sessionId)
           || (await readActionCallerLedSubtreeSessionIds(deps, ctx))?.has(String(readRecord(admittedInput).sessionId)))
@@ -3795,24 +3853,25 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           && !ctx.externalActionCredential && !ctx.externalActionExecutionAuthorization
         : ctx.operationAcceptance?.operationId === hostApprovalLifetime.operationId
           && ctx.actionCaller?.kind === 'host' && ctx.authority === 'account_automation'));
+    const resolveBaseApprovalRouting = (context: ActionExecutorContext) => resolveActionApprovalRouting({
+      actionId,
+      spec,
+      input: admittedInput,
+      context,
+      settings: context.actionsSettings,
+      ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
+      ...(computerSelection ? { computerConsentGranted: computerSelection.consentGranted } : {}),
+      ...(contextualSafety === undefined ? {} : { defaultSafety: contextualSafety }),
+      // Pass the raw policy-hook result through (boolean | undefined). When the hook is unwired,
+      // `undefined` propagates so `resolveActionApprovalRouting` applies its centralized fail-safe
+      // default instead of coercing an unwired dependency to "no approval" here. (F7)
+      requiredByPolicy: context.bypassApprovals ? false : contextualSafety === undefined
+        || visualAdmission && context.surface === 'ui' && resolveHostStampedAuthority(context) === 'present_user'
+        ? deps.isActionApprovalRequired?.(actionId, context, admittedInput) : undefined,
+    });
     const baseApprovalRouting = existingAdmission
       ? { required: false, flow: 'deferred' as const, result: 'none' as const }
-      : resolveActionApprovalRouting({
-          actionId,
-          spec,
-          input: admittedInput,
-          context: ctx,
-          settings: ctx.actionsSettings,
-          ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
-          ...(computerSelection ? { computerConsentGranted: computerSelection.consentGranted } : {}),
-          ...(contextualSafety === undefined ? {} : { defaultSafety: contextualSafety }),
-          // Pass the raw policy-hook result through (boolean | undefined). When the hook is unwired,
-          // `undefined` propagates so `resolveActionApprovalRouting` applies its centralized fail-safe
-          // default instead of coercing an unwired dependency to "no approval" here. (F7)
-          requiredByPolicy: ctx.bypassApprovals ? false : contextualSafety === undefined
-            || visualAdmission && ctx.surface === 'ui' && resolveHostStampedAuthority(ctx) === 'present_user'
-            ? deps.isActionApprovalRequired?.(actionId, ctx, admittedInput) : undefined,
-        });
+      : resolveBaseApprovalRouting(ctx);
     const folderApprovalRouting = folderCreateInput && !existingAdmission ? resolveActionApprovalRouting({
       actionId: 'artifact.folders.create', spec: getActionSpec('artifact.folders.create'), input: folderCreateInput,
       context: ctx, settings: ctx.actionsSettings,
@@ -3859,6 +3918,33 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
     try {
       if (approvalRouting.required && !isApprovalAction) {
+        if (options?.confirmUiDefault && approvalRouting === baseApprovalRouting && !folderApprovalRouting?.required
+          && ctx.surface === 'ui' && resolveHostStampedAuthority(ctx) === 'present_user'
+          && (!ctx.actionCaller || ctx.actionCaller.kind === 'host') && !ctx.bypassApprovals
+          && ctx.presentUserConfirmation?.actionId !== actionId && deps.presentUserActionConfirmation) {
+          const confirmedContext = { ...ctx, presentUserConfirmation: { actionId } };
+          // Only the policy owner can distinguish a confirmable default from an
+          // explicit Ask-first requirement after target/context admission.
+          if (!resolveBaseApprovalRouting(confirmedContext).required) {
+            const confirm = deps.presentUserActionConfirmation;
+            return ready({ actionId, input: admittedInput, context: ctx,
+              ...(legacyMetadataLabel ? { legacyMetadataLabel } : {}),
+            }, async () => {
+              if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+              const confirmed = await confirm({ actionId, input: admittedInput, context: ctx });
+              if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+              if (!confirmed) return { ok: false, errorCode: 'approval_canceled', error: 'approval_canceled' };
+              // The host reads current Account policy after this new UI await;
+              // a newly explicit Ask-first requirement invalidates the default confirmation.
+              if (deps.isActionApprovalRequired?.(actionId, confirmedContext, admittedInput) === true) {
+                return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+              }
+              // Re-enter current authority and domain admission with the existing
+              // exact-Action confirmation fact, never an approval bypass.
+              return await executeCoreTerminal(actionId, admittedInput, confirmedContext, true, legacyMetadataLabel);
+            });
+          }
+        }
         const confirmationSessionId = resolveSessionIdFromInput(admittedInput, ctx);
         const confirmationPreview = confirmationSessionId
           ? spec.projectSessionConfirmation?.(admittedInput, { sessionId: confirmationSessionId })
@@ -3964,10 +4050,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             error: errorCode,
           });
         }
+        if ('ok' in preparedApproval) return preparedApproval;
         const approvalActionArgs = preparedApproval.actionArgs;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId,
           input: approvalActionArgs,
+          admittedInput,
           context: ctx,
           targetSessionId,
         });
@@ -4000,7 +4088,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           },
           actionId,
           actionArgs: approvalActionArgs,
-          summary: buildApprovalSummary(spec, admittedInput),
+          summary: buildApprovalSummary(spec, admittedInput, preparedApproval.preview),
           preview: preparedApproval.preview,
           ...(requiredDirectoryApproval
             ? { sessionCreationDirectoryApproval: requiredDirectoryApproval }
@@ -4120,6 +4208,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             actionId,
           },
         };
+      }
+
+      // Request admission may permit automation to propose a human-only Action.
+      // A policy waiver suppresses that proposal, never grants execution authority.
+      if (canRequestPresentUserApprovalForActionInputV1(spec, admittedInput)
+        && resolveHostStampedAuthority(ctx) !== 'present_user') {
+        return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
       }
 
       if (options?.prepareOnly) {
@@ -4628,17 +4723,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
 
       if (isRoleActionIdV1(actionId)) {
-        if (actionId.startsWith('session.') && isAgentCaller(ctx)) {
-          const target = readRecord(parsed.data).sessionId;
-          const roleContext = await resolveActionAgentStartContextV1(deps, ctx, typeof target === 'string' ? target : undefined);
-          const caller = roleContext?.caller;
-          const ownSessionId = caller?.kind === 'session' ? caller.sessionId : undefined;
-          if (typeof target !== 'string' || !ownSessionId
-            || (target !== ownSessionId && !roleContext?.ledSubtreeSessionIds.includes(target))) {
-            return { ok: false, errorCode: 'session_target_not_led', error: 'session_target_not_led' };
-          }
-          ctx = { ...ctx, agentStartContext: roleContext ?? undefined };
-        }
         if (!deps.roleActionExecute) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         let result: unknown;
         try {
@@ -5902,6 +5986,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   : {}),
                 backendTarget: data.roleId && data.backendTarget ? data.backendTarget : normalizeExecutionBackendTargetValue(engineId),
                 instructions,
+                ...(reviewInput.childSelection ? { childSelection: reviewInput.childSelection } : {}),
                 ...(typeof data.modelId === 'string' ? { modelId: data.modelId } : {}),
                 ...(data.modelSelection !== undefined ? { modelSelection: data.modelSelection } : {}),
                 ...(data.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: data.sessionConfigOptionOverrides } : {}),
@@ -6089,6 +6174,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   ...(machineTarget?.project ? { cwd: machineTarget.project.directory } : {}),
                   backendTarget: data.roleId && data.backendTarget ? data.backendTarget : normalizeExecutionBackendTargetValue(backendTargetKey),
                   instructions,
+                  ...(data.childSelection !== undefined ? { childSelection: data.childSelection } : {}),
                   ...(data.modelSelection !== undefined ? { modelSelection: data.modelSelection } : {}),
                   ...(intent === 'voice_agent' && typeof data.chatModelId === 'string' ? { chatModelId: data.chatModelId } : {}),
                   ...(intent === 'voice_agent' && typeof data.commitModelId === 'string' ? { commitModelId: data.commitModelId } : {}),
@@ -7323,7 +7409,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             sessionId,
             serverId,
             ...(data.intent === 'resume' ? { intent: 'resume' as const } : {}),
-            ...(data.resumeRequest ? { resumeRequest: (parsed.data as PublicActionInputById['session.open']).resumeRequest } : {}),
+            ...(data.resumeRequest ? { resumeRequest: data.resumeRequest as SessionResumeRequestV1 } : {}),
             ...(destination ? { destination } : {}),
             ...(typeof data.tabId === 'string' ? { tabId: data.tabId } : {}),
             ...(typeof data.approvedNewDirectoryCreation === 'boolean'
@@ -8440,6 +8526,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
 
         if (actionId === 'session.goal.set') {
+          const goalMutation = parsed.data as SessionGoalSetRequestV1;
           const sessionId = normalizeId(data.sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           if (!deps.sessionGoalSet) {
@@ -8450,7 +8537,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await deps.sessionGoalSet({
             sessionId,
             ...(typeof data.objective === 'string' ? { objective: data.objective } : {}),
-            ...(typeof data.status === 'string' ? { status: data.status } : {}),
+            ...(typeof goalMutation.status === 'string' ? { status: goalMutation.status } : {}),
             ...(Object.prototype.hasOwnProperty.call(data, 'tokenBudget') && (typeof tokenBudget === 'number' || tokenBudget === null)
               ? { tokenBudget }
               : {}),
@@ -8728,12 +8815,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             decision,
             requestId: hasOwn(data, 'requestId') ? readNullableString(data.requestId) : null,
             turnId: hasOwn(data, 'turnId') ? readNullableString(data.turnId) : null,
-            ...(data.mode === undefined ? {} : { mode: SessionPermissionRespondRpcParamsV1Schema.options[0].shape.mode.parse(data.mode) }),
+            ...(data.mode === undefined ? {} : { mode: SessionPermissionRespondRpcParamsV1Schema._zod.def.options[0].shape.mode.parse(data.mode) }),
             ...(typeof data.reason === 'string' ? { reason: data.reason } : {}),
             ...(data.answers === undefined ? {} : { answers: StructuredQuestionAnswersV1Schema.parse(data.answers) }),
             ...(Array.isArray(data.allowedTools) ? { allowedTools: data.allowedTools } : {}),
             ...(hasOwn(data, 'updatedPermissions') ? { updatedPermissions: data.updatedPermissions } : {}),
-            ...(hasOwn(data, 'execPolicyAmendment') ? { execPolicyAmendment: SessionPermissionRespondRpcParamsV1Schema.options[0].shape.execPolicyAmendment.parse(data.execPolicyAmendment) } : {}),
+            ...(hasOwn(data, 'execPolicyAmendment') ? { execPolicyAmendment: SessionPermissionRespondRpcParamsV1Schema._zod.def.options[0].shape.execPolicyAmendment.parse(data.execPolicyAmendment) } : {}),
             ...(serverId ? { serverId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
@@ -9109,16 +9196,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: true, result: { ok: true, sessionId } };
         }
 
-        if (actionId === 'daemon.promptAssets.delete') {
-          if (!deps.daemonPromptAssetsDelete) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:daemon.promptAssets.delete' };
-          }
-          return completeActionResult(await deps.daemonPromptAssetsDelete({
-            request: parsed.data as Parameters<NonNullable<ActionExecutorDeps['daemonPromptAssetsDelete']>>[0]['request'],
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          }));
-        }
-
         if ((REGISTRY_ACTION_IDS_V1 as readonly string[]).includes(actionId)) {
           if (!deps.registryActionExecute) return {ok:false,errorCode:'unsupported_action',error:`unsupported_action:${actionId}`};
           return completeActionResult(await deps.registryActionExecute({actionId:actionId as RegistryActionIdV1,input:parsed.data,context:ctx}));
@@ -9369,42 +9446,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (actionId === 'prompt_asset.export') {
-          if (!deps.promptAssetExport) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:prompt_asset.export' };
-          }
-          const artifactId = normalizeId(data.artifactId);
-          const machineId = normalizeId(data.machineId);
-          const assetTypeId = normalizeId(data.assetTypeId);
-          const scope = data.scope === 'project' ? 'project' : data.scope === 'user' ? 'user' : null;
-          if (!artifactId || !machineId || !assetTypeId || !scope) {
-            return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          }
-          const res = await deps.promptAssetExport({
-            artifactId,
-            machineId,
-            assetTypeId,
-            scope,
-            ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
-            ...(typeof data.directory === 'string' && String(data.directory).trim().length > 0
-              ? { directory: String(data.directory).trim() }
-              : {}),
-            ...(typeof data.targetPath === 'string' && String(data.targetPath).trim().length > 0
-              ? { targetPath: String(data.targetPath).trim() }
-              : {}),
-            ...(typeof data.targetName === 'string' && String(data.targetName).trim().length > 0
-              ? { targetName: String(data.targetName).trim() }
-              : {}),
-            ...(data.installMode === 'copy' || data.installMode === 'symlink'
-              ? { installMode: data.installMode }
-              : {}),
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
-          const failure = readActionFailureEnvelope(res);
-          if (failure) return failure;
-          return completeActionResult(res);
-        }
-
         if (actionId === 'prompt_registry.install') {
           if (!deps.promptRegistryInstall) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:prompt_registry.install' };
@@ -9415,34 +9456,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (!machineId || !sourceId || !itemId) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
-          const installTargetRaw = data.installTarget;
-          const installTargetRecord = readRecord(installTargetRaw);
-          const installTargetScope = installTargetRecord.scope === 'project' || installTargetRecord.scope === 'user'
-            ? installTargetRecord.scope
-            : null;
-          const installMode = installTargetRecord.installMode === 'copy' || installTargetRecord.installMode === 'symlink'
-            ? installTargetRecord.installMode
-            : undefined;
-          const installTarget =
-            typeof installTargetRecord.assetTypeId === 'string'
-            && typeof installTargetRecord.targetName === 'string'
-            && installTargetScope
-              ? {
-                  assetTypeId: installTargetRecord.assetTypeId,
-                  scope: installTargetScope,
-                  ...(typeof installTargetRecord.directory === 'string' && installTargetRecord.directory.trim().length > 0
-                    ? { directory: installTargetRecord.directory.trim() }
-                    : {}),
-                  targetName: installTargetRecord.targetName,
-                  ...(installMode ? { installMode } : {}),
-                } satisfies NonNullable<Parameters<NonNullable<ActionExecutorDeps['promptRegistryInstall']>>[0]['installTarget']>
-              : undefined;
           const res = projectLegacySkillRegistryInstallActionResultV1(await deps.promptRegistryInstall({
             machineId,
             sourceId,
             itemId,
             ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
-            ...(installTarget ? { installTarget } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           }, ctx));
           const failure = readActionFailureEnvelope(res);
@@ -9556,8 +9574,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (!String(data.summary ?? '').trim()) {
           return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
         }
-        const summary = buildApprovalSummary(targetSpec, targetArgs);
-
         const initialApprovalActionArgs = targetActionId === 'session.spawn_new'
           ? materializeSessionSpawnApprovalInput(targetArgs, ctx)
           : targetArgs;
@@ -9572,6 +9588,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const errorCode = ctx.signal?.aborted ? 'cancelled' : 'approval_context_unavailable';
           return { ok: false, errorCode, error: errorCode };
         }
+        if ('ok' in preparedApproval) return preparedApproval;
+        const summary = buildApprovalSummary(targetSpec, targetArgs, preparedApproval.preview);
         const approvalActionArgs = preparedApproval.actionArgs;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId: targetActionId,
@@ -9866,17 +9884,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return failed.ok ? buildApprovalDecisionResult(failed.request) : failed;
         }
 
-        if (isBlockingApprovalRequest(approvedRequest)) {
-          const claimed = await resolveBlockingDecisionIfClaimed({
-            artifactId,
-            decision: 'approve',
-            decisionAuthority: resolveHostStampedAuthority(ctx),
-            request: approvedRequest,
-            serverId: effectiveServerId,
-          });
-          if (claimed) return buildApprovalDecisionResult(approvedRequest);
-        }
-
+        // The host's replay adapter owns admission to an exact origin. A
+        // process-local waiter cannot bypass that admission merely by being
+        // alive in the deciding app. App-owned effects return null here and
+        // continue through the same incumbent blocking coordinator below.
         if (deps.approvalRequestApprovedReplay) {
           const replayRequestId = normalizeId(ctx.actionRequestId)
             || (approvedRequest.v === 2 ? approvedRequest.executionOriginV1.requestId : '');
@@ -9887,7 +9898,33 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(replayRequestId ? { requestId: replayRequestId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
-          if (replay !== null) return replay;
+          if (replay !== null) {
+            const replayFailure = readActionFailureEnvelope(replay);
+            if (replayFailure?.errorCode === 'approval_origin_unavailable') {
+              // This refusal proves no origin was dispatched. Settle it through
+              // the Artifact owner so live callers observe terminal failure.
+              const failed = await executeApprovedActionForRequest({
+                artifactId,
+                request: approvedRequest,
+                artifactServerId: effectiveServerId,
+                ctx,
+                preExecutionFailure: replayFailure,
+              });
+              return failed.ok ? buildApprovalDecisionResult(failed.request) : failed;
+            }
+            return replay;
+          }
+        }
+
+        if (isBlockingApprovalRequest(approvedRequest)) {
+          const claimed = await resolveBlockingDecisionIfClaimed({
+            artifactId,
+            decision: 'approve',
+            decisionAuthority: resolveHostStampedAuthority(ctx),
+            request: approvedRequest,
+            serverId: effectiveServerId,
+          });
+          if (claimed) return buildApprovalDecisionResult(approvedRequest);
         }
 
         const executed = await executeApprovedActionForRequest({
@@ -9986,6 +10023,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     input: unknown,
     context?: ActionExecutorContext,
     hostInternal = false,
+    confirmUiDefault = false,
   ): Promise<ActionPrepareResult> => {
     const ctx = normalizeActionCallerContext(context ?? {});
     if (!ctx) return settlePrepareResult(actionId, {
@@ -10024,7 +10062,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ctx,
         false,
         undefined,
-        { prepareOnly: true, hostInternal },
+        { prepareOnly: true, hostInternal, confirmUiDefault },
       ));
     }
 
@@ -10136,7 +10174,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ctx,
       true,
       undefined,
-      { prepareOnly: true, hostInternal },
+      { prepareOnly: true, hostInternal, confirmUiDefault },
     ));
     const observeResult = async (result: ActionExecuteResult): Promise<void> => {
       try {
@@ -10177,7 +10215,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     context?: ActionExecutorContext,
     hostInternal = false,
   ): Promise<ActionExecuteResult> => {
-    const prepared = await prepareInvocation(actionId, input, context, hostInternal);
+    const prepared = await prepareInvocation(actionId, input, context, hostInternal, true);
     const result = prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
     // Admission may cancel before this read-only Action's observation arm runs.
     if (actionId === 'wait' && !result.ok && result.errorCode === 'cancelled') {

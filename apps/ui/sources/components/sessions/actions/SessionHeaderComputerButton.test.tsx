@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
+import { useOptionalSessionViewerController, type SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
+import { CurrentSessionPresentationActionInputV1Schema } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,8 +26,9 @@ vi.mock('@/sync/domains/state/storage', async () => {
         sessions: {
             session_1: createSessionFixture({ id: 'session_1', serverId: 'server_1' }),
             session_nomachine: createSessionFixture({ id: 'session_nomachine', serverId: 'server_1', metadata: { path: '/work', host: 'h' } }),
+            session_offline: createSessionFixture({ id: 'session_offline', serverId: 'server_1', metadata: { path: '/work', host: 'h', machineId: 'machine-off' } }),
         },
-        machineListByServerId: { server_1: [createMachineFixture()] },
+        machineListByServerId: { server_1: [createMachineFixture(), createMachineFixture({ id: 'machine-off', active: false })] },
     });
     return createStorageModuleStub({ storage, getStorage: () => storage });
 });
@@ -43,6 +46,12 @@ import { SessionHeaderComputerButton } from './SessionHeaderComputerButton';
 
 const TEST_ID = 'session-header-computer-button';
 
+let viewerState: SessionViewerController['state'] | null = null;
+function ViewerStateProbe() {
+    viewerState = useOptionalSessionViewerController()?.state ?? null;
+    return null;
+}
+
 function mounted(sessionId = 'session_1') {
     return (
         <SessionViewerControllerProvider
@@ -53,6 +62,7 @@ function mounted(sessionId = 'session_1') {
             openDocked={() => {}}
         >
             <SessionHeaderComputerButton sessionId={sessionId} serverId="server_1" />
+            <ViewerStateProbe />
         </SessionViewerControllerProvider>
     );
 }
@@ -61,16 +71,19 @@ describe('SessionHeaderComputerButton', () => {
     beforeEach(() => {
         deviceTypeMock = 'desktop';
         frontDoor.calls = [];
+        viewerState = null;
     });
 
     it('opens the Session viewer on Computer through the mounted presentation owner', async () => {
         const screen = await renderScreen(mounted());
+        expect(screen.findByTestId(TEST_ID)?.props.accessibilityLabel).toBe('computerUse.presentation.sourceComputer');
         await screen.pressByTestIdAsync(TEST_ID);
 
         expect(frontDoor.calls).toHaveLength(1);
         const [actionId, input, context] = frontDoor.calls[0] as [string, unknown, Record<string, unknown>];
         expect(actionId).toBe('session.presentation.apply');
-        expect(input).toEqual({ intent: { kind: 'viewer.open', source: 'computer' } });
+        expect(CurrentSessionPresentationActionInputV1Schema.parse(input))
+            .toEqual({ intent: { kind: 'viewer.open', source: 'computer' } });
         expect(context).toMatchObject({ serverId: 'server_1', defaultSessionId: 'session_1' });
     });
 
@@ -88,5 +101,14 @@ describe('SessionHeaderComputerButton', () => {
     it('is absent for a Session with no machine to watch', async () => {
         const screen = await renderScreen(mounted('session_nomachine'));
         expect(screen.findByTestId(TEST_ID)).toBeNull();
+    });
+
+    it('stays in the header while the Session\'s Machine is unreachable and opens the viewer there to say so', async () => {
+        const screen = await renderScreen(mounted('session_offline'));
+        await screen.pressByTestIdAsync(TEST_ID);
+
+        // The Machine cannot take the request, so the viewer opens on this client and its own state explains.
+        expect(frontDoor.calls).toHaveLength(0);
+        expect(viewerState).toMatchObject({ source: 'computer', mode: 'floating' });
     });
 });

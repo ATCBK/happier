@@ -496,17 +496,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: theme.space.s8,
     },
     work: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.primary,
     },
     quiet: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
     cardQuiet: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         paddingHorizontal: theme.space.s16,
     },

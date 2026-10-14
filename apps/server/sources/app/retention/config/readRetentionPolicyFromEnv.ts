@@ -1,4 +1,5 @@
-import { readServerConfig, type ServerConfigEntry } from '@happier-dev/protocol';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { type ServerConfigEntry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import type {
     DeleteOlderThanRetentionPolicy,

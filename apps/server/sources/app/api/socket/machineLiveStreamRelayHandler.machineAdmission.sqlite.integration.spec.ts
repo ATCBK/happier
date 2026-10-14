@@ -24,11 +24,15 @@ describe('Live stream current Machine admission (real SQLite)', () => {
 
     it.each(['revoke', 'installation-replacement', 'recipient-replacement-before-new-start'] as const)('keeps frame delivery current across %s', async (transition) => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
-        const createMachine = () => db.machine.create({ data: {
-            id: randomUUID(), accountId: owner.id, installationId: randomUUID(), active: true,
-            metadata: encodePlainMachineStoredContent({ host: 'stream-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/stream', happyHomeDir: '/home/stream/.happier' }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
-        } });
+        const createMachine = async () => {
+            const installationId = randomUUID();
+            const machine = await db.machine.create({ data: {
+                id: randomUUID(), accountId: owner.id, installationId, active: true,
+                metadata: encodePlainMachineStoredContent({ host: 'stream-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/stream', happyHomeDir: '/home/stream/.happier' }),
+                dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+            } });
+            return { ...machine, installationId };
+        };
         const source = await createMachine();
         const target = await createMachine();
         const socket = createFakeSocket({ id: randomUUID(), data: {
@@ -50,7 +54,7 @@ describe('Live stream current Machine admission (real SQLite)', () => {
             valueBase64Url: Buffer.from(tweetnacl.sign.detached(Buffer.from(createMachineLiveStreamRelayAuthorizationSigningInputV1(payload), 'utf8'), key.secretKey)).toString('base64url'),
         } };
         machineLiveStreamRelayHandler(owner.id, socket as unknown as Parameters<typeof machineLiveStreamRelayHandler>[1], {
-            io: { to: (room) => ({ emit: (_event, envelope) => {
+            io: { to: (room: string) => ({ emit: (_event: string, envelope: unknown) => {
                 for (const installationId of recipientInstallations) {
                     if (room !== `machine:${target.id}:${owner.id}` && room !== `machine:${target.id}:${owner.id}:installation:${installationId}`) continue;
                     forwarded.push(envelope);

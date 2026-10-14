@@ -1,29 +1,29 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ScmComparisonSchema, ScmComparisonSourceSchema, type ScmComparison } from './comparison.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 /** Workspace's existing Account JSON namespace owns mode admission and transition inventory. */
 export const SCM_REVIEWED_MARKS_KV_PREFIX = 'workspace:scm-reviewed:v1:';
-const changeRefs = z.array(z.string().min(1)).refine(refs => new Set(refs).size === refs.length, 'Change references must be unique');
-export const ScmReviewedMarksRecordSchema = lazyZodSchema(() => z.object({
-  v: z.literal(1), comparisonId: z.string().min(1), reviewedChangeRefs: changeRefs,
-}).strict());
+const changeRefs = z.array(z.string().check(z.minLength(1))).check(z.refine(refs => new Set(refs).size === refs.length, 'Change references must be unique'));
+export const ScmReviewedMarksRecordSchema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), comparisonId: z.string().check(z.minLength(1)), reviewedChangeRefs: changeRefs,
+}));
 const storedReviewedMarksRecordSchema = createStoredReadSchema(ScmReviewedMarksRecordSchema);
 export type ScmReviewedMarksRecord = z.infer<typeof ScmReviewedMarksRecordSchema>;
-const selectedChangeRefs = changeRefs.refine(refs => refs.length > 0, 'An explicit selection is required');
+const selectedChangeRefs = changeRefs.check(z.refine(refs => refs.length > 0, 'An explicit selection is required'));
 export const ScmReviewedMarkInputSchema = lazyZodSchema(() => z.union([
   // Preserve the existing saved-result selector. The new authority-bearing arm
   // has an explicit epoch so an older terminal rejects it before Account writes.
-  z.object({ cwd: z.string().min(1), resultId: z.string().min(1), changeRefs: selectedChangeRefs }).strict(),
-  z.object({ v: z.literal(2), cwd: z.string().min(1), comparisonId: z.string().regex(/^[a-f0-9]{64}$/),
-    source: ScmComparisonSourceSchema, sessionId: z.string().min(1).optional(), changeRefs: selectedChangeRefs }).strict(),
+  z.strictObject({ cwd: z.string().check(z.minLength(1)), resultId: z.string().check(z.minLength(1)), changeRefs: selectedChangeRefs }),
+  z.strictObject({ v: z.literal(2), cwd: z.string().check(z.minLength(1)), comparisonId: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+    source: ScmComparisonSourceSchema, sessionId: z.optional(z.string().check(z.minLength(1))), changeRefs: selectedChangeRefs }),
 ]));
 export type ScmReviewedMarkInput = z.infer<typeof ScmReviewedMarkInputSchema>;
 export const ScmReviewedMarkResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), record: ScmReviewedMarksRecordSchema, version: z.number().int().min(-1) }).strict(),
-  z.object({ success: z.literal(false), errorCode: z.string().min(1), error: z.string().min(1),
-    record: ScmReviewedMarksRecordSchema.optional(), version: z.number().int().min(-1).optional() }).strict(),
+  z.strictObject({ success: z.literal(true), record: ScmReviewedMarksRecordSchema, version: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ success: z.literal(false), errorCode: z.string().check(z.minLength(1)), error: z.string().check(z.minLength(1)),
+    record: z.optional(ScmReviewedMarksRecordSchema), version: z.optional(z.number().check(z.int(), z.minimum(-1))) }),
 ]));
 export type ScmReviewedMarkResponse = z.infer<typeof ScmReviewedMarkResponseSchema>;
 export type ScmReviewedMarksJsonSnapshot = Readonly<{ value: unknown | null; version: number; tombstone?: true }>;
@@ -37,7 +37,7 @@ export class ScmReviewedMarksError extends Error {
   constructor(readonly code: 'reviewed_marks_invalid_record' | 'reviewed_marks_invalid_selection', message: string) { super(message); }
 }
 export function buildScmReviewedMarksKey(comparisonId: string): string {
-  return SCM_REVIEWED_MARKS_KV_PREFIX + encodeURIComponent(z.string().min(1).parse(comparisonId));
+  return SCM_REVIEWED_MARKS_KV_PREFIX + encodeURIComponent(z.string().check(z.minLength(1)).parse(comparisonId));
 }
 export function parseScmReviewedMarksRecord(comparison: ScmComparison, value: unknown): ScmReviewedMarksRecord {
   const record = parseScmReviewedMarksRecordForId(comparison.id, value);
@@ -89,7 +89,7 @@ async function writeScmReviewedMarksIntent(params: Readonly<{
 export function clearScmReviewedMarksRecord(params: Readonly<{
   comparisonId: string; transport: ScmReviewedMarksJsonTransport;
 }>): Promise<ScmReviewedMarkResponse> {
-  const comparisonId = z.string().min(1).parse(params.comparisonId);
+  const comparisonId = z.string().check(z.minLength(1)).parse(params.comparisonId);
   return writeScmReviewedMarksIntent({ transport: params.transport,
     parseSnapshot: snapshot => parseScmReviewedMarksSnapshot(comparisonId, snapshot),
     apply: record => ({ ...record, reviewedChangeRefs: [] }),

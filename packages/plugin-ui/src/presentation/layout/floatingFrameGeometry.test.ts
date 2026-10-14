@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFloatingFrameRect } from './floatingFrameGeometry.js';
+import { resolveFloatingFrameRect, resolveFloatingFrameResizeRect } from './floatingFrameGeometry.js';
 
 describe('measured floating frame placement', () => {
+    it('resizes the leading-bottom grip around the trailing edge with aspect, chrome and measured limits', () => {
+        const input = {
+            rect: { x: 100, y: 50, width: 200, height: 165 },
+            availableRect: { x: 10, y: 20, width: 800, height: 600 },
+            aspectRatio: 1.6, chromeHeight: 40, minWidth: 180,
+        };
+        expect(resolveFloatingFrameResizeRect({ ...input, translationX: -80 })).toEqual({
+            x: 20, y: 50, width: 280, height: 215,
+        });
+        expect(resolveFloatingFrameResizeRect({ ...input, translationX: 100 })).toEqual({
+            x: 120, y: 50, width: 180, height: 152.5,
+        });
+        const short = resolveFloatingFrameResizeRect({ ...input, translationX: -500,
+            availableRect: { x: 10, y: 20, width: 800, height: 200 } });
+        expect(short.width / (short.height - 40)).toBeCloseTo(1.6);
+        expect(short.y + short.height).toBeLessThanOrEqual(220);
+        expect(short.x + short.width).toBe(300);
+    });
     it('settles a native or web throw at the projected corner through aspect, obstacle and dock constraints', () => {
         const input = {
             rect: { x: 40, y: 50, width: 200, height: 165 },

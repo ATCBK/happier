@@ -196,7 +196,7 @@ function ScmChangePathTag(props: Readonly<{ path: string; theme: AppTheme }>) {
     if (!label) return null;
     return (
         <View style={{ alignSelf: 'center', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, backgroundColor: props.theme.colors.surface.inset }}>
-            <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>{label}</Text>
+            <Text style={{ ...Typography.variant('micro', 'semiBold'), color: props.theme.colors.text.secondary,  }}>{label}</Text>
         </View>
     );
 }
@@ -429,10 +429,10 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         const metadata = rowState.renderRowMetadata?.(node);
         const shouldShowRight = showDetailsInline || metadata != null || Boolean(badge) || (isDirectoryNode(node) && node.isLoadingChildren);
         const right = shouldShowRight ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}>
                 {metadata}
                 {showDetailsInline ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s12 }}>
                         <Text
                             style={{
                                 width: 74,
@@ -464,11 +464,11 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                     badge.isComplete !== false ? <DiffStat testID={`${rowTestId}-totals`} added={badge.added} removed={badge.removed} /> : null
                 ) : badge && node.type === 'directory' ? (
                     // A folder says how many changed files it holds, in the tone of its strongest change.
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}>
                         {rowState.rowSelection ? null : <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: changeToneColor }} />}
                         <Text
                             testID={`${rowTestId}-changes`}
-                            style={{ fontSize: 12, color: rowState.theme.colors.text.secondary, fontVariant: ['tabular-nums'], ...Typography.default() }}
+                            style={{ ...Typography.variant('meta'), color: rowState.theme.colors.text.secondary, fontVariant: ['tabular-nums'],  }}
                         >
                             {formatExactCount(badge.changedCount)}
                         </Text>
@@ -476,9 +476,9 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                 ) : badge ? (
                     // A file carries the same letter as its Git row; Changed only adds its lines. With a
                     // checkbox (the Git tree) the letter moves to the icon slot after it (Git lab TV).
-                    <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: theme.space.s6 }}>
                         {rowState.rowProposal?.notes.get(node.path) ? (
-                            <Text testID={`${rowTestId}-proposal-note`} numberOfLines={1} style={{ fontSize: 12, color: rowState.theme.colors.state.active.foreground, ...Typography.default('semiBold') }}>
+                            <Text testID={`${rowTestId}-proposal-note`} numberOfLines={1} style={{ ...Typography.variant('meta', 'semiBold'), color: rowState.theme.colors.state.active.foreground,  }}>
                                 {rowState.rowProposal.notes.get(node.path)}
                             </Text>
                         ) : null}
@@ -539,7 +539,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                 node={node}
                 title={node.name}
                 titleAccessory={rowState.changeRows && node.type === 'directory' && badge ? (
-                    <Text testID={`${rowTestId}-count`} style={{ fontSize: 12, color: rowState.theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default() }}>
+                    <Text testID={`${rowTestId}-count`} style={{ ...Typography.variant('meta'), color: rowState.theme.colors.text.tertiary, fontVariant: ['tabular-nums'],  }}>
                         {formatExactCount(badge.changedCount)}
                     </Text>
                 ) : undefined}

@@ -17,6 +17,8 @@ export type SurfaceInputControl = Readonly<{
   beginConfidentialityHold(): Promise<void>;
   /** Only the source owner may clear this after proving the confidential target is safe. */
   clearConfidentialityHold(): boolean;
+  /** Retain a non-input operation through confidentiality drain without changing the controller. */
+  drainWhile<T>(effect: () => Promise<T>): Promise<T>;
   observeWhile<T>(read: () => Promise<T>, classifyCompletion?: (value: T) => SurfaceInputCompletion): Promise<T | undefined>;
   registerConfidentialityDrain(drain: () => Promise<void>): () => void;
   execute<T>(input: Readonly<{
@@ -60,6 +62,13 @@ export function createSurfaceInputControl(options: Readonly<{ requireObservation
     return undefined;
   }
 
+  async function drainWhile<T>(effect: () => Promise<T>): Promise<T> {
+    const pending = effect();
+    observations.add(pending);
+    try { return await pending; }
+    finally { observations.delete(pending); }
+  }
+
   return {
     getStatus: () => ({
       controller: humanHeld ? 'human' : active?.requestedBy ?? 'idle',
@@ -98,13 +107,12 @@ export function createSurfaceInputControl(options: Readonly<{ requireObservation
       options.onStatusChange?.();
       return true;
     },
+    drainWhile,
     async observeWhile<T>(read: () => Promise<T>, classifyCompletion?: (value: T) => SurfaceInputCompletion): Promise<T | undefined> {
       if (confidentialityHeld || closed) return undefined;
       const epoch = controlEpoch;
-      const pending = read();
-      observations.add(pending);
       try {
-        const result = await pending;
+        const result = await drainWhile(read);
         // A read may dismiss a dialog. Settle that physical effect even if its observation
         // became private or stale while awaiting the boundary acknowledgement.
         if (classifyCompletion?.(result) === 'unknown') {
@@ -115,7 +123,7 @@ export function createSurfaceInputControl(options: Readonly<{ requireObservation
       } catch (error) {
         if (confidentialityHeld || closed || epoch !== controlEpoch) return undefined;
         throw error;
-      } finally { observations.delete(pending); }
+      }
     },
     registerConfidentialityDrain(drain) {
       captureDrains.add(drain);

@@ -57,12 +57,16 @@ import {
   resolvePluginCollectionMigrationArtifactOwnerV1,
   resolvePluginCollectionMigrationChainV1,
   resolvePluginCollectionContractAccessV1,
+  isPluginCollectionSchemaWideningV1,
   splitPluginCollectionCandidatePreparationStageRequestsForKnownLimitsV1,
   validatePluginCollectionUiQueryParametersV1,
   validatePluginCollectionUiQueryResultV1,
 } from './collectionsV1.js';
 import { AccountEncryptionMigrateCollectionInventoryItemSchema } from '../../account/encryptionMigrate.js';
 import { sealAccountScopedBlobCiphertext } from '../../crypto/accountScopedCipher.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { createPluginJsonSchemaZodValueAdapter } from '../actions/jsonSchemaValidation.js';
+import type { PluginJsonSchemaV2 } from '../contributions/jsonSchema.js';
 import {
   cloneStrictPluginJsonValue,
   measureSerializedStrictPluginJsonUtf8Bytes,
@@ -155,6 +159,85 @@ describe('Collection migration Artifact ownership', () => {
 });
 
 describe('Plugin Account Collection contracts', () => {
+  it('admits same-version nested schema widenings without granting a retained reader write authority', () => {
+    const source = normalizePluginAccountCollectionContractV1({
+      pluginId: 'example.compat',
+      contribution: PluginAccountCollectionContributionV1Schema.parse({
+        ...baseCollection,
+        schema: { ...baseCollection.schema, properties: { ...baseCollection.schema.properties,
+          privateConfig: { type: 'object', properties: { service: { const: 'original' } },
+            required: ['service'], additionalProperties: false },
+        } },
+      }),
+    });
+    const widen = (schema: typeof source.schema) => normalizePluginAccountCollectionContractV1({
+      pluginId: source.pluginId,
+      contribution: PluginAccountCollectionContributionV1Schema.parse({ ...baseCollection, schema }),
+    });
+    const target = widen({ ...source.schema, properties: { ...source.schema.properties,
+      privateConfig: { type: 'object', properties: {
+        service: { anyOf: [{ const: 'original' }, { const: 'additional' }] },
+        note: { type: 'string' },
+      }, required: ['service'], additionalProperties: false },
+      privateNote: { type: 'string' },
+    } });
+    expect(isPluginCollectionSchemaWideningV1({ source, target })).toBe(true);
+    expect(resolvePluginCollectionContractAccessV1({ currentWriter: target, requested: source })).toBe('readOnly');
+    expect(resolvePluginCollectionContractAccessV1({ currentWriter: source, requested: target })).toBe('readOnly');
+    expect(resolvePluginCollectionContractAccessV1({ currentWriter: target, requested: target })).toBe('writable');
+    expect(isPluginCollectionSchemaWideningV1({
+      source, target: widen({ ...target.schema, required: [...source.schema.required!, 'privateNote'] }),
+    })).toBe(false);
+    expect(isPluginCollectionSchemaWideningV1({ source: target, target: source })).toBe(false);
+    expect(isPluginCollectionSchemaWideningV1({ source, target: {
+      ...target, serverReadable: [...target.serverReadable, 'privateNote'],
+    } })).toBe(false);
+    expect(isPluginCollectionSchemaWideningV1({ source, target: widen({
+      ...source.schema, properties: { ...source.schema.properties,
+        privateConfig: { anyOf: [source.schema.properties!.privateConfig!, { type: 'null' }] },
+      },
+    }) })).toBe(true);
+  });
+  it('distinguishes tolerant stored reads from narrowed writers and accepts removed scalar restrictions', () => {
+    const normalize = (schema: PluginJsonSchemaV2) =>
+      normalizePluginAccountCollectionContractV1({ pluginId: 'example.compat',
+        contribution: PluginAccountCollectionContributionV1Schema.parse({ ...baseCollection, schema }) });
+    const source = normalize({ ...baseCollection.schema, properties: { ...baseCollection.schema.properties,
+      privateNote: { type: 'string', pattern: '^x' },
+    } });
+    const removed = normalize(baseCollection.schema);
+    const retainedValue = { id: 'row', status: 'open', title: 'retained', privateNote: 'x-private' };
+    const strict = createPluginJsonSchemaZodValueAdapter(removed.schema);
+    expect(strict.safeParse(retainedValue).success).toBe(false);
+    expect(createStoredReadSchema(strict).safeParse(retainedValue).success).toBe(true);
+    expect(isPluginCollectionSchemaWideningV1({ source, target: removed })).toBe(false);
+    expect(isPluginCollectionSchemaWideningV1({
+      source: normalize({ ...source.schema, additionalProperties: true }),
+      target: normalize({ ...removed.schema, additionalProperties: true }),
+    })).toBe(true);
+    const relaxed = normalize({ ...source.schema, properties: { ...source.schema.properties,
+      privateNote: { type: 'string' },
+    } });
+    expect(isPluginCollectionSchemaWideningV1({ source, target: relaxed })).toBe(true);
+    expect(isPluginCollectionSchemaWideningV1({ source: relaxed, target: source })).toBe(false);
+    expect(isPluginCollectionSchemaWideningV1({ source, target: normalize({
+      ...source.schema, required: ['id', 'status'], properties: { ...source.schema.properties,
+        privateNote: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      },
+    }) })).toBe(true);
+    const projected = (status: PluginJsonSchemaV2) => normalizePluginAccountCollectionContractV1({
+      pluginId: source.pluginId,
+      contribution: PluginAccountCollectionContributionV1Schema.parse({ ...baseCollection,
+        indexes: [], uiQueries: [], schema: { ...baseCollection.schema,
+          properties: { ...baseCollection.schema.properties, status },
+        },
+      }),
+    });
+    expect(isPluginCollectionSchemaWideningV1({
+      source: projected({ type: 'string', format: 'date-time' }),
+      target: projected({ type: 'string' }),
+    })).toBe(false);
+  });
   it('normalizes schema structure without treating structured literals as child schemas', () => {
     const literal = { properties: { note: 'literal data' }, required: ['z', 'a'], enum: [2, 1] };
     const contribution = PluginAccountCollectionContributionV1Schema.parse({
@@ -199,7 +282,7 @@ describe('Plugin Account Collection contracts', () => {
     expect(resolvePluginCollectionContractAccessV1({
       currentWriter: target,
       requested: { ...target, contractDigest: sourceReader.contractDigest },
-    })).toBeNull();
+    })).toBe('readOnly');
 
     const sourceThatDoesNotAdmitTheWriter = normalizePluginAccountCollectionContractV1({
       pluginId: 'example.compat',

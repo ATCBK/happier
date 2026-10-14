@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Source timestamps are converted to JavaScript Dates by transcript owners.
@@ -7,7 +7,4 @@ import { z } from 'zod';
  */
 export const SESSION_TRANSCRIPT_SOURCE_TIMESTAMP_MAX_MS = 8_640_000_000_000_000;
 
-export const SessionTranscriptSourceTimestampMsSchema = lazyZodSchema(() => z.number()
-  .int()
-  .min(0)
-  .max(SESSION_TRANSCRIPT_SOURCE_TIMESTAMP_MAX_MS));
+export const SessionTranscriptSourceTimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(SESSION_TRANSCRIPT_SOURCE_TIMESTAMP_MAX_MS)));

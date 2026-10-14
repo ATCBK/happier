@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 
 import { AutomationEventPositiveSafeIntegerV1Schema } from './automationColumnBoundsV1.js';
@@ -48,19 +49,17 @@ export type AutomationObservationTransportKindV1 = z.infer<
 >;
 
 /** Descriptor-only eligibility on the canonical Event contribution. */
-export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   eligible: z.literal(true),
-  source: z.object({
+  source: z.strictObject({
     sourceContractVersion: AutomationEventPositiveSafeIntegerV1Schema,
-    supportedObservationTransports: z.array(AutomationObservationTransportKindV1Schema)
-      .min(1)
-      .superRefine((value, context) => {
+    supportedObservationTransports: z.array(AutomationObservationTransportKindV1Schema).check(z.minLength(1), z.superRefine((value, context) => {
         if (new Set(value).size !== value.length) {
-          context.addIssue({ code: z.ZodIssueCode.custom, message: 'Observation transports must be unique' });
+          context.addIssue({ code: "custom", message: 'Observation transports must be unique' });
         }
-      }),
-    webhookContributionRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema).optional(),
+      })),
+    webhookContributionRef: zMini.optional(asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema)),
     sourceConfigSchema: PluginJsonSchemaV2Schema,
     setupActionRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
     /**
@@ -68,22 +67,22 @@ export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.ob
      * input. The host still owns Action validation, invocation and setup-result
      * handling; this is presentation only and never targeted membership.
      */
-    setupSurface: PluginUiRendererChainBindingV1Schema.optional(),
-    historyGapResetActionRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema).optional(),
+    setupSurface: zMini.optional(PluginUiRendererChainBindingV1Schema),
+    historyGapResetActionRef: zMini.optional(asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema)),
     /**
      * A history-gap reset may bind the exact Account persisted in the current
      * source config. This is declarative source metadata; reset Action input
      * stays the strict source-identity triple and never carries credentials.
      */
-    connectedAccountPurposeBindings: z.array(
+    connectedAccountPurposeBindings: z.optional(z.array(
       PluginActionConnectedAccountPurposeBindingV2Schema,
-    ).max(8).optional(),
-  }).strict(),
-}).strict().superRefine((value, context) => {
+    ).check(z.maxLength(8))),
+  }),
+}).check(z.superRefine((value, context) => {
   const supportsDurablePush = value.source.supportedObservationTransports.includes('durablePush');
   if (supportsDurablePush !== (value.source.webhookContributionRef !== undefined)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['source', 'webhookContributionRef'],
       message: 'durablePush requires exactly one webhook contribution reference',
     });
@@ -91,7 +90,7 @@ export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.ob
   if (!value.source.supportedObservationTransports.includes('checkpointedPull')
     && value.source.historyGapResetActionRef !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['source', 'historyGapResetActionRef'],
       message: 'history-gap recovery requires checkpointedPull observation support',
     });
@@ -99,7 +98,7 @@ export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.ob
   const purposeBindings = value.source.connectedAccountPurposeBindings ?? [];
   if (purposeBindings.length > 0 && value.source.historyGapResetActionRef === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['source', 'historyGapResetActionRef'],
       message: 'Connected Account source bindings require a history-gap recovery Action.',
     });
@@ -109,12 +108,12 @@ export const PluginEventAutomationDeclarationV1Schema = lazyZodSchema(() => z.ob
     purposeBindings,
   )) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['source', 'connectedAccountPurposeBindings'],
       message: 'Connected Account source bindings must target one exact qualified credential-ref source-config leaf in every declared input arm.',
     });
   }
-}));
+})));
 export type PluginEventAutomationDeclarationV1 = z.infer<
   typeof PluginEventAutomationDeclarationV1Schema
 >;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 
 import { getAccountScopedBlobCiphertextBase64LengthV1 } from '../crypto/accountScopedCipherEnvelope.js';
@@ -25,14 +25,11 @@ export const SESSION_DRAFT_ROUTE_LIST = '/v1/account/session-drafts/list' as con
 export const SESSION_DRAFT_ROUTE_MUTATE = '/v1/account/session-drafts/mutate' as const;
 
 const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength;
-const BoundedDraftIdSchema = lazyZodSchema(() => z.string().refine(
-  (value) => utf8Length(value) <= SESSION_DRAFT_MAX_ID_UTF8_BYTES,
-  'Draft identifier exceeds the UTF-8 byte boundary',
-));
+const BoundedDraftIdSchema = lazyZodSchema(() => z.string().check(z.refine((value) => utf8Length(value) <= SESSION_DRAFT_MAX_ID_UTF8_BYTES, 'Draft identifier exceeds the UTF-8 byte boundary')));
 
 export const SessionDraftAddressV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('newSession'), draftId: BoundedDraftIdSchema.uuid() }).strict(),
-  z.object({ kind: z.literal('session'), sessionId: BoundedDraftIdSchema.min(1) }).strict(),
+  z.strictObject({ kind: z.literal('newSession'), draftId: BoundedDraftIdSchema.check(z.uuid()) }),
+  z.strictObject({ kind: z.literal('session'), sessionId: BoundedDraftIdSchema.check(z.minLength(1)) }),
 ]));
 export type SessionDraftAddressV1 = z.infer<typeof SessionDraftAddressV1Schema>;
 
@@ -62,10 +59,7 @@ function isCanonicalSessionDraftAddressV1(value: string): boolean {
   }
 }
 
-export const CanonicalSessionDraftAddressV1Schema = lazyZodSchema(() => z.string().min(1).refine(
-  isCanonicalSessionDraftAddressV1,
-  'Expected a canonical session draft address',
-));
+export const CanonicalSessionDraftAddressV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.refine(isCanonicalSessionDraftAddressV1, 'Expected a canonical session draft address')));
 export type CanonicalSessionDraftAddressV1 = z.infer<typeof CanonicalSessionDraftAddressV1Schema>;
 
 export { StrictJsonValueSchema };
@@ -75,10 +69,10 @@ export type StrictJsonObject = Extract<
   { readonly [key: string]: StrictJsonValue }
 >;
 
-export const DraftFieldV1Schema = lazyZodSchema(() => z.object({
-  mutationId: z.string().uuid(),
+export const DraftFieldV1Schema = lazyZodSchema(() => z.strictObject({
+  mutationId: z.string().check(z.uuid()),
   value: StrictJsonValueSchema,
-}).strict());
+}));
 export type DraftFieldV1<T extends StrictJsonValue = StrictJsonValue> = Readonly<{
   mutationId: string;
   value: T;
@@ -96,17 +90,17 @@ export type SessionDraftPredecessorAuthoringValueV1 = z.infer<
 
 export const SessionDraftRecipientValueV1Schema = lazyZodSchema(() => z.union([
   z.null(),
-  z.object({
+  z.strictObject({
     mode: z.literal('manual'),
-    recipient: ParticipantRecipientV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    recipient: z.nullable(ParticipantRecipientV1Schema),
+  }),
+  z.strictObject({
     mode: z.literal('scm_diff_summary'),
-    recipient: ParticipantRecipientV1Schema.nullable(),
-    target: ScmDiffSummaryDiscussInputSchema.omit({ message: true }),
-  }).strict().refine((value) => value.target.startNew === true
+    recipient: z.nullable(ParticipantRecipientV1Schema),
+    target: z.omit(ScmDiffSummaryDiscussInputSchema, { message: true }),
+  }).check(z.refine((value) => value.target.startNew === true
     ? value.recipient === null
-    : value.recipient?.kind === 'execution_run', 'Discussion must name a Run or explicitly start a new one'),
+    : value.recipient?.kind === 'execution_run', 'Discussion must name a Run or explicitly start a new one')),
 ]));
 export type SessionDraftRecipientValueV1 = z.infer<typeof SessionDraftRecipientValueV1Schema>;
 
@@ -117,28 +111,24 @@ export function isMeaningfulSessionDraftRecipientValueV1(
   return parsed.success && parsed.data !== null;
 }
 
-const semanticArraySchema = lazyZodSchema(() => z.preprocess(
-  (input) => Array.isArray(input)
+const semanticArraySchema = lazyZodSchema(() => z.pipe(z.transform((input) => Array.isArray(input)
     ? input.filter((entry) => StrictJsonValueSchema.safeParse(entry).success)
-    : input,
-  z.array(StrictJsonValueSchema),
-));
-const ComposerSchema = lazyZodSchema(() => z.object({
-  text: z.object({ mutationId: z.string().uuid(), value: z.string() }).strict(),
-  mentions: z.object({ mutationId: z.string().uuid(), value: semanticArraySchema }).strict(),
-  attachments: z.object({ mutationId: z.string().uuid(), value: semanticArraySchema }).strict(),
-}).strict());
+    : input), z.array(StrictJsonValueSchema)));
+const ComposerSchema = lazyZodSchema(() => z.strictObject({
+  text: z.strictObject({ mutationId: z.string().check(z.uuid()), value: z.string() }),
+  mentions: z.strictObject({ mutationId: z.string().check(z.uuid()), value: semanticArraySchema }),
+  attachments: z.strictObject({ mutationId: z.string().check(z.uuid()), value: semanticArraySchema }),
+}));
 
 /** Each draft epoch validates field values through its exact catalog projection. */
-export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<string, z.ZodType>>(
-  valueSchema: z.ZodObject<TShape>,
-): z.ZodType<Partial<Record<Extract<keyof TShape, string>, DraftFieldV1>>> {
+export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<string, z.ZodMiniType>>(
+  valueSchema: z.ZodMiniObject<TShape>,
+): z.ZodMiniType<Partial<Record<Extract<keyof TShape, string>, DraftFieldV1>>> {
   type FieldId = Extract<keyof TShape, string>;
   const fieldIds = Object.keys(valueSchema.shape) as [FieldId, ...FieldId[]];
-  const currentShape: Readonly<Record<string, z.ZodType>> = valueSchema.shape;
+  const currentShape: Readonly<Record<string, z.ZodMiniType>> = valueSchema.shape;
   const fieldsSchema = z
-  .partialRecord(z.enum(fieldIds), DraftFieldV1Schema)
-  .superRefine((fields, context) => {
+  .partialRecord(z.enum(fieldIds), DraftFieldV1Schema).check(z.superRefine((fields, context) => {
     for (const [fieldId, field] of Object.entries(fields)) {
       const parsedField = DraftFieldV1Schema.safeParse(field);
       if (!parsedField.success) continue;
@@ -146,14 +136,14 @@ export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<st
       const isValidCurrentValue = currentFieldSchema?.safeParse(parsedField.data.value).success === true;
       if (!isValidCurrentValue) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: [fieldId, 'value'],
           message: `Invalid synchronized authoring value for ${fieldId}`,
         });
       }
     }
-  });
-  return defineStoredReadProjection(fieldsSchema, () => z.preprocess(raw => {
+  }));
+  return defineStoredReadProjection(fieldsSchema, () => z.pipe(z.transform(raw => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
     const projected: Record<string, unknown> = {};
     for (const [fieldId, value] of Object.entries(raw)) {
@@ -165,7 +155,7 @@ export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<st
       projected[fieldId] = knownValue.success ? { ...field.data, value: knownValue.data } : field.data;
     }
     return projected;
-  }, fieldsSchema));
+  }), fieldsSchema));
 }
 const SyncedAuthoringFieldsSchema = createSessionDraftAuthoringFieldsSchema(
   SyncedSessionAuthoringValueV1Schema,
@@ -175,22 +165,22 @@ const ExtensionFieldsSchema = lazyZodSchema(() => z.record(
   z.record(BoundedDraftIdSchema, DraftFieldV1Schema),
 ));
 
-export const SessionDraftDocumentV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftDocumentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   composer: ComposerSchema,
   target: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('newSession'), authoring: SyncedAuthoringFieldsSchema }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('newSession'), authoring: SyncedAuthoringFieldsSchema }),
+    z.strictObject({
       kind: z.literal('session'),
-      routing: z.object({
+      routing: z.strictObject({
         recipient: DraftFieldV1Schema,
         agentContinuation: DraftFieldV1Schema,
         executionRunDelivery: DraftFieldV1Schema,
-      }).strict(),
-    }).strict(),
+      }),
+    }),
   ]),
   extensions: ExtensionFieldsSchema,
-}).strict().superRefine((document, context) => {
+}).check(z.superRefine((document, context) => {
   const targetFields = document.target.kind === 'newSession'
     ? Object.keys(document.target.authoring).length
     : 3;
@@ -198,109 +188,109 @@ export const SessionDraftDocumentV1Schema = lazyZodSchema(() => z.object({
     .reduce((count, fields) => count + Object.keys(fields).length, 0);
   if (3 + targetFields + extensionFields > SESSION_DRAFT_MAX_FIELDS) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Draft field count exceeds the supported boundary',
     });
   }
-}));
+})));
 export type SessionDraftDocumentV1 = z.infer<typeof SessionDraftDocumentV1Schema>;
 
-export const SessionDraftPrivatePayloadV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftPrivatePayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   address: SessionDraftAddressV1Schema,
   document: SessionDraftDocumentV1Schema,
-}).strict().superRefine((payload, context) => {
+}).check(z.superRefine((payload, context) => {
   if (payload.address.kind !== payload.document.target.kind) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['document', 'target', 'kind'],
       message: 'Draft payload address and document target must agree',
     });
   }
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > SESSION_DRAFT_MAX_PRIVATE_PAYLOAD_BYTES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Draft private payload exceeds the supported boundary',
     });
   }
-}));
+})));
 export type SessionDraftPrivatePayloadV1 = z.infer<typeof SessionDraftPrivatePayloadV1Schema>;
 
 export const SessionDraftStoredContentEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: SessionDraftPrivatePayloadV1Schema }).strict(),
-  z.object({
+  z.strictObject({ t: z.literal('plain'), v: SessionDraftPrivatePayloadV1Schema }),
+  z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().min(1).max(SESSION_DRAFT_MAX_CIPHERTEXT_LENGTH),
-  }).strict(),
+    c: z.string().check(z.minLength(1), z.maxLength(SESSION_DRAFT_MAX_CIPHERTEXT_LENGTH)),
+  }),
 ]));
 export type SessionDraftStoredContentEnvelopeV1 = z.infer<typeof SessionDraftStoredContentEnvelopeV1Schema>;
 export const SessionDraftStoredContentEnvelopeV1StoredSchema = createStoredReadSchema(SessionDraftStoredContentEnvelopeV1Schema);
 
-export const SessionDraftRecordV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftRecordV1Schema = lazyZodSchema(() => z.strictObject({
   address: SessionDraftAddressV1Schema,
-  revision: z.number().int().nonnegative(),
-  content: SessionDraftStoredContentEnvelopeV1StoredSchema.nullable(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict());
+  revision: z.number().check(z.int(), z.nonnegative()),
+  content: z.nullable(SessionDraftStoredContentEnvelopeV1StoredSchema),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionDraftRecordV1 = z.infer<typeof SessionDraftRecordV1Schema>;
 
-export const SessionDraftReadRequestV1Schema = lazyZodSchema(() => z.object({ address: SessionDraftAddressV1Schema }).strict());
+export const SessionDraftReadRequestV1Schema = lazyZodSchema(() => z.strictObject({ address: SessionDraftAddressV1Schema }));
 export type SessionDraftReadRequestV1 = z.infer<typeof SessionDraftReadRequestV1Schema>;
 export const SessionDraftReadResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('present'), record: SessionDraftRecordV1Schema }).strict(),
-  z.object({ status: z.literal('deleted'), record: SessionDraftRecordV1Schema }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
+  z.strictObject({ status: z.literal('present'), record: SessionDraftRecordV1Schema }),
+  z.strictObject({ status: z.literal('deleted'), record: SessionDraftRecordV1Schema }),
+  z.strictObject({ status: z.literal('absent') }),
 ]));
 export type SessionDraftReadResponseV1 = z.infer<typeof SessionDraftReadResponseV1Schema>;
 
-export const SessionDraftListRequestV1Schema = lazyZodSchema(() => z.object({
-  after: CanonicalSessionDraftAddressV1Schema.optional(),
-  limit: z.number().int().min(1).max(100).optional(),
-}).strict());
+export const SessionDraftListRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  after: z.optional(CanonicalSessionDraftAddressV1Schema),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(100))),
+}));
 export type SessionDraftListRequestV1 = z.infer<typeof SessionDraftListRequestV1Schema>;
-export const SessionDraftListResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftListResponseV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(SessionDraftRecordV1Schema),
-  nextAfter: CanonicalSessionDraftAddressV1Schema.optional(),
-}).strict());
+  nextAfter: z.optional(CanonicalSessionDraftAddressV1Schema),
+}));
 export type SessionDraftListResponseV1 = z.infer<typeof SessionDraftListResponseV1Schema>;
 
 export const SessionDraftExpectedRevisionV1Schema = lazyZodSchema(() => z.union([
-  z.number().int().nonnegative(),
+  z.number().check(z.int(), z.nonnegative()),
   z.literal('absent'),
 ]));
 export type SessionDraftExpectedRevisionV1 = z.infer<typeof SessionDraftExpectedRevisionV1Schema>;
-export const SessionDraftMutateRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftMutateRequestV1Schema = lazyZodSchema(() => z.strictObject({
   address: SessionDraftAddressV1Schema,
   expectedRevision: SessionDraftExpectedRevisionV1Schema,
-  content: SessionDraftStoredContentEnvelopeV1Schema.nullable(),
-}).strict());
+  content: z.nullable(SessionDraftStoredContentEnvelopeV1Schema),
+}));
 export type SessionDraftMutateRequestV1 = z.infer<typeof SessionDraftMutateRequestV1Schema>;
 export const SessionDraftMutateResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('updated'), record: SessionDraftRecordV1Schema }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('updated'), record: SessionDraftRecordV1Schema }),
+  z.strictObject({
     status: z.literal('conflict'),
     current: z.union([
       SessionDraftRecordV1Schema,
-      z.object({ status: z.literal('absent') }).strict(),
+      z.strictObject({ status: z.literal('absent') }),
     ]),
-  }).strict(),
+  }),
 ]));
 export type SessionDraftMutateResponseV1 = z.infer<typeof SessionDraftMutateResponseV1Schema>;
-export const SessionDraftRouteErrorResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftRouteErrorResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.enum(['session_unavailable', 'invalid_content_mode', 'invalid_address_binding']),
-}).strict());
+}));
 export type SessionDraftRouteErrorResponseV1 = z.infer<
   typeof SessionDraftRouteErrorResponseV1Schema
 >;
 
-export const SessionDraftChangeHintV1Schema = lazyZodSchema(() => z.object({
+export const SessionDraftChangeHintV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionDraft: z.literal(true),
   address: SessionDraftAddressV1Schema,
-  revision: z.number().int().nonnegative(),
+  revision: z.number().check(z.int(), z.nonnegative()),
   status: z.enum(['present', 'deleted']),
-}).strict());
+}));
 export type SessionDraftChangeHintV1 = z.infer<typeof SessionDraftChangeHintV1Schema>;
 export const SessionDraftSocketUpdateV1Schema = SessionDraftChangeHintV1Schema;
 export type SessionDraftSocketUpdateV1 = SessionDraftChangeHintV1;

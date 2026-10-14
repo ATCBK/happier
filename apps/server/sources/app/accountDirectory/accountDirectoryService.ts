@@ -39,16 +39,10 @@ import {
     mintHomeLoginAssertion,
     verifyHomeLoginAssertionSignature,
 } from "./accountDirectorySigner";
-import {
-    ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_CREDENTIAL_PLAINTEXT_BYTES,
-    computeCanonicalDomainSeparatedDigest,
-    createHomeCredentialDestinationDigestV1,
-    createHomeLoginAssertionSigningBytesV1,
-    decodeBase64,
-    encodeBase64,
-    isValidBoxBundlePublicKey,
-    sealBoxBundle,
-} from "@happier-dev/protocol";
+import { ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_CREDENTIAL_PLAINTEXT_BYTES, createHomeCredentialDestinationDigestV1, createHomeLoginAssertionSigningBytesV1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { isValidBoxBundlePublicKey, sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
 
 const HOME_DIRECTORY_ENTRY_SELECT = {
     homeServerIdentityId: true,

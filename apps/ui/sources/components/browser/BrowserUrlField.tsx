@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -70,7 +70,7 @@ const FADE_ON_WEB: (TextStyle & ViewStyle) | null = Platform.OS === 'web'
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     fieldRow: {
         flexDirection: 'row',
@@ -95,10 +95,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         // An explicit size is load-bearing, not decoration: `TextInput` only engages the iOS-web
         // 16px zoom guard when it can resolve a font size, and without one Safari zooms the whole
         // page on focus. It is also what gives `uiFontScale` a line box to scale.
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
     message: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         // Q2 measured the theme's semantic FOREGROUNDS as text at 2.20–3.55:1 in light theme —
         // they are fill colours, not text colours. The words carry their own meaning here, so
         // they take `text.primary`; the hue stays on the border/glyph beside them, where it is a
@@ -112,12 +112,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         paddingHorizontal: 14,
         pointerEvents: 'none',
     },
     capsuleHost: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -132,7 +132,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'absolute',
         right: 0,
         top: '100%',
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
 }));
 
@@ -211,7 +211,7 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
             inputRef.current?.focus();
         },
     }), [props.disabled]);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const [focused, setFocused] = React.useState(false);
     // The address bar's Copy waits in its trailing slot until the field is hovered or focused (lab
     // `browser` Q): at rest the field is only the trust glyph and the address. The slot keeps its

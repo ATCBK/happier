@@ -34,6 +34,9 @@ import {
 
 import { deliverConversationAutomationResultForInvocation } from './automationResultDelivery.js';
 import { startConversationForInvocation } from './conversationStart.js';
+import { listConversationConnectionsForInvocation, listConversationBindingsForInvocation,
+  readConversationIngressAttentionForInvocation, readConversationDeliveryAttentionForInvocation,
+  readConversationDeliveryForInvocation } from './readActions.js';
 import { BINDINGS_RESOURCE_RUNTIME } from './bindingsResource.js';
 import { createIngressSupervisor } from './checkpointedPollSupervisor.js';
 import {
@@ -404,7 +407,6 @@ function createChannelsPlugin() {
         kind: 'config',
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: 196_608,
         hostAccess: ['account-storage'],
         runtime: CONNECTIONS_RESOURCE_RUNTIME,
       },
@@ -421,7 +423,6 @@ function createChannelsPlugin() {
         kind: 'config',
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: 524_288,
         hostAccess: ['account-storage'],
         runtime: PAIRING_RESOURCE_RUNTIME,
       },
@@ -532,6 +533,31 @@ function createChannelsPlugin() {
     },
     ui: CHANNELS_UI,
     actions: {
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionList]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionList,
+        title: 'List conversation connections', description: 'Reads a page of safe Account connection status and current revisions.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'], hostAccess: ['account-storage'], run: listConversationConnectionsForInvocation,
+      },
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingList]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingList,
+        title: 'List conversation bindings', description: 'Reads a page of bindings, including router children and current revisions.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'], hostAccess: ['account-storage'], run: listConversationBindingsForInvocation,
+      },
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.ingressAttention]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.ingressAttention,
+        title: 'Read conversation ingress attention', description: 'Reads content-free ingress attention and retry revision witnesses.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'], hostAccess: ['account-storage'], run: readConversationIngressAttentionForInvocation,
+      },
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryAttention]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.deliveryAttention,
+        title: 'Read conversation delivery attention', description: 'Reads a page of current delivery recovery facts for a connection.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'], hostAccess: ['account-storage'], run: readConversationDeliveryAttentionForInvocation,
+      },
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryRead]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.deliveryRead,
+        title: 'Read conversation delivery', description: 'Reads exact custody status and current recovery revision without message content.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'], hostAccess: ['account-storage'], run: readConversationDeliveryForInvocation,
+      },
       [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart]: {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.conversationStart,
         title: 'Start conversation',

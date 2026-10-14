@@ -1,7 +1,4 @@
-import type {
-    HOME_OWNER_CLAIM_COMMAND_ARGUMENT_V1,
-    HomeOwnerClaimCommandOutputV1 as HomeOwnerClaimCommandOutputContractV1,
-} from "@happier-dev/protocol";
+import type { HOME_OWNER_CLAIM_COMMAND_ARGUMENT_V1, HomeOwnerClaimCommandOutputV1 as HomeOwnerClaimCommandOutputContractV1 } from '@happier-dev/protocol/home/governance/claim';
 
 import type { HomeOwnerClaimResult } from "./ownerAssignment";
 

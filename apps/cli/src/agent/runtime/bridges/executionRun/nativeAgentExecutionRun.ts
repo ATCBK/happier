@@ -113,6 +113,7 @@ type NativeAgentRunUsagePublisher = Readonly<{
 type NativeAgentSessionContextLease = Readonly<{
     context: AgentSessionRuntimeContext;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     subscribeMcpToolPolicy?: (listener: (policy: NonNullable<AgentSessionOpenRequest['mcpToolPolicy']>) => void) => () => void;
     skills?: AgentSessionOpenRequest['skills'];
@@ -146,6 +147,7 @@ export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
 type NativeAgentExecutionRunContextLease = Readonly<{
     context: AgentExecutionRunRuntimeContextV1;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     skills?: AgentSessionOpenRequest['skills'];
     skillIndex?: string;
@@ -171,6 +173,27 @@ export type NativeAgentRuntimeLeaseIdentity = Readonly<{
 }>;
 
 const RUN_SESSION_PROJECTION_UNAVAILABLE_CODE = 'agent_run_session_projection_unavailable';
+
+function withRunScopedSessionHooks(context: AgentSessionRuntimeContext): AgentSessionRuntimeContext {
+    const hooks = context.session.services.sessionHooks;
+    return Object.freeze({
+        ...context,
+        session: Object.freeze({
+            ...context.session,
+            services: Object.freeze({
+                ...context.session.services,
+                sessionHooks: Object.freeze({
+                    ...hooks,
+                    // Child runtimes share Session identity, never its retained hook endpoint or files.
+                    startServer: (request: Parameters<typeof hooks.startServer>[0]) =>
+                        hooks.startServer({ ...request, lifetime: 'invocation' }),
+                    createPluginDir: (request: Parameters<typeof hooks.createPluginDir>[0]) =>
+                        hooks.createPluginDir({ ...request, lifetime: 'invocation' }),
+                }),
+            }),
+        }),
+    });
+}
 
 export function createRunScopedWorkStateService(signal: AbortSignal): WorkStateService {
     return Object.freeze({
@@ -389,6 +412,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         let context: AgentExecutionRunRuntimeContextV1;
         let mcpMaterial: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | null = null;
         let mcpServers: AgentSessionOpenRequest['mcpServers'];
+        let mcpServersStrictMode: AgentSessionOpenRequest['mcpServersStrictMode'];
         let mcpToolPolicy: AgentSessionOpenRequest['mcpToolPolicy'];
         try {
             if (params.capabilitySelection?.mcp && (params.capabilitySelection.mcp.managedServersEnabled || params.capabilitySelection.mcp.forceIncludeServerIds.length > 0)) {
@@ -436,6 +460,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                 const identities = { mcpServerIdentities: Object.fromEntries(Object.entries(selected.mcpServerIdentities)
                     .filter(([name]) => Object.hasOwn(mcpMaterial!.mcpServers, name))) };
                 mcpServers = await resolveAgentSessionMcpLaunchConfigs(mcpMaterial.mcpServers, params.start, signal);
+                mcpServersStrictMode = selected.strictMode;
                 resolvedRunMcpServers = projectResolvedMcpServers({ mcpServers: mcpMaterial.mcpServers,
                     identities: identities.mcpServerIdentities, scope: { executionRunId: runId, directory: params.directory } });
                 const capturedMcpAccount = params.resolveAccountSettingsSnapshot?.readOperationContext?.();
@@ -495,6 +520,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         return Object.freeze({
             context,
             ...(mcpServers ? { mcpServers } : {}),
+            ...(mcpServersStrictMode !== undefined ? { mcpServersStrictMode } : {}),
             ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             async dispose() {
                 try {
@@ -1115,6 +1141,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, executionRunContextLease?.skillIndex) } : {}),
                 ...(executionRunContextLease?.mcpServers ? { mcpServers: executionRunContextLease.mcpServers } : {}),
                 ...(executionRunContextLease?.mcpToolPolicy ? { mcpToolPolicy: executionRunContextLease.mcpToolPolicy } : {}),
+                ...(executionRunContextLease?.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: executionRunContextLease.mcpServersStrictMode } : {}),
                 ...(executionRunContextLease?.skills ? { skills: executionRunContextLease.skills } : {}),
             };
             try {
@@ -1415,7 +1442,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                 let unsubscribeMcpToolPolicy: (() => void) | undefined;
                 try {
                     const runScopedContext: AgentSessionRuntimeContext = Object.freeze({
-                        ...sessionContext.context,
+                        ...withRunScopedSessionHooks(sessionContext.context),
                         // A finite child Run may reuse its parent's Session context
                         // services, but it never owns the parent's published work state.
                         workState: createRunScopedWorkStateService(executionContext.signal),
@@ -1439,6 +1466,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                             ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, sessionContext.skillIndex) } : {}),
                             ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
                             ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                            ...(sessionContext.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: sessionContext.mcpServersStrictMode } : {}),
                             ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
                         },
                         sessionId: sessionContext.context.session.id,
@@ -1631,7 +1659,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 await sessionContext.dispose();
                 throw error;
             }
-            const context = sessionContext.context;
+            const context = withRunScopedSessionHooks(sessionContext.context);
             skillIndex = sessionContext.skillIndex;
             let unsubscribeMcpToolPolicy: (() => void) | undefined;
             disposeSessionContext = async () => { unsubscribeMcpToolPolicy?.(); await sessionContext.dispose(); };
@@ -1640,6 +1668,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 cwd: params.options.cwd,
                 ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
                 ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                ...(sessionContext.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: sessionContext.mcpServersStrictMode } : {}),
                 ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
                 stateSharing: resolveNativeAgentSessionStateSharingPolicy(params.lease.agentId),
                 ...(launchEnvironment ? { launchEnvironment } : {}),
@@ -1885,6 +1914,11 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
             await open();
             const inputOrdinal = ++turnOrdinal;
             const localId = meta?.localId ?? `${runId}-input-${inputOrdinal}`;
+            const userMessageSeq = meta?.userMessageSeq !== undefined
+                ? meta.userMessageSeq
+                : params.options.scope === 'session_owned'
+                    ? params.options.sessionInteractionHost?.session.getCommittedUserMessageSeq?.(localId) ?? null
+                    : null;
             let resolvedInput: AgentSessionInput;
             try {
                 resolvedInput = params.createSessionContext.resolveStructuredInputForDispatch
@@ -1898,7 +1932,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 ...meta,
                 localId,
                 ...(resolvedInput.structuredInput === undefined ? {} : { structuredInput: resolvedInput.structuredInput }),
-                ...(meta?.userMessageSeq !== undefined ? { userMessageSeq: meta.userMessageSeq } : {}),
+                userMessageSeq,
                 ...(meta?.userMessageSeqs ? { userMessageSeqs: meta.userMessageSeqs } : {}),
                 ...(meta?.causalPermissionAuthority
                     ? { causalPermissionAuthority: meta.causalPermissionAuthority }

@@ -22,7 +22,7 @@ export type RegistriesActionInputById = {
             secretRef: string;
             header?: {
                 name: string;
-                scheme?: 'Bearer' | 'token' | undefined;
+                scheme?: 'token' | 'Bearer' | undefined;
             } | undefined;
         } | undefined;
         npmRegistryProfileId?: string | undefined;
@@ -38,7 +38,7 @@ export type RegistriesActionInputById = {
             secretRef: string;
             header?: {
                 name: string;
-                scheme?: 'Bearer' | 'token' | undefined;
+                scheme?: 'token' | 'Bearer' | undefined;
             } | undefined;
         } | null | undefined;
         npmRegistryProfileId?: string | null | undefined;
@@ -118,7 +118,7 @@ export type RegistriesActionResultById = {
                 secretRef: string;
                 header?: {
                     name: string;
-                    scheme?: 'Bearer' | 'token' | undefined;
+                    scheme?: 'token' | 'Bearer' | undefined;
                 } | undefined;
             } | undefined;
             npmRegistryProfileId?: string | undefined;
@@ -160,7 +160,7 @@ export type RegistriesActionResultById = {
                 secretRef: string;
                 header?: {
                     name: string;
-                    scheme?: 'Bearer' | 'token' | undefined;
+                    scheme?: 'token' | 'Bearer' | undefined;
                 } | undefined;
             } | undefined;
             npmRegistryProfileId?: string | undefined;
@@ -193,7 +193,7 @@ export type RegistriesActionResultById = {
                 secretRef: string;
                 header?: {
                     name: string;
-                    scheme?: 'Bearer' | 'token' | undefined;
+                    scheme?: 'token' | 'Bearer' | undefined;
                 } | undefined;
             } | undefined;
             npmRegistryProfileId?: string | undefined;
@@ -225,7 +225,7 @@ export type RegistriesActionResultById = {
                 secretRef: string;
                 header?: {
                     name: string;
-                    scheme?: 'Bearer' | 'token' | undefined;
+                    scheme?: 'token' | 'Bearer' | undefined;
                 } | undefined;
             } | undefined;
             npmRegistryProfileId?: string | undefined;
@@ -281,6 +281,14 @@ export type RegistriesActionResultById = {
                 } | {
                     code: 'removed_from_source';
                 } | undefined;
+                agentDistribution?: {
+                    kind: 'npm';
+                } | {
+                    kind: 'uv';
+                } | {
+                    kind: 'archive';
+                    platforms: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', 'supported' | 'archive_type_unsupported'>>;
+                } | undefined;
             }[];
             nextCursor: string | null;
             total?: number | undefined;
@@ -320,6 +328,14 @@ export type RegistriesActionResultById = {
                     reason: 'symlink' | 'submodule' | 'distribution' | 'package_type';
                 } | {
                     code: 'removed_from_source';
+                } | undefined;
+                agentDistribution?: {
+                    kind: 'npm';
+                } | {
+                    kind: 'uv';
+                } | {
+                    kind: 'archive';
+                    platforms: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', 'supported' | 'archive_type_unsupported'>>;
                 } | undefined;
             };
             payload: {

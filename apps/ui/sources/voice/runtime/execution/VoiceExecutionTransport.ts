@@ -31,7 +31,7 @@ export type VoiceExecutionTransport = Readonly<{
         userText: string,
         options?: VoiceAgentSendTurnOptions,
     ) => Promise<Readonly<{ assistantText: string; actions: VoiceAssistantAction[] }>>;
-    stop: (sessionId: string) => Promise<void>;
+    stop: (sessionId: string, reason?: 'continued_elsewhere') => Promise<void>;
 }>;
 
 export function createVoiceExecutionTransport(): VoiceExecutionTransport {
@@ -117,14 +117,14 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
         voiceAgentTurnAbortControllerBySessionId,
     });
 
-    const stop = (sessionId: string): Promise<void> => {
+    const stop = (sessionId: string, reason?: 'continued_elsewhere'): Promise<void> => {
         const existingStop = voiceAgentStopPromiseBySessionId.get(sessionId);
         if (existingStop) return existingStop;
 
         interruptActiveTurn(sessionId);
         const stopPromise = (async () => {
             try {
-                await recovery.stop(sessionId, () => waitForActiveTurns(sessionId));
+                await recovery.stop(sessionId, () => waitForActiveTurns(sessionId), reason);
             } finally {
                 clearRetainedLocalVoiceEffectOutcomes(sessionId);
             }

@@ -4,6 +4,11 @@ import { AGENT_DEFINITION } from './definition.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
 
 describe('Gemini agent definition', () => {
+  it('projects proven MCP host mediation through the canonical manifest', () => {
+    expect(PLUGIN_MANIFEST.contributes.agents[0]?.capabilities.tools).toMatchObject({
+      mcpToolControl: { off: 'blocked', approval: 'host' },
+    });
+  });
   it('keeps the public Agent definition free of private runtime aggregates', () => {
     expect(AGENT_DEFINITION).not.toHaveProperty('runtimeContributions');
   });

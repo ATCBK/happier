@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The effective Team capabilities of one viewer for one Team, resolved by the
@@ -20,7 +20,7 @@ import { z } from 'zod';
  * `manageAuthentication` is projected for the Lane 03 Authentication
  * destination; this child does not yet admit its mutation (see `team.ts`).
  */
-export const TeamCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const TeamCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
   viewTeam: z.boolean(),
   viewRoster: z.boolean(),
   manageSettings: z.boolean(),
@@ -33,8 +33,8 @@ export const TeamCapabilitiesV1Schema = lazyZodSchema(() => z.object({
   archiveTeam: z.boolean(),
   restoreTeam: z.boolean(),
   /** Self-removal is separate from Team administration, including suspended membership. */
-  leave: z.boolean().default(false),
-}).strict());
+  leave: z._default(z.boolean(), false),
+}));
 
 export type TeamCapabilitiesV1 = z.infer<typeof TeamCapabilitiesV1Schema>;
 

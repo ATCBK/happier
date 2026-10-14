@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type AgentRuntimeTranscriptSourceFacetV1 = Readonly<{
   supported: true;
@@ -11,17 +11,17 @@ export type AgentRuntimeFacetsV1 = Readonly<{
 }>;
 
 function createAgentRuntimeTranscriptSourceFacetV1Schema(zod: typeof z) {
-  return zod.object({
+  return zod.looseObject({
     supported: zod.literal(true),
-    followLeaseSupported: zod.literal(true).optional(),
-  }).passthrough();
+    followLeaseSupported: zod.optional(zod.literal(true)),
+  });
 }
 
 export function createAgentRuntimeFacetsV1Schema(zod: typeof z) {
-  return zod.object({
+  return zod.looseObject({
     v: zod.literal(1),
-    transcriptSource: createAgentRuntimeTranscriptSourceFacetV1Schema(zod).optional(),
-  }).passthrough();
+    transcriptSource: zod.optional(createAgentRuntimeTranscriptSourceFacetV1Schema(zod)),
+  });
 }
 
 export const AgentRuntimeFacetsV1Schema = createAgentRuntimeFacetsV1Schema(z);

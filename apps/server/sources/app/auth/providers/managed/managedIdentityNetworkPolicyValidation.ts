@@ -1,4 +1,4 @@
-import type { HomeIdentityNetworkPolicyV1 } from "@happier-dev/protocol";
+import type { HomeIdentityNetworkPolicyV1 } from '@happier-dev/protocol/home/governance';
 
 import { FEATURE_ENV_KEYS } from "@/app/features/catalog/featureEnvSchema";
 import { parseIpCidr } from "@/app/net/addressPolicy";

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { projectUsagePageCost, repriceUsageAnalyticsResponse, repriceUsageObservationCost, resolveUsageCostFacts, resolveUsageCostBasis, resolveEffectiveUsageCostUsd } from './usageCost.js';
 import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
-import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
+import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { addUsageCostForMode, createEmptyUsageCost } from './usageAggregation.js';
 
 it('never reclassifies a mixed aggregate with none provenance as reported money', () => {
@@ -14,6 +14,36 @@ it('recognizes explicit zero pricing while leaving default zero unpriced', () =>
   const zero = { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' };
   expect(resolveUsageCostBasis({ ...zero, costSource: 'none' }, 'auto')).toBeNull();
   expect(resolveUsageCostBasis({ ...zero, costSource: 'pricing_estimate' }, 'auto')).toMatchObject({ kind: 'estimated', amountUsd: 0 });
+});
+
+it('does not restore an incomplete API tariff population when a later row is priced', () => {
+  const unpriced = { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' as const };
+  const priced = { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate' as const, apiEquivalentUsd: 9 };
+  const cost = addUsageCostForMode(addUsageCostForMode(createEmptyUsageCost(), unpriced, 'api_equivalent'), priced, 'api_equivalent');
+  expect(cost.apiEquivalentUsd).toBeUndefined();
+  expect(resolveUsageCostBasis(cost, 'api_equivalent')).toBeNull();
+});
+
+it('keeps a money-only final from invalidating fully priced token accounting', () => {
+  const tokens = { input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1_000_000 };
+  const zero = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const cost = { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate' };
+  const response: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 2, tokens,
+    cost: { reportedUsd: 7, estimatedUsd: 1, currency: 'USD', costSource: 'none' } },
+    contributions: [{ id: 'inference', observedAtMs: 1, sessionId: 'session', turnId: 'turn', agentId: 'claude',
+      modelId: 'priced-model', machineId: null, projectKey: null, workspaceId: null, source: 'runtime', tokens, cost },
+      { id: 'final', observedAtMs: 2, sessionId: 'session', turnId: null, agentId: 'claude', modelId: null,
+        machineId: null, projectKey: null, workspaceId: null, source: 'final', tokens: zero,
+        cost: { reportedUsd: 7, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' } }],
+  };
+  const result = repriceUsageAnalyticsResponse(response, { v: 1,
+    models: { 'priced-model': { inputUsdPerMillion: 2, outputUsdPerMillion: 3 } },
+    provenance: { source: 'litellm', origin: 'bundled', asOfMs: 1, revision: 'fixture', fetchStatus: 'ready' },
+  }, {}, 'api_equivalent');
+  expect(result.totals.cost.apiEquivalentUsd).toBe(2);
+  expect(result.costPresentation).toMatchObject({ mode: 'api_equivalent', effectiveUsd: 2 });
+  expect(projectUsagePageCost(result, 'api_equivalent').amountUsd).toBe(2);
+  expect(result.costFacts?.some(fact => fact.kind === 'unpriced')).toBe(false);
 });
 
 it('keeps vendor API-equivalent reports a separate reported fact regardless of current tariff availability', () => {

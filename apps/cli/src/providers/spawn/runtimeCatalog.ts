@@ -1,7 +1,7 @@
 import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
 import { DaemonProviderModelProjectionResponseV1Schema, type DaemonProviderModelProjectionRequestV1, type DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
-import { pluginJsonValuesEqual } from '@happier-dev/protocol';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { createAccountConnectionModelProjectionRequest, projectProviderBrokerApplication } from '../broker/applicationProjection';
 import { createProviderManagedRuntimeDeclarationEqualityKeyV1, resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 import { createProviderManagedProbeRequestFingerprintV1, createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';

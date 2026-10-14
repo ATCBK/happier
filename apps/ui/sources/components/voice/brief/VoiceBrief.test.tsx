@@ -443,6 +443,7 @@ describe('mounted Voice Brief request', () => {
         expect(screen.findByTestId('voice-brief.unavailable')).toBeTruthy();
         const recover = screen.findByTestId('voice-brief.recover');
         expect(recover).toBeTruthy();
+        if (!recover) throw new Error('Voice recovery control missing');
         // The hint belongs to the button for assistive technology; it is never also body copy.
         expect(recover.props.accessibilityHint).toBeTruthy();
         expect(screen.getTextContent()).not.toContain(recover.props.accessibilityHint);

@@ -1,10 +1,5 @@
-import {
-    MachineTunnelServerRoutedCapabilitiesSchema,
-    normalizeMachineTunnelAllowedPorts,
-    normalizeMachineTunnelPreferredEncoding,
-    type MachineTunnelServerRoutedCapabilities,
-    type PeerTcpTunnelEncoding,
-} from '@happier-dev/protocol';
+import { MachineTunnelServerRoutedCapabilitiesSchema, normalizeMachineTunnelAllowedPorts, normalizeMachineTunnelPreferredEncoding, type MachineTunnelServerRoutedCapabilities } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+import { type PeerTcpTunnelEncoding } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
 
 export type PeerTcpTunnelRelayCaps = Readonly<Omit<MachineTunnelServerRoutedCapabilities, 'disabledReason' | 'supportedEncodings'> & {
     serverRoutedEnabled: boolean;

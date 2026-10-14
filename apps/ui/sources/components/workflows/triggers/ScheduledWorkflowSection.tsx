@@ -193,7 +193,7 @@ const DestinationChip = React.memo(function DestinationChip(props: Readonly<{ se
 const styles = StyleSheet.create(theme => ({
     // A precise pointer keeps the quiet line's own height; a finger gets the platform touch floor.
     destination: { minHeight: resolveTouchTargetFloorPx(Platform.OS) ?? undefined, flexDirection: 'row', alignItems: 'center',
-        gap: theme.margins.xs, maxWidth: '100%' },
+        gap: theme.space.s4, maxWidth: '100%' },
     destinationLabel: { flexShrink: 1, minWidth: 0 },
-    destinations: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.margins.md, marginTop: theme.margins.xs },
+    destinations: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, marginTop: theme.space.s4 },
 }));

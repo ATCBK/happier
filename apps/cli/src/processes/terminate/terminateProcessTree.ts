@@ -134,3 +134,27 @@ export async function terminateProcessTree(proc: ProcessTreeRoot | ProcessTreeTe
     throw error;
   }
 }
+
+/** One owned handle shares its current attempt, retains success, and permits retry after failure. */
+export function createProcessTreeStopper(
+  terminate: (options?: ProcessTreeOptions) => Promise<void>,
+): Readonly<{
+  stop(options?: ProcessTreeOptions): Promise<void>;
+  readonly currentAttempt: Promise<void> | null;
+}> {
+  let termination: Promise<void> | null = null;
+  return {
+    get currentAttempt() { return termination; },
+    stop(options) {
+      if (!termination) {
+        const attempt = Promise.resolve().then(() => terminate(options));
+        const guardedAttempt = attempt.catch((error) => {
+          if (termination === guardedAttempt) termination = null;
+          throw error;
+        });
+        termination = guardedAttempt;
+      }
+      return termination;
+    },
+  };
+}

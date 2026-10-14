@@ -1,9 +1,7 @@
-import type {
-    SessionOrganizationAccountEncryptionMigrationInventory,
-    SessionOrganizationContentEnvelope,
-    SessionOrganizationLabel,
-} from "@happier-dev/protocol";
-import { SessionOrganizationAccountEncryptionMigrationInventorySchema } from "@happier-dev/protocol";
+import type { SessionOrganizationAccountEncryptionMigrationInventory } from '@happier-dev/protocol/sessions/organization/accountEncryptionMigrationInventory';
+import type { SessionOrganizationContentEnvelope } from '@happier-dev/protocol/sessions/organization/content';
+import type { SessionOrganizationLabel } from '@happier-dev/protocol/sessions/organization/ordering';
+import { SessionOrganizationAccountEncryptionMigrationInventorySchema } from '@happier-dev/protocol/sessions/organization/accountEncryptionMigrationInventory';
 
 import type { Tx } from "@/storage/inTx";
 

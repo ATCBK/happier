@@ -31,6 +31,7 @@ import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceS
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration, type ExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
 import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { VoiceProviderSettingsJsonValueV1Schema } from '@happier-dev/protocol/voice/realtime/providerSettings';
 
 let accountFixture: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 let registration: ExternalVoiceProviderRegistration | null = null;
@@ -97,7 +98,7 @@ function replaceVoiceFixture(change: Partial<Settings['voice']>) {
 }
 function withProviderConfig(settings: Settings, config: Record<string, unknown>) {
   const voice = { ...settings.voice, providers: { ...settings.voice.providers,
-    [PROVIDER_ID]: { schemaVersion: 2, config } } };
+    [PROVIDER_ID]: { schemaVersion: 2, config: VoiceProviderSettingsJsonValueV1Schema.parse(config) } } };
   return settingsParse({ ...settings, ...normalizeVoiceSettingsLocalDelta({ voice }, settings) });
 }
 const state = {
@@ -112,7 +113,7 @@ const state = {
   get schemaVersion() { return storage.getState().settings.voice.providers[PROVIDER_ID]?.schemaVersion ?? 2; },
   set schemaVersion(schemaVersion: number) {
     replaceVoiceFixture({ providers: { ...storage.getState().settings.voice.providers,
-      [PROVIDER_ID]: { schemaVersion, config: state.config } } });
+      [PROVIDER_ID]: { schemaVersion, config: VoiceProviderSettingsJsonValueV1Schema.parse(state.config) } } });
   },
   get settingsVersion() { return storage.getState().settingsVersion ?? 1; },
   conflict: null as null | 'unrelated' | 'provider',
@@ -173,9 +174,13 @@ const owner = {
   defaultConfig: settingsOwner.defaultConfig,
   parseConfig: (value: unknown) => {
     const parsed = settingsOwner.parseConfig(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    return isConfigRecord(parsed) ? parsed : null;
   },
 };
+
+function isConfigRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
 describe('VoiceProviderSettingsActions', () => {
   it('offers one inline operation chosen from the contributed agent state', async () => {
@@ -206,18 +211,12 @@ describe('VoiceProviderSettingsActions', () => {
     accountFixture.replaceSettings(storage.getState().settings, { version: 4 });
     const request = accountFixture.request.getMockImplementation()!;
     accountFixture.request.mockImplementation(async (url, init) => {
-      if (new URL(url).pathname === '/v2/account/settings') {
-        if (state.advanceDuringPreparation) {
-          state.advanceDuringPreparation = false;
-          accountFixture.replaceSettings(withProviderConfig(storage.getState().settings,
-            { ...state.config, billingMode: 'happier', tts: {
-              ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
-              voiceSettings: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts.voiceSettings, stability: 0.25 },
-            } }), { version: state.settingsVersion + 1, publish: false });
-        }
+      if (providerUrl(url).pathname === '/v2/account/settings') {
         if (init?.method === 'POST') {
           const body = JSON.parse(String(init.body));
-          if (body.content?.t === 'plain' && body.content.v?.voiceSettingsV1?.providers?.[PROVIDER_ID]?.config?.agentId === 'agent_created') {
+          const isActionPatch = body.content?.t === 'plain'
+            && body.content.v?.voiceSettingsV1?.providers?.[PROVIDER_ID]?.config?.agentId === 'agent_created';
+          if (isActionPatch) {
             state.mutationAttempts += 1;
           }
           if (state.conflict) {
@@ -231,7 +230,7 @@ describe('VoiceProviderSettingsActions', () => {
           }
           if (state.outcomeUnknown) throw new Error('transport_response_lost');
           const result = await request(url, init);
-          state.mutationApplied = result.ok && (await result.clone().json()).success === true;
+          if (isActionPatch) state.mutationApplied = result.ok && (await result.clone().json()).success === true;
           return result;
         }
         if (state.outcomeUnknown && state.mutationAttempts > 0) throw new Error('transport_read_unavailable');
@@ -457,6 +456,21 @@ describe('VoiceProviderSettingsActions', () => {
 
   it('pairs action values with the same canonical revision when settings advance during preparation', async () => {
     state.advanceDuringPreparation = true;
+    const beforePreparationVersion = state.settingsVersion;
+    // Deliver the competing Home update as the pending Settings flush publishes,
+    // before preparation resumes. A later credential-catalog GET is execution,
+    // not preparation, and must not change the action's admitted authority.
+    const unsubscribe = storage.subscribe(snapshot => {
+      if (!state.advanceDuringPreparation || snapshot.settingsVersion !== beforePreparationVersion + 1) return;
+      state.advanceDuringPreparation = false;
+      accountFixture.replaceSettings(withProviderConfig(snapshot.settings, {
+        ...state.config, billingMode: 'happier', tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
+          voiceSettings: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts.voiceSettings, stability: 0.25 },
+        },
+      }), { version: beforePreparationVersion + 2 });
+    });
+    onTestFinished(unsubscribe);
     const http = provider.fetch.getMockImplementation()!;
     let revisionAtProvisioning: number | undefined;
     provider.fetch.mockImplementation(async (input, init) => {
@@ -481,7 +495,12 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
+      await vi.waitFor(() => expect(state.mutationApplied, JSON.stringify({
+        settingsVersion: state.settingsVersion, mutationAttempts: state.mutationAttempts,
+        requests: provider.fetch.mock.calls.map(([input]) => providerUrl(input).pathname),
+        failures: log.getLogs().filter(line => line.includes('voiceRuntimeFailure')),
+        alerts: nativeAlert.mock.calls.map(([title, body]) => ({ title, body })),
+      })).toBe(true));
     });
 
     const created = provider.fetch.mock.calls.find(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST');

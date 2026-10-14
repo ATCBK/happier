@@ -75,8 +75,8 @@ beforeEach(() => {
     getStorage().setState({ settingsScope: scope });
     applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
         controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 7,
-            record: { v: 1, id: profile.id, definition: { kind: 'inline', profile }, enabled: false,
-                promptStack: [], secretBindings: {} } }] }, true);
+            record: ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'inline', profile }, enabled: false,
+                promptStack: [], secretBindings: {} }) }] }, true);
 });
 afterEach(() => {
     standardCleanup();
@@ -210,10 +210,10 @@ describe('Profile editor entity writer', () => {
         accountSettingsVersion = 13;
         acpRead = () => Response.json({ status: 'present', revision: 0, content: { t: 'plain', v: { v: 1, definitions: [] } } });
         beforeProfileRead = undefined;
-        record = { v: 1, id: profile.id, definition: { kind: 'inline', profile }, enabled: false,
+        record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'inline', profile }, enabled: false,
             promptStack: [{ id: 'attached-prompt', ref: { kind: 'doc', artifactId: 'prompt-doc' },
                 enabled: true, placement: 'system_append' }],
-            secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } };
+            secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } });
         // HTTP and disconnected sockets are genuine boundaries; Account capture, crypto,
         // mutation schemas, operation services and the mounted store remain real.
         setRuntimeFetch(async (url, init) => {
@@ -384,7 +384,7 @@ describe('Profile editor entity writer', () => {
                 profileEnabledById: { 'gemini-api-key': false }, favoriteProfiles: ['keep-favorite'],
                 lastUsedAgent: 'codex', futurePreference: { retain: 'opaque' } } } } });
         expect(accountSettingsVersion).toBe(14);
-        expect(getStorage().getState().settingsVersion).toBe(14);
+        await vi.waitFor(() => expect(getStorage().getState().settingsVersion).toBe(14));
         expect(getStorage().getState().settings.profileEnabledById).toEqual({ 'gemini-api-key': false });
         expect(settingsWrites).not.toHaveBeenCalled();
         expect(getProfileCatalogSnapshot(homeScope)?.data).toMatchObject([{ record: { id: 'azure-openai', enabled: !hasPreference }, revision: 1 }]);
@@ -886,7 +886,7 @@ describe('Profile editor entity writer', () => {
             expect(chooseDefault).toBeTypeOf('function');
             await act(async () => { chooseDefault?.(selection); });
             await expect(Promise.resolve(saveRef.current?.())).resolves.toBe(true);
-            expect(record).toEqual({ ...admittedRecord, secretBindings: { TOKEN: selection, MASKED: null } });
+            expect(record).toEqual(ProfileRecordV1Schema.parse({ ...admittedRecord, secretBindings: { TOKEN: selection, MASKED: null } }));
             expect(getProfileCatalogSnapshot(homeScope)?.data).toMatchObject([{ revision: 8, record }]);
             expect(artifacts.get(artifact.id)).toEqual(artifact);
             expect(artifactWrites.mock.calls.filter(([url]) => !String(url).endsWith('/v1/artifacts/read'))).toEqual([]);

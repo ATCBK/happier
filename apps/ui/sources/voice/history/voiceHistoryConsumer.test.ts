@@ -44,8 +44,11 @@ const providerRegistry = createVoiceProviderRegistry({ bundledContributions: [
   settingsSectionId: 'voice.fixture',
   selectionOptions: [{ id: 'byo', modeId: 'byo', order: 1, titleKey: 'unused.fixture.title' }],
 })) });
-const readProviderLabel = (source: VoiceHistoryProviderSource | null) =>
-  resolveVoiceHistoryProviderLabel(providerRegistry, source, tLoose);
+const readProviderLabel = (source: VoiceHistoryProviderSource | null) => {
+  const label = resolveVoiceHistoryProviderLabel(providerRegistry, source, tLoose);
+  if (label === null) throw new Error('Expected a declared Voice History fixture provider');
+  return label;
+};
 
 function voiceMessage(input: Readonly<{
   id: string;

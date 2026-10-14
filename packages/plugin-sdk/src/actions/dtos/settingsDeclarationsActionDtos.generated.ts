@@ -160,9 +160,7 @@ export type SettingsDeclarationsActionResultById = {
     };
     readonly "settings.get": {
         anchor: string;
-        value: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null;
+        value: JsonValue;
         settingsVersion?: number | undefined;
     } | {
         anchor: string;
@@ -171,9 +169,7 @@ export type SettingsDeclarationsActionResultById = {
     };
     readonly "settings.set": {
         anchor: string;
-        value: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null;
+        value: JsonValue;
         settingsVersion?: number | undefined;
         reversal?: {
             scope: {
@@ -220,9 +216,7 @@ export type SettingsDeclarationsActionResultById = {
     };
     readonly "settings.reset": {
         anchor: string;
-        value: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null;
+        value: JsonValue;
     } | {
         anchor: string;
         unset: true;
@@ -231,8 +225,6 @@ export type SettingsDeclarationsActionResultById = {
         anchor: string;
         status: 'completed' | 'cancelled' | 'unavailable' | 'interaction_opened';
         reason?: string | undefined;
-        value?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        value?: JsonValue | undefined;
     };
 };

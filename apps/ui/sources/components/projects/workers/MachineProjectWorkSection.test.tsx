@@ -103,6 +103,7 @@ afterEach(async () => {
 async function setup(
   options: Readonly<{
     holdPolicyRead?: boolean;
+    deferMachineDiscovery?: boolean;
     waive?: readonly string[];
   }> = {},
 ) {
@@ -157,7 +158,8 @@ async function setup(
     version = request.expectedVersion + 1;
     return { result: 'success', version, metadata: request.metadata };
   }) as typeof apiSocket.emitWithAck);
-  storage.getState().applyMachines([machine]);
+  if (options.deferMachineDiscovery) storage.setState({ machines: {} });
+  else storage.getState().applyMachines([machine]);
   // Ask first is the Action default; these cases waive it in the Account's canonical settings.
   const { settingsParse } = await import('@/sync/domains/settings/settings');
   const settingsScope = storage.getState().settingsScope;
@@ -188,13 +190,13 @@ async function setup(
       machineName="hz-build-1"
     />,
   );
-  if (!options.holdPolicyRead)
+  if (!options.holdPolicyRead && !options.deferMachineDiscovery)
     await vi.waitFor(() =>
       expect(screen.findAllByTestId('work.accepting')[0]?.props.disabled).toBe(
         false,
       ),
     );
-  return { screen, sent, releasePolicyRead };
+  return { screen, sent, releasePolicyRead, discoverMachine: () => storage.getState().applyMachines([machine]) };
 }
 
 async function seedWorkerCopy() {
@@ -263,6 +265,27 @@ async function seedWorkerCopy() {
 }
 
 describe('Machine › Work from your projects through the Machine policy Actions', () => {
+  it('keeps a real failed policy read unavailable even while the Machine answers, and retries that read', async () => {
+    const { screen, releasePolicyRead } = await setup({ holdPolicyRead: true });
+    const successfulRead = machineHttp.read;
+    machineHttp.read = () => new Response(null, { status: 503 });
+    await act(async () => { releasePolicyRead(); });
+    const notice = () => screen.findAllByTestId('work.unavailable')[0]?.props;
+    await vi.waitFor(() => expect(notice()?.action).toBeTruthy());
+    expect(screen.findAllByTestId('work.accepting')).toHaveLength(0);
+    machineHttp.read = successfulRead;
+    await act(async () => { notice()?.action?.onPress(); });
+    await vi.waitFor(() => expect(screen.findAllByTestId('work.accepting')[0]?.props.disabled).toBe(false));
+    expect(screen.findAllByTestId('work.unavailable')).toHaveLength(0);
+  });
+  it('waits for Machine discovery before policy admission, then reads the answering Machine without an unavailable retry', async () => {
+    const { screen, discoverMachine } = await setup({ deferMachineDiscovery: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.findAllByTestId('work.unavailable')).toHaveLength(0);
+    expect(screen.findAllByTestId('work.accepting')[0]?.props.subtitle).toBe('common.loading');
+    await act(async () => { discoverMachine(); });
+    await vi.waitFor(() => expect(screen.findAllByTestId('work.accepting')[0]?.props.disabled).toBe(false));
+  });
   it('shows an own queued run from its canonical phase facts, never as running on an acceptance clock', async () => {
     const { screen } = await setup();
     const scope = storage.getState().profileScope;

@@ -175,6 +175,21 @@ describe('connected-account daemon machine RPC', () => {
         expect(issued[1]).toMatchObject({ params: { command: { operation: 'completeOAuth',
             attemptId: 'retained-attempt', completion: { code: 'code', state: 'retained-attempt.nonce', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 } } } });
     });
+    it.each([true, false])('consumes the originating Session return only for its exact OAuth attempt (matches=%s)', async matches => {
+        const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { MCP_OAUTH_CALLBACK_URL_V1, MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
+        expect(await TokenStorage.setPendingExternalConnect({ provider: matches ? 'mcp:retained-attempt' : 'mcp:other-attempt',
+            serverId, serverUrl: 'https://connected-accounts.test', returnTo: '/session/session-1?capabilities=open' })).toBe(true);
+        answers.push({ status: 'awaitingOAuth', attemptId: 'retained-attempt', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 },
+            { status: 'connected', attemptId: 'retained-attempt', account: { service: MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1, accountId: 'server-id' } });
+        expect(await completeMcpOAuthCallback({ callbackUrl: `${MCP_OAUTH_CALLBACK_URL_V1}?code=code&state=retained-attempt.nonce`,
+            account: { serverId, expectedAccountId: 'account-a', machineId: 'machine-1', assertCurrent() {}, async readMachines() { return []; } } }))
+            .toMatchObject({ kind: 'connected', returnTo: matches ? '/session/session-1?capabilities=open' : '/settings/mcp/server-id' });
+        expect(await TokenStorage.getPendingExternalConnect()).toEqual(matches ? null : expect.objectContaining({ provider: 'mcp:other-attempt' }));
+        await TokenStorage.clearPendingExternalConnect();
+    });
+
     it('keeps the full callback for paste when no machine owns the pending attempt', async () => {
         const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
         const { MCP_OAUTH_CALLBACK_URL_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');

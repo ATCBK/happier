@@ -78,6 +78,18 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
 describe('detached exact Run output observation transport', () => {
+  it('uses the installed exact Machine transport for ordinary detached Run calls', async () => {
+    const response = { runs: [] };
+    const invoke = vi.fn(async () => response);
+    callMachineRpc.mockClear();
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke } });
+    expect(await deps.executionRunList(null, {}, { targetMachineId: 'machine-1' })).toEqual(response);
+    expect(invoke).toHaveBeenCalledWith(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {}, expect.any(Object));
+    expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
   it('ends a local passive observation at its authored deadline despite blocked output', async () => {
     const snapshot = { run: {
       runId: 'run-watch', callId: 'call', sidechainId: 'call', intent: 'delegate',

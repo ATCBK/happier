@@ -30,9 +30,15 @@ async function openChoices(screen: Awaited<ReturnType<typeof renderScreen>>, tit
     await pressTestInstanceAsync(trigger);
 }
 const choiceRow = (screen: Awaited<ReturnType<typeof renderScreen>>, label: string) => screen.findAllByType('Pressable')
-    .find(node => (node.props.accessibilityRole === 'checkbox' || node.props.accessibilityRole === 'radio')
-        && String(node.props.accessibilityLabel ?? '').startsWith(label));
+    .find(node => {
+        const role = node.props.role ?? node.props.accessibilityRole;
+        return (role === 'checkbox' || role === 'radio')
+            && String(node.props.accessibilityLabel ?? '').startsWith(label);
+    });
 
+// The field's choices float in the host's Popover; render it in place so the real rows are driven.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal as never) as never);
 describe('ActionInputFields', () => {
     it('retains one array-valued group choice and writes its replacement as one choice', async () => {
         const { ActionInputFields } = await import('./ActionInputFields');

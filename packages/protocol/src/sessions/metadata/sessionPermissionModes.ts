@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SESSION_PERMISSION_MODES = [
   'default',
@@ -90,12 +90,9 @@ export function parseSessionPermissionModeAlias(raw: string): SessionPermissionM
 
 /** Strict, alias-aware schema for user and Action input boundaries. */
 export function createSessionPermissionModeInputSchema(zod: typeof z) {
-  return zod.preprocess(
-    (value) => typeof value === 'string'
+  return zod.pipe(zod.transform((value) => typeof value === 'string'
       ? parseSessionPermissionModeAlias(value) ?? value
-      : value,
-    zod.enum(SESSION_PERMISSION_MODES),
-  );
+      : value), zod.enum(SESSION_PERMISSION_MODES));
 }
 
 export const SessionPermissionModeInputSchema = createSessionPermissionModeInputSchema(z);
@@ -106,7 +103,7 @@ export const SessionPermissionModeInputSchema = createSessionPermissionModeInput
  * - Unknown/invalid values parse as `'default'` (forward compatible; never throws).
  */
 export function createSessionPermissionModeSchema(zod: typeof z) {
-  return zod.enum(SESSION_PERMISSION_MODES).catch('default');
+  return zod.catch(zod.enum(SESSION_PERMISSION_MODES), 'default');
 }
 
 export const SessionPermissionModeSchema = createSessionPermissionModeSchema(z);

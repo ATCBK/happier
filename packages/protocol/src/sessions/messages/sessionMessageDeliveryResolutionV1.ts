@@ -1,27 +1,27 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 /** Witnessed host admission; requested delivery intent is not accepted delivery evidence. */
-export const SessionMessageAcceptedDeliveryFactsV1Schema = lazyZodSchema(() => z.object({
+export const SessionMessageAcceptedDeliveryFactsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  acceptedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  delivery: z.object({
+  acceptedAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  delivery: z.strictObject({
     kind: z.enum(['newTurn', 'followUp', 'steer']),
-    turnId: z.string().refine((value) => value.trim().length > 0),
-  }).strict(),
-}).strict());
+    turnId: z.string().check(z.refine((value) => value.trim().length > 0)),
+  }),
+}));
 export const SessionMessageAcceptedDeliveryFactsV1StoredSchema = createStoredReadSchema(SessionMessageAcceptedDeliveryFactsV1Schema);
 
 export const SessionMessageAcceptedDeliveryContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: SessionMessageAcceptedDeliveryFactsV1Schema }).strict(),
-  z.object({ t: z.literal('encrypted'), c: z.string().min(1) }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: SessionMessageAcceptedDeliveryFactsV1Schema }),
+  z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]));
 
 export const SessionMessageDeliveryResolutionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ v: z.literal(1), kind: z.literal('manual_handled') }).strict(),
-  z.object({ v: z.literal(1), kind: z.literal('provider_accepted'),
-    content: SessionMessageAcceptedDeliveryContentV1Schema }).strict(),
+  z.strictObject({ v: z.literal(1), kind: z.literal('manual_handled') }),
+  z.strictObject({ v: z.literal(1), kind: z.literal('provider_accepted'),
+    content: SessionMessageAcceptedDeliveryContentV1Schema }),
 ]));
 
 export type SessionMessageAcceptedDeliveryFactsV1 = z.infer<typeof SessionMessageAcceptedDeliveryFactsV1Schema>;

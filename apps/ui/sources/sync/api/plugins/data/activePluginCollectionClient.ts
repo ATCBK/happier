@@ -582,7 +582,7 @@ export function mergeLogicalRow<TValue extends PluginAccountCollectionValue<Plug
 
 function isLogicalCollectionValue<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
     validate: ReturnType<typeof compilePluginJsonSchema>,
-    value: Readonly<Record<string, JsonValue>>,
+    value: unknown,
 ): value is TValue {
     return isValidPluginJsonSchemaValue(validate, value);
 }

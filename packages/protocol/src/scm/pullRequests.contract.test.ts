@@ -1,5 +1,7 @@
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
+import * as z from 'zod/mini';
+import type { core } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { ScmPullRequestReviewScopeV1Schema } from '../reviews/scmPullRequestScope.js';
 import { describe, expect, it } from 'vitest';
@@ -334,7 +336,7 @@ describe('pull-request references in the selected review scope JSON Schema', () 
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       const projections = [
         zodSchemaToJsonSchemaObject(ScmPullRequestReviewScopeV1Schema, { target }),
-        ScmPullRequestReviewScopeV1Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }),
+        z.toJSONSchema(ScmPullRequestReviewScopeV1Schema, { io: 'input', target, unrepresentable: 'any' }),
       ];
       for (const projection of projections) {
         const validator = target === 'draft-7'

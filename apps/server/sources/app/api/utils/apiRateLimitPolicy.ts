@@ -1,4 +1,4 @@
-import { readServerConfig } from "@happier-dev/protocol";
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { parseIntEnv } from "@/config/env";
 
 import { API_RATE_LIMIT_GLOBAL_SERVER_CONFIG as RATE_LIMIT_CONFIG } from "./apiRateLimitDefaults";

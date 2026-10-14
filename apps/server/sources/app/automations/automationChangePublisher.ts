@@ -1,7 +1,7 @@
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { eventRouter } from "@/app/events/eventRouter";
-import type { AutomationRunStateChangedHostEventV1 } from "@happier-dev/protocol";
-import type { ManagedWakeTargetV1 } from "@happier-dev/protocol";
+import type { AutomationRunStateChangedHostEventV1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
+import type { ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 
 import type {
     AutomationListItem,

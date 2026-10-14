@@ -7,7 +7,7 @@ import { SelectableRow, type SelectableRowVariant } from '@/components/ui/lists/
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { ItemGroupSelectionContext } from '@/components/ui/lists/ItemGroup';
 import { ItemGroupRowPositionBoundary } from '@/components/ui/lists/ItemGroupRowPosition';
-import type { SelectableMenuCategory, SelectableMenuItem } from './selectableMenuTypes';
+import type { SelectableMenuCategory, SelectableMenuCategoryDecorations, SelectableMenuItem } from './selectableMenuTypes';
 import { Text } from '@/components/ui/text/Text';
 import type { ScrollItemLayoutHandler } from '@/components/ui/scroll/useScrollRectIntoView';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
@@ -214,6 +214,31 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s4,
         color: theme.colors.text.secondary,
     },
+    categoryHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s4,
+    },
+    categoryHeaderTitle: {
+        ...Typography.variant('meta', 'semiBold'),
+        color: theme.colors.text.secondary,
+    },
+    categoryNote: {
+        ...Typography.variant('meta', 'regular'),
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s8,
+        color: theme.colors.text.tertiary,
+    },
+    categorySeparator: {
+        height: StyleSheet.hairlineWidth,
+        marginHorizontal: theme.space.s12,
+        marginVertical: MENU_ROW_METRICS.insetPx,
+        backgroundColor: theme.colors.border.subtle,
+    },
     itemRowPressable: {
         alignSelf: 'stretch',
         marginHorizontal: MENU_ROW_METRICS.insetPx,
@@ -244,6 +269,9 @@ type SelectableMenuResultsProps = {
     rowVariant: SelectableRowVariant;
     emptyLabel?: string | null;
     showCategoryTitles?: boolean;
+    /** Untitled groups read apart: a hairline between them (a menu's choices, then its operations). */
+    separateCategories?: boolean;
+    categoryDecorations?: SelectableMenuCategoryDecorations;
     rowKind?: 'selectableRow' | 'item';
     itemProps?: Partial<
         Omit<ItemProps, 'title' | 'subtitle' | 'icon' | 'rightElement' | 'selected' | 'disabled' | 'showChevron' | 'showDivider' | 'onPress'>
@@ -316,6 +344,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
     }
 
     let currentIndex = 0;
+    let renderedCategories = 0;
     const showCategoryTitles = props.showCategoryTitles !== false;
     const rowKind = props.rowKind ?? 'selectableRow';
 
@@ -411,7 +440,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                         />
                     );
 
-                    const scrollFrameLayout = props.registerItemLayout?.(String(itemIndex));
+                    const scrollFrameLayout = props.registerItemLayout?.(item.id);
                     const rowFrameTestID = `${optionTestID}:scroll-frame`;
                     const rowFramePointerEnter = Platform.OS === 'web' && item.hasSubmenu ? () => {
                         props.onSelectionChange(itemIndex);
@@ -447,14 +476,26 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                     );
                 });
 
+                const decoration = props.categoryDecorations?.[category.title];
+                const separated = props.separateCategories === true && renderedCategories > 0;
+                renderedCategories++;
                 return (
                     <View key={category.id}>
+                        {separated ? <View style={styles.categorySeparator} /> : null}
                         {showCategoryTitles && category.title.trim().length > 0 ? (
-                            <Text style={styles.categoryTitle} accessibilityRole="header">
-                                {category.title}
-                            </Text>
+                            decoration?.icon ? (
+                                <View style={styles.categoryHeader} accessibilityRole="header">
+                                    {decoration.icon}
+                                    <Text style={styles.categoryHeaderTitle}>{category.title}</Text>
+                                </View>
+                            ) : (
+                                <Text style={styles.categoryTitle} accessibilityRole="header">
+                                    {category.title}
+                                </Text>
+                            )
                         ) : null}
                         {categoryItems}
+                        {decoration?.note ? <Text style={styles.categoryNote}>{decoration.note}</Text> : null}
                     </View>
                 );
             })}

@@ -3,14 +3,8 @@ import { log } from "@/utils/logging/log";
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
-import {
-    ACCOUNT_SETTINGS_V2_UPDATE_REQUEST_MAX_UTF8_BYTES,
-    AccountSettingsV2GetResponseSchema,
-    AccountSettingsV2UpdateRequestAdmissionSchema,
-    AccountSettingsV2UpdateRequestSchema,
-    AccountSettingsV2UpdateResponseSchema,
-    AccountStoredContentUpgradeRequiredV1Schema,
-} from "@happier-dev/protocol";
+import { ACCOUNT_SETTINGS_V2_UPDATE_REQUEST_MAX_UTF8_BYTES, AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateRequestAdmissionSchema, AccountSettingsV2UpdateRequestSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import {
     enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest,
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";

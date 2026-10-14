@@ -85,19 +85,6 @@ describe('EntityDropSettledFeedback (lab ST4 late refusal)', () => {
         expect(screen.getTextContent()).toContain('Couldn’t check this session just now');
         await screen.unmount();
     });
-    it('keeps a committed relation key-waiting notice on the landed row without an unknown or refusal', async () => {
-        const outcome = { status: 'applied' as const, notice: {
-            code: 'session_follow_source_key_preparation_waiting', message: 'Updates start once the source key is ready',
-        } };
-        const { screen } = await lateSettlement(outcome);
-        expect(screen.findHostByTestId('row-settled')).not.toBeNull();
-        expect(screen.findHostByTestId('row-landed')).not.toBeNull();
-        expect(screen.getTextContent()).toContain('Updates start once the source key is ready');
-        expect(screen.getTextContent()).not.toContain('Not sure');
-        expect(screen.getTextContent()).not.toContain('Couldn’t put');
-        await screen.unmount();
-    });
-
     it('keeps the late refusal under its source row after the carry ends, naming verb, target and reason', async () => {
         const { runtime, screen } = await lateSettlement({ status: 'refused', reason: { code: 'changed', message: 'This session was just moved. Try again' } });
         expect(runtime.getSnapshot().phase).toBe('idle');

@@ -1,13 +1,13 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from '../ids.js';
 
-export const ProviderConnectionTombstoneV1Schema = lazyZodSchema(() => z.object({
+export const ProviderConnectionTombstoneV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   id: ProviderConnectionIdSchema,
-  contributionKey: ProviderContributionKeySchema.nullable(),
-  lastDisplayName: z.string().trim().min(1).max(128),
-  deletedAt: z.number().finite().nonnegative(),
-}).strict());
+  contributionKey: z.nullable(ProviderContributionKeySchema),
+  lastDisplayName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  deletedAt: z.number().check(z.nonnegative()),
+}));
 export type ProviderConnectionTombstoneV1 = z.infer<typeof ProviderConnectionTombstoneV1Schema>;

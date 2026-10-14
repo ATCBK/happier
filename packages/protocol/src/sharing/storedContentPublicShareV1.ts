@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { encodeBase64 } from '../crypto/base64.js';
 import { SessionStoredMessageContentSchema } from '../sessions/messages/sessionStoredMessageContent.js';
 import { ArtifactBlobReadResponseV1Schema } from '../artifacts/artifactBinaryV1.js';
@@ -9,101 +9,101 @@ import { SessionTranscriptSurfaceItemReferenceInputV1Schema, SessionTranscriptSu
 import { SessionMessageRoleSchema } from '../sessions/messages/sessionMessageRole.js';
 
 /** Closed authority-bearing HTTP objects; no fragment secret is a transport field. */
-export const StoredContentPublicShareSubjectV1Schema = lazyZodSchema(() => z.object({
-  kind: z.enum(['session', 'artifact']), id: z.string().min(1),
-}).strict());
+export const StoredContentPublicShareSubjectV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.enum(['session', 'artifact']), id: z.string().check(z.minLength(1)),
+}));
 export type StoredContentPublicShareSubjectV1 = z.infer<typeof StoredContentPublicShareSubjectV1Schema>;
 
 export const StoredContentPublicShareKeyDerivationV1Schema = lazyZodSchema(() => z.enum(['fragment_v1', 'legacy_token_v1']));
-export const StoredContentPublicShareCreateRequestV1Schema = lazyZodSchema(() => z.object({
+export const StoredContentPublicShareCreateRequestV1Schema = lazyZodSchema(() => z.strictObject({
   subject: StoredContentPublicShareSubjectV1Schema,
-  lookupId: z.string().min(1),
-  encryptedDataKey: z.string().min(1).nullable().optional(),
+  lookupId: z.string().check(z.minLength(1)),
+  encryptedDataKey: z.optional(z.nullable(z.string().check(z.minLength(1)))),
   keyDerivation: z.literal('fragment_v1'),
-  expiresAt: z.number().int().nonnegative().optional(),
-  maxUses: z.number().int().positive().optional(),
-  isConsentRequired: z.boolean().optional(),
-  networkOff: z.boolean().optional(),
-}).strict());
+  expiresAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  maxUses: z.optional(z.number().check(z.int(), z.positive())),
+  isConsentRequired: z.optional(z.boolean()),
+  networkOff: z.optional(z.boolean()),
+}));
 export type StoredContentPublicShareCreateRequestV1 = z.infer<typeof StoredContentPublicShareCreateRequestV1Schema>;
 
-export const StoredContentPublicShareV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), subject: StoredContentPublicShareSubjectV1Schema,
-  expiresAt: z.number().int().nonnegative().nullable(), maxUses: z.number().int().positive().nullable(),
-  useCount: z.number().int().nonnegative(), isConsentRequired: z.boolean(), networkOff: z.boolean().default(false),
-  createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative(),
+export const StoredContentPublicShareV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), subject: StoredContentPublicShareSubjectV1Schema,
+  expiresAt: z.nullable(z.number().check(z.int(), z.nonnegative())), maxUses: z.nullable(z.number().check(z.int(), z.positive())),
+  useCount: z.number().check(z.int(), z.nonnegative()), isConsentRequired: z.boolean(), networkOff: z._default(z.boolean(), false),
+  createdAt: z.number().check(z.int(), z.nonnegative()), updatedAt: z.number().check(z.int(), z.nonnegative()),
   keyDerivation: StoredContentPublicShareKeyDerivationV1Schema,
-}).strict());
+}));
 export type StoredContentPublicShareV1 = z.infer<typeof StoredContentPublicShareV1Schema>;
 /** Use limits govern new viewers; expiry or deletion ends the publication itself. */
 export function isStoredContentPublicShareActiveV1(publication: Readonly<{ expiresAt: number | null }> | null, nowMs: number): boolean {
   return publication !== null && !(publication.expiresAt !== null && publication.expiresAt <= nowMs);
 }
-export const StoredContentPublicSharesListResponseV1Schema = lazyZodSchema(() => z.object({
+export const StoredContentPublicSharesListResponseV1Schema = lazyZodSchema(() => z.strictObject({
   publicShares: z.array(StoredContentPublicShareV1Schema),
-}).strict());
+}));
 export type StoredContentPublicSharesListResponseV1 = z.infer<typeof StoredContentPublicSharesListResponseV1Schema>;
-export const StoredContentPublicShareCreateResponseV1Schema = lazyZodSchema(() => z.object({
+export const StoredContentPublicShareCreateResponseV1Schema = lazyZodSchema(() => z.strictObject({
   publicShare: StoredContentPublicShareV1Schema,
-  viewerOrigin: z.string().url(),
-}).strict());
+  viewerOrigin: z.string().check(z.url()),
+}));
 
-export const StoredContentPublicShareAccessLogV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), accessedAt: z.number().int().nonnegative(),
-  ipAddress: z.string().nullable(), userAgent: z.string().nullable(),
-}).strict());
-export const StoredContentPublicShareAccessLogResponseV1Schema = lazyZodSchema(() => z.object({
+export const StoredContentPublicShareAccessLogV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), accessedAt: z.number().check(z.int(), z.nonnegative()),
+  ipAddress: z.nullable(z.string()), userAgent: z.nullable(z.string()),
+}));
+export const StoredContentPublicShareAccessLogResponseV1Schema = lazyZodSchema(() => z.strictObject({
   accessLog: z.array(StoredContentPublicShareAccessLogV1Schema),
-}).strict());
+}));
 
-export const StoredContentPublicShareReadResponseV1Schema = lazyZodSchema(() => z.object({
+export const StoredContentPublicShareReadResponseV1Schema = lazyZodSchema(() => z.strictObject({
   subject: StoredContentPublicShareSubjectV1Schema,
   encryptionMode: z.enum(['e2ee', 'plain']),
-  encryptedDataKey: z.string().min(1).nullable(),
+  encryptedDataKey: z.nullable(z.string().check(z.minLength(1))),
   keyDerivation: StoredContentPublicShareKeyDerivationV1Schema,
   isConsentRequired: z.boolean(),
-  networkOff: z.boolean().default(false),
-  messagesAccessToken: z.string().min(1).nullable().optional(),
+  networkOff: z._default(z.boolean(), false),
+  messagesAccessToken: z.optional(z.nullable(z.string().check(z.minLength(1)))),
   content: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('artifact'), header: z.string(), body: z.string(),
-      headerVersion: z.number().int().positive(), bodyVersion: z.number().int().positive(),
-      blob: ArtifactBlobReadResponseV1Schema.optional(),
-    }).strict(),
-    z.object({
-      kind: z.literal('session'), metadata: z.string().nullable(), metadataVersion: z.number().int().nonnegative(),
-      metadataLayoutVersion: z.number().int().optional(), agentState: z.string().nullable(),
-      agentStateVersion: z.number().int().nonnegative(), messages: z.array(z.object({
-        id: z.string().min(1), seq: z.number().int().nonnegative(), localId: z.string().nullable().optional(),
-        createdAt: z.number().finite(), content: SessionStoredMessageContentSchema,
-        surfaceItemReference: z.lazy(() => SessionTranscriptSurfaceItemReferenceInputV1Schema).nullable().optional(),
-        messageRole: SessionMessageRoleSchema.optional(),
+      headerVersion: z.number().check(z.int(), z.positive()), bodyVersion: z.number().check(z.int(), z.positive()),
+      blob: z.optional(ArtifactBlobReadResponseV1Schema),
+    }),
+    z.strictObject({
+      kind: z.literal('session'), metadata: z.nullable(z.string()), metadataVersion: z.number().check(z.int(), z.nonnegative()),
+      metadataLayoutVersion: z.optional(z.number().check(z.int())), agentState: z.nullable(z.string()),
+      agentStateVersion: z.number().check(z.int(), z.nonnegative()), messages: z.array(z.object({
+        id: z.string().check(z.minLength(1)), seq: z.number().check(z.int(), z.nonnegative()), localId: z.optional(z.nullable(z.string())),
+        createdAt: z.number(), content: SessionStoredMessageContentSchema,
+        surfaceItemReference: z.optional(z.nullable(z.lazy(() => SessionTranscriptSurfaceItemReferenceInputV1Schema))),
+        messageRole: z.optional(SessionMessageRoleSchema),
       })),
-      hasMore: z.boolean(), nextBeforeSeq: z.number().int().nonnegative().nullable(),
-    }).strict(),
+      hasMore: z.boolean(), nextBeforeSeq: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    }),
   ]),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.subject.kind !== value.content.kind) context.addIssue({ code: 'custom', message: 'Public-share subject/content mismatch' });
   if ((value.encryptionMode === 'e2ee') !== (value.encryptedDataKey !== null)) {
     context.addIssue({ code: 'custom', message: 'Public-share mode/key mismatch' });
   }
-}));
+})));
 export type StoredContentPublicShareReadResponseV1 = z.infer<typeof StoredContentPublicShareReadResponseV1Schema>;
 
 /** A message capability is the only public visual selector; item ids are not request authority. */
-export const StoredContentPublicShareVisualReadResponseV1Schema = lazyZodSchema(() => z.object({
-  messageId: z.string().min(1),
+export const StoredContentPublicShareVisualReadResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  messageId: z.string().check(z.minLength(1)),
   encryptionMode: z.enum(['plain', 'e2ee']),
   networkOff: z.boolean(),
   reference: z.lazy(() => SessionTranscriptSurfaceItemReferenceReadV1Schema),
-  record: SessionSystemRecordSchema.extend({ content: SessionSystemRecordContentSchema }),
-}).strict().superRefine((value, context) => {
+  record: z.extend(SessionSystemRecordSchema, { content: SessionSystemRecordContentSchema }),
+}).check(z.superRefine((value, context) => {
   if ((value.encryptionMode === 'plain') !== (value.record.content.t === 'plain')
     || value.record.address.owner !== 'host' || value.record.address.namespace !== 'surface'
     || value.record.address.kind !== 'item.v1' || value.record.address.localId !== value.reference.itemId) {
     context.addIssue({ code: 'custom', message: 'Public visual mode or addressed identity mismatch' });
   }
-}));
+})));
 export type StoredContentPublicShareVisualReadResponseV1 = z.infer<typeof StoredContentPublicShareVisualReadResponseV1Schema>;
 
 /** Independent cryptographic capabilities: the lookup is HTTP-visible, the secret is local. */

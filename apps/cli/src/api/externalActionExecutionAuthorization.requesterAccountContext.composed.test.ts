@@ -26,6 +26,10 @@ import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/p
 import { effectiveCredentialAuthority, narrowCredentialAuthority } from '../../../server/sources/app/auth/effectiveCredentialAuthority';
 import { AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { MachineWorkSummaryGetInputV1Schema, MachineWorkSummaryGetResultV1Schema } from '@happier-dev/protocol/machines/machineWorkSummaryV1';
+import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 
 // Terminal reads and controlling-TTY availability are genuine user/OS boundaries;
 // the consent owner and its default-no answer parsing stay real.
@@ -37,6 +41,7 @@ vi.mock('@/terminal/prompts/promptInput', async importOriginal => ({
 }));
 
 const servers: Server[] = [];
+const controlApps: ReturnType<typeof createDaemonControlApp>[] = [];
 const homeIdentityId = 'srv_requester_home';
 // This machine-placed public Action exercises transport custody; settings.list
 // is Account-local declaration discovery and does not originate a Machine call.
@@ -44,6 +49,7 @@ const ownMachineInput = MachineWorkSummaryGetInputV1Schema.parse({ serverId: 'ho
 const ownMachineResult = MachineWorkSummaryGetResultV1Schema.parse({ kind: 'current', requesters: [] });
 afterEach(async () => {
   terminal.interactive = true; terminal.answer = 'no'; terminal.prompts = []; process.exitCode = undefined;
+  await Promise.all(controlApps.splice(0).map(app => app.close()));
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))));
 });
 
@@ -63,6 +69,7 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
   retireAccountSecurity?: boolean;
   retireSessionAccess?: boolean;
   allowedTerminalSecurity?: boolean;
+  receiverSession?: boolean;
   authorityCeiling?: 'account_automation';
 } = {}) {
   const seed = new Uint8Array(32).fill(19);
@@ -87,6 +94,12 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
       return respond(options.finiteWake ? [machine, controller] : [machine]);
     }
     if (request.url === '/ping') return respond({ status: 'ok' });
+    if (options.receiverSession && request.method === 'GET' && request.url === '/v2/sessions/session-1') {
+      return respond(V2SessionByIdResponseSchema.parse({ session: {
+        id: 'session-1', seq: 0, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+        encryptionMode: 'plain', metadata: '{}', metadataVersion: 1, dataEncryptionKey: null,
+      } }));
+    }
     if (request.url === '/v1/machines/alice-machine') return respond({ machine });
     if (request.url === '/v1/machines/alice-controller') return respond({ machine: options.staleController === 'installation'
       ? { ...controller, installationId: 'replacement-controller-installation' } : controller });
@@ -190,6 +203,42 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
     controllerPrivateKey: new Uint8Array([...controllerSeed, ...controllerPublicKey]) };
 }
 
+async function privateAccountDaemon(serverApiUrl: string, events: string[]) {
+  const credentials: StoredCredentials = { token: token(), encryption: null, credentialProvenance: 'stored_session' };
+  const { executor } = createCliActionExecutorHarness({
+    token: credentials.token, credentials, serverId: 'home', serverHttpBaseUrl: serverApiUrl,
+    sessionId: '', mode: 'plain', ctx: null,
+    actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }) },
+  });
+  const app = createDaemonControlApp({
+    getChildren: () => [], machineId: 'alice-machine', controlToken: 'test-daemon-control',
+    stopSession: async () => { throw new Error('Unexpected process stop'); },
+    spawnSession: async () => { throw new Error('Unexpected process spawn'); },
+    requestShutdown: () => { throw new Error('Unexpected daemon shutdown'); }, onHappySessionWebhook: () => {},
+    externalActionApi: { currentServerId: 'home', currentAccountId: 'bob', executor,
+      verifyPat: async () => { throw new Error('Private control does not verify PATs'); },
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl }),
+    },
+  });
+  controlApps.push(app);
+  let received: unknown;
+  app.addHook('preHandler', async request => {
+    if (request.url === '/actions/root/execute' && request.headers['x-happier-daemon-token'] === 'test-daemon-control') {
+      received = request.body; events.push('local-daemon');
+    }
+  });
+  // A retired terminal bearer alone cannot enter the independently authenticated
+  // private control route. The production client must possess its control token.
+  expect((await app.inject({ method: 'POST', url: '/actions/root/execute',
+    headers: { authorization: `Bearer ${token('terminal')}` },
+    payload: { actionId: 'account.security.get', input: {} },
+  })).statusCode).toBe(401);
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const address = app.server.address();
+  if (!address || typeof address === 'string') throw new Error('Private daemon fixture did not listen');
+  return { url: `http://127.0.0.1:${address.port}`, readReceived: () => received };
+}
+
 describe('ordinary CLI requester Account custody on the existing Action carrier', () => {
   it.each(['plain', 'e2ee'] as const)('delivers an own remote %s client Action without a local daemon or private custody disclosure', async mode => {
     await withTempDir('happier-own-remote-action-', async taskDir => {
@@ -268,7 +317,13 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
     });
   });
 
-  it.each(['machine', 'account-default', 'session'] as const)('preserves genuine terminal kind and retired epoch through Home even beside its own live Account daemon (%s)', async placement => {
+  it.each([
+    { placement: 'machine', localDaemon: true },
+    { placement: 'account-default', localDaemon: true },
+    { placement: 'session', localDaemon: true },
+    { placement: 'account-default', localDaemon: false },
+    { placement: 'session', localDaemon: false },
+  ] as const)('rechecks Home credential retirement on $placement delivery (private daemon: $localDaemon)', async ({ placement, localDaemon }) => {
     await withTempDir('happier-terminal-own-local-', async taskDir => {
       const originalConfiguration = { serversDir: configuration.serversDir };
       Object.assign(configuration, { serversDir: join(taskDir, 'servers') });
@@ -276,13 +331,17 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
         const events: string[] = [];
         const target = await home('plain', events, { custodianAccountId: 'bob', originalOwnAction: 'machines.work.summary.get',
           authenticationKind: 'terminal', retireOwnAction: true, retireAccountSecurity: placement === 'account-default',
-          retireSessionAccess: placement === 'session' });
-        const control = await home('plain', events, { custodianAccountId: 'bob', localDaemon: true });
+          retireSessionAccess: placement === 'session', receiverSession: placement === 'session' });
+        const control = !localDaemon ? null : placement === 'machine'
+          ? await home('plain', events, { custodianAccountId: 'bob', localDaemon: true })
+          : await privateAccountDaemon(target.url, events);
         const serverDir = join(configuration.serversDir, 'home');
-        await mkdir(serverDir, { recursive: true });
-        await writeFile(join(serverDir, 'daemon.state.json'), JSON.stringify({ pid: process.pid,
-          httpPort: Number(new URL(control.url).port), startedAt: Date.now(), startedWithCliVersion: 'test',
-          machineId: 'alice-machine', accountId: 'bob', controlToken: 'test-daemon-control' }));
+        if (control) {
+          await mkdir(serverDir, { recursive: true });
+          await writeFile(join(serverDir, 'daemon.state.json'), JSON.stringify({ pid: process.pid,
+            httpPort: Number(new URL(control.url).port), startedAt: Date.now(), startedWithCliVersion: 'test',
+            machineId: 'alice-machine', accountId: 'bob', controlToken: 'test-daemon-control' }));
+        }
         const executor = createCliActionExecutorFromCredentials({
           credentials: { token: token('terminal'), encryption: null, credentialProvenance: 'stored_session' }, externalActionClient: true,
           serverId: 'home', serverApiUrl: target.url, serverIdentityId: homeIdentityId,
@@ -296,17 +355,30 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
         const result = await executor.execute(placement === 'machine' ? 'machines.work.summary.get'
           : placement === 'session' ? 'session.access.grants.list' : 'account.security.get', input, context);
         expect(result).toMatchObject({ ok: false, errorCode: placement === 'machine' ? 'invalid_token' : 'not_authenticated' });
-        expect(events).toEqual([placement === 'machine' ? 'dispatch' : placement === 'session' ? 'session-access' : 'account-security']);
-        expect(target.readRetiredRequests()).toEqual([expect.objectContaining({ authorization: `Bearer ${token('terminal')}`,
+        const homeEvent = placement === 'machine' ? 'dispatch' : placement === 'session' ? 'session-access' : 'account-security';
+        expect(events).toEqual(control && placement !== 'machine' ? ['local-daemon', homeEvent] : [homeEvent]);
+        expect(target.readRetiredRequests()).toEqual([expect.objectContaining({ authorization: `Bearer ${token(control && placement !== 'machine' ? 'account' : 'terminal')}`,
           ...(placement === 'session' ? { path: '/v2/sessions/access-grants/list', body: { sessionId: 'session-1' } } : {}) })]);
-        expect(control.readReceived()).toBeUndefined();
+        if (placement === 'machine') expect(control?.readReceived()).toBeUndefined();
+        else if (control) {
+          expect(control.readReceived()).toMatchObject({ actionId: placement === 'session' ? 'session.access.grants.list' : 'account.security.get' });
+          expect(JSON.stringify(control.readReceived())).not.toContain(token('terminal'));
+        }
       } finally { Object.assign(configuration, originalConfiguration); }
     });
   });
 
-  it.each([true, false])('retains the original terminal automation ceiling at an allowed-policy Home without changing interactive CLI authority (external client: %s)', async externalClient => {
+  // docs/actions.md, "The three host-stamped facts": allowed terminal CLI/RPC
+  // invocations are present-user. External delivery does not change the surface;
+  // an explicit automation ceiling or a disallowed local policy still narrows it.
+  it.each([
+    { externalClient: true, policy: 'allowed', authority: undefined, expected: 'present_user' },
+    { externalClient: false, policy: 'allowed', authority: undefined, expected: 'present_user' },
+    { externalClient: true, policy: 'disallowed', authority: undefined, expected: 'account_automation' },
+    { externalClient: true, policy: 'allowed', authority: 'account_automation', expected: 'account_automation' },
+  ] as const)('preserves terminal policy and explicit authority on CLI delivery ($externalClient, $policy, $authority)', async ({ externalClient, policy, authority, expected }) => {
     const originalPolicy = configuration.terminalPresentUserPolicy;
-    configuration.terminalPresentUserPolicy = 'allowed';
+    configuration.terminalPresentUserPolicy = policy;
     try {
       expect(effectiveCredentialAuthority({ credentialKind: 'terminal', mintedAuthority: 'account_automation',
         terminalPresentUserPolicy: 'allowed' })).toBe('present_user');
@@ -317,9 +389,10 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
         serverId: 'home', serverApiUrl: target.url, serverIdentityId: homeIdentityId,
         actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }) },
       });
-      await expect(executor.execute('account.security.get', {}, { surface: 'cli', actionRequestId: 'terminal-ceiling' }))
+      await expect(executor.execute('account.security.get', {}, { surface: 'cli', actionRequestId: 'terminal-ceiling',
+        ...(authority ? { authority } : {}) }))
         .resolves.toMatchObject({ ok: true, result: { terminalPresentUserPolicy: 'allowed' } });
-      expect(target.readSecurityPrincipals()).toEqual([{ authority: externalClient ? 'account_automation' : 'present_user',
+      expect(target.readSecurityPrincipals()).toEqual([{ authority: expected,
         authorization: `Bearer ${token('terminal')}` }]);
     } finally { configuration.terminalPresentUserPolicy = originalPolicy; }
   });

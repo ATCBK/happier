@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -283,7 +285,7 @@ describe('session draft protocol', () => {
   });
 
   it('keeps the released synchronized authoring object closed', () => {
-    expect(SyncedSessionAuthoringValueV1Schema.partial().safeParse({
+    expect(lazyZodSchema(() => z.partial(SyncedSessionAuthoringValueV1Schema)).safeParse({
       successorOnly: null,
     }).success).toBe(false);
   });

@@ -14,6 +14,7 @@ import { Typography } from '@/constants/Typography';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
 import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { formatUsageCost } from '@/utils/format/usageNumbers';
 import { usageMeterFill, usageSignatureAccent } from '../usageAccent';
 import {
@@ -119,10 +120,13 @@ export function UsageWorkAutopsy(
           : t('usage.board.howYouWork.notRecorded')}`;
       }),
     ].join(' · ');
-  const outcomeLine = (turn: UsageWorkTurnRow) =>
-    turn.outcome
-      ? `${usageWorkPullRequestTitle(turn.outcome.pullRequest)} · ${usageWorkPullRequestState(turn.outcome.pullRequest)}`
-      : t(`usage.board.work.reason_${turn.reason === 'allocated' ? 'missing_evidence' : turn.reason}`);
+  // This column is about the PR outcome: a turn whose commit is linked lacks a PR, not commit evidence.
+  const outcomeLine = (turn: UsageWorkTurnRow) => {
+    if (turn.outcome)
+      return `${usageWorkPullRequestTitle(turn.outcome.pullRequest)} · ${usageWorkPullRequestState(turn.outcome.pullRequest)}`;
+    const reason = turn.reason === 'allocated' ? 'missing_evidence' : turn.reason;
+    return t(`usage.board.work.reason_${reason === 'missing_evidence' && turn.commits.length > 0 ? 'missing_pr' : reason}`);
+  };
 
   const phases = props.slice.howYouWork?.intervals;
   const phaseEvents = props.slice.howYouWork?.autopsy?.events.filter(event => event.sessionId === selected) ?? [];
@@ -264,6 +268,8 @@ export function UsageWorkAutopsy(
             valueFormatter={value => autopsy.costTimelineBasis && value !== null
               ? formatUsageCost(value, autopsy.costTimelineBasis.currency) : t('usage.board.recap.money_unpriced')}
             unknownLabel={t('usage.board.recap.money_unpriced')}
+            // Labels count time since the first cost; exact values say when it was observed.
+            coordinateFormatter={observedAtMs => formatUsageObservedAt(observedAtMs)}
             series={[{ id: 'cost', label: t('usage.cost'), color: accent,
               points: autopsy.costTimeline.map(point => ({ id: point.id,
                 x: point.observedAtMs,
@@ -312,19 +318,20 @@ export function UsageWorkAutopsy(
               { label: t('usage.board.work.turn') },
               { label: metricLabel, proportion: true },
               { label: t('usage.board.work.linkedOutcome') },
-              { label: t('usage.board.work.checkpoint') },
               { label: t('usage.board.work.commit') },
-              { label: `${t('usage.board.page.byModel')} · ${t('common.machine')}` },
               { label: t('usage.board.work.linesKept') },
+              { label: `${t('usage.board.page.byModel')} · ${t('common.machine')}` },
+              { label: t('usage.board.work.checkpoint') },
             ]}
             rows={turns.map((turn) => [
               turn.turnId === null ? t('usage.board.work.reason_missing_turn') : turnLabel(turn.turnId),
               cell(turn.amount, turn.moneyBasis),
               outcomeLine(turn),
-              turn.checkpoints.join(' · '),
               evidenceLine(turn),
-              identityLine(turn),
               usageWorkRetainedChangeLine(turn.retainedChanges),
+              identityLine(turn),
+              // The raw checkpoint ref is the longest and least readable fact, so it ends the row's one line.
+              turn.checkpoints.join(' · '),
             ])}
           />
           {turns.some(turn => turn.retainedChanges.length > 0) ?

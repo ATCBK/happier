@@ -16,7 +16,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -108,7 +108,7 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
     const router = useRouter();
     const openAgent = useWorkflowAgentAuthoring();
     const columnOwnsCreation = useWorkflowsColumnOwnsCreation();
-    const phone = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
     const library = useWorkflowDefinitionLibrary();
     const focused = useIsFocused();
     React.useEffect(() => {
@@ -362,7 +362,7 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
     const needsYouRunId = summary?.needsYouRunId ?? null;
     // A phone recomposes the row like the Sessions list's (lab `convo-N6b`): the state word stays on the
     // title line and the history strip, a wide-screen enrichment, is left out rather than wrapped beneath.
-    const phone = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
     const showStrip = !phone && summary !== undefined && summary.recent.length > 0;
     return {
         busy: commands?.deleting.has(row.key) === true,
@@ -532,7 +532,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx,
         paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     },
@@ -553,7 +553,7 @@ const styles = StyleSheet.create((theme) => ({
     rowAccessory: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     headerActions: {
         flexDirection: 'row',
@@ -562,17 +562,17 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
         maxWidth: '100%',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     importLine: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: theme.margins.xs,
-        paddingBottom: theme.margins.xl,
+        gap: theme.space.s4,
+        paddingBottom: theme.space.s20,
     },
     importPrompt: {
-        ...Typography.default(),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -1,4 +1,5 @@
-import { isStoredJsonContentEnvelopeModeCompatible, pluginJsonValuesEqual } from '@happier-dev/protocol';
+import { isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { verifyRunnerEndpointFactsV1, type RunnerEndpointFactsV1 } from '@happier-dev/protocol/ephemeralRunner/endpoint';
 import { acquireAccountSessionOwnerMetadataFenceInTx, AccountSessionOwnerMetadataFenceAccountNotFoundError } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { inTx } from '@/storage/inTx';

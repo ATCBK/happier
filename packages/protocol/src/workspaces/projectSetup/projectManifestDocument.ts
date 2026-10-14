@@ -46,6 +46,35 @@ function unknownDiagnostics(original: unknown, projected: unknown, path: (string
   return diagnostics;
 }
 
+/** Diagnostics are shared by the raw editor and the file banner, so both get the same repair. */
+function describeInvalidField(issue: z.core.$ZodIssue): string {
+  const path = issue.path.map(String).join('.') || 'Project file';
+  let repair: string;
+  switch (issue.code) {
+    case 'invalid_value': {
+      const values = issue.values.map(value => JSON.stringify(value)).join(' or ');
+      repair = issue.values.length === 1 ? `Use ${values}.` : `Choose ${values}.`;
+      break;
+    }
+    case 'invalid_type':
+      repair = issue.expected === 'string' ? 'Use text.'
+        : issue.expected === 'object' ? 'Use an object.'
+        : issue.expected === 'array' ? 'Use a list.'
+        : `Use a ${issue.expected}.`;
+      break;
+    case 'too_small':
+      repair = issue.origin === 'string' ? `Enter at least ${issue.minimum} characters.` : `Use a value of at least ${issue.minimum}.`;
+      break;
+    case 'invalid_union':
+      repair = 'Choose a supported format for this field.';
+      break;
+    default:
+      // Owner-authored path/format constraints already explain their requirement.
+      repair = issue.message;
+  }
+  return `${path}: ${repair}`;
+}
+
 /** Read projection and original text are separate: only the text is ever saved. */
 export function readProjectManifestDocument(bytes: string): ProjectManifestDocument {
   let original: unknown;
@@ -62,7 +91,7 @@ export function readProjectManifestDocument(bytes: string): ProjectManifestDocum
   const parsed = ProjectManifestV1StoredSchema.safeParse(original);
   if (!parsed.success || !isObject(original)) {
     const diagnostics: ProjectManifestDiagnostic[] = parsed.success ? [{ code: 'invalid_field', path: [], message: 'Project manifest must be an object' }]
-      : parsed.error.issues.map(issue => ({ code: 'invalid_field', path: issue.path.map(item => typeof item === 'number' ? item : String(item)), message: issue.message }));
+      : parsed.error.issues.map(issue => ({ code: 'invalid_field', path: issue.path.map(item => typeof item === 'number' ? item : String(item)), message: describeInvalidField(issue) }));
     return { status: 'invalid', bytes, original, diagnostics };
   }
   return { status: 'valid', bytes, original, manifest: parsed.data, diagnostics: unknownDiagnostics(original, parsed.data) };

@@ -100,6 +100,11 @@ describe('machineWorkspaceFileList', () => {
         expect(outgoing).toMatchObject([{
             method: 'm1:daemon.workspaceFiles.list.v1', params: { rootPath: '/repo', query: 'a', limit: 50 },
         }]);
+        expect(outgoing[0]?.timeoutMs).toBeNull();
+        expect(outgoing[0]?.params).toMatchObject({ budgetMs: expect.any(Number) });
+        const budget = (outgoing[0]?.params as { budgetMs: number }).budgetMs;
+        expect(budget).toBeGreaterThan(0);
+        expect(budget).toBeLessThanOrEqual(30_000);
         expect(homes.requestsFor('/v1/machines/m1')[0]?.serverId).toBe(serverId);
 
         // Abort while the genuine network acknowledgement is outstanding. The

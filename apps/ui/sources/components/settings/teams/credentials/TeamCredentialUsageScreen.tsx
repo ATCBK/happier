@@ -69,6 +69,7 @@ const COST_MODE_LABEL_KEYS = {
     auto: 'usage.auto',
     reported: 'usage.reported',
     estimated: 'usage.estimated',
+    api_equivalent: 'usage.board.page.factApiEquivalent',
 } as const satisfies Record<UsageCostMode, string>;
 
 /**
@@ -88,6 +89,13 @@ function costProvenanceLabel(
     if (cost.reportedUsd > 0) return t('usage.reported');
     if (cost.estimatedUsd > 0) return t('usage.estimated');
     return undefined;
+}
+
+/** A bucket's full date for exact values and Details, where the axis label may shorten it. */
+function seriesBucketDate(timestampSeconds: number, period: UsagePeriod): string {
+    const hourly = getUsagePeriodDefinition(period).granularity === 'hour';
+    return formatWithCachedDateTimeFormatter(new Date(timestampSeconds * 1000), undefined,
+        hourly ? { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' } : { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function seriesBucketLabel(timestampSeconds: number, period: UsagePeriod): string {
@@ -448,8 +456,10 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
                         series={[{ id: selectedMetric, label: selectedMetric === 'requests' ? usageRequestMetricLabel(result.coverage.requestCountCoverage) : metricLabel(selectedMetric), color: theme.colors.text.link,
                             points: series.map((point) => ({ id: String(point.timestamp), x: point.timestamp, label: seriesBucketLabel(point.timestamp, period),
                                 y: selectedMetric === 'tokens' ? point.tokens : selectedMetric === 'cost' ? point.cost : point.requests ?? null })) }]}
+                        coordinateFormatter={(timestampSeconds) => seriesBucketDate(timestampSeconds, period)}
                         valueFormatter={usageSeriesValueFormatter(selectedMetric, result.totals.cost.currency)}
-                        renderBucket={usageSeriesTooltip(theme.colors.text.link, 'usage-volume-point-trigger', usageSeriesValueFormatter(selectedMetric, result.totals.cost.currency))}
+                        renderBucket={usageSeriesTooltip(theme.colors.text.link, 'usage-volume-point-trigger', usageSeriesValueFormatter(selectedMetric, result.totals.cost.currency),
+                            (timestampSeconds) => seriesBucketDate(timestampSeconds, period))}
                         renderFrame={usageSeriesFrame(series.length, { accentColor: theme.colors.text.link,
                             resolveContent: usageVolumeLens(series, result.totals.cost.currency, (timestamp) => seriesBucketLabel(timestamp, period), usageRequestMetricLabel(result.coverage.requestCountCoverage)) })}
                     />

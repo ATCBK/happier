@@ -1,7 +1,9 @@
 import { createHmac } from "node:crypto";
-import { AUTH_TOKEN_KIND_AUTHORITIES, encodePasswordCredentialFieldV1, selectPasswordEnvelopeWriterProfileV1,
-    type NativeEmailPasswordPreloginResponseV1 } from "@happier-dev/protocol";
-import { acceptPasswordTextV1, normalizeVerifiedEmail, parseAccountPasswordCredentialV1 } from "@happier-dev/protocol";
+import { AUTH_TOKEN_KIND_AUTHORITIES } from '@happier-dev/protocol/auth/authToken';
+import { encodePasswordCredentialFieldV1, selectPasswordEnvelopeWriterProfileV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
+import { type NativeEmailPasswordPreloginResponseV1 } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
+import { acceptPasswordTextV1, parseAccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import { issueKeyChallengeV2 } from "@/app/auth/keyChallengeV2";
 import { ensureSameServiceHomeEntryInTx, prepareSameServiceHomeEntry } from "@/app/accountDirectory/accountDirectoryService";
 import { db } from "@/storage/db";

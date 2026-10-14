@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginUiJsonValueV1Schema, type PluginUiJsonValueV1 } from './json.js';
 
@@ -35,21 +35,21 @@ type PluginUiPredicateV1 =
       readonly values?: readonly PluginUiJsonValueV1[];
     };
 
-export const PluginUiPredicateV1Schema: z.ZodType<PluginUiPredicateV1> = z.lazy(() => z.union([
-  z.object({
-    all: z.array(PluginUiPredicateV1Schema).min(1),
-  }).strict(),
-  z.object({
-    any: z.array(PluginUiPredicateV1Schema).min(1),
-  }).strict(),
-  z.object({
+export const PluginUiPredicateV1Schema: z.ZodMiniType<PluginUiPredicateV1> = z.lazy(() => z.union([
+  z.strictObject({
+    all: z.array(PluginUiPredicateV1Schema).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    any: z.array(PluginUiPredicateV1Schema).check(z.minLength(1)),
+  }),
+  z.strictObject({
     not: PluginUiPredicateV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     operand: PluginUiPredicateOperandV1Schema,
-    path: z.string().trim().min(1).optional(),
-    value: PluginUiJsonValueV1Schema.optional(),
-    values: z.array(PluginUiJsonValueV1Schema).optional(),
-  }).strict(),
+    path: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    value: z.optional(PluginUiJsonValueV1Schema),
+    values: z.optional(z.array(PluginUiJsonValueV1Schema)),
+  }),
 ]));
 export type { PluginUiPredicateV1 };

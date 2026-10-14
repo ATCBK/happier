@@ -56,7 +56,7 @@ export type UsageSourcesActionResultById = {
                 localId: string;
             };
             root: {
-                kind: 'default' | 'override' | 'configured' | 'materialized';
+                kind: 'default' | 'configured' | 'materialized' | 'override';
                 path: string | null;
             };
             consent: 'enabled' | 'disabled';
@@ -80,7 +80,7 @@ export type UsageSourcesActionResultById = {
                 localId: string;
             };
             root: {
-                kind: 'default' | 'override' | 'configured' | 'materialized';
+                kind: 'default' | 'configured' | 'materialized' | 'override';
                 path: string | null;
             };
             consent: 'enabled' | 'disabled';
@@ -107,7 +107,7 @@ export type UsageSourcesActionResultById = {
                 localId: string;
             };
             root: {
-                kind: 'default' | 'override' | 'configured' | 'materialized';
+                kind: 'default' | 'configured' | 'materialized' | 'override';
                 path: string | null;
             };
             consent: 'enabled' | 'disabled';
@@ -131,7 +131,7 @@ export type UsageSourcesActionResultById = {
                 localId: string;
             };
             root: {
-                kind: 'default' | 'override' | 'configured' | 'materialized';
+                kind: 'default' | 'configured' | 'materialized' | 'override';
                 path: string | null;
             };
             consent: 'enabled' | 'disabled';
@@ -155,7 +155,7 @@ export type UsageSourcesActionResultById = {
                 localId: string;
             };
             root: {
-                kind: 'default' | 'override' | 'configured' | 'materialized';
+                kind: 'default' | 'configured' | 'materialized' | 'override';
                 path: string | null;
             };
             consent: 'enabled' | 'disabled';

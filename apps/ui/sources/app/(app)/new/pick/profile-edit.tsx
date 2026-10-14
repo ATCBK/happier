@@ -236,7 +236,7 @@ export default React.memo(function ProfileEditScreen() {
                 hitSlop={12}
                 style={({ pressed }) => ({
                     opacity: pressed ? motionTokens.press.opacity : 1,
-                    padding: 4,
+                    padding: theme.space.s4,
                 })}
             >
                 <Icon name="x" size={24} color={theme.colors.chrome.header.foreground} />
@@ -258,7 +258,7 @@ export default React.memo(function ProfileEditScreen() {
                 hitSlop={12}
                 style={({ pressed }) => ({
                     opacity: !isDirty ? 0.35 : pressed ? motionTokens.press.opacity : 1,
-                    padding: 4,
+                    padding: theme.space.s4,
                 })}
             >
                 <Icon name="check" size={24} color={theme.colors.chrome.header.foreground} />

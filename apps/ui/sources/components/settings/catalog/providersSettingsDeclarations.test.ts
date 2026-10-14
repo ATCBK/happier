@@ -17,7 +17,7 @@ describe('Providers settings search', () => {
         for (const [pageId, subpageId, pathname, anchors] of [
             ['providers', 'detail', '/settings/providers/pc_work', ['providers.detail.name', 'providers.detail.visibility']],
             ['providers', 'gateway', '/settings/providers/pc_gateway', ['providers.gateway.slots', 'providers.gateway.placement', 'providers.gateway.helpers']],
-            ['agents', 'detail', '/settings/agents/codex', ['agents.defaultPermission', 'agents.enabled', 'agents.executableSource']],
+            ['agents', 'detail', '/settings/agents/codex', ['agents.defaultPermission', 'agents.defaultModel', 'agents.enabled', 'agents.executableSource']],
         ] as const) {
             const page = SETTINGS_PAGE_DECLARATIONS.find(candidate => candidate.pageId === pageId && candidate.subpage?.id === subpageId);
             expect(page).toBeDefined();

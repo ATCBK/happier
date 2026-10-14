@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginJsonValueV2Schema } from '../plugins/contributions/publicTypes.js';
 import {
@@ -9,49 +10,49 @@ import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdent
 import { PluginIdSchema } from '../plugins/pluginId.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
-export const PluginDiagnosticTextV1Schema = lazyZodSchema(() => z.string().trim().min(1));
+export const PluginDiagnosticTextV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 export const PluginDiagnosticRemediationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('retry') }).strict(),
-  z.object({ kind: z.literal('openSettings'), path: z.string().trim().min(1) }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('retry') }),
+  z.strictObject({ kind: z.literal('openSettings'), path: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({
     kind: z.literal('selectAccount'),
-    service: z.object({ pluginId: asProtocolZod(PluginIdSchema), localId: z.string().trim().min(1) }).strict(),
-  }).strict(),
-  z.object({ kind: z.literal('installDependency'), dependencyId: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('openUrl'), url: z.string().url() }).strict(),
+    service: z.strictObject({ pluginId: asProtocolZod(PluginIdSchema), localId: z.string().check(z.trim(), z.minLength(1)) }),
+  }),
+  z.strictObject({ kind: z.literal('installDependency'), dependencyId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('openUrl'), url: z.string().check(z.url()) }),
 ]));
 export type PluginDiagnosticRemediationV1 = z.infer<typeof PluginDiagnosticRemediationV1Schema>;
 
-export const PluginDiagnosticDataV1Schema = lazyZodSchema(() => z.object({
-  code: z.string().trim().min(1),
+export const PluginDiagnosticDataV1Schema = lazyZodSchema(() => z.strictObject({
+  code: z.string().check(z.trim(), z.minLength(1)),
   severity: z.enum(['info', 'warning', 'error']),
-  message: PluginDiagnosticTextV1Schema.optional(),
-  details: PluginJsonValueV2Schema.optional(),
-  remediation: PluginDiagnosticRemediationV1Schema.optional(),
-}).strict());
+  message: z.optional(PluginDiagnosticTextV1Schema),
+  details: zMini.optional(PluginJsonValueV2Schema),
+  remediation: z.optional(PluginDiagnosticRemediationV1Schema),
+}));
 export type PluginDiagnosticDataV1 = z.infer<typeof PluginDiagnosticDataV1Schema>;
 
 const PluginContributionIntrospectionIdentityBaseV1Schema = lazyZodSchema(() => z.object({
   pluginId: asProtocolZod(PluginIdSchema),
-  family: z.string().trim().min(1),
-  qualifiedId: z.string().trim().min(1),
+  family: z.string().check(z.trim(), z.minLength(1)),
+  qualifiedId: z.string().check(z.trim(), z.minLength(1)),
 }));
 export const PluginContributionIntrospectionIdentityV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  PluginContributionIntrospectionIdentityBaseV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginContributionIntrospectionIdentityBaseV1Schema, {
     kind: z.literal('localId'),
-    localId: z.string().trim().min(1),
-  }).strict(),
-  PluginContributionIntrospectionIdentityBaseV1Schema.extend({
+    localId: z.string().check(z.trim(), z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginContributionIntrospectionIdentityBaseV1Schema, {
     kind: z.literal('locale'),
     family: z.literal('ui.translations'),
-    locale: z.string().trim().min(1),
-  }).strict(),
-  PluginContributionIntrospectionIdentityBaseV1Schema.extend({
+    locale: z.string().check(z.trim(), z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginContributionIntrospectionIdentityBaseV1Schema, {
     kind: z.literal('delegatedDomain'),
     family: z.literal('providers'),
-    domainId: z.string().trim().min(1),
-  }).strict(),
+    domainId: z.string().check(z.trim(), z.minLength(1)),
+  })),
 ]));
 export type PluginContributionIntrospectionIdentityV1 = z.infer<
   typeof PluginContributionIntrospectionIdentityV1Schema
@@ -79,27 +80,27 @@ export const PluginDiagnosticHostV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type PluginDiagnosticHostV1 = z.infer<typeof PluginDiagnosticHostV1Schema>;
 
-export const PluginDiagnosticRecordV1Schema = lazyZodSchema(() => z.object({
+export const PluginDiagnosticRecordV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
-  id: z.string().trim().min(1),
+  id: z.string().check(z.trim(), z.minLength(1)),
   data: PluginDiagnosticDataV1Schema,
-  plugin: z.object({
+  plugin: z.strictObject({
     id: asProtocolZod(PluginIdSchema),
-    version: z.string().trim().min(1),
+    version: z.string().check(z.trim(), z.minLength(1)),
     source: z.enum(['bundled', 'npm', 'localPath', 'archive', 'development']),
-  }).strict(),
-  contribution: asProtocolZod(PluginContributionIdentityV1Schema).optional(),
+  }),
+  contribution: zMini.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
   stage: PluginDiagnosticStageV1Schema,
-  occurrenceId: z.string().trim().min(1).optional(),
+  occurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   host: PluginDiagnosticHostV1Schema,
-  platform: z.string().trim().min(1),
-  correlationId: z.string().trim().min(1).optional(),
-  occurredAtMs: z.number().int().nonnegative(),
+  platform: z.string().check(z.trim(), z.minLength(1)),
+  correlationId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  occurredAtMs: z.number().check(z.int(), z.nonnegative()),
   resolution: z.discriminatedUnion('state', [
-    z.object({ state: z.literal('current') }).strict(),
-    z.object({ state: z.literal('resolved'), resolvedAtMs: z.number().int().nonnegative() }).strict(),
+    z.strictObject({ state: z.literal('current') }),
+    z.strictObject({ state: z.literal('resolved'), resolvedAtMs: z.number().check(z.int(), z.nonnegative()) }),
   ]),
-}).strict());
+}));
 export type PluginDiagnosticRecordV1 = z.infer<typeof PluginDiagnosticRecordV1Schema>;
 
 /**
@@ -107,48 +108,48 @@ export type PluginDiagnosticRecordV1 = z.infer<typeof PluginDiagnosticRecordV1Sc
  * only for the contribution family whose manifest owns these facts.
  */
 export const PluginContributionIntrospectionPresentationV1Schema =
-  lazyZodSchema(() => PluginComposerReferenceProviderPresentationV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(PluginComposerReferenceProviderPresentationV1Schema, {
     kind: z.literal('composerReference'),
-  }).strict());
+  })));
 export type PluginContributionIntrospectionPresentationV1 = z.infer<
   typeof PluginContributionIntrospectionPresentationV1Schema
 >;
 
-export const PluginContributionLifecycleRecordV1Schema = lazyZodSchema(() => z.object({
+export const PluginContributionLifecycleRecordV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   contribution: PluginContributionIntrospectionIdentityV1Schema,
-  occurrenceId: z.string().trim().min(1).optional(),
-  progression: z.object({
+  occurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  progression: z.strictObject({
     declared: z.literal(true),
     normalized: z.boolean(),
     merged: z.boolean(),
-  }).strict().refine((value) => !value.merged || value.normalized, {
+  }).check(z.refine((value) => !value.merged || value.normalized, {
     message: 'merged contribution lifecycle state requires normalization',
-  }),
+  })),
   registration: z.discriminatedUnion('requirement', [
-    z.object({
+    z.strictObject({
       requirement: z.literal('required'),
       state: z.enum(['unbound', 'bound', 'unavailable']),
-      occurrenceId: z.string().trim().min(1).optional(),
-      reason: PluginDiagnosticTextV1Schema.optional(),
-    }).strict(),
-    z.object({ requirement: z.literal('notRequired'), state: z.literal('notRequired') }).strict(),
+      occurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+      reason: z.optional(PluginDiagnosticTextV1Schema),
+    }),
+    z.strictObject({ requirement: z.literal('notRequired'), state: z.literal('notRequired') }),
   ]),
   activation: z.discriminatedUnion('state', [
-    z.object({ state: z.literal('notRequired') }).strict(),
-    z.object({ state: z.literal('dormant') }).strict(),
-    z.object({ state: z.literal('active'), occurrenceId: z.string().trim().min(1) }).strict(),
-    z.object({ state: z.literal('unavailable'), reason: PluginDiagnosticTextV1Schema }).strict(),
+    z.strictObject({ state: z.literal('notRequired') }),
+    z.strictObject({ state: z.literal('dormant') }),
+    z.strictObject({ state: z.literal('active'), occurrenceId: z.string().check(z.trim(), z.minLength(1)) }),
+    z.strictObject({ state: z.literal('unavailable'), reason: PluginDiagnosticTextV1Schema }),
   ]),
   projection: z.discriminatedUnion('state', [
-    z.object({ state: z.literal('projected') }).strict(),
-    z.object({ state: z.literal('unavailable'), reason: PluginDiagnosticTextV1Schema }).strict(),
+    z.strictObject({ state: z.literal('projected') }),
+    z.strictObject({ state: z.literal('unavailable'), reason: PluginDiagnosticTextV1Schema }),
   ]),
-  presentation: PluginContributionIntrospectionPresentationV1Schema.optional(),
-  consumer: z.string().trim().min(1),
+  presentation: zMini.optional(PluginContributionIntrospectionPresentationV1Schema),
+  consumer: z.string().check(z.trim(), z.minLength(1)),
   platforms: z.array(z.enum(['cli', 'web', 'ios', 'android', 'desktop'])),
   diagnostics: z.array(PluginDiagnosticRecordV1Schema),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.registration.requirement === 'notRequired') {
     if (value.activation.state !== 'notRequired') {
       context.addIssue({
@@ -187,17 +188,17 @@ export const PluginContributionLifecycleRecordV1Schema = lazyZodSchema(() => z.o
       message: 'composer reference presentation is valid only for composer reference contributions',
     });
   }
-}));
+})));
 export type PluginContributionLifecycleRecordV1 = z.infer<
   typeof PluginContributionLifecycleRecordV1Schema
 >;
 
-export const PluginContributionIntrospectionProjectionV1Schema = lazyZodSchema(() => z.object({
+export const PluginContributionIntrospectionProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
-  generation: z.number().int().nonnegative(),
+  generation: z.number().check(z.int(), z.nonnegative()),
   contributions: z.array(PluginContributionLifecycleRecordV1Schema),
   diagnostics: z.array(PluginDiagnosticRecordV1Schema),
-}).strict());
+}));
 export type PluginContributionIntrospectionProjectionV1 = z.infer<
   typeof PluginContributionIntrospectionProjectionV1Schema
 >;

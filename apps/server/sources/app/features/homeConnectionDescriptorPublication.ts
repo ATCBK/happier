@@ -1,11 +1,6 @@
-import {
-    HomeConnectionDescriptorV1Schema,
-    HomeConnectionEndpointV1Schema,
-    isLoopbackHostname,
-    type HomeConnectionDescriptorV1,
-    type HomeConnectionEndpointV1,
-    type IrohEndpointDescriptorV1,
-} from "@happier-dev/protocol";
+import { HomeConnectionDescriptorV1Schema, HomeConnectionEndpointV1Schema, type HomeConnectionDescriptorV1, type HomeConnectionEndpointV1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
+import { type IrohEndpointDescriptorV1 } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
 import {
     getHomeIrohEndpointState,
     type HomeIrohEndpointState,

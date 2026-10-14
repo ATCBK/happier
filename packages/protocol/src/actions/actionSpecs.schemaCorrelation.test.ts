@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from 'vitest';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { PluginActionInputById, PluginActionResultById, PublicActionInputById } from './actionSpecs.js';
 import type { ProtocolJsonValue } from '../plugins/actions/protocolComposableSchema.js';
 import type { SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS } from './sessionCanvasActionFamily.js';

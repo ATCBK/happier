@@ -7,6 +7,7 @@ import {
   projectVoiceProviderSettings,
   projectVoiceProviderDeclarationRegistryBase,
   type VoiceUiRuntimeContribution,
+  type VoiceProviderRegistryEntry,
 } from './providerRegistry';
 import { createDefaultVoiceProviderRegistry } from './defaultRegistry';
 import { projectVoiceProviderSelectionRows } from './providerSelection';
@@ -495,7 +496,7 @@ describe('voice provider registry', () => {
 
   it('keeps each first-party service and its declared gallery modes identical before and after installed admission', () => {
     const registry = createDefaultVoiceProviderRegistry();
-    const services = registry.list().filter((entry) => entry.source.kind === 'bundled');
+    const services = registry.list().filter((entry): entry is Exclude<VoiceProviderRegistryEntry, { kind: 'voice.turn-support.v1' }> => entry.kind !== 'voice.turn-support.v1' && entry.source.kind === 'bundled');
     const settings = { providerId: 'happier.voice.openai/realtime-openai', providers: {} };
     const discoveryRows = projectVoiceProviderSelectionRows(settings, registry);
     expect(discoveryRows).toHaveLength(6);

@@ -1,16 +1,16 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettings } from '../../account/settings/accountSettings.js';
 import { InstallableAutoUpdateModeSchema } from '../../installables/descriptor.js';
 import { applyInstallablePolicyOverride } from '../../installables/policy.js';
 
-export const MachineInstallablePolicyKeySchema = z.string().trim().min(1);
-export const MachineInstallablePolicyChangeSchema = z.object({
-  installableKey: z.string().trim().min(1),
-  patch: z.object({
-    autoInstallWhenNeeded: z.boolean().optional(),
-    autoUpdateMode: InstallableAutoUpdateModeSchema.optional(),
-  }).strict().refine(value => Object.keys(value).length > 0),
-}).strict();
+export const MachineInstallablePolicyKeySchema = z.string().check(z.trim(), z.minLength(1));
+export const MachineInstallablePolicyChangeSchema = z.strictObject({
+  installableKey: z.string().check(z.trim(), z.minLength(1)),
+  patch: z.strictObject({
+    autoInstallWhenNeeded: z.optional(z.boolean()),
+    autoUpdateMode: z.optional(InstallableAutoUpdateModeSchema),
+  }).check(z.refine(value => Object.keys(value).length > 0)),
+});
 
 export function readMachineInstallablePolicySetting(settings: Pick<AccountSettings, 'installablesPolicyByMachineId'>, machineId: string) {
   return Object.hasOwn(settings.installablesPolicyByMachineId, machineId)

@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
 import { createCanonicalJsonSigningInput } from '../../../crypto/canonicalJson.js';
@@ -16,41 +16,41 @@ export const PEER_APPLICATION_ENCRYPTION_CIPHERTEXT_MAX_BYTES_V1 = 512 * 1024;
 export const PEER_APPLICATION_ENCRYPTION_INSTALL_PROOF_V1 = 'happier.peer-application.install.v1' as const;
 export const PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1 = 'happier.peer-application.confirmed.v1' as const;
 
-const Sha256DigestSchema = lazyZodSchema(() => z.string().regex(/^sha256:[0-9a-f]{64}$/u));
-const SafeSequenceSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const Sha256DigestSchema = lazyZodSchema(() => z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/u)));
+const SafeSequenceSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
-function canonicalBase64UrlBytesSchema(minBytes: number, maxBytes: number): z.ZodString {
-  return z.string().regex(/^[A-Za-z0-9_-]+$/u).refine((value) => {
+function canonicalBase64UrlBytesSchema(minBytes: number, maxBytes: number): z.ZodMiniString {
+  return z.string().check(z.regex(/^[A-Za-z0-9_-]+$/u), z.refine((value) => {
     if (value.length % 4 === 1) return false;
     const decoded = decodeBase64(value, 'base64url');
     return decoded.byteLength >= minBytes
       && decoded.byteLength <= maxBytes
       && encodeBase64(decoded, 'base64url') === value;
-  });
+  }));
 }
 
-export const PeerApplicationEncryptionAuthorityBindingV1Schema = lazyZodSchema(() => z.object({
+export const PeerApplicationEncryptionAuthorityBindingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(PEER_APPLICATION_ENCRYPTION_VERSION_V1),
   suite: z.literal(PEER_APPLICATION_ENCRYPTION_SUITE_V1),
   flowKind: z.literal('voice_media'),
   routeKind: z.literal('server_relay'),
   authorityDigest: Sha256DigestSchema,
-  accountId: z.string().min(1),
-  machineId: z.string().min(1),
-  tunnelId: z.string().min(1),
+  accountId: z.string().check(z.minLength(1)),
+  machineId: z.string().check(z.minLength(1)),
+  tunnelId: z.string().check(z.minLength(1)),
   applicationKind: VoiceMediaApplicationKindV1Schema,
-  applicationAttemptId: z.string().min(1).max(256),
+  applicationAttemptId: z.string().check(z.minLength(1), z.maxLength(256)),
   applicationAuthorityDigest: Sha256DigestSchema,
-}).strict());
+}));
 export type PeerApplicationEncryptionAuthorityBindingV1 = z.infer<
   typeof PeerApplicationEncryptionAuthorityBindingV1Schema
 >;
 
-export const PeerApplicationEncryptionStartResponseV1Schema = lazyZodSchema(() => z.object({
+export const PeerApplicationEncryptionStartResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(PEER_APPLICATION_ENCRYPTION_VERSION_V1),
   suite: z.literal(PEER_APPLICATION_ENCRYPTION_SUITE_V1),
   recipientPublicKeyBase64Url: canonicalBase64UrlBytesSchema(32, 32),
-}).strict());
+}));
 export type PeerApplicationEncryptionStartResponseV1 = z.infer<
   typeof PeerApplicationEncryptionStartResponseV1Schema
 >;
@@ -68,19 +68,19 @@ const PeerApplicationEncryptedFrameBaseV1Schema = lazyZodSchema(() => z.object({
 }));
 
 export const PeerApplicationEncryptedFrameV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  PeerApplicationEncryptedFrameBaseV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PeerApplicationEncryptedFrameBaseV1Schema, {
     kind: z.literal('install'),
-    encryptedDataKeyEnvelopeBase64Url: canonicalBase64UrlBytesSchema(
+    encryptedDataKeyEnvelopeBase64Url: z.optional(canonicalBase64UrlBytesSchema(
       1,
       PEER_APPLICATION_ENCRYPTION_DATA_KEY_ENVELOPE_MAX_BYTES_V1,
-    ).optional(),
-  }).strict(),
-  PeerApplicationEncryptedFrameBaseV1Schema.extend({
+    )),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PeerApplicationEncryptedFrameBaseV1Schema, {
     kind: z.literal('data'),
-  }).strict(),
-  PeerApplicationEncryptedFrameBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PeerApplicationEncryptedFrameBaseV1Schema, {
     kind: z.literal('finish'),
-  }).strict(),
+  })),
 ]));
 export type PeerApplicationEncryptedFrameV1 = z.infer<typeof PeerApplicationEncryptedFrameV1Schema>;
 export type PeerApplicationEncryptionPhaseV1 = PeerApplicationEncryptedFrameV1['kind'];
@@ -91,22 +91,22 @@ const PeerApplicationEncryptionAadBaseV1Schema = lazyZodSchema(() => z.object({
   suite: z.literal(PEER_APPLICATION_ENCRYPTION_SUITE_V1),
   flowKind: z.literal('voice_media'),
   authorityDigest: Sha256DigestSchema,
-  accountId: z.string().min(1),
-  machineId: z.string().min(1),
-  tunnelId: z.string().min(1),
-  applicationAttemptId: z.string().min(1).max(256),
+  accountId: z.string().check(z.minLength(1)),
+  machineId: z.string().check(z.minLength(1)),
+  tunnelId: z.string().check(z.minLength(1)),
+  applicationAttemptId: z.string().check(z.minLength(1), z.maxLength(256)),
   applicationAuthorityDigest: Sha256DigestSchema,
   direction: z.enum(['client_to_daemon', 'daemon_to_client']),
-  substreamId: z.string().min(1),
+  substreamId: z.string().check(z.minLength(1)),
   sequence: SafeSequenceSchema,
   phase: z.enum(['install', 'data', 'finish']),
 }));
 
-export const PeerApplicationEncryptionAadV1Schema = lazyZodSchema(() => PeerApplicationEncryptionAadBaseV1Schema.extend({
+export const PeerApplicationEncryptionAadV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PeerApplicationEncryptionAadBaseV1Schema, {
   applicationKind: z.literal('speech_transcription'),
-  streamId: z.string().min(1),
-  generation: z.number().int().nonnegative(),
-}).strict());
+  streamId: z.string().check(z.minLength(1)),
+  generation: z.number().check(z.int(), z.nonnegative()),
+})));
 export type PeerApplicationEncryptionAadV1 = z.infer<typeof PeerApplicationEncryptionAadV1Schema>;
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -126,7 +126,7 @@ export function createSpeechTranscriptionApplicationAuthorityDigestV1(
   return createPeerApplicationAuthorityDigestV1({
     v: 1,
     applicationKind: 'speech_transcription',
-    applicationAttemptId: z.string().min(1).max(256).parse(applicationAttemptId),
+    applicationAttemptId: z.string().check(z.minLength(1), z.maxLength(256)).parse(applicationAttemptId),
   });
 }
 

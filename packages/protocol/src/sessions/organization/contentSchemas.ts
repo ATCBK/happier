@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { SESSION_ORGANIZATION_MAX_DISPLAY_ENVELOPE_BYTES } from './constants.js';
@@ -15,25 +15,25 @@ function measureJsonUtf8Bytes(value: unknown): number | null {
   }
 }
 
-const CycleSafeJsonValueSchema = lazyZodSchema(() => z.preprocess((value) => {
+const CycleSafeJsonValueSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   try {
     JSON.stringify(value);
     return value;
   } catch {
     return undefined;
   }
-}, z.json()));
+}), z.json()));
 
 export const SessionOrganizationContentEnvelopeSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: CycleSafeJsonValueSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().min(1),
-  }).strict(),
-]).superRefine((value, ctx) => {
+    c: z.string().check(z.minLength(1)),
+  }),
+]).check(z.superRefine((value, ctx) => {
   const byteLength = measureJsonUtf8Bytes(value);
   if (byteLength === null) {
     ctx.addIssue({
@@ -49,14 +49,12 @@ export const SessionOrganizationContentEnvelopeSchema = lazyZodSchema(() => z.di
       message: 'Session organization display envelope exceeds the maximum serialized size.',
     });
   }
-}));
+})));
 export type SessionOrganizationContentEnvelope = z.infer<typeof SessionOrganizationContentEnvelopeSchema>;
 export const SessionOrganizationContentEnvelopeStoredSchema = createStoredReadSchema(SessionOrganizationContentEnvelopeSchema);
 
-export const SessionOrganizationDisplayStateSchema = lazyZodSchema(() => z
-  .object({
+export const SessionOrganizationDisplayStateSchema = lazyZodSchema(() => z.strictObject({
     status: z.literal('unavailable'),
     reason: z.enum(['invalid_stored_display', 'storage_mode_mismatch']),
-  })
-  .strict());
+  }));
 export type SessionOrganizationDisplayState = z.infer<typeof SessionOrganizationDisplayStateSchema>;

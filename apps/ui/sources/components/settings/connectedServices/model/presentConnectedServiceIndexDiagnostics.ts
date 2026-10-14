@@ -7,8 +7,6 @@ type IndexDiagnosticsPresentation = Readonly<{
   supportDetails: string | null;
 }>;
 
-const MAX_SUPPORT_DETAILS = 4;
-
 // These are failed registry reads, not failed account mutations. Each bounded
 // read outcome uses the existing account-preserving read notice, including a
 // malformed or unsupported machine response; none claims a change was sent.
@@ -33,7 +31,6 @@ export function presentConnectedServiceIndexDiagnosticCopy(code: string): string
 function appendSafeSupportDetail(values: Set<string>, code: string | null | undefined): void {
   if (!code) return;
   const detail = presentConnectedServiceIndexDiagnosticCopy(code);
-  if (values.size >= MAX_SUPPORT_DETAILS && !values.has(detail)) return;
   values.add(detail);
 }
 
@@ -41,7 +38,8 @@ function appendSafeSupportDetail(values: Set<string>, code: string | null | unde
  * Projects service-specific conflicts, availability and descriptor diagnostics.
  * Registry read failures belong to the page notice, never to each service.
  *
- * The primary row consumes only bounded state and read-diagnostic copy.
+ * The primary row is one message, the highest-priority fact, and consumes only bounded state and
+ * read-diagnostic copy.
  * The support disclosure contains the same bounded product-copy
  * projection, never boundary text.
  */
@@ -49,16 +47,15 @@ export function presentConnectedServiceIndexDiagnostics(params: Readonly<{
   entry: ConnectedServiceRegistryEntry;
 }>): IndexDiagnosticsPresentation {
   const primary = new Set<string>();
-  const details = new Set<string>();
   const entry = params.entry;
 
   if (entry.projectionConflicts?.some(conflict => conflict.kind === 'identity_divergence')) {
     const conflict = t('connectedServicesSettings.identityConflict');
     primary.add(conflict);
-    details.add(conflict);
   } else if (entry.projectionStatus === 'conflict') primary.add(t('common.blocked'));
   if (entry.availability?.state === 'blocked') primary.add(t('common.blocked'));
   if (entry.availability?.state === 'disabled') primary.add(t('common.disabled'));
+  const details = new Set(primary);
 
   // The descriptor producer keeps sound declarations available through plugin runtime
   // diagnostics. An answered service cannot be presented as a failed registry read.
@@ -76,7 +73,9 @@ export function presentConnectedServiceIndexDiagnostics(params: Readonly<{
     appendSafeSupportDetail(details, reason);
   }
   return {
-    primary: [...primary].filter(Boolean).join(' · ') || null,
+    // One message per service: the first fact that needs the user (they are added in priority order).
+    // Every distinct fact stays in the support disclosure.
+    primary: [...primary].find(Boolean) ?? null,
     supportDetails: details.size > 0 ? [...details].join('\n') : null,
   };
 }

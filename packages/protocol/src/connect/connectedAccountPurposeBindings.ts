@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
@@ -14,27 +14,27 @@ import {
 } from './qualifiedConnectedAccountPersistence.js';
 
 export const QualifiedConnectedAccountPurposeBindingAccountTargetV1Schema =
-  lazyZodSchema(() => z.object({
+  lazyZodSchema(() => z.strictObject({
     kind: z.literal('account'),
     account: asProtocolZod(QualifiedConnectedAccountRefSchema),
-  }).strict());
+  }));
 
 export const QualifiedConnectedAccountPurposeBindingGroupTargetV1Schema =
-  lazyZodSchema(() => z.object({
+  lazyZodSchema(() => z.strictObject({
     kind: z.literal('group'),
     service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
     groupId: ConnectedServiceAuthGroupIdSchema,
-  }).strict());
+  }));
 
 export const QualifiedConnectedAccountPurposeBindingTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   QualifiedConnectedAccountPurposeBindingAccountTargetV1Schema,
   QualifiedConnectedAccountPurposeBindingGroupTargetV1Schema,
 ]));
 
-export const QualifiedConnectedAccountPurposeBindingV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountPurposeBindingV1Schema = lazyZodSchema(() => z.strictObject({
   purpose: QualifiedConnectedAccountPurposeV1Schema,
   target: QualifiedConnectedAccountPurposeBindingTargetV1Schema,
-}).strict());
+}));
 
 /**
  * A durable Team resource default for one purpose (lane 10 child 09 §10.4,
@@ -45,11 +45,11 @@ export const QualifiedConnectedAccountPurposeBindingV1Schema = lazyZodSchema(() 
  * entitlement — no revision is pinned — and it reaches a Session only as that
  * Session's own Team binding, which the Home admits.
  */
-export const QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema = lazyZodSchema(() => z.strictObject({
   purpose: QualifiedConnectedAccountPurposeV1Schema,
-  teamId: z.string().trim().min(1).max(256),
+  teamId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
   selection: TeamResourceConnectedServiceSelectionV2Schema,
-}).strict());
+}));
 
 /**
  * Forward read of a Team purpose default an earlier 0.3 build persisted as a
@@ -91,12 +91,11 @@ export function readEarlierTeamResourcePurposeTargetsV1(value: unknown): unknown
 
 /** One strict current purpose catalog, including the distinct Team selection arm. */
 export const QualifiedConnectedAccountPurposeBindingsV1RecordSchema = lazyZodSchema(() =>
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     bindings: z.array(QualifiedConnectedAccountPurposeBindingV1Schema),
-    teamResourceSelections: z.array(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema)
-      .optional(),
-  }).strict().superRefine((value, context) => {
+    teamResourceSelections: z.optional(z.array(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema)),
+  }).check(z.superRefine((value, context) => {
     const seen = new Set<string>();
     const entries = [
       ...value.bindings.map((binding, index) => ({ purpose: binding.purpose, path: ['bindings', index, 'purpose'] })),
@@ -116,17 +115,13 @@ export const QualifiedConnectedAccountPurposeBindingsV1RecordSchema = lazyZodSch
       }
       seen.add(key);
     }
-  }));
+  })));
 
 /** Read-only retained source normalization; it never admits a current row write. */
-export const QualifiedConnectedAccountPurposeBindingsV1Schema = defineStoredReadProjection(lazyZodSchema(() => z.preprocess(
-  readEarlierTeamResourcePurposeTargetsV1,
-  QualifiedConnectedAccountPurposeBindingsV1RecordSchema.safeExtend({
-    bindings: z.array(QualifiedConnectedAccountPurposeBindingV1Schema).max(256),
-    teamResourceSelections: z.array(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema).max(256).optional(),
-  }),
-)), () => z.preprocess(readEarlierTeamResourcePurposeTargetsV1,
-  createStoredReadSchema(QualifiedConnectedAccountPurposeBindingsV1RecordSchema)));
+export const QualifiedConnectedAccountPurposeBindingsV1Schema = defineStoredReadProjection(lazyZodSchema(() => z.pipe(z.transform(readEarlierTeamResourcePurposeTargetsV1), z.safeExtend(QualifiedConnectedAccountPurposeBindingsV1RecordSchema, {
+    bindings: z.array(QualifiedConnectedAccountPurposeBindingV1Schema).check(z.maxLength(256)),
+    teamResourceSelections: z.optional(z.array(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema).check(z.maxLength(256))),
+  }))), () => z.pipe(z.transform(readEarlierTeamResourcePurposeTargetsV1), createStoredReadSchema(QualifiedConnectedAccountPurposeBindingsV1RecordSchema)));
 
 export type QualifiedConnectedAccountPurposeBindingTargetV1 = z.infer<
   typeof QualifiedConnectedAccountPurposeBindingTargetV1Schema

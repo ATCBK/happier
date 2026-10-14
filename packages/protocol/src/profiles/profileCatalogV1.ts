@@ -152,7 +152,7 @@ export async function loadProfileCatalogV1(input: Readonly<{
     && (source === 'destination' || control?.record.phase === 'active')) {
     const updates: ProfileCatalogRecordV1[] = [];
     for (const row of records) {
-      const classified = await readStackSkillIdsV1(row.record.promptStack.filter(entry => entry.skillMigrationV1 !== true), input.skillMigration);
+      const classified = await readStackSkillIdsV1(row.record.promptStack.filter(entry => entry.enabled && entry.skillMigrationV1 !== true), input.skillMigration);
       if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
       if (classified.status !== 'ready') return { status: 'unavailable', reason: 'invalid-stored-content' };
       const converted = convertStackSkillEntriesV1(row.record.promptStack, { kind: 'profile' }, classified);

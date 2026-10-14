@@ -6,7 +6,8 @@ import {
     chatListHarnessState,
     renderChatList,
     requireCapturedLegendListProps,
-    resetChatListHarness,
+    resetChatListHarness } from '@/dev/testkit/harness/chatListHarness';
+import {
     standardCleanup,
 } from '@/dev/testkit';
 import type { SessionMessagesWindowState } from '@/sync/runtime/sessionMessagesWindowState';

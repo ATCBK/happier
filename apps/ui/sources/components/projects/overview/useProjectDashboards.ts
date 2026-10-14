@@ -142,7 +142,13 @@ export function useWidgetAreaLayouts(
   const load = React.useCallback(async () => {
     if (!surface || !isCurrent()) return null;
     const current = ++generation.current;
-    const outcome = await run('widgets.area.layout.list', { surface });
+    let outcome: ActionExecuteResult;
+    try {
+      outcome = await run('widgets.area.layout.list', { surface });
+    } catch (error) {
+      if (!isCurrent() || current !== generation.current || interest.controller.signal.aborted) return null;
+      throw error;
+    }
     const parsed = outcome.ok
       ? WidgetInstanceActionOutputSchemasV1[
           'widgets.area.layout.list'
@@ -154,7 +160,7 @@ export function useWidgetAreaLayouts(
       : { status: 'offline', dashboards: previous.observation === observation ? previous.state.dashboards : [] },
     }));
     return parsed?.success ? parsed.data.layouts : null;
-  }, [isCurrent, observation, run, surface]);
+  }, [interest, isCurrent, observation, run, surface]);
 
   React.useEffect(() => {
     setInventory(previous => previous.observation === observation

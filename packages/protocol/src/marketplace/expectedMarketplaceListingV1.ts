@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { NpmRegistryProfileIdV1Schema } from '../rpc/npmRegistryProfiles.js';
 import { COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } from './marketplaceSourceRegistryV1.js';
@@ -35,58 +35,58 @@ const ExpectedMarketplaceListingBaseShape = {
   publisher: entry.publisher,
   packageName: distribution.packageName,
   registryOrigin: distribution.registryOrigin,
-  registryProfileId: NpmRegistryProfileIdV1Schema.optional(),
+  registryProfileId: z.optional(NpmRegistryProfileIdV1Schema),
   version: distribution.version,
   integrity: distribution.integrity,
   manifestDigest: entry.manifestDigest,
 } as const;
 
-const ApprovedListingReviewV1Schema = lazyZodSchema(() => z.object({
+const ApprovedListingReviewV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.literal('approved'),
-  reviewedAt: z.string().datetime(),
+  reviewedAt: z.string().check(z.iso.datetime()),
   reason: entry.review.shape.reason,
-}).strict());
+}));
 
-const UnreviewedListingReviewV1Schema = lazyZodSchema(() => z.object({
+const UnreviewedListingReviewV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.literal('unreviewed'),
   reviewedAt: z.null(),
-}).strict());
+}));
 
 export const ExpectedMarketplaceListingV1Schema = lazyZodSchema(() => z.union([
-  z.object({
-    source: z.object({
+  z.strictObject({
+    source: z.strictObject({
       id: source.id,
       kind: z.literal('curated'),
       sourceUrl: source.sourceUrl,
-    }).strict(),
+    }),
     ...ExpectedMarketplaceListingBaseShape,
     review: ApprovedListingReviewV1Schema,
     updatePolicy: PluginUpdatePolicyV1Schema,
-  }).strict(),
-  z.object({
-    source: z.object({
+  }),
+  z.strictObject({
+    source: z.strictObject({
       id: z.literal(COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1),
       kind: z.literal('community-npm'),
       sourceUrl: source.sourceUrl,
-    }).strict(),
+    }),
     ...ExpectedMarketplaceListingBaseShape,
-    registryProfileId: z.undefined().optional(),
+    registryProfileId: z.optional(z.undefined()),
     review: UnreviewedListingReviewV1Schema,
     updatePolicy: PluginUpdatePolicyV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     // A user-added catalog names its own source id and may bind a private
     // registry host, but its listings stay unreviewed: the first install still
     // goes through Install and Trust.
-    source: z.object({
+    source: z.strictObject({
       id: source.id,
       kind: z.literal('user'),
       sourceUrl: source.sourceUrl,
-    }).strict(),
+    }),
     ...ExpectedMarketplaceListingBaseShape,
     review: UnreviewedListingReviewV1Schema,
     updatePolicy: PluginUpdatePolicyV1Schema,
-  }).strict(),
+  }),
 ]));
 export type ExpectedMarketplaceListingV1 = z.infer<typeof ExpectedMarketplaceListingV1Schema>;
 

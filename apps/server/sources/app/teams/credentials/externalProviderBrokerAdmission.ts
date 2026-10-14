@@ -1,12 +1,5 @@
-import {
-    TeamCredentialExternalProviderAdmissionV1Schema,
-    TeamCredentialExternalProviderTerminalUsageV1Schema,
-    TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialExternalProviderAdmissionV1,
-    type TeamCredentialExternalProviderAdmissionResponseV1,
-    type TeamCredentialExternalProviderTerminalUsageResponseV1,
-} from '@happier-dev/protocol/teams';
+import { TeamCredentialExternalProviderAdmissionV1Schema, TeamCredentialExternalProviderTerminalUsageV1Schema, TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema, type TeamCredentialExternalProviderAdmissionV1, type TeamCredentialExternalProviderAdmissionResponseV1, type TeamCredentialExternalProviderTerminalUsageResponseV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { Tx } from '@/storage/inTx';
 import { admitTeamCredentialBrokerMachineForResourceInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';

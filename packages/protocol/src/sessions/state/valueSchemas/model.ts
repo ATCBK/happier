@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ModelOverrideV1Schema } from '../../metadata/metadataOverridesV1.js';
 import { SessionModelSelectionIntentV1Schema } from '../../../providers/selection/v1.js';

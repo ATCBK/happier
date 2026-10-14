@@ -1,5 +1,5 @@
-import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { z } from 'zod/mini';
 import type { Fastify } from '@/app/api/types';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { requirePresentUser } from '@/app/api/utils/requirePresentUser';
@@ -9,7 +9,7 @@ import type { HomeSearchRequestContext } from './homeSearchService';
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';
 
-const HomeSearchRebuildResponseSchema = z.object({ ok: z.literal(true) }).strict();
+const HomeSearchRebuildResponseSchema = z.strictObject({ ok: z.literal(true) });
 
 /** Registers authenticated Personal Home search and local repair operations. */
 export function registerHomeSearchRoutes(app: Fastify, params: Readonly<{

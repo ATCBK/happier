@@ -3,11 +3,19 @@ import { readCapabilityLaunchRestartFromMetadataV1, readSessionCapabilityAgentFa
 import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
 import type { SessionSkillsReapplyRunner } from '@/prompts/skills/runtime/reapplySessionSkills';
 import type { RunnerSkillsTransports } from '@/prompts/skills/runtime/resolveRunnerSkills';
+import type { RunnerMcpRuleObservation } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { logger } from '@/ui/logger';
+import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
+import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { realpathReachRules } from '@/mcp/servers/createRealpathNormalizer';
 import { areSessionCapabilitySelectionsEquivalentV1, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1,
-  readCapabilitySelectionApplyV1, resolveSelectionRestartMarkersForStartupV1, writeCapabilitySelectionApplyV1,
+  resolveSelectionRestartMarkersForStartupV1, patchCapabilitySelectionApplyV1,
+  clearCapabilitySelectionApplyV1, readPendingCapabilityRuleApplyV1,
   type CapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+
+type SkillRuleObservation = Readonly<{ context: ReachContextV1; rules: readonly SkillRuleV1[] }>;
 
 export type CapabilitySelectionSynchronizerInput = Readonly<{
   session: Readonly<{
@@ -20,19 +28,54 @@ export type CapabilitySelectionSynchronizerInput = Readonly<{
   isSettled: () => boolean;
   skillsRunner?: SessionSkillsReapplyRunner;
   skillsTransports?: RunnerSkillsTransports;
+  initialSkillRules?: SkillRuleObservation;
+  readSkillRules?: () => SkillRuleObservation | null;
+  initialMcpRules?: RunnerMcpRuleObservation & Readonly<{ selectedServerIds: readonly string[] }>;
+  readMcpRules?: () => RunnerMcpRuleObservation | null;
+  /** Bound through the host's incumbent captured Account subscription. */
+  subscribeAccountSettings?: (observe: () => void) => () => void;
   requestRestart?: (request: RestartSessionRunnerRequestV1) => Promise<RestartSessionRunnerResultV1>;
 }>;
 
 export function createCapabilitySelectionSynchronizer(input: CapabilitySelectionSynchronizerInput) {
-  let applied = readAppliedSessionCapabilitySelectionFromMetadataV1(input.session.getMetadataSnapshot());
-  let desired = readSessionCapabilitySelectionFromMetadataV1(input.session.getMetadataSnapshot());
+  const initialMetadata = input.session.getMetadataSnapshot();
+  let applied = readAppliedSessionCapabilitySelectionFromMetadataV1(initialMetadata);
+  let desired = readSessionCapabilitySelectionFromMetadataV1(initialMetadata);
   let blocked = false;
   let restartAccepted = false;
   let applying: Promise<void> | null = null;
   let waitForNextSettlement = false;
   let metadataApplyScheduled = false;
-  let observedAgentFacts = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot());
+  let observedAgentFacts = readSessionCapabilityAgentFactsV1(initialMetadata);
   let lastSettledTurnId: string | undefined;
+  let disposed = false;
+
+  const ruleSelection = (observation: SkillRuleObservation, selection: SessionCapabilitySelectionV1) => {
+    const ids = new Set([...observation.rules.map(rule => rule.skillId), ...(selection.skills?.forceIncludeSkillIds ?? [])]);
+    const resolved = resolveSessionCapabilitiesV1({ context: observation.context, mcp: null,
+      skills: { items: [...ids].map(skillId => ({ skillId, name: skillId })), rules: realpathReachRules(observation.rules) },
+      selection, agentAcceptsUserMcp: false });
+    return JSON.stringify(resolved.skills.items.filter(item => item.selected).map(item => item.id).sort());
+  };
+  const initialRules = input.initialSkillRules ?? input.readSkillRules?.();
+  // A preserved-process attach cannot infer native application from today's rules.
+  let appliedSkillRules = initialRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'skills') ? ruleSelection(initialRules, applied) : null;
+  let desiredSkillRules = initialRules ? ruleSelection(initialRules, desired) : appliedSkillRules;
+  let skillRulesAvailable = initialRules != null;
+  const mcpRuleSelection = (observation: RunnerMcpRuleObservation, selection: SessionCapabilitySelectionV1) => {
+    const resolved = resolveSessionCapabilitiesV1({ context: observation.context,
+      mcp: { ...observation.settings, bindings: realpathReachRules(observation.settings.bindings) },
+      mcpPluginItems: observation.mcpPluginItems.map(item => ({ ...item, rules: realpathReachRules(item.rules) })),
+      skills: null, selection, agentAcceptsUserMcp: true });
+    return JSON.stringify(resolved.mcp.items.filter(item => item.selected).map(item => item.id).sort());
+  };
+  const initialMcpRules = input.initialMcpRules;
+  // Only the launch resolver establishes the applied server set. In particular,
+  // an unavailable launch or preserved-process refusal is not today's empty set.
+  const appliedMcpRules = initialMcpRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'mcp')
+    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null;
+  let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
+  let mcpRulesAvailable = initialMcpRules != null;
 
   const observe = () => {
     const next = readSessionCapabilitySelectionFromMetadataV1(input.session.getMetadataSnapshot());
@@ -41,23 +84,45 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     observedAgentFacts = nextAgentFacts;
     if (!areSessionCapabilitySelectionsEquivalentV1(desired, next)) blocked = false;
     desired = next;
+    const rules = input.readSkillRules?.();
+    if (rules) {
+      const nextRules = ruleSelection(rules, desired);
+      if (nextRules !== desiredSkillRules) blocked = false;
+      desiredSkillRules = nextRules;
+    }
+    skillRulesAvailable = rules != null;
+    const mcpRules = input.readMcpRules?.();
+    if (mcpRules) {
+      const nextRules = mcpRuleSelection(mcpRules, desired);
+      if (nextRules !== desiredMcpRules) blocked = false;
+      desiredMcpRules = nextRules;
+    }
+    mcpRulesAvailable = mcpRules != null;
   };
   const pending = () => ({
-    mcp: !areSessionCapabilitySelectionsEquivalentV1({ mcp: applied.mcp }, { mcp: desired.mcp }),
-    skills: !areSessionCapabilitySelectionsEquivalentV1({ skills: applied.skills }, { skills: desired.skills }),
+    mcp: !areSessionCapabilitySelectionsEquivalentV1({ mcp: applied.mcp }, { mcp: desired.mcp })
+      || mcpRulesAvailable && desiredMcpRules !== appliedMcpRules,
+    skills: !areSessionCapabilitySelectionsEquivalentV1({ skills: applied.skills }, { skills: desired.skills })
+      || skillRulesAvailable && desiredSkillRules !== appliedSkillRules,
   });
   const publishReason = async (captured: Required<SessionCapabilitySelectionV1>, kinds: Readonly<{ mcp: boolean; skills: boolean }>,
     status: NonNullable<CapabilitySelectionApplyV1['mcp']>) => {
     await input.session.updateMetadataAsCurrentPublisher(metadata => {
       // Active presence can expire while the process remains alive. Restore the
       // known runtime baseline if an offline desired write carried no marker.
-      const withAppliedBaseline = resolveSelectionRestartMarkersForStartupV1({ current: metadata, applied });
+      const withAppliedBaseline = resolveSelectionRestartMarkersForStartupV1({ current: metadata, applied: {
+        ...(kinds.mcp ? { mcp: applied.mcp } : {}), ...(kinds.skills ? { skills: applied.skills } : {}),
+      } });
       const current = readSessionCapabilitySelectionFromMetadataV1(withAppliedBaseline);
-      const previous = readCapabilitySelectionApplyV1(withAppliedBaseline);
-      return writeCapabilitySelectionApplyV1(withAppliedBaseline, {
-        ...previous,
-        ...(kinds.mcp && areSessionCapabilitySelectionsEquivalentV1({ mcp: captured.mcp }, { mcp: current.mcp }) ? { mcp: status } : {}),
-        ...(kinds.skills && areSessionCapabilitySelectionsEquivalentV1({ skills: captured.skills }, { skills: current.skills }) ? { skills: status } : {}),
+      const mcpRulePending = mcpRulesAvailable ? desiredMcpRules !== appliedMcpRules : readPendingCapabilityRuleApplyV1(metadata, 'mcp');
+      const skillRulePending = skillRulesAvailable ? desiredSkillRules !== appliedSkillRules : readPendingCapabilityRuleApplyV1(metadata, 'skills');
+      return patchCapabilitySelectionApplyV1(withAppliedBaseline, {
+        ...(kinds.mcp && areSessionCapabilitySelectionsEquivalentV1({ mcp: captured.mcp }, { mcp: current.mcp }) ? { mcp: {
+          ...status, ...(mcpRulePending ? { source: 'rules' as const } : {}),
+        } } : {}),
+        ...(kinds.skills && areSessionCapabilitySelectionsEquivalentV1({ skills: captured.skills }, { skills: current.skills }) ? { skills: {
+          ...status, ...(skillRulePending ? { source: 'rules' as const } : {}),
+        } } : {}),
       });
     }).catch(() => {
       logger.debug('[CapabilitySelection] Apply status publication unavailable; selection remains pending');
@@ -66,11 +131,35 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
 
   const apply = async () => {
     observe();
-    if (!input.isStarted() || !input.isSettled() || blocked || restartAccepted) return;
+    if (disposed || !input.isStarted() || restartAccepted) return;
     const captured = desired;
+    const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;
     const kinds = pending();
-    if (!kinds.mcp && !kinds.skills) return;
+    // Restoration can withdraw a refusal while a busy request awaits its next
+    // settlement. It never acknowledges an unavailable observation.
+    for (const kind of ['mcp', 'skills'] as const) {
+      const available = kind === 'mcp' ? mcpRulesAvailable : skillRulesAvailable;
+      if (!kinds[kind] && available && readPendingCapabilityRuleApplyV1(input.session.getMetadataSnapshot(), kind)) {
+        await input.session.updateMetadataAsCurrentPublisher(metadata => clearCapabilitySelectionApplyV1(metadata, kind));
+      }
+    }
+    if (blocked) return;
+    if (!kinds.mcp && !kinds.skills) {
+      return;
+    }
+    // Rules can change without a desired-selection marker. Publish that pending
+    // fact before waiting for settlement or native acknowledgment, through the
+    // same status owner used for an apply refusal.
+    if (kinds.skills && skillRulesAvailable && desiredSkillRules !== appliedSkillRules
+      && !readPendingCapabilityRuleApplyV1(input.session.getMetadataSnapshot(), 'skills')) {
+      await publishReason(captured, { mcp: false, skills: true }, { reason: 'next_turn' });
+    }
+    if (kinds.mcp && mcpRulesAvailable && desiredMcpRules !== appliedMcpRules
+      && !readPendingCapabilityRuleApplyV1(input.session.getMetadataSnapshot(), 'mcp')) {
+      await publishReason(captured, { mcp: true, skills: false }, { reason: 'next_turn' });
+    }
+    if (!input.isSettled() || waitForNextSettlement) return;
     const nativeChanged = !areSessionCapabilitySelectionsEquivalentV1(
       { skills: { ...applied.skills, forceIncludeSkillIds: [], forceExcludeSkillIds: [] } },
       { skills: { ...captured.skills, forceIncludeSkillIds: [], forceExcludeSkillIds: [] } });
@@ -85,6 +174,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
           current: metadata, applied: { skills: captured.skills },
         }));
         applied = { ...applied, skills: captured.skills };
+        appliedSkillRules = capturedSkillRules;
         kinds.skills = false;
       }
     }
@@ -114,34 +204,48 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
         agent: { ...agent, skillsLiveReload: 'unsupported' }, launchRestart: { refused: refusal } }) : null;
     await publishReason(captured, kinds, refusalTiming?.t === 'restart_to_apply'
       ? { reason: refusalTiming.t, restartBy: refusalTiming.restartBy }
-      : { reason: result.status === 'missing_resume_snapshot' ? result.status : result.reasonCode ?? result.status });
+      : { reason: busy ? 'next_turn' : result.status === 'missing_resume_snapshot' ? result.status : result.reasonCode ?? result.status });
   };
 
   const flush = (): Promise<void> => {
-    if (applying) return applying;
+    if (applying) return applying.then(() => {
+      // A settlement wake may arrive while the earlier busy-turn publication
+      // is finishing. Drain that work, then apply the still-pending change.
+      const kinds = pending();
+      if (!disposed && input.isStarted() && input.isSettled() && !blocked && !restartAccepted
+        && !waitForNextSettlement && (kinds.mcp || kinds.skills)) return flush();
+      return undefined;
+    });
     const attemptedSelection = desired;
+    const attemptedSkillRules = desiredSkillRules;
+    const attemptedMcpRules = desiredMcpRules;
     applying = apply().catch(async () => {
       blocked = true;
       await publishReason(desired, pending(), { reason: 'apply_failed' });
     }).finally(() => {
       applying = null;
-      if (!blocked && !waitForNextSettlement && !restartAccepted && input.isSettled()
-        && !areSessionCapabilitySelectionsEquivalentV1(attemptedSelection, desired)) {
+      if (!disposed && !blocked && !waitForNextSettlement && !restartAccepted && input.isSettled()
+        && (!areSessionCapabilitySelectionsEquivalentV1(attemptedSelection, desired) || attemptedSkillRules !== desiredSkillRules
+          || attemptedMcpRules !== desiredMcpRules)) {
         void flush();
       }
     });
     return applying;
   };
+  const syncFromMetadata = () => {
+    if (disposed) return;
+    observe();
+    if (!input.isStarted() || metadataApplyScheduled) return;
+    metadataApplyScheduled = true;
+    void Promise.resolve().then(async () => {
+      metadataApplyScheduled = false;
+      await flush();
+    }).catch(error => logger.debug('[CapabilitySelection] Apply status publication failed', { error: String(error) }));
+  };
+  const unsubscribeAccountSettings = input.subscribeAccountSettings?.(syncFromMetadata);
   return {
-    syncFromMetadata: () => {
-      observe();
-      if (!input.isStarted() || !input.isSettled() || waitForNextSettlement || metadataApplyScheduled) return;
-      metadataApplyScheduled = true;
-      void Promise.resolve().then(async () => {
-        metadataApplyScheduled = false;
-        if (!waitForNextSettlement) await flush();
-      }).catch(error => logger.debug('[CapabilitySelection] Apply status publication failed', { error: String(error) }));
-    },
+    syncFromMetadata,
+    dispose: async () => { disposed = true; unsubscribeAccountSettings?.(); },
     flushBeforeTurn: () => waitForNextSettlement ? Promise.resolve() : flush(),
     flushAfterSettledTurn: (turnId?: string) => {
       if (!input.isSettled()) return Promise.resolve();

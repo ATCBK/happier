@@ -27,7 +27,6 @@ export type BundledPluginPackage = Readonly<{
   agentUiDescriptor?: AgentUiDescriptor;
   agentPredecessorMessageMetaWriter?: AgentPredecessorMessageMetaWriterImportSource;
   releasedFlatSessionMetadataRuntimeDescriptorReader?: ReleasedFlatSessionMetadataRuntimeDescriptorReaderContributionDescriptor;
-  promptAssetContributions?: PromptAssetContributionSource;
   builtInLegacyConnectedAccountCompatibility?:
     readonly BuiltInLegacyConnectedAccountCompatibilitySource[];
 }>;
@@ -307,10 +306,6 @@ export type SessionSubagentVisibleMessageResolverSource = Readonly<{
   descriptor: JsonObject;
 }>;
 
-export type PromptAssetContributionSource = Readonly<{
-  pluginPackageId: string;
-  descriptors: readonly JsonObject[];
-}>;
 
 export type BundledFirstPartyVoiceProjectionSource = Readonly<{
   manifest: PluginManifestJson;

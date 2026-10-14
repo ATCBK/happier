@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ConnectedServiceAuthGroupIdSchema,
@@ -127,46 +127,35 @@ function isConnectedServiceUxDiagnosticCredentialKey(key: string): boolean {
 }
 
 const ConnectedServiceUxDiagnosticKeyV1Schema = lazyZodSchema(() => z
-  .string()
-  .trim()
-  .min(1)
-  .max(CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEY_LENGTH)
-  .refine(
-    (key) => !isConnectedServiceUxDiagnosticCredentialKey(key),
-    'diagnostic keys must not identify secrets or tokens',
-  ));
+  .string().check(z.trim(), z.minLength(1), z.maxLength(CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEY_LENGTH), z.refine((key) => !isConnectedServiceUxDiagnosticCredentialKey(key), 'diagnostic keys must not identify secrets or tokens')));
 
 const ConnectedServiceUxDiagnosticScalarV1Schema = lazyZodSchema(() => z.union([
-  z.string().max(CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_STRING_LENGTH),
-  z.number().finite(),
+  z.string().check(z.maxLength(CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_STRING_LENGTH)),
+  z.number(),
   z.boolean(),
   z.null(),
 ]));
 
 const ConnectedServiceUxDiagnosticDiagnosticsV1Schema = lazyZodSchema(() => z
-  .record(ConnectedServiceUxDiagnosticKeyV1Schema, ConnectedServiceUxDiagnosticScalarV1Schema)
-  .refine(
-    (diagnostics) => Object.keys(diagnostics).length <= CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEYS,
-    `diagnostics must include at most ${CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEYS} keys`,
-  ));
+  .record(ConnectedServiceUxDiagnosticKeyV1Schema, ConnectedServiceUxDiagnosticScalarV1Schema).check(z.refine((diagnostics) => Object.keys(diagnostics).length <= CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEYS, `diagnostics must include at most ${CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEYS} keys`)));
 
 // R.17 classification (2026-07-10): the former `providerId` field carried
 // `ConnectedServiceStateSharingDescriptor.providerId` values, which are typed
 // `CatalogAgentId` (agent-meaning, e.g. 'codex') — NOT connected-service ids
 // (those travel in `serviceId`). It was merged into `agentId`; legacy persisted
 // diagnostics are normalized below.
-const ConnectedServiceUxDiagnosticV1ObjectSchema = lazyZodSchema(() => z.object({
+const ConnectedServiceUxDiagnosticV1ObjectSchema = lazyZodSchema(() => z.strictObject({
   code: ConnectedServiceUxDiagnosticCodeV1Schema,
   failurePhase: ConnectedServiceUxDiagnosticFailurePhaseV1Schema,
   source: ConnectedServiceUxDiagnosticSourceV1Schema,
-  serviceId: ConnectedAccountServiceKeyIngressSchema.optional(),
-  agentId: z.string().trim().min(1).optional(),
-  profileId: ConnectedServiceProfileIdSchema.optional(),
-  groupId: ConnectedServiceAuthGroupIdSchema.optional(),
+  serviceId: z.optional(ConnectedAccountServiceKeyIngressSchema),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  profileId: z.optional(ConnectedServiceProfileIdSchema),
+  groupId: z.optional(ConnectedServiceAuthGroupIdSchema),
   retryable: z.boolean(),
-  suggestedActions: z.array(ConnectedServiceUxDiagnosticSuggestedActionV1Schema).default([]),
-  diagnostics: ConnectedServiceUxDiagnosticDiagnosticsV1Schema.optional(),
-}).strict());
+  suggestedActions: z._default(z.array(ConnectedServiceUxDiagnosticSuggestedActionV1Schema), []),
+  diagnostics: z.optional(ConnectedServiceUxDiagnosticDiagnosticsV1Schema),
+}));
 
 // legacy `providerId` read-compat (pre-rename persisted diagnostics in transcripts)
 function normalizeLegacyConnectedServiceUxDiagnosticAgentId(value: unknown): unknown {
@@ -180,10 +169,7 @@ function normalizeLegacyConnectedServiceUxDiagnosticAgentId(value: unknown): unk
     : rest;
 }
 
-export const ConnectedServiceUxDiagnosticV1Schema = lazyZodSchema(() => z.preprocess(
-  normalizeLegacyConnectedServiceUxDiagnosticAgentId,
-  ConnectedServiceUxDiagnosticV1ObjectSchema,
-));
+export const ConnectedServiceUxDiagnosticV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyConnectedServiceUxDiagnosticAgentId), ConnectedServiceUxDiagnosticV1ObjectSchema));
 
 export type ConnectedServiceUxDiagnosticV1 = z.infer<typeof ConnectedServiceUxDiagnosticV1ObjectSchema>;
 

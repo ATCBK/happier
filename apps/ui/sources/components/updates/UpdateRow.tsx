@@ -11,7 +11,7 @@ import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ITEM_ROW_PADDING_HORIZONTAL, resolveItemTextColumnInset } from '@/components/ui/lists/itemDensityMetrics';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { hapticsLight } from '@/components/ui/theme/haptics';
@@ -82,7 +82,7 @@ export const UpdateRow = React.memo(function UpdateRow(props: Readonly<{
     const percent = item.state === 'running' ? item.progressPercent : null;
     const canOpenLog = props.isThisComputer === true && isDesktopHost();
     const logPath = item.logPath ?? null;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const markCopied = copyFeedback.markCopied;
     // A quiet secondary action of the failed row: on this computer the desktop app opens the log;
     // elsewhere the log lives on that machine, so its path is copied (with the copied feedback).
@@ -231,6 +231,6 @@ const styles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
+        gap: theme.space.s16,
     },
 }));

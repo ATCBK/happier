@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
@@ -29,52 +29,50 @@ export const ScmDiffSummaryTurnEvidenceModeSchema = lazyZodSchema(() => z.enum([
 export type ScmDiffSummaryTurnEvidenceMode =
   z.infer<typeof ScmDiffSummaryTurnEvidenceModeSchema>;
 
-export const ScmDiffSummaryModelSelectorSchema = lazyZodSchema(() => z
-  .object({
-    profileId: z.string().trim().min(1).optional(),
-    modelId: z.string().trim().min(1).optional(),
-    backendTargetKey: z.string().trim().min(1).optional(),
-  })
-  .strict()
-  .refine(
-    (value) => Boolean(value.profileId || value.modelId || value.backendTargetKey),
-    { message: 'modelSelector requires profileId, modelId, or backendTargetKey' },
-  ));
+export const ScmDiffSummaryModelSelectorSchema = lazyZodSchema(() => z.strictObject({
+    profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    modelId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    backendTargetKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }).check(z.refine((value) => Boolean(value.profileId || value.modelId || value.backendTargetKey), { message: 'modelSelector requires profileId, modelId, or backendTargetKey' })));
 export type ScmDiffSummaryModelSelector =
   z.infer<typeof ScmDiffSummaryModelSelectorSchema>;
 
 export const SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION = 1;
 
-export const ScmDiffSummaryResolvedSelectorSchema = lazyZodSchema(() => z.object({
-  catalogId: z.string().trim().min(1),
-}).strict());
+export const ScmDiffSummaryResolvedSelectorSchema = lazyZodSchema(() => z.strictObject({
+  catalogId: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type ScmDiffSummaryResolvedSelector =
   z.infer<typeof ScmDiffSummaryResolvedSelectorSchema>;
 
-export const ScmDiffSummaryCachePolicySchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryCachePolicySchema = lazyZodSchema(() => z.strictObject({
   mode: z.enum(['read_write', 'bypass']),
-  reason: z.string().min(1).optional(),
-}).strict());
+  reason: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ScmDiffSummaryCachePolicy =
   z.infer<typeof ScmDiffSummaryCachePolicySchema>;
 
+/** A language tag controls prose only; it never supplies prompt instructions. */
+export const ScmDiffSummaryOutputLanguageSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine(value => {
+  try { return Intl.getCanonicalLocales(value).length === 1; } catch { return false; }
+}, 'Expected a language tag')));
+
 // Retain concrete identity for shared Control input JSON Schema references.
-export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z
-  .object({
-    cwd: z.string().min(1),
-    sessionId: z.string().min(1).optional(),
-    comparisonId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    backendPreference: ScmBackendPreferenceSchema.optional(),
+export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z.strictObject({
+    cwd: z.string().check(z.minLength(1)),
+    sessionId: z.optional(z.string().check(z.minLength(1))),
+    comparisonId: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/))),
+    backendPreference: z.optional(ScmBackendPreferenceSchema),
     source: ScmDiffSummarySourceSchema,
-    turnId: z.string().min(1).optional(),
-    checkpointReceiptId: z.string().min(1).optional(),
-    turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
-    modelSelector: ScmDiffSummaryModelSelectorSchema.optional(),
-    cachePolicy: ScmDiffSummaryCachePolicySchema.optional(),
-    outputs: z.array(z.enum(['summary', 'walkthrough', 'commitPlan'])).min(1).optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+    turnId: z.optional(z.string().check(z.minLength(1))),
+    checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
+    turnEvidenceMode: z.optional(ScmDiffSummaryTurnEvidenceModeSchema),
+    modelSelector: z.optional(ScmDiffSummaryModelSelectorSchema),
+    cachePolicy: z.optional(ScmDiffSummaryCachePolicySchema),
+    investigateSurroundingFiles: z.optional(z.boolean()),
+    outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+    outputs: z.optional(z.array(z.enum(['summary', 'walkthrough', 'commitPlan'])).check(z.minLength(1))),
+  }).check(z.superRefine((value, ctx) => {
     if (value.source.kind === 'turnCheckpoint') {
       for (const [key, sourceValue, requestValue] of [
         ['turnId', value.source.turnId, value.turnId],
@@ -83,12 +81,12 @@ export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z
         ['sessionId', value.source.sessionId, value.sessionId],
       ] as const) {
         if (sourceValue !== undefined && requestValue !== undefined && sourceValue !== requestValue) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'Selectors must identify one captured source' });
+          ctx.addIssue({ code: "custom", path: [key], message: 'Selectors must identify one captured source' });
         }
       }
     }
     if (value.source.kind === 'session' && value.sessionId && value.source.sessionId !== value.sessionId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionId'], message: 'Selectors must identify one session' });
+      ctx.addIssue({ code: "custom", path: ['sessionId'], message: 'Selectors must identify one session' });
     }
     if (
       value.source.kind === 'turnCheckpoint' &&
@@ -96,45 +94,45 @@ export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z
       !value.checkpointReceiptId && !value.source.checkpointReceiptId
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           'turnCheckpoint comparisons require a turn or checkpoint receipt selector resolved by the host',
         path: ['checkpointReceiptId'],
       });
     }
     if (value.outputs?.includes('commitPlan') && value.source.kind !== 'workingTree') {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['outputs'], message: 'Commit plans require a pending working-tree comparison' });
+      ctx.addIssue({ code: "custom", path: ['outputs'], message: 'Commit plans require a pending working-tree comparison' });
     }
     if (value.outputs && new Set(value.outputs).size !== value.outputs.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['outputs'], message: 'Requested outputs must be unique' });
+      ctx.addIssue({ code: "custom", path: ['outputs'], message: 'Requested outputs must be unique' });
     }
     if (value.source.kind === 'workingTree' && value.checkpointReceiptId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           'workingTree summaries must not carry a checkpointReceiptId; use turnCheckpoint source for receipt-keyed cache lookup',
         path: ['checkpointReceiptId'],
       });
     }
-  }));
+  })));
 export type ScmDiffSummaryGenerateInput =
   z.infer<typeof ScmDiffSummaryGenerateInputSchema>;
 
 /** Capture current evidence, or read an exact retained comparison without model admission. */
 // Retain concrete identity for shared Control input JSON Schema references.
-export const ScmComparisonCaptureInputSchema = lazyZodSchema(() => z.object({
-  cwd: z.string().min(1), sessionId: z.string().min(1).optional(),
-  comparisonId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  backendPreference: ScmBackendPreferenceSchema.optional(), source: ScmDiffSummarySourceSchema,
-  turnId: z.string().min(1).optional(), checkpointReceiptId: z.string().min(1).optional(),
-  turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
-}).strict().superRefine((value, ctx) => {
+export const ScmComparisonCaptureInputSchema = lazyZodSchema(() => z.strictObject({
+  cwd: z.string().check(z.minLength(1)), sessionId: z.optional(z.string().check(z.minLength(1))),
+  comparisonId: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/))),
+  backendPreference: z.optional(ScmBackendPreferenceSchema), source: ScmDiffSummarySourceSchema,
+  turnId: z.optional(z.string().check(z.minLength(1))), checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
+  turnEvidenceMode: z.optional(ScmDiffSummaryTurnEvidenceModeSchema),
+}).check(z.superRefine((value, ctx) => {
   const { comparisonId: _comparisonId, ...selectors } = value;
   const parsed = ScmDiffSummaryGenerateInputSchema.safeParse(selectors);
   if (!parsed.success) for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: issue.path });
+    ctx.addIssue({ code: "custom", message: issue.message, path: issue.path });
   }
-}));
+})));
 export type ScmComparisonCaptureInput = z.infer<typeof ScmComparisonCaptureInputSchema>;
 
 export const ScmDiffSummaryTruncationReasonSchema = lazyZodSchema(() => z.enum([
@@ -145,10 +143,10 @@ export const ScmDiffSummaryTruncationReasonSchema = lazyZodSchema(() => z.enum([
 export type ScmDiffSummaryTruncationReason =
   z.infer<typeof ScmDiffSummaryTruncationReasonSchema>;
 
-export const ScmDiffSummaryTruncationSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryTruncationSchema = lazyZodSchema(() => z.looseObject({
   reason: ScmDiffSummaryTruncationReasonSchema,
-  droppedFiles: z.number().int().nonnegative().optional(),
-}).passthrough());
+  droppedFiles: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type ScmDiffSummaryTruncation =
   z.infer<typeof ScmDiffSummaryTruncationSchema>;
 
@@ -159,27 +157,27 @@ export const ScmDiffSummaryGenerationStateSchema = lazyZodSchema(() => z.enum([
 export type ScmDiffSummaryGenerationState =
   z.infer<typeof ScmDiffSummaryGenerationStateSchema>;
 
-export const ScmDiffSummaryCostMetadataSchema = lazyZodSchema(() => z.object({
-  inputTokens: z.number().int().nonnegative().optional(),
-  outputTokens: z.number().int().nonnegative().optional(),
-  estimatedUsd: z.number().nonnegative().optional(),
-}).passthrough());
+export const ScmDiffSummaryCostMetadataSchema = lazyZodSchema(() => z.looseObject({
+  inputTokens: z.optional(z.number().check(z.int(), z.nonnegative())),
+  outputTokens: z.optional(z.number().check(z.int(), z.nonnegative())),
+  estimatedUsd: z.optional(z.number().check(z.nonnegative())),
+}));
 export type ScmDiffSummaryCostMetadata =
   z.infer<typeof ScmDiffSummaryCostMetadataSchema>;
 
-export const ScmDiffSummaryMetadataSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryMetadataSchema = lazyZodSchema(() => z.strictObject({
   source: ScmDiffSummarySourceSchema,
-  sourceKey: z.string().min(1),
-  turnId: z.string().min(1).optional(),
-  checkpointReceiptId: z.string().min(1).optional(),
-  turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
-  contentConfidence: z.enum(['exact', 'unavailable']).optional(),
-  attributionScope: z.enum([
+  sourceKey: z.string().check(z.minLength(1)),
+  turnId: z.optional(z.string().check(z.minLength(1))),
+  checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
+  turnEvidenceMode: z.optional(ScmDiffSummaryTurnEvidenceModeSchema),
+  contentConfidence: z.optional(z.enum(['exact', 'unavailable'])),
+  attributionScope: z.optional(z.enum([
     'no_happier_checkpoint_overlap_observed',
     'shared_worktree',
     'unknown',
-  ]).optional(),
-}).strict());
+  ])),
+}));
 export type ScmDiffSummaryMetadata =
   z.infer<typeof ScmDiffSummaryMetadataSchema>;
 
@@ -199,100 +197,99 @@ export type ScmDiffSummaryOutputKind = z.infer<typeof ScmDiffSummaryOutputKindSc
 export const ScmDiffSummaryOutputStateSchema = lazyZodSchema(() => z.enum(['pending', 'writing', 'complete', 'partial', 'failed', 'cancelled']));
 export type ScmDiffSummaryOutputState = z.infer<typeof ScmDiffSummaryOutputStateSchema>;
 
-export const ScmDiffSummarySummarySchema = lazyZodSchema(() => z.object({
-  summaryMarkdown: z.string().trim().min(1), risks: z.array(z.string().trim().min(1)).optional(),
-  testImpact: z.string().trim().min(1).optional(), suggestedPrBody: z.string().trim().min(1).optional(),
-}).strict());
-export const ScmReviewFindingIdentitySchema = lazyZodSchema(() => z.object({ runId: z.string().min(1), findingId: z.string().min(1) }).strict());
-export const ScmReviewExplanationRequesterSchema = lazyZodSchema(() => z.object({
-  kind: z.enum(['user', 'agent', 'plugin', 'automation', 'workflow', 'unknown']), id: z.string().min(1).optional(),
-}).strict());
+export const ScmDiffSummarySummarySchema = lazyZodSchema(() => z.strictObject({
+  summaryMarkdown: z.string().check(z.trim(), z.minLength(1)), risks: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  testImpact: z.optional(z.string().check(z.trim(), z.minLength(1))), suggestedPrBody: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
+export const ScmReviewFindingIdentitySchema = lazyZodSchema(() => z.strictObject({ runId: z.string().check(z.minLength(1)), findingId: z.string().check(z.minLength(1)) }));
+export const ScmReviewExplanationRequesterSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.enum(['user', 'agent', 'plugin', 'automation', 'workflow', 'unknown']), id: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ScmReviewExplanationRequester = z.infer<typeof ScmReviewExplanationRequesterSchema>;
 // Retain concrete identity for shared Control target JSON Schema references.
-export const ScmReviewExplanationTargetsSchema = lazyZodSchema(() => z.array(z.object({
-  stopId: z.string().min(1), findingRefs: z.array(ScmReviewFindingIdentitySchema).min(1),
-}).strict()).min(1).refine(targets => new Set(targets.map(target => target.stopId)).size === targets.length, 'Explanation stop ids must be unique'));
-export const ScmReviewExplanationSchema = lazyZodSchema(() => z.object({
-  markdown: z.string().trim().min(1), findingRefs: z.array(ScmReviewFindingIdentitySchema).min(1),
-  provenance: z.object({ requestedBy: ScmReviewExplanationRequesterSchema,
-    requestedAtMs: z.number().int().nonnegative(), generatedAtMs: z.number().int().nonnegative(),
-    modelId: z.string().min(1).optional(), runId: z.string().min(1).optional(),
-  }).strict(),
-}).strict());
-export const ScmDiffSummaryWalkthroughSchema = lazyZodSchema(() => z.object({
-  title: z.string().trim().min(1), intro: z.string(),
-  stops: z.array(z.object({
-    id: z.string().min(1), title: z.string().trim().min(1), explanationMarkdown: z.string().trim().min(1),
-    changeRefs: z.array(z.string().min(1)), importance: z.enum(['low', 'medium', 'high']).optional(),
-    findingRefs: z.array(z.string().min(1)).optional(),
-    reviewExplanations: z.array(ScmReviewExplanationSchema).min(1).optional(),
-  }).strict()),
-  readingHint: z.string().optional(), otherChangeRefs: z.array(z.string().min(1)),
-}).strict());
+export const ScmReviewExplanationTargetsSchema = lazyZodSchema(() => z.array(z.strictObject({
+  stopId: z.string().check(z.minLength(1)), findingRefs: z.array(ScmReviewFindingIdentitySchema).check(z.minLength(1)),
+})).check(z.minLength(1), z.refine(targets => new Set(targets.map(target => target.stopId)).size === targets.length, 'Explanation stop ids must be unique')));
+export const ScmReviewExplanationSchema = lazyZodSchema(() => z.strictObject({
+  markdown: z.string().check(z.trim(), z.minLength(1)), findingRefs: z.array(ScmReviewFindingIdentitySchema).check(z.minLength(1)),
+  provenance: z.strictObject({ requestedBy: ScmReviewExplanationRequesterSchema,
+    requestedAtMs: z.number().check(z.int(), z.nonnegative()), generatedAtMs: z.number().check(z.int(), z.nonnegative()),
+    modelId: z.optional(z.string().check(z.minLength(1))), runId: z.optional(z.string().check(z.minLength(1))),
+  }),
+}));
+export const ScmDiffSummaryWalkthroughSchema = lazyZodSchema(() => z.strictObject({
+  title: z.string().check(z.trim(), z.minLength(1)), intro: z.string(),
+  stops: z.array(z.strictObject({
+    id: z.string().check(z.minLength(1)), title: z.string().check(z.trim(), z.minLength(1)), explanationMarkdown: z.string().check(z.trim(), z.minLength(1)),
+    changeRefs: z.array(z.string().check(z.minLength(1))), importance: z.optional(z.enum(['low', 'medium', 'high'])),
+    findingRefs: z.optional(z.array(z.string().check(z.minLength(1)))),
+    reviewExplanations: z.optional(z.array(ScmReviewExplanationSchema).check(z.minLength(1))),
+  })),
+  readingHint: z.optional(z.string()), otherChangeRefs: z.array(z.string().check(z.minLength(1))),
+}));
 export type ScmDiffSummaryWalkthrough = z.infer<typeof ScmDiffSummaryWalkthroughSchema>;
-export const ScmDiffSummaryCommitPlanSchema = lazyZodSchema(() => z.object({
-  groups: z.array(z.object({
-    id: z.string().min(1), message: z.string().trim().min(1), rationale: z.string(),
-    changeRefs: z.array(z.string().min(1)),
-  }).strict()), leftOutChangeRefs: z.array(z.string().min(1)),
-}).strict());
+export const ScmDiffSummaryCommitPlanSchema = lazyZodSchema(() => z.strictObject({
+  groups: z.array(z.strictObject({
+    id: z.string().check(z.minLength(1)), message: z.string().check(z.trim(), z.minLength(1)), rationale: z.string(),
+    changeRefs: z.array(z.string().check(z.minLength(1))),
+  })), leftOutChangeRefs: z.array(z.string().check(z.minLength(1))),
+}));
 export type ScmDiffSummaryCommitPlan = z.infer<typeof ScmDiffSummaryCommitPlanSchema>;
 
-export const ScmDiffSummaryModelOutputSchema = lazyZodSchema(() => ScmDiffSummarySummarySchema.partial().extend({
-  walkthrough: ScmDiffSummaryWalkthroughSchema.optional(), commitPlan: ScmDiffSummaryCommitPlanSchema.optional(),
-  reviewExplanations: z.array(z.object({ stopId: z.string().min(1), markdown: z.string().trim().min(1) }).strict()).min(1).optional(),
-}).strict().refine((value) => Boolean(value.summaryMarkdown || value.walkthrough || value.commitPlan || value.reviewExplanations), 'A structured output is required'));
+export const ScmDiffSummaryModelOutputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.partial(ScmDiffSummarySummarySchema), {
+  walkthrough: z.optional(ScmDiffSummaryWalkthroughSchema), commitPlan: z.optional(ScmDiffSummaryCommitPlanSchema),
+  reviewExplanations: z.optional(z.array(z.strictObject({ stopId: z.string().check(z.minLength(1)), markdown: z.string().check(z.trim(), z.minLength(1)) })).check(z.minLength(1))),
+})).check(z.refine((value) => Boolean(value.summaryMarkdown || value.walkthrough || value.commitPlan || value.reviewExplanations), 'A structured output is required')));
 export type ScmDiffSummaryModelOutput = z.infer<typeof ScmDiffSummaryModelOutputSchema>;
 
-function progress<T extends z.ZodType>(value: T) {
-  return z.object({ state: ScmDiffSummaryOutputStateSchema, value: value.optional(), reason: z.string().min(1).optional() }).strict()
-    .refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value');
+function progress<T extends z.ZodMiniType>(value: T) {
+  return z.strictObject({ state: ScmDiffSummaryOutputStateSchema, value: z.optional(value), reason: z.optional(z.string().check(z.minLength(1))) }).check(z.refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value'));
 }
-export const ScmDiffSummaryOutputsSchema = lazyZodSchema(() => z.object({
-  summary: progress(ScmDiffSummarySummarySchema).optional(),
-  walkthrough: progress(ScmDiffSummaryWalkthroughSchema).optional(),
-  commitPlan: progress(ScmDiffSummaryCommitPlanSchema).optional(),
-}).strict());
+export const ScmDiffSummaryOutputsSchema = lazyZodSchema(() => z.strictObject({
+  summary: z.optional(progress(ScmDiffSummarySummarySchema)),
+  walkthrough: z.optional(progress(ScmDiffSummaryWalkthroughSchema)),
+  commitPlan: z.optional(progress(ScmDiffSummaryCommitPlanSchema)),
+}));
 export type ScmDiffSummaryOutputs = z.infer<typeof ScmDiffSummaryOutputsSchema>;
-export const ScmDiffSummaryAnalysisCoverageSchema = lazyZodSchema(() => z.object({
-  suppliedChangeRefs: z.array(z.string().min(1)), analysedChangeRefs: z.array(z.string().min(1)),
-  remainingChangeRefs: z.array(z.string().min(1)),
-  parts: z.object({ admitted: z.number().int().nonnegative(), completed: z.number().int().nonnegative(),
-    total: z.number().int().nonnegative(), phase: z.enum(['evidence', 'merge', 'done']),
-  }).strict().optional(),
-}).strict());
+export const ScmDiffSummaryAnalysisCoverageSchema = lazyZodSchema(() => z.strictObject({
+  suppliedChangeRefs: z.array(z.string().check(z.minLength(1))), analysedChangeRefs: z.array(z.string().check(z.minLength(1))),
+  remainingChangeRefs: z.array(z.string().check(z.minLength(1))),
+  parts: z.optional(z.strictObject({ admitted: z.number().check(z.int(), z.nonnegative()), completed: z.number().check(z.int(), z.nonnegative()),
+    total: z.number().check(z.int(), z.nonnegative()), phase: z.enum(['evidence', 'merge', 'done']),
+  })),
+}));
 export type ScmDiffSummaryAnalysisCoverage = z.infer<typeof ScmDiffSummaryAnalysisCoverageSchema>;
 
 /** Provenance is host-authored. Finding identities always include their owning Run. */
-export const ScmDiffSummaryReviewRunSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryReviewRunSchema = lazyZodSchema(() => z.strictObject({
   ...ReviewPublicationEvidenceSchema.shape,
-  runId: z.string().min(1), callId: z.string().min(1), backendId: z.string().min(1),
+  runId: z.string().check(z.minLength(1)), callId: z.string().check(z.minLength(1)), backendId: z.string().check(z.minLength(1)),
   status: z.enum(['running', 'succeeded', 'failed', 'cancelled', 'timeout']),
-  hasOutput: z.boolean(), comparisonId: z.string().min(1).optional(),
-  reviewOutcome: z.enum(['complete', 'partial', 'failed', 'unavailable']).optional(),
-}).strict());
+  hasOutput: z.boolean(), comparisonId: z.optional(z.string().check(z.minLength(1))),
+  reviewOutcome: z.optional(z.enum(['complete', 'partial', 'failed', 'unavailable'])),
+}));
 export type ScmDiffSummaryReviewRun = z.infer<typeof ScmDiffSummaryReviewRunSchema>;
-export const ScmDiffSummaryReviewProvenanceSchema = lazyZodSchema(() => z.object({
-  reviewedRuns: z.array(ScmDiffSummaryReviewRunSchema).min(1),
+export const ScmDiffSummaryReviewProvenanceSchema = lazyZodSchema(() => z.strictObject({
+  reviewedRuns: z.array(ScmDiffSummaryReviewRunSchema).check(z.minLength(1)),
   narrationMode: z.enum(['continued_review', 'seeded_narrator']),
   comparisonFreshness: z.enum(['unchanged', 'changed', 'unknown']),
-  launchFailures: z.array(ReviewLaunchFailureSchema).optional(),
-}).strict());
+  launchFailures: z.optional(z.array(ReviewLaunchFailureSchema)),
+}));
 export type ScmDiffSummaryReviewProvenance = z.infer<typeof ScmDiffSummaryReviewProvenanceSchema>;
 
 const envelope = {
-  comparison: ScmComparisonSchema.optional(), requestedOutputs: z.array(ScmDiffSummaryOutputKindSchema).min(1).optional(),
-  outputs: ScmDiffSummaryOutputsSchema.optional(), analysis: ScmDiffSummaryAnalysisCoverageSchema.optional(),
-  runId: z.string().min(1).optional(), resultId: z.string().min(1).optional(), revision: z.number().int().nonnegative().optional(),
-  producer: z.object({ kind: z.enum(['generation', 'review']), modelId: z.string().min(1).optional(),
-    runId: z.string().min(1).optional(), seededFromRunId: z.string().min(1).optional(),
-    reviewedBy: z.array(z.string().min(1)).optional(),
-    reviewedRuns: z.array(ScmDiffSummaryReviewRunSchema).optional(),
-    narrationMode: z.enum(['continued_review', 'seeded_narrator']).optional(),
-    comparisonFreshness: z.enum(['unchanged', 'changed', 'unknown']).optional(),
-    narratedAtMs: z.number().int().nonnegative().optional(),
-    launchFailures: z.array(ReviewLaunchFailureSchema).optional(),
-  }).strict().optional(),
+  comparison: z.optional(ScmComparisonSchema), requestedOutputs: z.optional(z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1))),
+  outputs: z.optional(ScmDiffSummaryOutputsSchema), analysis: z.optional(ScmDiffSummaryAnalysisCoverageSchema),
+  runId: z.optional(z.string().check(z.minLength(1))), resultId: z.optional(z.string().check(z.minLength(1))), revision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  producer: z.optional(z.strictObject({ kind: z.enum(['generation', 'review']), modelId: z.optional(z.string().check(z.minLength(1))),
+    runId: z.optional(z.string().check(z.minLength(1))), seededFromRunId: z.optional(z.string().check(z.minLength(1))),
+    reviewedBy: z.optional(z.array(z.string().check(z.minLength(1)))),
+    reviewedRuns: z.optional(z.array(ScmDiffSummaryReviewRunSchema)),
+    narrationMode: z.optional(z.enum(['continued_review', 'seeded_narrator'])),
+    comparisonFreshness: z.optional(z.enum(['unchanged', 'changed', 'unknown'])),
+    narratedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    launchFailures: z.optional(z.array(ReviewLaunchFailureSchema)),
+  })),
 };
 
 /** Resolve model aliases only against captured evidence; prose never supplies authority. */
@@ -348,44 +345,44 @@ export function normalizeScmDiffSummaryModelOutput(value: unknown, params: Reado
   return output;
 }
 
-export const ScmDiffSummaryGenerateSuccessSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryGenerateSuccessSchema = lazyZodSchema(() => z.strictObject({
   success: z.literal(true),
   /** Actual authored initial Run input, for exact lifecycle observation. */
-  inputId: z.string().min(1).optional(),
-  summaryMarkdown: z.string().min(1).optional(),
-  sourceKey: z.string().min(1),
-  checkpointReceiptId: z.string().min(1).optional(),
+  inputId: z.optional(z.string().check(z.minLength(1))),
+  summaryMarkdown: z.optional(z.string().check(z.minLength(1))),
+  sourceKey: z.string().check(z.minLength(1)),
+  checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
   metadata: ScmDiffSummaryMetadataSchema,
-  truncation: ScmDiffSummaryTruncationSchema.optional(),
-  generationState: ScmDiffSummaryGenerationStateSchema.optional(),
-  cost: ScmDiffSummaryCostMetadataSchema.optional(),
-  risks: z.array(z.string().min(1)).optional(),
-  testImpact: z.string().min(1).optional(),
-  suggestedPrBody: z.string().min(1).optional(),
+  truncation: z.optional(ScmDiffSummaryTruncationSchema),
+  generationState: z.optional(ScmDiffSummaryGenerationStateSchema),
+  cost: z.optional(ScmDiffSummaryCostMetadataSchema),
+  risks: z.optional(z.array(z.string().check(z.minLength(1)))),
+  testImpact: z.optional(z.string().check(z.minLength(1))),
+  suggestedPrBody: z.optional(z.string().check(z.minLength(1))),
   ...envelope,
-}).strict().refine((value) => Boolean(value.summaryMarkdown || value.comparison), 'A comparison or summary is required'));
+}).check(z.refine((value) => Boolean(value.summaryMarkdown || value.comparison), 'A comparison or summary is required')));
 export type ScmDiffSummaryGenerateSuccess =
   z.infer<typeof ScmDiffSummaryGenerateSuccessSchema>;
 
-export const ScmDiffSummaryGenerateFailureSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryGenerateFailureSchema = lazyZodSchema(() => z.strictObject({
   success: z.literal(false),
-  error: z.string().min(1),
+  error: z.string().check(z.minLength(1)),
   errorCode: ScmDiffSummaryErrorCodeSchema,
-  sourceKey: z.string().min(1).optional(),
-  checkpointReceiptId: z.string().min(1).optional(),
-  metadata: ScmDiffSummaryMetadataSchema.optional(),
-  cost: ScmDiffSummaryCostMetadataSchema.optional(),
+  sourceKey: z.optional(z.string().check(z.minLength(1))),
+  checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
+  metadata: z.optional(ScmDiffSummaryMetadataSchema),
+  cost: z.optional(ScmDiffSummaryCostMetadataSchema),
   ...envelope,
-}).strict());
+}));
 export type ScmDiffSummaryGenerateFailure =
   z.infer<typeof ScmDiffSummaryGenerateFailureSchema>;
 
 export const ScmDiffSummaryGenerateOutputSchema = lazyZodSchema(() => z.union([
   ScmDiffSummaryGenerateSuccessSchema,
   ScmDiffSummaryGenerateFailureSchema,
-]).superRefine((value, ctx) => {
+]).check(z.superRefine((value, ctx) => {
   if (!value.comparison) return;
-  const issue = (path: string[], message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
+  const issue = (path: string[], message: string) => ctx.addIssue({ code: "custom", path, message });
   if (value.sourceKey !== value.comparison.id) issue(['sourceKey'], 'Source key must identify the captured comparison');
   if (value.metadata && value.metadata.sourceKey !== value.comparison.id) issue(['metadata', 'sourceKey'], 'Metadata must identify the captured comparison');
   if (value.metadata && JSON.stringify(value.metadata.source) !== JSON.stringify(value.comparison.source)) issue(['metadata', 'source'], 'Metadata must describe the captured source');
@@ -424,51 +421,50 @@ export const ScmDiffSummaryGenerateOutputSchema = lazyZodSchema(() => z.union([
       issue(['outputs', kind, 'value'], error instanceof Error ? error.message : 'Invalid captured occurrence references');
     }
   }
-}));
+})));
 export type ScmDiffSummaryGenerateOutput =
   z.infer<typeof ScmDiffSummaryGenerateOutputSchema>;
 
 export const ScmComparisonCaptureOutputSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), comparison: ScmComparisonSchema, metadata: ScmDiffSummaryMetadataSchema }).strict(),
-  z.object({ success: z.literal(false), error: z.string().min(1), errorCode: ScmDiffSummaryErrorCodeSchema }).strict(),
+  z.strictObject({ success: z.literal(true), comparison: ScmComparisonSchema, metadata: ScmDiffSummaryMetadataSchema }),
+  z.strictObject({ success: z.literal(false), error: z.string().check(z.minLength(1)), errorCode: ScmDiffSummaryErrorCodeSchema }),
 ]));
 export type ScmComparisonCaptureOutput = z.infer<typeof ScmComparisonCaptureOutputSchema>;
 
-export const ScmDiffSummaryCacheKeyDescriptorSchema = lazyZodSchema(() => z
-  .object({
+export const ScmDiffSummaryCacheKeyDescriptorSchema = lazyZodSchema(() => z.strictObject({
     source: ScmDiffSummarySourceSchema,
-    checkpointReceiptId: z.string().trim().min(1).optional(),
-    checkpointRef: z.string().trim().min(1).optional(),
-    volatileSourceVersion: z.string().trim().min(1).optional(),
-    comparisonId: z.string().trim().min(1).optional(),
-    outputs: z.array(ScmDiffSummaryOutputKindSchema).min(1).optional(),
-    turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
-    summarySchemaVersion: z.number().int().positive(),
+    checkpointReceiptId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    checkpointRef: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    volatileSourceVersion: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    comparisonId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    outputs: z.optional(z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1))),
+    outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+    turnEvidenceMode: z.optional(ScmDiffSummaryTurnEvidenceModeSchema),
+    investigateSurroundingFiles: z.optional(z.boolean()),
+    summarySchemaVersion: z.number().check(z.int(), z.positive()),
     resolvedSelector: ScmDiffSummaryResolvedSelectorSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     if (value.source.kind !== 'turnCheckpoint' && value.source.kind !== 'workingTree' && !value.comparisonId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['comparisonId'], message: 'Historical sources require a captured comparison identity' });
+      ctx.addIssue({ code: "custom", path: ['comparisonId'], message: 'Historical sources require a captured comparison identity' });
     }
     if (value.source.kind === 'turnCheckpoint') {
       if (!value.checkpointReceiptId) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['checkpointReceiptId'],
           message: 'turnCheckpoint cache descriptors require checkpointReceiptId',
         });
       }
       if (!value.checkpointRef) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['checkpointRef'],
           message: 'turnCheckpoint cache descriptors require checkpointRef',
         });
       }
       if (value.volatileSourceVersion) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['volatileSourceVersion'],
           message: 'turnCheckpoint cache descriptors must not use volatileSourceVersion',
         });
@@ -478,30 +474,30 @@ export const ScmDiffSummaryCacheKeyDescriptorSchema = lazyZodSchema(() => z
     if (value.source.kind === 'workingTree') {
       if (!value.volatileSourceVersion) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['volatileSourceVersion'],
           message: 'workingTree cache descriptors require volatileSourceVersion',
         });
       }
       if (value.checkpointReceiptId) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['checkpointReceiptId'],
           message: 'workingTree cache descriptors must not use checkpointReceiptId',
         });
       }
     }
-  }));
+  })));
 export type ScmDiffSummaryCacheKeyDescriptor =
   z.infer<typeof ScmDiffSummaryCacheKeyDescriptorSchema>;
 
-export const ScmDiffSummaryCacheEntrySchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryCacheEntrySchema = lazyZodSchema(() => z.looseObject({
   key: ScmDiffSummaryCacheKeyDescriptorSchema,
-  checkpointRef: z.string().min(1).optional(),
+  checkpointRef: z.optional(z.string().check(z.minLength(1))),
   value: ScmDiffSummaryGenerateOutputSchema,
-  createdAtMs: z.number().int().nonnegative().optional(),
-  updatedAtMs: z.number().int().nonnegative().optional(),
-}).passthrough());
+  createdAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  updatedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type ScmDiffSummaryCacheEntry =
   z.infer<typeof ScmDiffSummaryCacheEntrySchema>;
 
@@ -514,7 +510,9 @@ export type ScmDiffSummaryCacheKeyInput = Readonly<{
   source: ScmDiffSummaryCacheSource; summarySchemaVersion: number;
   resolvedSelector: ScmDiffSummaryResolvedSelectorInput;
   outputs?: readonly ScmDiffSummaryOutputKind[];
+  outputLanguage?: string;
   scopeKey?: string;
+  investigateSurroundingFiles?: boolean;
   volatileDiffDigest?: string;
 }>;
 
@@ -526,7 +524,9 @@ export function buildScmDiffSummaryCacheKey(input: ScmDiffSummaryCacheKeyInput):
   }
   if (!Number.isInteger(input.summarySchemaVersion) || input.summarySchemaVersion <= 0) throw new Error('summarySchemaVersion must be a positive integer');
   const selector = part(input.resolvedSelector.catalogId, 'resolved catalog id');
-  const suffix = `schema:${input.summarySchemaVersion}:selector:${selector}`;
+  const suffix = `schema:${input.summarySchemaVersion}:selector:${selector}`
+    + (input.outputLanguage ? `:language:${part(ScmDiffSummaryOutputLanguageSchema.parse(input.outputLanguage), 'outputLanguage')}` : '')
+    + (input.investigateSurroundingFiles === true ? ':investigation:surrounding-files' : '');
   const outputs = [...new Set(input.outputs ?? ['summary'])].sort();
   if (!outputs.length || outputs.some((output) => !ScmDiffSummaryOutputKindSchema.safeParse(output).success)) throw new Error('Requested output kinds are invalid');
   const outputSuffix = outputs.length === 1 && outputs[0] === 'summary' ? '' : `:outputs:${outputs.join(',')}`;

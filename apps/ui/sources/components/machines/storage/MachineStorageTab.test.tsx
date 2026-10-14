@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DiskScanStateV1, HappierStorageSummaryV1, MachineStorageCategoryListResultV1, StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -143,6 +144,49 @@ beforeEach(async () => { await home.reset(); machineStorageStore.reset(); transp
 afterEach(async () => { standardCleanup(); machineStorageStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('MachineStorageTab', () => {
+    it.each(['web', 'ios', 'android'] as const)('announces a worktree group as none, mixed, all, then none on %s', async platform => {
+        // Only the platform SDK fact changes; the group, pile controller and shared Pressable stay real.
+        const originalPlatform = Object.getOwnPropertyDescriptor(Platform, 'OS')!;
+        Object.defineProperty(Platform, 'OS', { ...originalPlatform, value: platform });
+        try {
+            const items: StorageItemV1[] = ['a', 'b'].map(id => ({
+                itemId: `wt-${id}`, kind: 'worktree', categoryId: 'worktrees', title: id, evidence: [],
+                path: `/Users/leeroy/dev/happier/.dev/worktree/${id}`, size: size(GB),
+                verdict: 'safe', reason: { code: 'merged_clean' }, collectable: true,
+            }));
+            let pile: Array<Record<string, unknown>> = [];
+            const pileResult = () => ({ revision: 2, items: pile, summary: { count: pile.length, freesBytes: pile.length * GB, droppedSinceLastView: [] } });
+            const { screen } = await mount({ id: 'storage', page: 'worktrees' }, {}, ({ method, payload }) => {
+                if (method === RPC_METHODS.DAEMON_STORAGE_WORKTREES_LIST) return { revision: 1, items };
+                if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, pile: pileResult().summary };
+                if (method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return pileResult();
+                if (method === RPC_METHODS.DAEMON_STORAGE_PILE_SET) {
+                    const remove = (payload?.remove as string[] | undefined) ?? [];
+                    pile = [...pile.filter(entry => !remove.includes(String(entry.itemId))),
+                        ...((payload?.add as Array<Record<string, unknown>> | undefined) ?? []).map(resolved)];
+                    return pileResult();
+                }
+                return undefined;
+            });
+            const groupId = 'machine-storage-worktrees-group-happier-collect';
+            const expectChecked = async (checked: boolean | 'mixed') => {
+                await act(async () => { await vi.waitFor(() => {
+                    const control = screen.findHostByTestId(groupId);
+                    expect(control?.props.accessibilityState?.checked).toBe(checked);
+                    expect(control?.props['aria-checked']).toBe(checked);
+                }); });
+            };
+            await expectChecked(false);
+            await act(async () => { screen.pressByTestId('machine-storage-worktree-wt-a-collect'); });
+            await expectChecked('mixed');
+            await act(async () => { screen.pressByTestId(groupId); });
+            await expectChecked(true);
+            await act(async () => { screen.pressByTestId(groupId); });
+            await expectChecked(false);
+            expect(pile).toEqual([]);
+        } finally { Object.defineProperty(Platform, 'OS', originalPlatform); }
+    });
+
     it('shows the daemon’s concrete main-checkout lifecycle limitation in Staying, with apply unavailable', async () => {
         const ref = { itemId: '/Users/leeroy/projects', path: '/Users/leeroy/projects' };
         const pile = { count: 1, freesBytes: GB, droppedSinceLastView: [] };

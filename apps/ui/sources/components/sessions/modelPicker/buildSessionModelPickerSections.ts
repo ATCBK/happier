@@ -455,7 +455,9 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
         ])
         : undefined;
     return {
-        subtitle: selectedOption.label,
+        subtitle: selectedSection.id === 'current-selection-recovery' && selectedOption.label === selected.modelId
+            ? input.fallbackLabel
+            : selectedOption.label,
         ...(detail ? { detail } : {}),
         ...(accessibilityLabel ? { accessibilityLabel } : {}),
     };

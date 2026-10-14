@@ -10,6 +10,28 @@ const record = (id: string): ProfileRecordV1 => ProfileRecordV1Schema.parse({
 });
 
 describe('complete opened Profile catalog', () => {
+  it('ignores disabled and consumed unavailable migration candidates but refuses enabled unavailable content', async () => {
+    let stored = ProfileRecordV1Schema.parse({ ...record('profile'), promptStack: [
+      { id: 'disabled', enabled: false, placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'missing' } },
+      { id: 'consumed', enabled: true, skillMigrationV1: true, placement: 'system_append', ref: { kind: 'bundle', artifactId: 'consumed' } },
+    ] });
+    const reads: string[] = [];
+    let writes = 0;
+    const load = () => loadProfileCatalogV1({ mode: 'plain', material: null,
+      readPage: async () => ProfileRowsListResponseV1Schema.parse({ status: 'listed', rows: [{ id: stored.id, revision: 1, content: { t: 'plain', v: stored } }],
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } }),
+      readReferenceGuard: async () => ({ status: 'ready', revision: 1 }), readTransfer: async () => ({ status: 'absent' }),
+      readSource: async () => ({}), skillMigration: {
+        readArtifact: async ref => { reads.push(ref.artifactId); return null; },
+        writeRecord: async () => { writes++; return { status: 'updated', revision: 2 }; },
+      },
+    });
+    expect(await load()).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: [], promptStack: stored.promptStack } }] });
+    expect(reads).toEqual([]); expect(writes).toBe(0);
+    stored = ProfileRecordV1Schema.parse({ ...stored, promptStack: stored.promptStack.map(entry => entry.id === 'disabled' ? { ...entry, enabled: true } : entry) });
+    expect(await load()).toEqual({ status: 'unavailable', reason: 'invalid-stored-content' });
+    expect(reads).toEqual(['missing']); expect(writes).toBe(0);
+  });
   it('adds enabled Profile skill seeds at load while retaining the full legacy stack for Session exclusions', async () => {
     let stored = ProfileRecordV1Schema.parse({ ...record('profile'), skillSeeds: ['existing'], promptStack: [
       { id: 'skill-entry', enabled: true, placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'skill' } },

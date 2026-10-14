@@ -13,6 +13,7 @@ export type ScmBackendSelectionInput = {
     cwd: string;
     workingDirectory: string;
     backendPreference?: ScmBackendPreference;
+    includeRetainedWorktrees?: boolean;
 };
 
 function modeRank(mode: ScmRepoMode): number {
@@ -38,11 +39,12 @@ function isPreferenceAllowedForMode(input: { backend: ScmBackend; mode: ScmRepoM
 }
 
 export function createScmBackendRegistry(backends: readonly ScmBackend[]) {
-    async function detectAll(input: { cwd: string }): Promise<Array<{ backend: ScmBackend; detection: ScmRepoDetection }>> {
+    async function detectAll(input: { cwd: string; includeRetainedWorktrees?: boolean }): Promise<Array<{ backend: ScmBackend; detection: ScmRepoDetection }>> {
         const results = await Promise.allSettled(
             backends.map(async (backend) => ({
                 backend,
-                detection: await backend.detectRepo({ cwd: input.cwd }),
+                detection: await backend.detectRepo({ cwd: input.cwd,
+                    ...(input.includeRetainedWorktrees ? { includeRetainedWorktrees: true } : {}) }),
             }))
         );
         const detectedRepositories = results.flatMap((result) => (
@@ -72,7 +74,7 @@ export function createScmBackendRegistry(backends: readonly ScmBackend[]) {
     }
 
     async function selectBackend(input: ScmBackendSelectionInput): Promise<ScmBackendSelection | null> {
-        const detections = await detectAll({ cwd: input.cwd });
+        const detections = await detectAll({ cwd: input.cwd, includeRetainedWorktrees: input.includeRetainedWorktrees });
         if (detections.length === 0) return null;
 
         const preference = input.backendPreference;

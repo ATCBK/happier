@@ -1,24 +1,19 @@
-import {
-    isPlainArtifactDataKeyMarker,
-    isPlainArtifactStoredContent,
-    decodePlainArtifactStoredContent,
-    ArtifactPrivateRevisionMetadataV1Schema,
-    ArtifactPrivateRevisionMetadataV1StoredSchema,
-    parseEncryptedDataKeyEnvelopeV1,
-    readSessionDataKeyBundleV0,
-} from "@happier-dev/protocol";
+import { isPlainArtifactDataKeyMarker, isPlainArtifactStoredContent, decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactPrivateRevisionMetadataV1Schema, ArtifactPrivateRevisionMetadataV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { readSessionDataKeyBundleV0 } from '@happier-dev/protocol/crypto/sessionDataKeyBundleV0';
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { EffectiveAccountEncryptionMode } from "@/app/encryption/accountEncryptionMode";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { decryptString, encryptString } from "@/modules/encrypt";
 
-const ArtifactDbSealedContentV1Schema = createStoredReadSchema(z.object({
+const ArtifactDbSealedContentV1Schema = createStoredReadSchema(z.strictObject({
     t: z.literal("sealed_v1"),
-    c: z.string().min(1),
-}).strict());
+    c: z.string().check(z.minLength(1)),
+}));
 
 type ArtifactContentField = "header" | "body" | "provenance";
 

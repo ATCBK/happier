@@ -681,6 +681,43 @@ describe('executable targeted contribution admission', () => {
         }
     });
 
+    it.each([
+        { pluginId: 'happier.voice.elevenlabs', localId: 'realtime-elevenlabs' },
+        { pluginId: 'happier.voice.xai', localId: 'realtime-grok' },
+    ])('admits client-only bundled declaration $pluginId through the executable registry', async ({ pluginId, localId }) => {
+        const fixture = await createAdmittedPluginRuntimeFixture({
+            runtimeOptions: { pluginIds: [pluginId], generationAuthority: fixtureGenerationAuthority([]) },
+        });
+        try {
+            const runtime = fixture.registry;
+            expect(runtime.contributes.activationTargets.some(target => target.pluginId === pluginId)).toBe(false);
+            const occurrenceId = runtime.readPluginOccurrenceId?.(pluginId);
+            expect(occurrenceId).toBeTruthy();
+            expect(runtime.readPluginSourceCustody?.(pluginId)).toMatchObject({ kind: 'development' });
+            expect(runtime.activatedPluginIds.has(pluginId)).toBe(false);
+            expect(runtime.pluginFinalPolicyCurrentRuntimesById?.get(pluginId)).toMatchObject({
+                occurrenceId, desiredOccurrenceId: occurrenceId, appliedOccurrenceId: occurrenceId, applied: true,
+            });
+            const lifecycle = runtime.resolveVoiceProviderRuntimeLifecycle?.({ pluginId, localId });
+            expect(lifecycle?.occurrenceId).toBe(occurrenceId);
+            expect(lifecycle?.isCurrent()).toBe(true);
+            const projection = buildPluginProjectionV2({
+                registry: runtime.contributes,
+                generation: fixture.controller.getState().generation,
+                pluginFinalPolicyCurrentRuntimesById: runtime.pluginFinalPolicyCurrentRuntimesById,
+            });
+            expect(projection.installedPackagesById[pluginId]).toMatchObject({ occurrenceId });
+            runtime.retirePluginConsumers?.([pluginId]);
+            expect(lifecycle?.isCurrent()).toBe(false);
+            expect(lifecycle?.retirementSignal.aborted).toBe(true);
+            expect(runtime.pluginFinalPolicyCurrentRuntimesById?.get(pluginId)).toMatchObject({
+                occurrenceId, desiredOccurrenceId: null, appliedOccurrenceId: null, applied: false,
+            });
+        } finally {
+            await fixture.dispose();
+        }
+    });
+
     it('does not synthesize final-policy runtime authority from a legacy bundled generation alone', async () => {
         const bundledPluginId = 'examples.cold-bundled';
         const runtime = await resolveExecutablePluginRuntimeRegistry({

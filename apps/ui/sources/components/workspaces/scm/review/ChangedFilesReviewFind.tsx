@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Platform, TextInput, View } from 'react-native';
-import type { FindController } from '@happier-dev/plugin-ui/presentation';
+import { HappierBadge, type FindController } from '@happier-dev/plugin-ui/presentation';
 import { FindBar } from '@/components/ui/find/FindBar';
 import { FindBarPlacement, useFindBarPresence } from '@/components/ui/find/FindBarPlacement';
 import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFocusReturn';
@@ -30,10 +30,10 @@ export function ChangedFilesReviewFindCount(props: Readonly<{ model?: ChangedFil
         () => model?.getFileSnapshot(props.path).count ?? 0,
     );
     // The count wears the match tint (Find lab `.fd-fc`), so the index reads as where the marks are.
-    return count ? <View style={{ minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.find.matchAll }}>
+    return count ? <HappierBadge color={theme.colors.text.primary} backgroundColor={theme.colors.find.matchAll}>
         <Text testID={`scm-review-find-count:${props.path}`} accessibilityLabel={t('find.count', { current: null, total: count })}
-            style={{ color: theme.colors.text.primary, ...Typography.pillLabel(), ...Typography.tabular() }}>{String(count)}</Text>
-    </View> : null;
+            style={{ color: theme.colors.text.primary, ...Typography.variant('micro', 'semiBold'), ...Typography.tabular() }}>{String(count)}</Text>
+    </HappierBadge> : null;
 }
 
 export function ChangedFilesReviewFindSurface(props: Readonly<{

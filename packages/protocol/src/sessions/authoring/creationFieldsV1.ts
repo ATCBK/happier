@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { WindowsRemoteSessionLaunchModeSchema } from '../metadata/windowsRemoteSessionLaunchMode.js';
 import { WindowsTerminalWindowNameSchema } from '../metadata/windowsTerminalWindowName.js';
@@ -12,34 +12,34 @@ import { WindowsTerminalWindowNameSchema } from '../metadata/windowsTerminalWind
  * catalog prevents that catalog's Automation definitions from forming a
  * reciprocal initialization cycle with Session spawn.
  */
-export const SessionAuthoringCheckoutCreationDraftV1Schema = lazyZodSchema(() => z.object({
+export const SessionAuthoringCheckoutCreationDraftV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('git_worktree'),
-  displayName: z.string().trim().min(1),
-  baseRef: z.string().trim().min(1).nullable(),
-  branchMode: z.enum(['new', 'existing']).optional(),
-}).strict());
+  displayName: z.string().check(z.trim(), z.minLength(1)),
+  baseRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  branchMode: z.optional(z.enum(['new', 'existing'])),
+}));
 
 export type SessionAuthoringCheckoutCreationDraftV1 = z.infer<
   typeof SessionAuthoringCheckoutCreationDraftV1Schema
 >;
 
-const SessionAuthoringWindowsTerminalV1Schema = lazyZodSchema(() => z.object({
-  launchMode: WindowsRemoteSessionLaunchModeSchema.optional(),
-  console: z.enum(['hidden', 'visible']).optional(),
-  windowName: WindowsTerminalWindowNameSchema.optional(),
-}).strict());
+const SessionAuthoringWindowsTerminalV1Schema = lazyZodSchema(() => z.strictObject({
+  launchMode: z.optional(WindowsRemoteSessionLaunchModeSchema),
+  console: z.optional(z.enum(['hidden', 'visible'])),
+  windowName: z.optional(WindowsTerminalWindowNameSchema),
+}));
 
-export const SessionAuthoringTerminalV1Schema = lazyZodSchema(() => z.object({
-  mode: z.enum(['integrated', 'plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console']).optional(),
-  tmux: z.object({
-    sessionName: z.string().optional(),
-    isolated: z.boolean().optional(),
-    tmpDir: z.union([z.string(), z.null()]).optional(),
-  }).strict().optional(),
-  herdr: z.object({
-    sessionName: z.string().optional(),
-  }).strict().optional(),
-  windows: SessionAuthoringWindowsTerminalV1Schema.optional(),
-}).strict());
+export const SessionAuthoringTerminalV1Schema = lazyZodSchema(() => z.strictObject({
+  mode: z.optional(z.enum(['integrated', 'plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console'])),
+  tmux: z.optional(z.strictObject({
+    sessionName: z.optional(z.string()),
+    isolated: z.optional(z.boolean()),
+    tmpDir: z.optional(z.union([z.string(), z.null()])),
+  })),
+  herdr: z.optional(z.strictObject({
+    sessionName: z.optional(z.string()),
+  })),
+  windows: z.optional(SessionAuthoringWindowsTerminalV1Schema),
+}));
 
 export type SessionAuthoringTerminalV1 = z.infer<typeof SessionAuthoringTerminalV1Schema>;

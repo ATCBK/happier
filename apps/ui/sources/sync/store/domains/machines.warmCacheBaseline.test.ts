@@ -79,9 +79,11 @@ async function createHarness() {
     await profiles.setActiveServerId(active.id, { scope: 'device' });
     activeServerId = active.id;
     const { storage } = await import('@/sync/domains/state/storage');
+    (await import('../../domains/state/warmCachePersistence')).setWarmCacheAccountScope('account-1');
     storage.setState({
         machines: {}, machineDisplayById: {}, machineListByServerId: {},
         profile: { ...storage.getState().profile, id: 'account-1' },
+        profileScope: { serverId: activeServerId, accountId: 'account-1' },
     });
     return { get: storage.getState, domain: storage.getState(), profiles };
 }
@@ -149,12 +151,13 @@ describe('machines domain: warm cache baseline', () => {
             replacedByMachineId: 'machine-new',
             replacedAt: 41,
             replacementReason: 'rotated',
-        })], true, { sourceServerId: other.id });
+        })], true, { sourceServerId: other.id, sourceAccountId: 'account-2' });
         await flushWarmCacheSave();
 
         expect(get().machines).toEqual({});
-        expect(get().machineListByServerId[other.id]).toHaveLength(1);
-        const raw = mmkvStore.get('machine-display-warm-cache-v1:srv_server_b:account-1');
+        expect(get().machineListByServerId[profiles.resolveServerProfileScopeIdForIdentifier(other.id)]).toHaveLength(1);
+        expect(mmkvStore.get('machine-display-warm-cache-v1:srv_server_b:account-1')).toBeUndefined();
+        const raw = mmkvStore.get('machine-display-warm-cache-v1:srv_server_b:account-2');
         expect(raw).toBeDefined();
         expect(JSON.parse(raw ?? '{}')).toMatchObject({
             'machine-old': {
@@ -165,5 +168,42 @@ describe('machines domain: warm cache baseline', () => {
                 replacementReason: 'rotated',
             },
         });
+    });
+
+    it('does not borrow the focused Account for an unqualified secondary inventory', async () => {
+        const { domain, profiles } = await createHarness();
+        const other = await profiles.upsertServerProfile({ serverUrl: 'http://server-b.local' });
+        await profiles.setServerProfileIdentityForUrl(other.serverUrl, 'srv_server_b');
+        domain.applyMachines([makeMachine()], true, { sourceServerId: other.id });
+        await flushWarmCacheSave();
+        expect(mmkvStore.get('machine-display-warm-cache-v1:srv_server_b:account-1')).toBeUndefined();
+    });
+
+    it('does not persist a foreground inventory before its Account scope is available', async () => {
+        const { domain } = await createHarness();
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ profileScope: null });
+        domain.applyMachines([makeMachine()], true, { sourceServerId: activeServerId });
+        await flushWarmCacheSave();
+        expect(mmkvStore.get('machine-display-warm-cache-v1:srv_server_a:account-1')).toBeUndefined();
+    });
+
+    it('persists foreground display rows for the proven scope rather than a retained profile id', async () => {
+        const { domain } = await createHarness();
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ profile: { ...storage.getState().profile, id: 'retained-account' } });
+        domain.applyMachines([makeMachine()], true, { sourceServerId: activeServerId });
+        await flushWarmCacheSave();
+        expect(readPersistedMachineEntry('m-1')?.displayName).toBe('Dev box');
+        expect(mmkvStore.get('machine-display-warm-cache-v1:srv_server_a:retained-account')).toBeUndefined();
+    });
+
+    it('refuses a same-Home inventory captured for a replaced Account', async () => {
+        const { domain, get } = await createHarness();
+        const before = get();
+        domain.applyMachines([makeMachine()], true, { sourceServerId: activeServerId, sourceAccountId: 'retired-account' });
+        await flushWarmCacheSave();
+        expect(get()).toBe(before);
+        expect(mmkvStore.get('machine-display-warm-cache-v1:srv_server_a:account-1')).toBeUndefined();
     });
 });

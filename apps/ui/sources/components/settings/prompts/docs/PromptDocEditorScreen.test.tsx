@@ -12,6 +12,7 @@ import { sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/ac
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { PromptDocEditorScreen } from './PromptDocEditorScreen';
+import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), preventRemove: false }));
 const modal = vi.hoisted(() => ({ alert: vi.fn() }));
 
@@ -80,7 +81,7 @@ describe('PromptDocEditorScreen', () => {
     expect(navigation.preventRemove).toBe(false);
   });
 
-  it('shows real private organization and links, and preserves every dirty field when the folder row refreshes', async () => {
+  it('keeps retired export receipts unexposed and preserves every dirty field when the folder row refreshes', async () => {
     const f = await home([{ key: 'folders', value: { v: 1, folders: [{ id: 'ops', name: 'Ops' }] } }]);
     const id = await createPromptDoc({ title: 'Organized', markdown: 'Original', folderId: 'ops', tags: ['alpha', 'beta'] });
     const { writePromptLibraryRecord } = await import('@/sync/api/account/apiPromptLibraryCatalog');
@@ -93,8 +94,13 @@ describe('PromptDocEditorScreen', () => {
     const screen = await renderScreen(<PromptDocEditorScreen artifactId={id} />);
     await vi.waitFor(async () => { await flushHookEffects(); expect(screen.findByTestId('promptDoc.folderName')?.props.value).toBe('Ops'); });
     expect(screen.findByTestId('promptDoc.tags')?.props.value).toBe('alpha, beta');
-    expect(screen.findByTestId('promptDoc.link.0')).toBeTruthy();
-    expect(screen.getTextContent()).toContain('machine-1');
+    expect(screen.findAllByTestId('promptDoc.link.0')).toHaveLength(0);
+    expect(screen.findAllByTestId('promptDoc.manageExternalAssets')).toHaveLength(0);
+    expect(screen.findAllByType(PageHeaderMenu)[0]?.props.actions.map((action: PageHeaderMenuAction) => action.id))
+      .toEqual(['duplicate', 'delete']);
+    expect(screen.findAll(node => Array.isArray(node.props.meta)
+      && node.props.meta.some((fact: Readonly<{ key: string }>) => fact.key === 'exports'))).toHaveLength(0);
+    expect(catalog.read('external-links')).toMatchObject({ value: { links: [{ id: 'link', assetTypeId: 'claude.command' }] } });
     await act(async () => {
       screen.changeTextByTestId('promptDoc.title', 'Draft title');
       screen.findAllByType('TextInput').find(node => node.props.multiline === true)?.props.onChangeText('Draft markdown');
@@ -111,16 +117,6 @@ describe('PromptDocEditorScreen', () => {
     expect(screen.findAllByType('TextInput').find(node => node.props.multiline === true)?.props.value).toBe('Draft markdown');
     expect(screen.findByTestId('promptDoc.folderName')?.props.value).toBe('Draft folder');
     expect(screen.findByTestId('promptDoc.tags')?.props.value).toBe('draft, tags');
-  });
-
-  it('opens the real linked-assets destination for a saved document', async () => {
-    const f = await home();
-    const id = await createPromptDoc({ title: 'Exports', markdown: 'Instructions' });
-    const screen = await renderScreen(<PromptDocEditorScreen artifactId={id} />);
-    await vi.waitFor(async () => { await flushHookEffects(); expect(screen.findByTestId('promptDoc.title')?.props.value).toBe('Exports'); });
-    await screen.pressByTestIdAsync('promptDoc.manageExternalAssets');
-    expect(navigation.push).toHaveBeenCalledWith(`/(app)/settings/prompts/docs/${id}/export?serverId=${encodeURIComponent(f.home.id)}`);
-    expect(f.boundary.read(id)).not.toBeNull();
   });
 
   it('edits the explicitly selected Home while a different Home is active', async () => {

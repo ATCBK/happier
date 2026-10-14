@@ -40,7 +40,9 @@ export function useLegacyProfileSecretRequirements(params: Readonly<{
         legacyCloneSource: ProfileLegacyCloneSourceV1 | undefined;
     }> | null>(null);
     if (!capture.current) {
-        const row = snapshot?.catalog.status === 'ready' && snapshot.catalog.source === 'destination' && !snapshot.stale
+        // A refresh keeps the complete admitted row used to render this editor.
+        // Capture its matching private bindings; save still requires a fresh census below.
+        const row = snapshot?.dataComplete && snapshot.source === 'destination'
             ? snapshot.data?.find(candidate => candidate.record.id === profile.id) : undefined;
         const bindings = profile.profileRecordRevision !== undefined
             ? row?.revision === profile.profileRecordRevision ? row.record.secretBindings : null

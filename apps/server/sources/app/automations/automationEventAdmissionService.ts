@@ -1,29 +1,14 @@
-import {
-    AutomationEventAdmitHttpRequestV1Schema,
-    AutomationEventAdmitHttpResultV1Schema,
-    AutomationEventTriggerDefinitionStoredPayloadV1Schema,
-    AutomationStoredContentEnvelopeV1Schema,
-    AutomationTriggerIdSchema,
-    compilePluginJsonSchema,
-    buildAutomationPluginEventOccurrenceEvidenceV1,
-    createCanonicalJsonSigningInput,
-    deriveAutomationOccurrenceKeyV1,
-    evaluateAutomationEventFilterV1,
-    isAutomationEventObservationFreshV1,
-    isAutomationTriggerEvidenceCiphertextV1,
-    isSameAutomationEventDeclarationReleaseV1,
-    isValidPluginJsonSchemaValue,
-    openAutomationTriggerDefinitionStoredEnvelopeV1,
-    type AutomationEventAdmitHostEvidenceV1,
-    type AutomationEventAdmitContinuationV1,
-    type AutomationEventAdmitHttpInputV1,
-    type AutomationEventAdmitItemResultV1,
-    type AutomationEventAdmitHttpResultV1,
-    type AutomationOccurrenceKeyV1,
-    type AutomationPluginEventOccurrenceEvidenceV1,
-    type AutomationSourceSelectorIdV1,
-    type AutomationTriggerId,
-} from "@happier-dev/protocol";
+import { AutomationEventAdmitHttpRequestV1Schema, AutomationEventTriggerDefinitionStoredPayloadV1Schema, evaluateAutomationEventFilterV1, isAutomationEventObservationFreshV1, isSameAutomationEventDeclarationReleaseV1, type AutomationEventAdmitHostEvidenceV1 } from '@happier-dev/protocol/automations/event';
+import { AutomationEventAdmitHttpResultV1Schema, type AutomationEventAdmitContinuationV1, type AutomationEventAdmitHttpInputV1, type AutomationEventAdmitItemResultV1, type AutomationEventAdmitHttpResultV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
+import { AutomationStoredContentEnvelopeV1Schema } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
+import { AutomationTriggerIdSchema, type AutomationTriggerId } from '@happier-dev/protocol/automations/automationTriggerIdentity';
+import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { buildAutomationPluginEventOccurrenceEvidenceV1, deriveAutomationOccurrenceKeyV1, type AutomationOccurrenceKeyV1, type AutomationPluginEventOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { isAutomationTriggerEvidenceCiphertextV1 } from '@happier-dev/protocol/automations/automationEventTriggerEvidence';
+import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { openAutomationTriggerDefinitionStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationTriggerDefinitionStoredContent';
+import { type AutomationSourceSelectorIdV1 } from '@happier-dev/protocol/automations/automationEventJsonBoundsV1';
 import type { Prisma } from "@prisma/client";
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";

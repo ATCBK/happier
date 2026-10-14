@@ -1,4 +1,4 @@
-import type { MemorySearchQueryV1, MemorySearchResultV1 } from '@happier-dev/protocol';
+import type { MemorySearchQueryV1, MemorySearchResultV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {

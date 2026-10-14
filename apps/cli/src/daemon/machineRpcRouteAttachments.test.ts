@@ -12,8 +12,55 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { createProcessOwnershipRuntime } from './processes/ownership/processOwnershipRuntime';
 import { createLeftBehindPass } from './processes/leftBehind/leftBehindPass';
+import { DaemonComputerActionExecuteResponseV1Schema } from '@happier-dev/protocol/computer/v1';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createComputerRoutes } from './computer/routes';
+import { createMachineLiveStreamCaptureRegistry } from './peer/mediation/stream/captureRegistry';
 
 describe('daemon machine RPC route attachments', () => {
+  it('dispatches Computer RPC after delayed machine attachment and transport replacement, including unavailable owners', async () => {
+    const { createDaemonMachineRpcRouteAttachmentCache } = await import('./machineRpcRouteAttachments');
+    let active: ApiMachineClient | null = null;
+    const cache = createDaemonMachineRpcRouteAttachmentCache({ getApiMachineForSessions: () => active });
+    const routes = createComputerRoutes({ machineId: 'machine-computer', machineDisplayName: 'QA desktop',
+      defaultDisplayId: 'unsupported-native-display', registry: createMachineLiveStreamCaptureRegistry() });
+    let current: typeof routes | null = routes;
+    const clients: ApiMachineClient[] = [];
+    const attach = () => {
+      const client = new ApiMachineClient('computer-test-token', { id: 'machine-computer', encryptionMode: 'plain',
+        metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      clients.push(client);
+      active = client;
+      cache.attachApiMachineForSessions(client);
+      // Observe the real transport owner without adding a production inspection seam.
+      const manager: unknown = Reflect.get(client, 'rpcHandlerManager');
+      if (!(manager instanceof RpcHandlerManager)) throw new Error('Missing machine RPC owner');
+      return manager;
+    };
+    const list = async (manager: RpcHandlerManager, authority: 'present_user' | 'account_automation') =>
+      DaemonComputerActionExecuteResponseV1Schema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE,
+        { sessionId: 'session-computer', actionId: 'computer.targets.list', input: { machineId: 'machine-computer' } },
+        { verifiedPeerAuthority: authority })).result;
+    try {
+      cache.attachComputerRoutes(() => current);
+      const first = attach();
+      // No native process is launched for an unsupported display; real routes return a typed refusal.
+      expect(await list(first, 'present_user')).toMatchObject({ ok: false, errorCode: 'target_unsupported' });
+      expect(await list(first, 'account_automation')).toMatchObject({ ok: false, errorCode: 'approval_required' });
+      const replacement = attach();
+      expect(await list(replacement, 'present_user')).toMatchObject({ ok: false, errorCode: 'target_unsupported' });
+      current = null;
+      expect(await list(replacement, 'present_user')).toEqual({ ok: false, errorCode: 'computer_unavailable', error: 'computer_unavailable' });
+      // Owner publication after the transport already exists follows the same attachment path.
+      cache.attachComputerRoutes(() => routes);
+      expect(await list(replacement, 'present_user')).toMatchObject({ ok: false, errorCode: 'target_unsupported' });
+    } finally {
+      for (const client of clients) client.shutdown();
+      await routes.dispose();
+    }
+  });
+
   it('keeps process reads reachable with the same ownership view after the exact machine transport is replaced', async () => {
     const { createDaemonMachineRpcRouteAttachmentCache } = await import('./machineRpcRouteAttachments');
     const { createMachineProcessesView } = await import('./processes/view/createMachineProcessesView');

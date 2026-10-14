@@ -23,6 +23,31 @@ import { administerTriageAction, readTriageActionsForSurface } from './actionsCa
  */
 
 describe('the configured-action Actions', () => {
+    it('upgrades stored defaults and keeps built-in opt-outs across catalog Actions', async () => {
+        const testkit = createTestkitAccountKv();
+        testkit.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, {
+            v: 1, actions: TRIAGE_DEFAULT_ACTIONS_V1.slice(0, 3).map(action => ({ ...action, appliesTo: [...action.appliesTo] })),
+        });
+        const deps = { catalog: testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'custom' };
+        const read = () => readTriageActionsForSurface({ v: 1 }, deps).then(value => TriageReadActionsResultV1Schema.parse(value));
+        expect((await read()).actions).toEqual(TRIAGE_DEFAULT_ACTIONS_V1);
+        const deleted = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(
+            TriageAdministerActionInputV1Schema.parse({ v: 1, kind: 'delete', actionId: 'explain-pr', expectedRevision: (await read()).revision }), deps));
+        expect(deleted.status).toBe('applied');
+        expect(deleted.actions?.find(action => action.actionId === 'explain-pr')?.enabled).toBe(false);
+        expect((await read()).actions).toEqual(deleted.actions);
+
+        const created = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(
+            TriageAdministerActionInputV1Schema.parse({ v: 1, kind: 'create', expectedRevision: (await read()).revision,
+                label: 'My action', enabled: true, appliesTo: ['issue'], profileId: null, workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: null, delivery: 'compose' } }), deps));
+        expect(created.status).toBe('applied');
+        const removed = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(
+            TriageAdministerActionInputV1Schema.parse({ v: 1, kind: 'delete', actionId: 'custom', expectedRevision: (await read()).revision }), deps));
+        expect(removed.status).toBe('applied');
+        expect((await read()).actions).toEqual(deleted.actions);
+    });
+
     it('keeps shipped fallback instructions read-only on the catalog mutation wire', () => {
         const customFallback = {
             v: 1,
@@ -60,7 +85,7 @@ describe('the configured-action Actions', () => {
         // both: absent is showing the seed and the first write stores it.
         expect(result.availability).toBe('absent');
         expect(result.actions.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
         // The runnable Review arm is explicit on the wire, so nothing
         // downstream infers it from a label.
         expect(result.actions[2]?.target)
@@ -72,7 +97,7 @@ describe('the configured-action Actions', () => {
             });
     });
 
-    it('creates against the seed, so a first action does not delete the shipped three', async () => {
+    it('creates against the seed, so a first action does not delete the shipped actions', async () => {
         const testkit = createTestkitAccountKv();
 
         const input = TriageAdministerActionInputV1Schema.parse({
@@ -98,7 +123,7 @@ describe('the configured-action Actions', () => {
 
         expect(applied.status).toBe('applied');
         expect(applied.actions?.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review', 'Explain']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat', 'Explain']);
 
         // The seed became stored bytes on that first write, which is also the
         // moment the person first expressed an opinion about it.
@@ -132,12 +157,12 @@ describe('the configured-action Actions', () => {
                 v: 1,
                 kind: 'reorder',
                 expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
-                actionIds: ['review', 'ask', 'fix'],
+                actionIds: ['review', 'ask', 'fix', 'explain-pr'],
             }),
             deps,
         ));
         expect(reordered.actions?.map((action) => action.actionId))
-            .toEqual(['review', 'ask', 'fix']);
+            .toEqual(['review', 'ask', 'fix', 'explain-pr']);
 
         // A shorter list would delete an action under the guise of reordering.
         const dropped = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(

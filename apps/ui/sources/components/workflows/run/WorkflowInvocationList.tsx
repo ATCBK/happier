@@ -51,19 +51,19 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
     },
     list: {
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     listHeader: {
-        marginBottom: theme.margins.lg,
+        marginBottom: theme.space.s16,
     },
     listFooter: {
-        marginTop: theme.margins.lg,
+        marginTop: theme.space.s16,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s8,
         minHeight: MINIMUM_TARGET_SIZE,
         borderWidth: 1,
         borderColor: 'transparent',
@@ -79,7 +79,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.border.default,
     },
     label: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -87,7 +87,7 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
     },
     ordinal: {
-        ...Typography.default('regular'),
+        ...Typography.variant('micro'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
     },
@@ -95,10 +95,10 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: 'auto',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     footer: {
-        paddingVertical: theme.margins.md,
+        paddingVertical: theme.space.s12,
         alignItems: 'center',
     },
     footerTarget: {
@@ -109,20 +109,20 @@ const styles = StyleSheet.create((theme) => ({
     },
     footerError: {
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     footerAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     footerNote: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     empty: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        paddingVertical: theme.margins.md,
+        paddingVertical: theme.space.s12,
     },
 }));
 

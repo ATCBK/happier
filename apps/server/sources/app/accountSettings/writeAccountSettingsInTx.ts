@@ -1,7 +1,5 @@
-import type {
-    AccountRemoteAlertPolicyV1,
-    AccountSettingsStoredContentEnvelope,
-} from "@happier-dev/protocol";
+import type { AccountRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
+import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import type { Prisma } from "@prisma/client";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
@@ -30,6 +28,7 @@ import { readConnectedAccountCatalogRowInTx } from '@/app/account/connectedAccou
 import { readConfiguredAgentCatalogRowInTx } from '@/app/account/agents/configuredAgentRows';
 import { openAcpCatalogContentV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { reconcileMachineRecoveryNoticeRequestsInTx } from '@/app/activity/remoteAlerts/submitMachineRemoteAlerts';
 
 /** Authoritative rows permit retained bytes or cleanup, never legacy root reseeding. */
 function isAccountSettingsSourceRetainedOrRemoved(
@@ -181,6 +180,8 @@ export async function writeAccountSettingsInTx(
                     ? input.next.content.c
                     : null;
     const nextVersion = input.expectedVersion + 1;
+    const previousRemoteAlertPolicy = input.next.kind === 'v2' && input.next.remoteAlertPolicy !== undefined
+        ? await input.tx.account.findUnique({ where: { id: input.accountId }, select: { remoteAlertPolicy: true } }) : null;
     const remoteAlertPolicyWrite =
         input.next.kind === "v2"
         && input.next.remoteAlertPolicy !== undefined
@@ -244,6 +245,11 @@ export async function writeAccountSettingsInTx(
                     : account?.settings ?? null,
             currentContent: refreshedContent,
         };
+    }
+
+    if (input.next.kind === 'v2' && input.next.remoteAlertPolicy !== undefined) {
+        await reconcileMachineRecoveryNoticeRequestsInTx({ tx: input.tx, accountId: input.accountId,
+            previousPolicy: previousRemoteAlertPolicy?.remoteAlertPolicy, nextPolicy: input.next.remoteAlertPolicy });
     }
 
     await recordAccountSettingsSnapshotsForWrite({

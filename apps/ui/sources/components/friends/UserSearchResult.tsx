@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View, TouchableOpacity, Pressable } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -85,24 +86,23 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         backgroundColor: theme.colors.surface.base,
         borderRadius: 12,
-        marginHorizontal: 16,
-        marginVertical: 4,
+        marginHorizontal: theme.space.s16,
+        marginVertical: theme.space.s4,
         ...shadowLevelStyle(theme.colors.shadowLevels[1]),
     },
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        padding: 16,
+        padding: theme.space.s16,
     },
     info: {
         flex: 1,
-        marginLeft: 16,
+        marginLeft: theme.space.s16,
     },
     name: {
-        fontSize: 16,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        marginBottom: 2,
+        marginBottom: theme.space.s2,
     },
     username: {
         fontSize: 14,
@@ -110,8 +110,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     button: {
         backgroundColor: theme.colors.button.primary.background,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
         borderRadius: 8,
         minWidth: 100,
         alignItems: 'center',
@@ -121,12 +121,10 @@ const styles = StyleSheet.create((theme) => ({
     },
     buttonText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
     },
     buttonTextDisabled: {
         color: theme.colors.text.secondary,
-        fontSize: 14,
-        fontWeight: '500',
+        ...Typography.variant('label'),
     },
 }));

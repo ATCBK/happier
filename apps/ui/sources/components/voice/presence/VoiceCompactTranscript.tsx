@@ -65,9 +65,7 @@ export const VoiceCompactTranscript = React.memo(function VoiceCompactTranscript
 
 const styles = StyleSheet.create((theme) => ({
     line: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

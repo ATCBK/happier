@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { JsonValue } from '../../../json/strictJsonValue.js';
 import { isStrictPluginJsonValue } from '../strictJsonValue.js';

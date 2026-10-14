@@ -8,6 +8,22 @@ const corridorActionIds = ACTION_IDS.filter(id => /^machines\.(managed\.|presets
   || id.startsWith('connectedServices.authentication.'));
 
 describe('Corridor C approval defaults', () => {
+  it('keeps present-user terminal input under admitted custody while automation and explicit Ask still require approval', () => {
+    const actionId = 'machines.terminal.write';
+    const settings = normalizeActionsSettingsV1({ v: 1 });
+    const spec = getActionSpec(actionId);
+    expect(resolveActionApprovalRouting({ actionId, spec, settings,
+      context: { surface: 'ui', authority: 'present_user' } }).required).toBe(false);
+    for (const surface of ['ui', 'cli', 'agent', 'mcp'] as const) {
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface, authority: 'account_automation' } }).required).toBe(true);
+    }
+    expect(resolveActionApprovalRouting({ actionId, spec,
+      settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+      context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ actionId: 'machines.terminal.open', spec: getActionSpec('machines.terminal.open'), settings,
+      context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
+  });
   it('honors a surface-specific waiver on every machine and provisioner Connect Action; an explicit Ask wins', () => {
     expect(corridorActionIds.length).toBeGreaterThan(0);
     for (const actionId of corridorActionIds) {

@@ -60,6 +60,8 @@ describe('Channels V1 connection management contracts', () => {
         } as const;
 
         expect(ConversationConnectionCreateInputV1Schema.parse(checkpointedPull)).toEqual(checkpointedPull);
+        const longFreshness = { ...checkpointedPull, maximumObservationAgeMs: 31 * 86_400_000 };
+        expect(ConversationConnectionCreateInputV1Schema.parse(longFreshness)).toEqual(longFreshness);
         expect(ConversationConnectionCreateInputV1Schema.parse({
             ...checkpointedPull,
             selectedTransport: 'socket',
@@ -243,7 +245,7 @@ describe('Channels V1 connection management contracts', () => {
         }).success).toBe(false);
         expect(ConversationConnectionUpdateInputV1Schema.safeParse({
             ...updateInput,
-            maximumObservationAgeMs: 59_999,
+            maximumObservationAgeMs: -1,
         }).success).toBe(false);
         expect(ConversationConnectionUpdateInputV1Schema.safeParse({
             ...updateInput,

@@ -41,6 +41,7 @@ import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToH
 import { randomUUID } from '@/platform/randomUUID';
 
 import { WorkspaceActivationContentPolicyFields, WorkspaceActivationDestinationFields, WorkspaceActivationModeField } from '@/components/workspaces/activation/WorkspaceActivationEditor';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type SourceWorkspace = Readonly<{ id?: string; serverId: string; machineId: string; rootPath: string }>;
 type AddMachineOperation = { inFlight: boolean; abortController: AbortController | null };
@@ -301,7 +302,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         title: t('settings.addMachine'),
         subtitle: t('workspaceSync.title'),
         testID: 'workspace-sync-add-machine-modal',
-        dimensions: { width: 540, maxHeightRatio: 0.92 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92 },
         footer,
     } as const), [footer]);
     useModalCardChrome(props.setChrome, chrome);

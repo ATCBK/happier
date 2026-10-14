@@ -5,7 +5,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { isRecord } from '@happier-dev/plugin-sdk';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
-import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionRuntimeIssueV1, SessionTurnFactsV1, SessionRolePromptContextV1 } from '@happier-dev/protocol';
+import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionTurnFactsV1, SessionRolePromptContextV1 } from '@happier-dev/protocol';
 import { render } from 'ink';
 import React from 'react';
 
@@ -85,7 +85,6 @@ import {
   observeRuntimeMessageForSessionTurnLifecycle,
 } from '@/agent/runtime/session/turn/lifecycle';
 import {
-  commitRequiredRuntimeTranscriptMessage,
   createRuntimeTranscriptProjector,
   RuntimeTranscriptRequiredAdmissionError,
 } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
@@ -120,157 +119,18 @@ import type {
   HostSessionTerminalRemoteHandoffResult,
   HostSessionTerminalRemoteModeLoop,
 } from './terminalRemoteModeRuntime';
-import { configuration } from '@/configuration';
 import { stampTurnFacts } from '@/agent/runtime/session/turn/stampTurnFacts';
+import { createRuntimeFailureTranscriptProjector } from '@/agent/runtime/session/transcripts/runtimeFailureTranscript';
 
 export const HOST_SESSION_RUNTIME_PLAN_KIND = 'hostSessionRuntimePlan' as const;
 
 const KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS = 100;
-
-type RuntimeTranscriptAgentCommitEvent = Extract<AgentSessionRuntimeEvent, { kind: 'transcript-message-committed' }>;
-type RuntimeTurnFailedEvent = Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>;
-
-function isVisibleAssistantMessage(event: RuntimeTranscriptAgentCommitEvent): boolean {
-  return event.role === 'assistant' && event.text.trim().length > 0;
-}
-
-function runtimeIssueFromFailureEvent(
-  event: RuntimeTurnFailedEvent,
-  provider: ACPProvider,
-): SessionRuntimeIssueV1 {
-  return classifyPrimarySessionRuntimeIssue({
-    cause: 'session_error',
-    error: event.diagnostic,
-    occurredAt: event.emittedAtMs,
-    provider,
-    ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}),
-  });
-}
 
 function normalizeAcpProvider(value: string | null | undefined, fallback: string): ACPProvider {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (normalized.length > 0) return normalized as ACPProvider;
   const fallbackNormalized = fallback.trim();
   return (fallbackNormalized.length > 0 ? fallbackNormalized : 'agent') as ACPProvider;
-}
-
-function formatRuntimeIssueTranscriptMessage(issue: SessionRuntimeIssueV1, fallbackProviderName: string): string {
-  const providerLabel = issue.agentId?.trim() || fallbackProviderName.trim() || 'Agent';
-  const detail = issue.sanitizedPreview?.trim() || issue.code.trim() || issue.source;
-  if (issue.source === 'permission_blocked') return detail;
-  return `${providerLabel} turn failed: ${detail}`;
-}
-
-function buildRuntimeIssueTranscriptMeta(issue: SessionRuntimeIssueV1): Record<string, unknown> {
-  return {
-    source: 'runtime',
-    runtimeIssueCode: issue.code,
-    runtimeIssueSource: issue.source,
-    ...(issue.agentId ? { runtimeIssueProvider: issue.agentId } : {}),
-    ...(issue.agentTurnId ? { runtimeIssueProviderTurnId: issue.agentTurnId } : {}),
-  };
-}
-
-function shouldAlwaysProjectRuntimeIssueDiagnostic(issue: SessionRuntimeIssueV1): boolean {
-  return issue.source === 'permission_blocked';
-}
-
-function createRuntimeFailureTranscriptProjector(params: Readonly<{
-  session: ApiSessionClient;
-  provider: ACPProvider;
-  providerName: string;
-}>): (event: AgentSessionRuntimeEvent) => Promise<void> | null {
-  let activeTurnId: string | null = null;
-  const visibleAssistantTurnIds = new Set<string>();
-  const projectedDiagnosticTurnIds = new Set<string>();
-  const projectedLifecycleMarkerTurnIds = new Set<string>();
-
-  return (event) => {
-    if (event.sessionId !== params.session.sessionId) return null;
-
-    if (event.kind === 'turn-start') {
-      activeTurnId = event.turnId;
-      return null;
-    }
-
-    if (event.kind === 'transcript-message-committed') {
-      if (isForegroundTurnRuntimeTranscriptEvent(event) && activeTurnId === event.turnId && activeTurnId && isVisibleAssistantMessage(event)) {
-        visibleAssistantTurnIds.add(activeTurnId);
-      }
-      return null;
-    }
-
-    if (event.kind === 'message-delta') {
-      if (isForegroundTurnRuntimeTranscriptEvent(event) && event.text.length > 0) {
-        visibleAssistantTurnIds.add(event.turnId);
-      }
-      return null;
-    }
-
-    if (event.kind !== 'turn-failed') {
-      return null;
-    }
-
-    if (activeTurnId === event.turnId) {
-      activeTurnId = null;
-    }
-
-    const issue = runtimeIssueFromFailureEvent(event, params.provider);
-    return projectRuntimeFailureTranscript({
-      session: params.session,
-      provider: params.provider,
-      providerName: params.providerName,
-      event,
-      issue,
-      shouldProjectDiagnostic:
-        (!visibleAssistantTurnIds.has(event.turnId) || shouldAlwaysProjectRuntimeIssueDiagnostic(issue))
-        && !projectedDiagnosticTurnIds.has(event.turnId),
-      shouldProjectLifecycleMarker: !projectedLifecycleMarkerTurnIds.has(event.turnId),
-      markDiagnosticProjected: () => projectedDiagnosticTurnIds.add(event.turnId),
-      markLifecycleMarkerProjected: () => projectedLifecycleMarkerTurnIds.add(event.turnId),
-    });
-  };
-}
-
-async function projectRuntimeFailureTranscript(params: Readonly<{
-  session: ApiSessionClient;
-  provider: ACPProvider;
-  providerName: string;
-  event: RuntimeTurnFailedEvent;
-  issue: SessionRuntimeIssueV1;
-  shouldProjectDiagnostic: boolean;
-  shouldProjectLifecycleMarker: boolean;
-  markDiagnosticProjected: () => void;
-  markLifecycleMarkerProjected: () => void;
-}>): Promise<void> {
-  const meta = buildRuntimeIssueTranscriptMeta(params.issue);
-  if (params.shouldProjectDiagnostic) {
-    params.markDiagnosticProjected();
-    await commitRequiredRuntimeTranscriptMessage({
-      session: params.session,
-      provider: params.provider,
-      body: {
-        type: 'message',
-        message: formatRuntimeIssueTranscriptMessage(params.issue, params.providerName),
-      } satisfies ACPMessageData,
-      localId: `${params.event.turnId}:runtime_issue`,
-      meta,
-      provenance: { kind: 'non_dependent', source: 'background' },
-      eventKind: params.event.kind,
-    });
-  }
-  if (params.shouldProjectLifecycleMarker) {
-    params.markLifecycleMarkerProjected();
-    await commitRequiredRuntimeTranscriptMessage({
-      session: params.session,
-      provider: params.provider,
-      body: { type: 'turn_failed', id: params.event.turnId } satisfies ACPMessageData,
-      localId: `${params.event.turnId}:turn_failed`,
-      meta,
-      provenance: { kind: 'non_dependent', source: 'background' },
-      eventKind: params.event.kind,
-    });
-  }
 }
 
 export type HostSessionRuntimePlan = Readonly<{
@@ -360,7 +220,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   sessionIsNew?: boolean;
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
-  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner'>;
+  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
   registerProviderAcceptedEffect: (
     localId: string,
     onAccepted: (() => void) | null,
@@ -1018,31 +878,19 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     ?? (terminalRemoteModeLoop ? activeTerminalRemoteMode : 'remote');
   let lastKeepAliveSentAt = 0;
   let lastKeepAliveSignature: string | null = null;
-  let keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
   let keepAliveStopped = false;
   const stopKeepAlive = (): void => {
     keepAliveStopped = true;
-    if (keepAliveTimer !== null) clearTimeout(keepAliveTimer);
-    keepAliveTimer = null;
   };
-  const publishKeepAlive = (renewalDue = false): void => {
+  const publishKeepAlive = (): void => {
     if (keepAliveStopped) return;
     const now = Date.now();
     const mode = getKeepAliveMode() === 'terminal' ? 'local' : 'remote';
     const signature = `${params.session.sessionId}:${params.runtimeState.thinking ? 'thinking' : 'idle'}:${mode}`;
-    if (!renewalDue && lastKeepAliveSignature === signature && now - lastKeepAliveSentAt < KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS) return;
+    if (lastKeepAliveSignature === signature && now - lastKeepAliveSentAt < KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS) return;
     params.session.keepAlive(params.runtimeState.thinking, mode);
     lastKeepAliveSignature = signature;
     lastKeepAliveSentAt = now;
-    if (keepAliveTimer !== null) clearTimeout(keepAliveTimer);
-    const cadenceMs = params.runtimeState.thinking
-      ? configuration.sessionKeepAliveThinkingMs
-      : configuration.sessionKeepAliveIdleMs;
-    keepAliveTimer = setTimeout(() => {
-      keepAliveTimer = null;
-      publishKeepAlive(true);
-    }, cadenceMs);
-    keepAliveTimer.unref?.();
   };
   const setThinkingState = (value: boolean): void => {
     if (params.runtimeState.thinking === value) return;
@@ -1535,6 +1383,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     terminationHandlers.dispose();
     shouldExit = true;
     abortController.abort();
+    await capabilityOverrideSync?.dispose?.();
     const activeRunnerTerminationWork = runnerTerminationWork;
     if (activeRunnerTerminationWork) {
       await activeRunnerTerminationWork;

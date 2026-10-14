@@ -137,13 +137,27 @@ resolve_self_publisher_policy() {
     node "$projection_command_policy" --publisher-policy "$self_publisher_repo" "$self_publisher_cwd" "$@"
   ) || exit $?
   self_publisher_flag=${self_publisher_policy%% *}
-  self_publisher_class=${self_publisher_policy#* }
+  self_publisher_fields=${self_publisher_policy#* }
+  self_publisher_class=${self_publisher_fields%% *}
+  self_publisher_tools=${self_publisher_fields#* }
   case "$self_publisher_flag:$self_publisher_class" in
     [01]:[A-Za-z0-9-]*) ;;
     *) printf '%s\n' '[preferred-execution] invalid publisher policy' >&2; exit 2 ;;
   esac
   case "$self_publisher_class" in
     *[!A-Za-z0-9-]*) printf '%s\n' '[preferred-execution] invalid publisher envelope' >&2; exit 2 ;;
+  esac
+  case "$self_publisher_tools" in
+    -) policy_requiredTools= ;;
+    '') printf '%s\n' '[preferred-execution] invalid publisher prerequisites' >&2; exit 2 ;;
+    *)
+      for self_publisher_tool in $self_publisher_tools; do
+        case "$self_publisher_tool" in
+          *[!A-Za-z0-9_.+-]*) printf '%s\n' '[preferred-execution] invalid publisher prerequisite' >&2; exit 2 ;;
+        esac
+      done
+      policy_requiredTools=$self_publisher_tools
+      ;;
   esac
   policy_selfPublisher=$self_publisher_flag
   [ "$self_publisher_class" = - ] || policy_heavyClass=$self_publisher_class
@@ -510,7 +524,7 @@ heavyweight_decline_before_dispatch() {
     heavyweight_reject_workspace_order
   fi
   heavyweight_declined_busy=1
-  printf '[preferred-execution] heavyweight admission declined before dispatch (%s)\n' "${heavyweight_resource_reason-${heavyweight_queue_reason-admission busy}}" >&2
+  printf '[preferred-execution] heavyweight admission declined before dispatch (%s)\n' "${1-${heavyweight_resource_reason-${heavyweight_queue_reason-admission busy}}}" >&2
   exit 75
 }
 
@@ -999,7 +1013,7 @@ run_heavyweight_admission() {
     heavyweight_release_lock
     if [ -n "${heavyweight_workspace_worker_pid-}" ]; then heavyweight_release_workspace_attempt; fi
     if [ "${heavyweight_prior_workspace_lease-0}" = 1 ]; then heavyweight_reject_workspace_order; fi
-    [ "${heavyweight_no_wait-0}" != 1 ] || heavyweight_decline_before_dispatch
+    [ "${heavyweight_no_wait-0}" != 1 ] || heavyweight_decline_before_dispatch "$heavyweight_wait_reason"
     if [ "$heavyweight_diagnostic_state" != "$heavyweight_last_wait_state" ]; then
       printf '[preferred-execution] waiting for heavyweight admission on %s (class=%s, %s)\n' \
         "$heavyweight_admission_machine" "$heavyweight_admission_class" "$heavyweight_wait_state" >&2
@@ -1158,11 +1172,16 @@ run_local() {
   unset HAPPIER_HSTACK_DISPATCH_CONTROL
   HAPPIER_HSTACK_EXECUTION=1
   export HAPPIER_HSTACK_EXECUTION
+  local_script_policy_resolved=0
   case "${1-}" in
     --script=*)
       local_script=${1#--script=}
       shift
       if [ "${1-}" = "--" ]; then shift; fi
+      # The manifest owns publication/admission policy. Resolve its logical
+      # package command before inherited Yarn paths hide it behind Node.
+      resolve_self_publisher_policy corepack yarn -s "$local_script" "$@"
+      local_script_policy_resolved=1
       if [ -n "${npm_node_execpath-}" ] && [ -n "${npm_execpath-}" ]; then
         set -- "$npm_node_execpath" "$npm_execpath" -s "$local_script" "$@"
       else
@@ -1176,7 +1195,7 @@ run_local() {
     printf '%s\n' '[preferred-execution] provide --script=NAME or COMMAND [ARG...] after --' >&2
     exit 1
   fi
-  resolve_self_publisher_policy "$@"
+  if [ "$local_script_policy_resolved" != 1 ]; then resolve_self_publisher_policy "$@"; fi
   heavyweight_local_class=$policy_heavyClass
   if [ -z "$heavyweight_local_class" ]; then
     heavyweight_local_class=$(heavyweight_command_class "$@" || true)
@@ -2392,7 +2411,9 @@ if [ -n "$runtime_build_target" ]; then printf 'HSTACK_RUNTIME_SELECTED:%s\n' "$
 if [ "$selected_number" = 0 ]; then
   run_selected_local "$@"
 fi
-reservation_temporary=$(create_cache_temporary "$cache_dir/$selected_name.active" 2>/dev/null || true)
+# Active readers may reap unlocked records. Keep construction private until
+# its metadata and lifetime lock are ready to publish together by rename.
+reservation_temporary=$(create_cache_temporary "$cache_dir/.dispatch-reservation" 2>/dev/null || true)
 reservation_token=${reservation_temporary##*.}
 execution_id="native-${reservation_token:-$$}-${selected_number}-$(date +%s)"
 reservation_path="$cache_dir/$selected_name.active.$reservation_token"
@@ -2404,6 +2425,7 @@ if [ -n "$reservation_temporary" ] && command -v flock >/dev/null 2>&1; then
       reservation_lock_held=1
     else
       exec 8>&-
+      rm -f -- "$reservation_temporary" 2>/dev/null || true
       reservation_temporary=
     fi
   fi

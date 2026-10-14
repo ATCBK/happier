@@ -8,7 +8,6 @@ import { createEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/nod
 import { createDirectTransferImportSessionManager } from './directTransferImportSession';
 import { TRANSFER_CHUNK_HARD_MAX_BYTES } from '@happier-dev/transfers/node';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createComposerMediaStageStore } from '@/transfers/staging/composerMediaStageStore';
 import { createOneBitGrayscalePng } from '@/testkit/media/pngFixtures';
@@ -762,95 +761,6 @@ describe('direct transfer import session manager', () => {
     } finally {
       await manager.close();
       await rm(workingDirectory, { recursive: true, force: true }).catch(() => undefined);
-    }
-  });
-
-  it('supports prompt asset uploads through the direct import session manager', async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), 'happier-direct-transfer-import-prompt-assets-'));
-
-    try {
-      const manager = createDirectTransferImportSessionManager({
-        ttlMs: 10_000,
-        promptAssetUpload: {
-          adapterRegistry: createPromptAssetAdapterRegistry({
-            homedir: () => homeDir,
-          }),
-        },
-      } as unknown as Parameters<typeof createDirectTransferImportSessionManager>[0]);
-
-      const payload = Buffer.from(JSON.stringify({
-        assetTypeId: 'agents.skill',
-        scope: 'user',
-        externalRef: null,
-        targetName: 'writer',
-        title: 'Writer',
-        bundleSchemaId: 'skills.skill_md_v1',
-        bundleBody: {
-          v: 1,
-          entries: [
-            { path: 'SKILL.md', contentBase64: Buffer.from('# Writer\n', 'utf8').toString('base64'), contentKind: 'utf8' },
-          ],
-          createdAtMs: 1,
-          updatedAtMs: 1,
-        },
-        previewOnly: false,
-        expectedDigest: null,
-      }), 'utf8');
-
-      const open = await manager.openTrustedImportSession({
-        workingDirectory: homeDir,
-        t: 'prompt_asset_upload_v1',
-        sizeBytes: payload.length,
-      } as unknown as Parameters<typeof manager.openTrustedImportSession>[0]);
-
-      expect(open).toEqual({
-        success: true,
-        response: expect.objectContaining({
-          destDisplayPath: 'prompt-asset-upload.json',
-          expectedSizeBytes: payload.length,
-          chunkSizeBytes: expect.any(Number),
-          recipientPublicKeyBase64: expect.any(String),
-          expiresAt: expect.any(Number),
-          uploadId: expect.any(String),
-        }),
-      });
-
-      if (!open.success) {
-        throw new Error(open.error);
-      }
-
-      const encryptedChunk = createEncryptedTransferChunkEnvelope({
-        transferId: open.response.uploadId,
-        sequence: 0,
-        payload,
-        recipientPublicKeyBase64: open.response.recipientPublicKeyBase64,
-      });
-
-      expect(await manager.writeImportTransferChunk({
-        uploadId: open.response.uploadId,
-        index: 0,
-        payloadBase64: encryptedChunk.payloadBase64,
-        encryptedDataKeyEnvelopeBase64: encryptedChunk.encryptedDataKeyEnvelopeBase64,
-      })).toEqual({ success: true });
-
-      const finalized = await manager.finalizeImportTransferSession({ uploadId: open.response.uploadId });
-      expect(finalized).toMatchObject({
-        success: true,
-        finalized: {
-          success: true,
-          result: expect.objectContaining({
-            ok: true,
-            externalRef: { skillName: 'writer' },
-          }),
-        },
-      });
-      if (!finalized.success) {
-        throw new Error(finalized.error);
-      }
-
-      await expect(readFile(join(homeDir, '.agents', 'skills', 'writer', 'SKILL.md'), 'utf8')).resolves.toBe('# Writer\n');
-    } finally {
-      await rm(homeDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 

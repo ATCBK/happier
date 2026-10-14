@@ -36,9 +36,8 @@ export function SourceControlUpdateSwitchRow(props: Readonly<{
             showDivider={false}
             title={props.label}
             titleStyle={{
-                fontSize: 12,
+                ...Typography.variant('meta', 'semiBold'),
                 color: props.theme.colors.text.primary,
-                ...Typography.default('semiBold'),
             }}
             style={{ minHeight: 38, paddingHorizontal: 0, paddingVertical: 0 }}
             rightElement={(

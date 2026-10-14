@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol';
+import { z } from 'zod/mini';
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogKeyV1Schema,
     ConnectedAccountCatalogRowReadResponseV1Schema, ConnectedAccountCatalogRowMutationV1Schema,
     ConnectedAccountCatalogRowMutationResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -12,8 +12,8 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { inTx } from '@/storage/inTx';
 import { mutateConnectedAccountCatalogRow, readConnectedAccountCatalogRowInTx } from './configurationRows';
 
-const params = z.object({ key: asServerProtocolZod(ConnectedAccountCatalogKeyV1Schema) }).strict();
-const internal = z.object({ error: z.literal('internal') }).strict();
+const params = z.strictObject({ key: asServerProtocolZod(ConnectedAccountCatalogKeyV1Schema) });
+const internal = z.strictObject({ error: z.literal('internal') });
 
 /** The authenticated Account owns this address; neither Account ids nor private KV keys are client parameters. */
 export function registerConnectedAccountConfigurationRowsRoutes(app: Fastify): void {

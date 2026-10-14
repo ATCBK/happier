@@ -4,18 +4,22 @@ import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessi
 import { findCatalogEntry } from '@/agent/catalog/registry';
 import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
 import { getVendorResumeSupport } from './catalogHooks';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
 /** Timing consumes the Agent catalog's declaration and its existing experimental runtime predicate. */
 export async function resolveCapabilityApplyAgentFacts(input: Readonly<{
   agentId: string; metadata: unknown; sessionRunning: boolean;
+  registry?: ResolvedExecutablePluginRuntimeRegistry;
 }>): Promise<CapabilityApplyTimingInputV1['agent']> {
   const published = readSessionCapabilityAgentFactsV1(input.metadata);
   if (published) return published;
-  const entry = findCatalogEntry(input.agentId);
+  const entry = input.registry
+    ? input.registry.contributes.catalogEntriesById[input.agentId]
+    : findCatalogEntry(input.agentId);
   let vendorResume = entry?.vendorResumeSupport ?? 'unsupported';
   if (input.sessionRunning && vendorResume === 'experimental') {
-    const predicate = await getVendorResumeSupport(input.agentId);
+    const predicate = await getVendorResumeSupport(input.agentId, input.registry);
     if (!predicate({ runtimeDescriptorV1: readRuntimeDescriptorV1FromMetadata(input.metadata) ?? undefined })) vendorResume = 'unsupported';
   }
-  return { vendorResume, skillsLiveReload: resolveAgentSkillsCapability(input.agentId).liveReload };
+  return { vendorResume, skillsLiveReload: resolveAgentSkillsCapability(input.agentId, input.registry?.contributes).liveReload };
 }

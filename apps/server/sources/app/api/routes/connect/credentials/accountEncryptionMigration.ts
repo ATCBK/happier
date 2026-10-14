@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import {
-    AccountEncryptionMigrateConnectedServicesDirectiveSchema,
-    type AccountEncryptionMigrateConnectedServicesDirective,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateConnectedServicesDirectiveSchema, type AccountEncryptionMigrateConnectedServicesDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import type { Tx } from "@/storage/inTx";
 

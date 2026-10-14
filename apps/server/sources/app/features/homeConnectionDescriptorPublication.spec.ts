@@ -509,6 +509,7 @@ describe("home connection descriptor production read path", () => {
             continuityStore: store, resolveIrohEndpointState: inactiveIroh });
         const descriptor = await read();
         expect(descriptor).toMatchObject({ revision: 1 });
+        if (!descriptor) throw new Error("Expected authenticated Home descriptor");
         expect(JSON.parse(await readFile(join(dataDir, "runtime", "home.descriptor.json"), "utf8")))
             .toEqual({ revision: 1, contentKey: createHomeConnectionDescriptorContentKey(descriptor) });
     });

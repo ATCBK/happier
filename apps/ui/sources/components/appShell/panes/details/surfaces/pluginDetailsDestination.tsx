@@ -987,7 +987,7 @@ const viewerChoiceStylesheet = StyleSheet.create((theme) => ({
     },
     label: {
         color: theme.colors.text.secondary,
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
     labelSelected: {
         color: theme.colors.text.primary,
@@ -996,7 +996,7 @@ const viewerChoiceStylesheet = StyleSheet.create((theme) => ({
     detail: {
         color: theme.colors.text.secondary,
         marginTop: 1,
-        ...Typography.pillLabel(),
+        ...Typography.variant('micro', 'semiBold'),
     },
 }));
 

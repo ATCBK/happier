@@ -129,6 +129,7 @@ describe('mounted Board note approval continuation', () => {
                 expect(result).toMatchObject({ ok: true, result: { status: terminalStatus } });
                 const artifact = await account.fetchArtifact(artifactId);
                 if (!artifact) throw new Error('Missing approval Artifact');
+                if (typeof artifact.body !== 'string') throw new Error('Expected a plain approval Artifact body');
                 expect(approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body)).toMatchObject({ family: 'built_in', request: { status: terminalStatus } });
             });
             await waitForHomeGovernance(async () => { await act(async () => {}); expect(approval.pending).toBe(false); });

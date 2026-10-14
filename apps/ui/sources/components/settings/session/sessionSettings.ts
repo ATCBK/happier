@@ -18,6 +18,12 @@ export const SESSION_SETTINGS = defineSettingsPage({
                 rememberEngineSelections: {},
             },
         },
+        mcpServersReliability: {
+            titleKey: 'mcpSettings.failureSection',
+            settings: {
+                mcpServersStrictMode: {},
+            },
+        },
         listOrganization: {
             titleKey: 'settingsSession.rootGroups.listOrganization.title',
             settings: {

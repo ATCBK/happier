@@ -44,6 +44,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
+import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>[0]
   & CliTranscriptActionExecutorOptions
@@ -62,6 +63,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     invokeContributedAction?: ActionExecutorDeps['invokeContributedAction'];
     /** Exact daemon replay for API target-action approvals. */
     targetActionApprovalReplay?: ActionExecutorDeps['targetActionApprovalReplay'];
+    approvalRequestApprovedReplay?: ActionExecutorDeps['approvalRequestApprovedReplay'];
     /** Current authority/credential/target proof for durable core Action replay. */
     isApprovalExecutionOriginCurrent?: ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
     prepareApprovalExecutionAuthorization?: ActionExecutorDeps['prepareApprovalExecutionAuthorization'];
@@ -182,6 +184,9 @@ export function createCliActionExecutor(
         : {}),
       ...(params.targetActionApprovalReplay
         ? { targetActionApprovalReplay: params.targetActionApprovalReplay }
+        : {}),
+      ...(params.approvalRequestApprovedReplay
+        ? { approvalRequestApprovedReplay: params.approvalRequestApprovedReplay }
         : {}),
       ...(params.isApprovalExecutionOriginCurrent
         ? { isApprovalExecutionOriginCurrent: params.isApprovalExecutionOriginCurrent }
@@ -339,12 +344,18 @@ export function createCliActionExecutor(
       && sameStrictJsonValue(context.externalActionTarget, sessionBinding.target));
     if ((admittedReceiver || ordinaryUiBinding) && authorization && privateKey && params.externalActionMachineInstallationId
       && params.serverId && params.serverIdentityId && context?.externalActionTarget) {
-      const projected = await projectExternalActionRequesterHttpAuthorization({ authorization,
+      const originalAuthorization = authorization;
+      const projectionRequest = { authorization: originalAuthorization,
         serverId: params.serverId, serverIdentityId: params.serverIdentityId,
         serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
         target: context.externalActionTarget, installationId: params.externalActionMachineInstallationId,
-        privateKey, isCurrent: context.verifyMachineAdmissionCurrent, ...(context.signal ? { signal: context.signal } : {}) });
-      if (!projected) return null;
+        privateKey, isCurrent: context.verifyMachineAdmissionCurrent, ...(context.signal ? { signal: context.signal } : {}) };
+      const projected = await measureActionStartPhaseV1(context, 'requester_projection',
+        () => projectExternalActionRequesterHttpAuthorization(projectionRequest));
+      if (!projected) {
+        context?.recordActionStartDiagnostic?.({ phase: 'requester_projection', refusalReason: 'requester_projection_unavailable' });
+        return null;
+      }
       authorization = projected;
       if (ordinaryUiBinding) authority = resolveInvocationAuthority({ credential: 'account', surface });
     }
@@ -405,22 +416,23 @@ export function createCliActionExecutor(
       const denied = filesystemRequesterAuthorityFailure(actionId, context)
         ?? requesterPrivateEffectAuthorityFailure(actionId, context);
       if (denied) return { kind: 'settled' as const, result: denied };
-      const resolvedContext = await resolveContext(context);
-      if (!resolvedContext) return { kind: 'settled' as const, result: { ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable' } };
+      const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
+      if (!resolvedContext) return { kind: 'settled' as const,
+        result: actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable') };
       return await base.prepare(actionId, input, resolvedContext);
     },
     execute: async (actionId, input, context) => {
       const denied = filesystemRequesterAuthorityFailure(actionId, context)
         ?? requesterPrivateEffectAuthorityFailure(actionId, context);
       if (denied) return denied;
-      const resolvedContext = await resolveContext(context);
-      if (!resolvedContext) return { ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable' };
+      const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
+      if (!resolvedContext) return actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
       return await daemonAware.execute(actionId, input, resolvedContext);
     },
     continueConfidentialApprovalRequest: async (input, context) => {
-      const resolvedContext = await resolveContext(context);
+      const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       return resolvedContext ? await base.continueConfidentialApprovalRequest(input, resolvedContext)
-        : { ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        : actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
     },
     replayApprovedApprovalRequest: async (args) => await base.replayApprovedApprovalRequest(args),
   };

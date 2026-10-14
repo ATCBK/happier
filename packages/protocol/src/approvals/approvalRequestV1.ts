@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
@@ -12,7 +13,7 @@ import {
 } from '../sessions/creation/sessionCreationTargetPreparationV1.js';
 import { HandoffTargetReplacementApprovalV1Schema } from '../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
 import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
-import { isAutomationApprovalRequestSurface, canRequestPresentUserApprovalForActionInputV1 } from '../actions/decisionAuthority.js';
+import { isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import {
   ExternalActionTargetV1Schema,
@@ -32,6 +33,7 @@ import { AgentStartSessionCallerV1Schema } from '../account/settings/admitAgentS
 import { ComputerSecretFillRequestV1Schema, SecretFillSettlementV1Schema } from '../computer/v1.js';
 import { BrowserAutomationSecretFillRequestV1Schema } from '../browser/automation/v1.js';
 import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { MachineStorageTrashMoveInputV1Schema, PileApplyResultStoredV1Schema, PileApplyResultV1Schema } from '../storage/storageV1.js';
 
 export const ApprovalRequestStatusSchema = lazyZodSchema(() => z.enum(['open', 'approved', 'rejected', 'executed', 'failed', 'canceled']));
 export type ApprovalRequestStatus = z.infer<typeof ApprovalRequestStatusSchema>;
@@ -41,7 +43,7 @@ export const ApprovalRequestV2StatusSchema = lazyZodSchema(() => z.enum([
   'open', 'approved', 'executing', 'rejected', 'executed', 'failed', 'canceled',
 ]));
 
-const ApprovalRequestedSurfaceSchema = lazyZodSchema(() => z.string().min(1));
+const ApprovalRequestedSurfaceSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 
 /**
  * Released ApprovalRequestV1 artifacts may name this retired interactive
@@ -53,70 +55,70 @@ const ApprovalRequestV1HistoricalActionIdSchema = lazyZodSchema(() => z.union([
   z.literal('session.spawn_picker'),
 ]));
 
-export const ApprovalRequestOriginV1Schema = lazyZodSchema(() => z.object({
+export const ApprovalRequestOriginV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('transcript_tool_call'),
-  sessionId: z.string().min(1),
-  messageId: z.string().min(1).optional(),
-  parentMessageId: z.string().min(1).optional(),
-  toolCallId: z.string().min(1).optional(),
-  mcpRequestId: z.string().min(1).optional(),
-  toolName: z.string().min(1).optional(),
-  toolInput: z.unknown().optional(),
-}).strict().superRefine((value, ctx) => {
+  sessionId: z.string().check(z.minLength(1)),
+  messageId: z.optional(z.string().check(z.minLength(1))),
+  parentMessageId: z.optional(z.string().check(z.minLength(1))),
+  toolCallId: z.optional(z.string().check(z.minLength(1))),
+  mcpRequestId: z.optional(z.string().check(z.minLength(1))),
+  toolName: z.optional(z.string().check(z.minLength(1))),
+  toolInput: z.optional(z.unknown()),
+}).check(z.superRefine((value, ctx) => {
   if (value.messageId || value.parentMessageId || value.toolCallId || value.toolName) {
     return;
   }
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['origin'],
     message: 'transcript tool-call approval origins require a messageId, parentMessageId, toolCallId, or toolName',
   });
-}));
+})));
 export type ApprovalRequestOriginV1 = z.infer<typeof ApprovalRequestOriginV1Schema>;
 
-export const ApprovalRequestCreatedBySchema = lazyZodSchema(() => z.object({
+export const ApprovalRequestCreatedBySchema = lazyZodSchema(() => z.strictObject({
   surface: z.enum(['voice', 'agent', 'session_agent', 'mcp', 'cli', 'system']),
-  agentId: z.string().min(1).optional(),
-  pluginId: asProtocolZod(PluginIdSchema).optional(),
-  contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema).optional(),
-  sessionId: z.string().min(1).optional(),
-}).strict());
+  agentId: z.optional(z.string().check(z.minLength(1))),
+  pluginId: zMini.optional(asProtocolZod(PluginIdSchema)),
+  contributionLocalId: zMini.optional(asProtocolZod(PluginContributionLocalIdSchema)),
+  sessionId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ApprovalRequestCreatedBy = z.infer<typeof ApprovalRequestCreatedBySchema>;
 
-export const ApprovalDecisionV1Schema = lazyZodSchema(() => z.object({
+export const ApprovalDecisionV1Schema = lazyZodSchema(() => z.looseObject({
   kind: z.enum(['approve', 'reject']),
-  decidedAtMs: z.number().int().min(0),
-}).passthrough());
+  decidedAtMs: z.number().check(z.int(), z.minimum(0)),
+}));
 export type ApprovalDecisionV1 = z.infer<typeof ApprovalDecisionV1Schema>;
 
 // Current decision authority is host-stamped. Released V1 history retains its
 // original passthrough schema and never authorizes current operand edits.
-const ApprovalDecisionV2Schema = lazyZodSchema(() => ApprovalDecisionV1Schema.extend({
-  authority: z.literal('present_user').optional(),
-  narrowedInput: StrictJsonValueSchema.optional(),
-}).strict());
+const ApprovalDecisionV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ApprovalDecisionV1Schema, {
+  authority: z.optional(z.literal('present_user')),
+  narrowedInput: zMini.optional(StrictJsonValueSchema),
+})));
 
-export const ApprovalExecutionV1Schema = lazyZodSchema(() => z.object({
-  executedAtMs: z.number().int().min(0),
+export const ApprovalExecutionV1Schema = lazyZodSchema(() => z.looseObject({
+  executedAtMs: z.number().check(z.int(), z.minimum(0)),
   ok: z.boolean(),
-  result: z.unknown().optional(),
-  errorCode: z.string().min(1).optional(),
-  error: z.string().min(1).optional(),
-}).passthrough());
+  result: z.optional(z.unknown()),
+  errorCode: z.optional(z.string().check(z.minLength(1))),
+  error: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ApprovalExecutionV1 = z.infer<typeof ApprovalExecutionV1Schema>;
 
 /**
  * Current execution history. Failure details are admitted only by the
  * request-bound validator below; this field is not an arbitrary error bag.
  */
-export const ApprovalExecutionV2Schema = lazyZodSchema(() => z.object({
-  executedAtMs: z.number().int().min(0),
+export const ApprovalExecutionV2Schema = lazyZodSchema(() => z.strictObject({
+  executedAtMs: z.number().check(z.int(), z.minimum(0)),
   ok: z.boolean(),
-  result: z.unknown().optional(),
-  errorCode: z.string().min(1).optional(),
-  error: z.string().min(1).optional(),
-  details: z.unknown().optional(),
-}).strict());
+  result: z.optional(z.unknown()),
+  errorCode: z.optional(z.string().check(z.minLength(1))),
+  error: z.optional(z.string().check(z.minLength(1))),
+  details: z.optional(z.unknown()),
+}));
 export type ApprovalExecutionV2 = z.infer<typeof ApprovalExecutionV2Schema>;
 
 const ApprovalExecutionOriginSurfaceV1Schema = lazyZodSchema(() => z.enum([
@@ -131,32 +133,32 @@ const ApprovalExecutionOriginSurfaceV1Schema = lazyZodSchema(() => z.enum([
 ]));
 
 export const ApprovalExecutionOriginCallerV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('host') }).strict(),
+  z.strictObject({ kind: z.literal('host') }),
   AgentStartSessionCallerV1Schema,
-  z.object({
+  z.strictObject({
     kind: z.literal('plugin'),
     pluginId: asProtocolZod(PluginIdSchema),
     contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
     sourceCustody: PluginSourceCustodyV1Schema,
     /** Bounded descriptive admission fact for durable replay, never recursive authority. */
-    startedBy: WorkflowRunStartedByV1Schema.optional(),
-  }).strict(),
-  z.object({
+    startedBy: zMini.optional(WorkflowRunStartedByV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('automationRun'),
-    runId: z.string().trim().min(1),
-    automationId: z.string().trim().min(1),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    automationId: z.string().check(z.trim(), z.minLength(1)),
     cause: AutomationRunCauseSchema,
-  }).strict(),
+  }),
   /**
    * Host-stamped provenance for an admitted Workflow Run, carrying the exact
    * accepted authorization the live Workflow admission already owns. Replay
    * currentness rechecks that principal; the Run identity is immutable.
    */
-  z.object({
+  z.strictObject({
     kind: z.literal('workflowRun'),
-    runId: z.string().trim().min(1),
+    runId: z.string().check(z.trim(), z.minLength(1)),
     authorization: WorkflowAcceptedAuthorizationV1Schema,
-  }).strict(),
+  }),
 ]));
 export type ApprovalExecutionOriginCallerV1 = z.infer<typeof ApprovalExecutionOriginCallerV1Schema>;
 
@@ -166,37 +168,37 @@ export type ApprovalExecutionOriginCallerV1 = z.infer<typeof ApprovalExecutionOr
  * material; it contains no PAT bearer and cannot authenticate without that
  * Machine's signature. Descriptive `createdBy`/`origin` is display metadata.
  */
-export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.object({
+export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   authority: ActionRequiredAuthoritySchema,
   surface: ApprovalExecutionOriginSurfaceV1Schema,
   caller: ApprovalExecutionOriginCallerV1Schema,
   /** Local profile identifier used to route the replay to its configured Home. */
-  serverId: z.string().trim().min(1),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
   /** Cryptographic Home identity, required for a Home-signed external invocation. */
-  serverIdentityId: z.string().trim().min(1).optional(),
-  accountId: z.string().trim().min(1).optional(),
-  principalId: z.string().trim().min(1).optional(),
-  credentialId: z.string().trim().min(1).optional(),
-  externalActionExecutionAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
-  externalActionInputSignature: z.string().regex(/^[A-Za-z0-9_-]{86}$/u).optional(),
-  sessionId: z.string().trim().min(1).optional(),
+  serverIdentityId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  accountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  principalId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  credentialId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  externalActionExecutionAuthorization: zMini.optional(ExternalActionExecutionAuthorizationV1Schema),
+  externalActionInputSignature: z.optional(z.string().check(z.regex(/^[A-Za-z0-9_-]{86}$/u))),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Original host corpus binding; current resource admission remains mandatory. */
-  sessionListAccess: z.enum(['current_session', 'led_subtree', 'unavailable']).optional(),
-  machineId: z.string().trim().min(1).optional(),
-  runId: z.string().trim().min(1).optional(),
-  runOccurrenceId: z.string().trim().min(1).optional(),
+  sessionListAccess: z.optional(z.enum(['current_session', 'led_subtree', 'unavailable'])),
+  machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  runId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  runOccurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Original admitted permission inputs; current runtime policy is rechecked before replay. */
-  callerPermissionMode: asProtocolZod(AgentPermissionIntentV1Schema).nullable().optional(),
-  sessionAgentSpawnPolicyV1: SessionAgentSpawnPolicyV1StrictSchema.optional(),
-  causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1Schema.nullable().optional(),
-  sessionInputSource: SessionInputSourceSessionV1Schema.nullable().optional(),
-  target: ExternalActionTargetV1Schema.optional(),
+  callerPermissionMode: zMini.optional(zMini.nullable(asProtocolZod(AgentPermissionIntentV1Schema))),
+  sessionAgentSpawnPolicyV1: zMini.optional(SessionAgentSpawnPolicyV1StrictSchema),
+  causalPermissionAuthority: zMini.optional(zMini.nullable(SessionInputCausalPermissionAuthorityV1Schema)),
+  sessionInputSource: zMini.optional(zMini.nullable(SessionInputSourceSessionV1Schema)),
+  target: zMini.optional(ExternalActionTargetV1Schema),
   actionId: ActionIdSchema,
-  requestId: z.string().trim().min(1),
-}).strict().superRefine((value, ctx) => {
+  requestId: z.string().check(z.trim(), z.minLength(1)),
+}).check(z.superRefine((value, ctx) => {
   if ((value.sessionListAccess === 'current_session' || value.sessionListAccess === 'led_subtree') && !value.sessionId) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionListAccess'],
+    ctx.addIssue({ code: "custom", path: ['sessionListAccess'],
       message: 'Current-Session list scope requires an exact Session binding' });
   }
   if (
@@ -206,7 +208,7 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.object({
     && value.sessionListAccess !== 'led_subtree'
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sessionListAccess'],
       message: 'Autonomous Session-list approval origins require their exact admitted Session corpus',
     });
@@ -241,7 +243,7 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.object({
     if (!principalMatches || value.serverIdentityId !== binding.serverIdentityId
       || value.accountId !== binding.accountId
       || value.requestId !== binding.requestId || value.machineId !== binding.machineId || !admittedTarget) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['externalActionExecutionAuthorization'],
+      ctx.addIssue({ code: "custom", path: ['externalActionExecutionAuthorization'],
         message: 'Execution authorization must match the exact originating invocation' });
     }
   }
@@ -249,45 +251,45 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.object({
     .filter((field) => field !== undefined).length;
   if (credentialFieldCount === 1 || (credentialFieldCount === 2 && !value.accountId)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['credentialId'],
       message: 'external approval origins require accountId, principalId, and credentialId together',
     });
   }
   if (value.surface === 'api' && (!value.accountId || credentialFieldCount !== 2)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['credentialId'],
       message: 'API approval origins require verified credential provenance',
     });
   }
   if (value.target?.kind === 'session' && value.sessionId !== value.target.sessionId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sessionId'],
       message: 'Session-target approval origins require the same exact Session id',
     });
   }
   if (value.target?.kind === 'machine' && value.machineId !== value.target.machineId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['machineId'],
       message: 'Machine-target approval origins require the same exact machine id',
     });
   }
   if (value.caller.kind === 'automationRun' && value.runId !== value.caller.runId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['runId'],
       message: 'Automation-run approval origins require the same exact Run id',
     });
   }
-}));
+})));
 export type ApprovalExecutionOriginV1 = z.infer<typeof ApprovalExecutionOriginV1Schema>;
 
 function validateApprovalRequestLifecycle(
   value: Readonly<Record<string, unknown>>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   const status = value.status as z.infer<typeof ApprovalRequestV2StatusSchema>;
   const decision = value.decision as ApprovalDecisionV1 | undefined;
@@ -300,32 +302,66 @@ function validateApprovalRequestLifecycle(
   const requiresExecution = status === 'executed' || status === 'failed';
 
   if (status === 'open') {
-    if (decision != null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision'], message: 'open approval requests must not include a decision' });
-    if (execution != null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution'], message: 'open approval requests must not include execution metadata' });
+    if (decision != null) ctx.addIssue({ code: "custom", path: ['decision'], message: 'open approval requests must not include a decision' });
+    if (execution != null) ctx.addIssue({ code: "custom", path: ['execution'], message: 'open approval requests must not include execution metadata' });
   }
-  if (requiresDecision && decision == null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision'], message: `status ${status} requires a decision` });
-  if (requiresExecution && execution == null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution'], message: `status ${status} requires execution metadata` });
-  if (!requiresExecution && execution != null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution'], message: `status ${status} must not include execution metadata` });
+  if (requiresDecision && decision == null) ctx.addIssue({ code: "custom", path: ['decision'], message: `status ${status} requires a decision` });
+  if (requiresExecution && execution == null) ctx.addIssue({ code: "custom", path: ['execution'], message: `status ${status} requires execution metadata` });
+  if (!requiresExecution && execution != null) ctx.addIssue({ code: "custom", path: ['execution'], message: `status ${status} must not include execution metadata` });
   if ((status === 'approved' || status === 'executing' || status === 'executed' || status === 'failed') && decision?.kind !== 'approve') {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision'], message: `status ${status} requires an approve decision` });
+    ctx.addIssue({ code: "custom", path: ['decision'], message: `status ${status} requires an approve decision` });
   }
-  if (status === 'rejected' && decision?.kind !== 'reject') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision'], message: 'status rejected requires a reject decision' });
-  if (status === 'canceled' && decision != null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision'], message: 'canceled approval requests must not include a decision' });
-  if (status === 'executed' && execution?.ok !== true) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution'], message: 'status executed requires a successful execution result' });
-  if (status === 'failed' && execution?.ok !== false) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution'], message: 'status failed requires a failed execution result' });
+  if (status === 'rejected' && decision?.kind !== 'reject') ctx.addIssue({ code: "custom", path: ['decision'], message: 'status rejected requires a reject decision' });
+  if (status === 'canceled' && decision != null) ctx.addIssue({ code: "custom", path: ['decision'], message: 'canceled approval requests must not include a decision' });
+  if (status === 'executed' && execution?.ok !== true) ctx.addIssue({ code: "custom", path: ['execution'], message: 'status executed requires a successful execution result' });
+  if (status === 'failed' && execution?.ok !== false) ctx.addIssue({ code: "custom", path: ['execution'], message: 'status failed requires a failed execution result' });
   if (value.v === 2 && execution?.ok === true && Object.hasOwn(execution, 'details')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['execution', 'details'], message: 'successful approval execution cannot include failure details' });
+    ctx.addIssue({ code: "custom", path: ['execution', 'details'], message: 'successful approval execution cannot include failure details' });
   }
 
   if (value.sessionCreationDirectoryApproval !== undefined && value.actionId !== 'session.spawn_new') {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionCreationDirectoryApproval'], message: 'Directory creation approval evidence belongs only to session.spawn_new.' });
+    ctx.addIssue({ code: "custom", path: ['sessionCreationDirectoryApproval'], message: 'Directory creation approval evidence belongs only to session.spawn_new.' });
   }
   if (value.handoffTargetReplacementApproval !== undefined
     && value.actionId !== 'session.handoff'
     && !(value.v === 2 && value.actionId === 'workspace.sync.relationship.create')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['handoffTargetReplacementApproval'], message: 'Workspace target approval evidence belongs only to destination-choosing Actions.' });
+    ctx.addIssue({ code: "custom", path: ['handoffTargetReplacementApproval'], message: 'Workspace target approval evidence belongs only to destination-choosing Actions.' });
   }
   validateConfidentialApprovalRequest(value, ctx);
+}
+
+/** Read-only retry receipts belong to the original failed items, never to replay authority. */
+function validateStorageRetryResults(value: Readonly<Record<string, unknown>>, ctx: z.core.$RefinementCtx): void {
+  if (value.storageRetryResults === undefined) return;
+  const issue = () => ctx.addIssue({ code: "custom", path: ['storageRetryResults'],
+    message: 'Storage retry receipts require distinct settled batches for the proposal’s unsuccessful items' });
+  const original = PileApplyResultStoredV1Schema.safeParse((value.execution as ApprovalExecutionV2 | undefined)?.result);
+  const args = MachineStorageTrashMoveInputV1Schema.safeParse(value.actionArgs);
+  const retries = z.array(PileApplyResultV1Schema).check(z.minLength(1)).safeParse(value.storageRetryResults);
+  if (value.v !== 2 || value.status !== 'executed' || value.actionId !== 'machines.storage.trash.move'
+    || !original.success || !args.success || !retries.success) { issue(); return; }
+  const requested = new Set(args.data.items.map(item => item.ref.itemId));
+  const unsuccessful = new Set(original.data.outcomes.filter(outcome => requested.has(outcome.itemId)
+    && outcome.status !== 'moved' && outcome.status !== 'deleted').map(outcome => outcome.itemId));
+  const batches = new Set([original.data.batchId]);
+  const entries = new Set(original.data.trashEntryIds ?? []);
+  for (const retry of retries.data) {
+    const items = new Set<string>();
+    if (retry.mode !== 'trash' || batches.has(retry.batchId) || retry.trashEntryIds === undefined
+      || retry.outcomes.length === 0 || retry.trashEntryIds.length > retry.outcomes.filter(outcome => outcome.status === 'moved').length) {
+      issue(); return;
+    }
+    batches.add(retry.batchId);
+    for (const outcome of retry.outcomes) {
+      if (!unsuccessful.has(outcome.itemId) || items.has(outcome.itemId)) { issue(); return; }
+      items.add(outcome.itemId);
+      if (outcome.status === 'moved' || outcome.status === 'deleted') unsuccessful.delete(outcome.itemId);
+    }
+    for (const entryId of retry.trashEntryIds) {
+      if (entries.has(entryId)) { issue(); return; }
+      entries.add(entryId);
+    }
+  }
 }
 
 const ConfidentialApprovalFailureCodeSchema = lazyZodSchema(() => z.enum([
@@ -335,11 +371,11 @@ const ConfidentialApprovalFailureCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 
 /** The durable request never becomes a carrier for the live human credential choice or native echoes. */
-function validateConfidentialApprovalRequest(value: Readonly<Record<string, unknown>>, ctx: z.RefinementCtx): void {
+function validateConfidentialApprovalRequest(value: Readonly<Record<string, unknown>>, ctx: z.core.$RefinementCtx): void {
   const actionId = value.actionId;
   if (actionId !== 'computer.secret.fill' && actionId !== 'browser.automation.secret.fill') return;
   const issue = (path: (string | number)[]) => ctx.addIssue({
-    code: z.ZodIssueCode.custom, path, message: 'Confidential approval requires exact value-free custody',
+    code: "custom", path, message: 'Confidential approval requires exact value-free custody',
   });
   if (value.v !== 2) { issue(['v']); return; }
   const inputSchema = actionId === 'computer.secret.fill'
@@ -353,14 +389,14 @@ function validateConfidentialApprovalRequest(value: Readonly<Record<string, unkn
     }
   }
   if (value.preview !== undefined) {
-    const preview = z.object({ actionId: z.literal(actionId), actionArgs: inputSchema }).strict().safeParse(value.preview);
+    const preview = z.strictObject({ actionId: z.literal(actionId), actionArgs: inputSchema }).safeParse(value.preview);
     if (!preview.success || !args.success || !sameStrictJsonValue(preview.data.actionArgs, args.data)) issue(['preview']);
   }
   const transcriptOrigin = ApprovalRequestOriginV1Schema.safeParse(value.origin);
   if (transcriptOrigin.success && transcriptOrigin.data.toolInput !== undefined) {
     const toolInput = transcriptOrigin.data.toolInput;
     const direct = inputSchema.safeParse(toolInput);
-    const wrapped = z.object({ actionId: z.literal(actionId), input: inputSchema }).strict().safeParse(toolInput);
+    const wrapped = z.strictObject({ actionId: z.literal(actionId), input: inputSchema }).safeParse(toolInput);
     const parsedInput = direct.success ? direct.data : wrapped.success ? wrapped.data.input : undefined;
     if (!args.success || parsedInput === undefined || !sameStrictJsonValue(parsedInput, args.data)) issue(['origin', 'toolInput']);
   }
@@ -375,57 +411,60 @@ function validateConfidentialApprovalRequest(value: Readonly<Record<string, unkn
   }
 }
 
-export const ApprovalRequestV1Schema = lazyZodSchema(() => z.object({
+export const ApprovalRequestV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
   status: ApprovalRequestStatusSchema,
-  createdAtMs: z.number().int().min(0),
-  updatedAtMs: z.number().int().min(0),
+  createdAtMs: z.number().check(z.int(), z.minimum(0)),
+  updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: ApprovalRequestedSurfaceSchema.optional(),
-  origin: ApprovalRequestOriginV1Schema.optional(),
-  approval: ActionApprovalSchema.optional(),
+  requestedSurface: z.optional(ApprovalRequestedSurfaceSchema),
+  origin: z.optional(ApprovalRequestOriginV1Schema),
+  approval: zMini.optional(ActionApprovalSchema),
   actionId: ApprovalRequestV1HistoricalActionIdSchema,
   actionArgs: z.unknown(),
-  summary: z.string().min(1),
-  preview: z.unknown().optional(),
+  summary: z.string().check(z.minLength(1)),
+  preview: z.optional(z.unknown()),
   /**
    * Host-stamped target evidence for a deferred `session.spawn_new` directory
    * creation approval. It is not Action input and cannot authorize another
    * Action family.
    */
-  sessionCreationDirectoryApproval: SessionCreationDirectoryApprovalV1Schema.optional(),
+  sessionCreationDirectoryApproval: zMini.optional(SessionCreationDirectoryApprovalV1Schema),
   /** Host-stamped workspace destination evidence; never Action input. */
-  handoffTargetReplacementApproval: HandoffTargetReplacementApprovalV1Schema.optional(),
-  decision: ApprovalDecisionV1Schema.optional(),
-  execution: ApprovalExecutionV1Schema.optional(),
-}).passthrough().superRefine((value, ctx) => {
+  handoffTargetReplacementApproval: zMini.optional(HandoffTargetReplacementApprovalV1Schema),
+  decision: z.optional(ApprovalDecisionV1Schema),
+  execution: z.optional(ApprovalExecutionV1Schema),
+}).check(z.superRefine((value, ctx) => {
   validateApprovalRequestLifecycle(value, ctx);
-}));
+})));
 export type ApprovalRequestV1 = z.infer<typeof ApprovalRequestV1Schema>;
 
 /** Current durable replay format. V1 remains readable history but carries no replay authority. */
-export const ApprovalRequestV2Schema = lazyZodSchema(() => z.object({
+export const ApprovalRequestV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   status: ApprovalRequestV2StatusSchema,
-  createdAtMs: z.number().int().min(0),
-  updatedAtMs: z.number().int().min(0),
+  createdAtMs: z.number().check(z.int(), z.minimum(0)),
+  updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: ApprovalRequestedSurfaceSchema.optional(),
-  origin: ApprovalRequestOriginV1Schema.optional(),
+  requestedSurface: z.optional(ApprovalRequestedSurfaceSchema),
+  origin: z.optional(ApprovalRequestOriginV1Schema),
   executionOriginV1: ApprovalExecutionOriginV1Schema,
-  approval: ActionApprovalSchema.optional(),
+  approval: zMini.optional(ActionApprovalSchema),
   actionId: ActionIdSchema,
   actionArgs: z.unknown(),
-  summary: z.string().min(1),
-  preview: z.unknown().optional(),
-  sessionCreationDirectoryApproval: SessionCreationDirectoryApprovalV1Schema.optional(),
-  handoffTargetReplacementApproval: HandoffTargetReplacementApprovalV1Schema.optional(),
-  decision: ApprovalDecisionV2Schema.optional(),
-  execution: ApprovalExecutionV2Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  summary: z.string().check(z.minLength(1)),
+  preview: z.optional(z.unknown()),
+  sessionCreationDirectoryApproval: zMini.optional(SessionCreationDirectoryApprovalV1Schema),
+  handoffTargetReplacementApproval: zMini.optional(HandoffTargetReplacementApprovalV1Schema),
+  decision: z.optional(ApprovalDecisionV2Schema),
+  execution: z.optional(ApprovalExecutionV2Schema),
+  /** Settled results of new UI retries; original execution and approval authority stay immutable. */
+  storageRetryResults: z.optional(z.array(PileApplyResultV1Schema).check(z.minLength(1))),
+}).check(z.superRefine((value, ctx) => {
   validateApprovalRequestLifecycle(value, ctx);
+  validateStorageRetryResults(value, ctx);
   if (value.executionOriginV1.actionId !== value.actionId) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['executionOriginV1', 'actionId'], message: 'execution origin Action must match the approved Action' });
+    ctx.addIssue({ code: "custom", path: ['executionOriginV1', 'actionId'], message: 'execution origin Action must match the approved Action' });
   }
   // A Home-signed external invocation is persisted as an `api` origin even when
   // the caller reached it through another surface, so the descriptive requested
@@ -438,23 +477,23 @@ export const ApprovalRequestV2Schema = lazyZodSchema(() => z.object({
     && value.requestedSurface !== value.executionOriginV1.surface
     && !nestedExternalInvocation
   ) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedSurface'], message: 'requested surface must match the immutable execution origin' });
+    ctx.addIssue({ code: "custom", path: ['requestedSurface'], message: 'requested surface must match the immutable execution origin' });
   }
   const originCaller = value.executionOriginV1.caller;
   if (originCaller.kind === 'plugin') {
     if (value.createdBy.pluginId !== undefined && value.createdBy.pluginId !== originCaller.pluginId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['createdBy', 'pluginId'], message: 'display plugin must match the immutable execution origin' });
+      ctx.addIssue({ code: "custom", path: ['createdBy', 'pluginId'], message: 'display plugin must match the immutable execution origin' });
     }
     if (
       value.createdBy.contributionLocalId !== undefined
       && value.createdBy.contributionLocalId !== originCaller.contributionLocalId
     ) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['createdBy', 'contributionLocalId'], message: 'display contribution must match the immutable execution origin' });
+      ctx.addIssue({ code: "custom", path: ['createdBy', 'contributionLocalId'], message: 'display contribution must match the immutable execution origin' });
     }
   } else if (value.createdBy.pluginId !== undefined || value.createdBy.contributionLocalId !== undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['createdBy'], message: 'display plugin identity requires a plugin execution origin' });
+    ctx.addIssue({ code: "custom", path: ['createdBy'], message: 'display plugin identity requires a plugin execution origin' });
   }
-}));
+})));
 export type ApprovalRequestV2 = z.infer<typeof ApprovalRequestV2Schema>;
 
 export const ApprovalRequestSchema = lazyZodSchema(() => z.discriminatedUnion('v', [
@@ -499,7 +538,7 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
  * Unsigned host-caused Account/client approvals on a present-user surface remain
- * locally replayable, as do host-CLI Account effects with durable input custody and,
+ * locally replayable, as do durable host-origin Account effects and,
  * by the 2026-10-12 owner ruling, signed Agent-Session proposals whose reviewed
  * effect is Account/client-only: the approving app runs that effect while the signed
  * carrier stays immutable proposal provenance. Other signed external origins
@@ -536,12 +575,8 @@ export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): bo
   // Plugin and other external provenance still belongs to its original executor.
   if (spec && origin.caller.kind === 'host'
     && spec.approvalInputCustody !== 'live_only') {
-    if (origin.surface === 'cli') {
-      if (accountEffect) return false;
-    }
-    if (isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs)
-      && spec.executionPlacement === 'account'
-      && canRequestPresentUserApprovalForActionInputV1(spec, approval.actionArgs)) return false;
+    if (accountEffect && (origin.surface === 'cli'
+      || isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs))) return false;
   }
   return SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.surface]
     || CALLER_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.caller.kind];

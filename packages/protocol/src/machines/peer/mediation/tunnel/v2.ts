@@ -1,27 +1,25 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PeerTcpTunnelDirectionV1Schema } from './v1.js';
 
 const BinaryFrameKindV2Schema = lazyZodSchema(() => z.enum(['open', 'data', 'ack', 'close', 'abort']));
 
-export const PeerTcpTunnelBinaryFrameHeaderV2Schema = lazyZodSchema(() => z
-  .object({
+export const PeerTcpTunnelBinaryFrameHeaderV2Schema = lazyZodSchema(() => z.strictObject({
     version: z.literal(2),
     kind: BinaryFrameKindV2Schema,
-    tunnelId: z.string().min(1),
-    substreamId: z.string().min(1).optional(),
-    direction: PeerTcpTunnelDirectionV1Schema.optional(),
-    sequence: z.number().int().nonnegative().optional(),
-    ack: z.number().int().nonnegative().optional(),
-    window: z.number().int().nonnegative().optional(),
-    halfClose: z.boolean().optional(),
-    reasonCode: z.string().min(1).optional(),
-    flags: z.array(z.string().min(1)).optional(),
-    payloadLength: z.number().int().nonnegative(),
-    receiptId: z.string().min(1).optional(),
-  })
-  .strict());
+    tunnelId: z.string().check(z.minLength(1)),
+    substreamId: z.optional(z.string().check(z.minLength(1))),
+    direction: z.optional(PeerTcpTunnelDirectionV1Schema),
+    sequence: z.optional(z.number().check(z.int(), z.nonnegative())),
+    ack: z.optional(z.number().check(z.int(), z.nonnegative())),
+    window: z.optional(z.number().check(z.int(), z.nonnegative())),
+    halfClose: z.optional(z.boolean()),
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+    flags: z.optional(z.array(z.string().check(z.minLength(1)))),
+    payloadLength: z.number().check(z.int(), z.nonnegative()),
+    receiptId: z.optional(z.string().check(z.minLength(1))),
+  }));
 export type PeerTcpTunnelBinaryFrameHeaderV2 = z.infer<typeof PeerTcpTunnelBinaryFrameHeaderV2Schema>;
 
 /**

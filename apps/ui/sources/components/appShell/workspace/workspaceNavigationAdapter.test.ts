@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
 import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { readScopedWorkspaceLayout, workspaceLayoutScopeKey, writeScopedWorkspaceLayout } from './workspacePersistence';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -78,6 +80,49 @@ describe('workspace navigation adapter', () => {
         expect(h.adapter.canGoBack).toBe(true);
     });
 
+    it('adopts the saved terminal pane for an exact cold alias URL without merging other presentations or Accounts', async () => {
+        const endpoint = 'http://happier-agent-qa-find-search.localhost:3009';
+        const alias = (await upsertServerProfile({ serverUrl: endpoint })).id;
+        const home = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+        const profile = await setServerProfileIdentityForUrl(endpoint, home);
+        if (!profile) throw new Error('Home identity missing');
+        onTestFinished(async () => { await removeServerProfile(profile.id); });
+        const scope = { serverId: profile.id, accountId: 'alice' };
+        const sessionId = 'cmv88vp4l0062m2i1pvpsyc0i';
+        const paneId = 'be022062-19f9-45a6-9adb-3fc5a79208d0';
+        const original = createWorkspaceState({ id: paneId, target: { kind: 'session',
+            params: { id: sessionId, serverId: home, bottom: 'terminal', right: 'terminal' } }, preview: false, pinned: false });
+        const key = workspaceLayoutScopeKey({ ...scope, windowId: 'main' });
+        const saved = readScopedWorkspaceLayout(JSON.parse(JSON.stringify(writeScopedWorkspaceLayout({}, key, original))), key);
+        if (!saved) throw new Error('Written layout was not admitted');
+        let state = saved;
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: false, friends: false }, pages: [] });
+        const adapter = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog, getScope: () => scope,
+            dispatch: action => { state = reduceWorkspaceState(state, action); },
+            transport: { commit: () => {} }, createId: () => crypto.randomUUID(), onChange: () => {} });
+        adapter.initialize(`/session/${sessionId}?serverId=${alias}&bottom=terminal`);
+        const active = () => state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(active()).toEqual(original.tabs[paneId]);
+        expect(Object.keys(state.tabs)).toEqual([paneId]);
+        adapter.acceptUrl(`/session/${sessionId}?serverId=${alias}&right=files`);
+        expect(active().id).not.toBe(paneId);
+        expect(active().target.params.right).toBe('files');
+        adapter.initialize(`/session/${sessionId}?serverId=${alias}&bottom=terminal&accountId=bob`);
+        expect(active().id).not.toBe(paneId);
+        adapter.initialize(`/session/${sessionId}?serverId=unrelated-home&bottom=terminal`);
+        expect(active().id).not.toBe(paneId);
+        adapter.initialize(`/session/${sessionId}?serverId=${home}&bottom=terminal&right=files`);
+        expect(active().id).toBe(paneId);
+        expect(active().target.params.right).toBe('files');
+        // An intentional second view remains its own current pane even when
+        // the unchanged URL is re-admitted using the equivalent Home label.
+        adapter.openHref(`/session/${sessionId}?serverId=${home}&bottom=terminal&right=files`, { mode: 'newTab' });
+        const secondPaneId = active().id;
+        expect(secondPaneId).not.toBe(paneId);
+        adapter.acceptUrl(`/session/${sessionId}?serverId=${alias}&bottom=terminal&right=files`);
+        expect(active().id).toBe(secondPaneId);
+    });
+
     it('contracts restored duplicate Workflows hubs without dropping distinct workflow details', () => {
         const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
         const normalized = normalizeWorkspaceSingletonTabs({ v: 1, order: ['hub-1', 'detail', 'hub-2'], pairs: [], tabsById: {
@@ -112,6 +157,51 @@ describe('workspace navigation adapter', () => {
         expect(Object.keys(h.state().tabs)).toEqual(['A']);
         expect(h.active().target.params).toEqual({ id: 'A1', serverId: 'home-a', accountId: 'account-a' });
         expect(h.commits.at(-1)?.href).toBe('/session/A1?serverId=home-a&accountId=account-a');
+    });
+    it('reuses a retained unqualified Session when the legacy workspace has no Account scope', () => {
+        const h = harness();
+        h.adapter.openHref('/session/legacy', { mode: 'newTab', reuseExisting: true });
+        const original = h.active().id;
+        h.adapter.openHref('/session/legacy', { mode: 'newTab', reuseExisting: true });
+        expect(h.active().id).toBe(original);
+        expect(Object.values(h.state().tabs).filter(tab => tab.target.params.id === 'legacy')).toHaveLength(1);
+    });
+    it('adopts a Session URL into its retained pane without discarding terminal presentation', () => {
+        const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
+        h.adapter.setParams('A', { bottom: 'terminal' });
+        h.adapter.openHref('/inbox', { mode: 'newTab' });
+        expect(h.adapter.acceptUrl('/session/A1?serverId=home-a')).toBe(true);
+        expect(h.active()).toMatchObject({ id: 'A', target: { params: { bottom: 'terminal' } } });
+        expect(h.adapter.acceptUrl('/session/A1?serverId=home-a&right=files')).toBe(true);
+        expect(h.active().target.params.right).toBe('files');
+    });
+    it('returns from a pane-scoped Inbox router and Session list to the retained Session', () => {
+        const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
+        h.adapter.setParams('A', { bottom: 'terminal' });
+        for (const source of ['/inbox', '/projects']) {
+            expect(h.adapter.openHref(source, { mode: 'newTab' })).toBe(true);
+            const sourceTabId = h.active().id;
+            expect(h.adapter.openHref('/session/A1?serverId=home-a', { tabId: sourceTabId })).toBe(true);
+            expect(h.active()).toMatchObject({ id: 'A', target: { params: { bottom: 'terminal' } } });
+            expect(Object.values(h.state().tabs).filter(tab => tab.target.kind === 'session')).toHaveLength(1);
+        }
+    });
+    it('keeps explicit-group Session previews in that group while intentional new tabs stay distinct', () => {
+        const h = harness();
+        h.adapter.openHref('/session/B1?serverId=home-b', { mode: 'splitRight',
+            availableSizePx: 1000, minimumFirstSizePx: 320, minimumSecondSizePx: 320 });
+        const groupId = h.state().focusedGroupId;
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'preview', groupId });
+        const second = h.active().id;
+        expect(second).not.toBe('A');
+        expect(h.state().focusedGroupId).toBe(groupId);
+        h.adapter.setParams(second, { bottom: 'terminal' });
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'preview', groupId });
+        expect(h.active().id).toBe(second);
+        expect(h.active().target.params.bottom).toBe('terminal');
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'newTab', groupId });
+        expect(h.active().id).not.toBe(second);
+        expect(h.active().id).not.toBe('A');
     });
     it('publishes a destination edge as one admitted layout without exposing an intermediate centre tab', () => {
         const h = harness();

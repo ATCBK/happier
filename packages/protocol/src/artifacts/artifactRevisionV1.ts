@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const ArtifactRevisionV1Schema = lazyZodSchema(() => z.object({
-  headerVersion: z.number().int().positive(), bodyVersion: z.number().int().positive(),
-}).strict());
+export const ArtifactRevisionV1Schema = lazyZodSchema(() => z.strictObject({
+  headerVersion: z.number().check(z.int(), z.positive()), bodyVersion: z.number().check(z.int(), z.positive()),
+}));
 export type ArtifactRevisionV1 = z.infer<typeof ArtifactRevisionV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { createProtocolStoredReadSchema } from '../../plugins/actions/protocolComposableSchema.js';
 import {
@@ -101,31 +101,28 @@ function normalizeDeployedRuntimeDescriptorV1(value: unknown): unknown {
 }
 
 function createRuntimeDescriptorAgentSchema(zod: typeof z) {
-  const schema = zod.object({
-    agentExtra: createRuntimeDescriptorAgentExtraV1Schema(zod).optional(),
-  }).passthrough();
+  const schema = zod.looseObject({
+    agentExtra: zod.optional(createRuntimeDescriptorAgentExtraV1Schema(zod)),
+  });
   // This is Agent-owned recovery data, not a generic Session-domain projection.
   return defineStoredReadProjection(schema, () => schema);
 }
 
 function createRuntimeDescriptorAgentExtraV1Schema(zod: typeof z) {
-  const schema = zod.object({
-    owner: zod.string().min(1),
-    schemaId: zod.string().min(1),
-    v: zod.number().int().min(1),
-  }).passthrough();
+  const schema = zod.looseObject({
+    owner: zod.string().check(zod.minLength(1)),
+    schemaId: zod.string().check(zod.minLength(1)),
+    v: zod.number().check(zod.int(), zod.minimum(1)),
+  });
   return defineStoredReadProjection(schema, () => schema);
 }
 
 export function createRuntimeDescriptorV1Schema(zod: typeof z) {
-  const schema = zod.preprocess(
-    normalizeDeployedRuntimeDescriptorV1,
-    zod.object({
+  const schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform(normalizeDeployedRuntimeDescriptorV1), zod.looseObject({
       v: zod.literal(1),
-      agentId: zod.string().min(1),
+      agentId: zod.string().check(zod.minLength(1)),
       agent: createRuntimeDescriptorAgentSchema(zod),
-    }).passthrough(),
-  );
+    }));
   // Agent recovery state is explicitly native JSON, not unknown typed fields.
   // The same owner validates identity/aliases while preserving these bags.
   return defineStoredReadProjection(schema, () => schema);
@@ -142,17 +139,17 @@ export const RuntimeDescriptorV1Schema = createRuntimeDescriptorV1Schema(z);
  * Provider Session ids, host paths/endpoints, runtime handles and unknown fields
  * are therefore rejected at this boundary.
  */
-export const PortableRuntimeDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const PortableRuntimeDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  agentId: z.string().trim().min(1),
-  agent: z.object({
-    backendMode: z.string().trim().min(1),
-    home: z.enum(['user', 'connectedService']).optional(),
-    connectedServiceId: z.string().trim().min(1).optional(),
-    connectedServiceProfileId: z.string().trim().min(1).optional(),
-    connectedServiceGroupId: z.string().trim().min(1).optional(),
-  }).strict(),
-}).strict());
+  agentId: z.string().check(z.trim(), z.minLength(1)),
+  agent: z.strictObject({
+    backendMode: z.string().check(z.trim(), z.minLength(1)),
+    home: z.optional(z.enum(['user', 'connectedService'])),
+    connectedServiceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    connectedServiceProfileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    connectedServiceGroupId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+}));
 export type PortableRuntimeDescriptorV1 = z.infer<typeof PortableRuntimeDescriptorV1Schema>;
 
 export function readRuntimeDescriptorV1(value: unknown): RuntimeDescriptorV1 | null {

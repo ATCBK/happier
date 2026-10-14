@@ -112,7 +112,7 @@ async function createAccountSourceReader(): Promise<MarketplaceRegistrySourcesRe
 
 export async function readMarketplaceInstallSources(input: Readonly<{ readRegistrySources?: MarketplaceRegistrySourcesReaderV1 }> = {}): Promise<readonly MarketplaceIndexSourceConfig[]> {
   const readSources = input.readRegistrySources ?? await createAccountSourceReader();
-  return (await readSources()).filter(source => source.kinds.includes('plugin')
+  return (await readSources()).filter(source => (source.kinds.includes('plugin') || source.kinds.includes('agent'))
     && (source.format === 'happier-catalog' || source.format === 'happier-npm')).map(source => {
     const projected = registryMarketplaceSourceV1(source);
     return { id: source.id, title: source.title, sourceUrl: source.url, enabled: source.enabled, registrySource: source,

@@ -19,6 +19,7 @@ import type {
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type AuthorityExpansion = Extract<PluginChangePendingReviewResult, Readonly<{
     kind: 'reviewRequired';
@@ -584,7 +585,7 @@ export async function showPluginInstallationReviewDialog(params: Readonly<{
             testID: 'settings.plugins.installReview',
             scrollHost: 'body',
             bodyScroll: 'none',
-            dimensions: { width: 640, maxHeightRatio: 0.9, size: 'lg' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'lg' },
         },
         closeOnBackdrop: true,
     });

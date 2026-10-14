@@ -8,6 +8,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 
 import { classifyChildExit, classifySpawnError } from './exitClassifier';
 import type { TerminationEvent } from './types';
@@ -22,6 +23,7 @@ export type ManagedChildProcess = Readonly<{
 }>;
 
 export function createManagedChildProcess(child: ChildProcess): ManagedChildProcess {
+  observeProcessLaunch(child);
   const pid = typeof child.pid === 'number' && Number.isFinite(child.pid) ? child.pid : null;
 
   let settled = false;

@@ -93,7 +93,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       ctx: createPluginContextFixture(terminalHost.service, createEventsFixture().service, { sessionHooks: hooks.service }),
       directory: '/tmp/claude-project', happierSessionId: 'unified-confined',
       hostPreference: 'zellij' as const, launchEnv: {}, permissionMode: 'yolo',
-      allowedTools: ['WebSearch', 'mcp__wilson__*'], unlistedTools: 'deny' as const,
+      allowedTools: ['websearch', 'mcp__wilson__*'], unlistedTools: 'deny' as const,
     };
     const operations = createClaudeUnifiedTerminalProviderOperations(params);
     try {
@@ -166,6 +166,30 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       expect(events.filter(event => event.kind === 'tool-result')).toEqual([expected]);
       await session.observeSourceTranscript({ providerSessionId, sourceId: 'live:native', row: native });
       expect(events.filter(event => event.kind === 'tool-result')).toEqual([expected]);
+      if (status === 'completed') {
+        const ordinaryResult = {
+          type: 'user',
+          uuid: 'ordinary-tool-result',
+          session_id: providerSessionId,
+          message: { role: 'user', content: [{
+            type: 'tool_result', tool_use_id: 'ordinary-action-tool',
+            content: JSON.stringify({ ok: true, result: { items: ['visible'] } }),
+          }] },
+        };
+        await session.observeSourceTranscript({
+          providerSessionId,
+          sourceId: 'live:ordinary-tool-result',
+          row: ordinaryResult,
+        });
+        expect(events.filter(event => event.kind === 'tool-result')).toContainEqual(expect.objectContaining({
+          toolCallId: 'ordinary-action-tool',
+          output: JSON.stringify({ ok: true, result: { items: ['visible'] } }),
+        }));
+        await session.observeSourceTranscript({
+          providerSessionId, sourceId: 'live:ordinary-tool-result', row: ordinaryResult,
+        });
+        expect(events.filter(event => event.kind === 'tool-result' && event.toolCallId === 'ordinary-action-tool')).toHaveLength(1);
+      }
     } finally {
       subscription.dispose();
       await session.dispose();
@@ -658,6 +682,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
     operations.subscribeEffectiveModel(evidence => effectiveModels.push(evidence.modelId));
     try {
       await operations.startProviderSession();
+      operations.beginProviderTurn('host-paid-turn');
       await transcripts.emitRow({ type: 'assistant', uuid: 'main-record', sessionId: 'native-session',
         message: { id: 'main-request', model: 'claude-sonnet-4-6', usage: { input_tokens: 10, output_tokens: 2 } } });
       await transcripts.emitRow({ type: 'assistant', uuid: 'child-record', sessionId: 'native-session', isSidechain: true, parent_tool_use_id: 'task-tool',
@@ -670,12 +695,15 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
           'claude-haiku-4-5': { inputTokens: 20, outputTokens: 3, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
         } });
       expect(observations).toEqual([
-        expect.objectContaining({ nativeRecordId: 'main-record', modelId: 'claude-sonnet-4-6' }),
+        expect.objectContaining({ nativeRecordId: 'main-record', modelId: 'claude-sonnet-4-6', turnId: 'host-paid-turn' }),
         expect.objectContaining({ nativeRecordId: 'child-record', inferenceId: 'child-request', modelId: 'claude-haiku-4-5', tokens: expect.objectContaining({ total: 23 }) }),
         expect.objectContaining({ nativeRecordId: 'unknown-child-record', modelId: null }),
         expect.objectContaining({ source: 'claude-sdk-result', nativeRecordId: 'failed-summary', modelId: null, tokens: expect.objectContaining({ total: 35 }),
           cost: expect.objectContaining({ reportedUsd: 0.2, costSource: 'provider_reported_api_equivalent' }) }),
       ]);
+      // Sidechain rows have no proven foreground-turn ownership; whole-Session
+      // summaries cannot allocate their residual cost to the current turn.
+      for (const observation of observations.slice(1)) expect(observation).not.toHaveProperty('turnId');
       expect(effectiveModels).not.toContain('claude-haiku-4-5');
     } finally { await operations.disposeProviderSession(); }
   });
@@ -6734,6 +6762,70 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
     }
   });
 
+  it.each(['closed', 'failed', 'already-closed'] as const)('drops active observation on explicit disposal without claiming native exit (%s)', async (disposition) => {
+    const terminalHost = createTerminalHostFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(terminalHost.service, createEventsFixture().service, { sessionHooks: hooks.service });
+    const operations = createClaudeUnifiedTerminalProviderOperations({ ctx, directory: '/tmp/claude-project',
+      happierSessionId: 'unified-observer-dispose', hostPreference: 'zellij', launchEnv: {}, permissionMode: 'default' });
+    const activity: AgentSessionRuntimeEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents(event => activity.push(event));
+    await operations.prepareTerminalPresentation();
+    const request = hooks.service.startServer.mock.calls[0]?.[0];
+    if (!request?.onSessionHook) throw new Error('Session hook server was not started');
+    await request.onSessionHook('observer-dispose-provider', { hook_event_name: 'PostToolUse', session_id: 'observer-dispose-provider',
+      tool_name: 'Agent', tool_response: { status: 'async_launched', agentId: 'agent-active-at-disposal' } });
+    await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+    if (disposition === 'already-closed') {
+      await operations.observeTerminalLifecycle({ agentId: 'claude', type: 'process_exited', exitCode: 0, signal: null, nativeExited: true });
+      expect(activity.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
+    }
+    const failure = new Error('Terminal disposal refused at OS boundary');
+    if (disposition === 'failed') vi.mocked(terminalHost.service.dispose).mockRejectedValue(failure);
+    try {
+      if (disposition === 'failed') await expect(operations.disposeProviderSession()).rejects.toBe(failure);
+      else await operations.disposeProviderSession();
+      expect(activity.at(-1)).toMatchObject({ state: disposition === 'already-closed' ? 'idle' : 'unknown', activeCount: 0 });
+    } finally {
+      vi.mocked(terminalHost.service.dispose).mockResolvedValue(undefined);
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it.each([
+    { paneDead: true, nativeExited: false, expectedState: 'unknown', expectedCount: 0 },
+    { paneDead: false, nativeExited: false, expectedState: 'active', expectedCount: 1 },
+    { paneDead: true, nativeExited: true, expectedState: 'idle', expectedCount: 0 },
+  ])('demotes unresolved Activity after pane loss (paneDead=$paneDead, nativeExited=$nativeExited)', async ({ paneDead, nativeExited, expectedState, expectedCount }) => {
+    const terminalHost = createTerminalHostFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(terminalHost.service, createEventsFixture().service, { sessionHooks: hooks.service });
+    const operations = createClaudeUnifiedTerminalProviderOperations({ ctx, directory: '/tmp/claude-project',
+      happierSessionId: 'unified-pane-loss', hostPreference: 'zellij', launchEnv: {}, permissionMode: 'default' });
+    const activity: AgentSessionRuntimeEvent[] = [];
+    const providerEvents: ClaudeProviderEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents(event => activity.push(event));
+    operations.subscribeProviderEvents(event => providerEvents.push(event));
+    try {
+      await operations.prepareTerminalPresentation();
+      const request = hooks.service.startServer.mock.calls[0]?.[0];
+      if (!request?.onSessionHook) throw new Error('Session hook server was not started');
+      await request.onSessionHook('pane-loss-provider', { hook_event_name: 'PostToolUse', session_id: 'pane-loss-provider',
+        tool_name: 'Agent', tool_response: { status: 'async_launched', agentId: 'agent-active-at-pane-loss' } });
+      await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+      if (nativeExited) {
+        await operations.observeTerminalLifecycle({ agentId: 'claude', type: 'process_exited', exitCode: 0, signal: null, nativeExited: true });
+        expect(activity.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
+      }
+      const failedTurnsBeforePaneLoss = providerEvents.filter(event => event.kind === 'turn-failed');
+      vi.mocked(terminalHost.service.evaluateLiveness).mockResolvedValue({ paneAlive: false, paneDead, observedAt: 200 });
+      await operations.prepareTerminalPresentation();
+      expect(activity.at(-1)).toMatchObject({ state: expectedState, activeCount: expectedCount });
+      // Readiness owns this failure; losing a pane must not fabricate another process-exit turn.
+      expect(providerEvents.filter(event => event.kind === 'turn-failed')).toEqual(failedTurnsBeforePaneLoss);
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   describe('idle session-scoped failures (SILENT-F1 port: idle host deaths must not be silent)', () => {
     function readTurnEvents(runtimeEvents: readonly unknown[]): Readonly<{
       turnStarts: ReadonlyArray<Readonly<{ kind: string; turnId: string }>>;
@@ -6857,7 +6949,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       }
     });
 
-    it('projects active provider tasks as unknown when the host process exits', async () => {
+    it.each(['host-exit', 'session-end'] as const)('keeps provider activity unknown after %s without physical provider-stop proof', async (evidence) => {
       const terminalHost = createTerminalHostFixture();
       const events = createEventsFixture();
       const ctx = createPluginContextFixture(terminalHost.service, events.service);
@@ -6890,12 +6982,15 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
         const nativeRuntime = envelope.nativeRuntime as unknown as Readonly<{
           observeTerminalLifecycle(observation: unknown): Promise<void>;
         }>;
-        await nativeRuntime.observeTerminalLifecycle({
-          agentId: 'claude',
-          type: 'process_exited',
-          exitCode: 1,
-          signal: null,
-        });
+        if (evidence === 'host-exit') {
+          await nativeRuntime.observeTerminalLifecycle({
+            agentId: 'claude', type: 'process_exited', exitCode: 1, signal: null,
+          });
+        } else {
+          await hookRequest.onSessionHook('claude-session-active-exit', {
+            hook_event_name: 'SessionEnd', session_id: 'claude-session-active-exit',
+          });
+        }
         expect(runtimeActivityEvents.at(-1)).toEqual(expect.objectContaining({
           kind: 'runtime-activity-snapshot',
           state: 'unknown',
@@ -6914,6 +7009,19 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
           state: 'unknown',
           activeCount: 0,
         })));
+        await hookRequest.onSessionHook('claude-session-active-exit', {
+          hook_event_name: 'PostToolUse', session_id: 'claude-session-active-exit', tool_name: 'Agent',
+          tool_response: { status: 'async_launched', agentId: 'fresh-agent' },
+        });
+        await vi.waitFor(() => expect(runtimeActivityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+        await hookRequest.onSessionHook('claude-session-active-exit', {
+          hook_event_name: 'PostToolUse', session_id: 'claude-session-active-exit', tool_name: 'TaskOutput',
+          tool_input: { task_id: 'fresh-agent' },
+          tool_response: { retrieval_status: 'success', task: { task_id: 'fresh-agent', status: 'completed' } },
+        });
+        await vi.waitFor(() => expect(runtimeActivityEvents.at(-1)).toMatchObject({
+          state: 'unknown', activeCount: 0,
+        }));
       } finally {
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
       }

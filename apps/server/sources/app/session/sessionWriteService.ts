@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer } from "./messages/sessionInputAdmission";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { assertSessionCapabilityInTx, assertSessionOwnerInTx, resolveSessionAccessForOperation, type EffectiveSessionAccess, type SessionCapability } from "@/app/session/access/sessionAccess";
@@ -15,55 +16,19 @@ import { log, warn } from "@/utils/logging/log";
 import type { Prisma } from "@prisma/client";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
-import {
-    SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT,
-    AccountEncryptionMigrateSessionsDirectiveSchema,
-    VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-    agentEventLocalIdAttentionImpact,
-    ExactSessionTurnEndMutationV1Schema,
-    PrimaryTurnStatusV1Schema,
-    SessionRuntimeActivityProjectionSchema,
-    SessionRuntimeActivitySnapshotSchema,
-    TranscriptRawRecordV1Schema,
-    SessionTurnMutationActionV1Schema,
-    SessionTurnMutationV1Schema,
-    SessionTranscriptObservationProvenanceV1Schema,
-    SessionStoredMessageContentSchema,
-    SessionInputAdmissionReceiptV1Schema,
-    deriveSessionMessageAuthorAccountIdV1,
-    isRecoveredHistoryTranscriptObservationProvenance,
-    sanitizeSessionRuntimeIssueV1,
-    createPlainSessionOwnerMetadataEnvelopeV1,
-    createSessionOwnerMetadataV1,
-    encodeSessionOwnerMetadataEnvelopeV1,
-    projectSessionSharedMetadataV1,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-    SessionOwnerMetadataEnvelopeV1Schema,
-    SessionSharedMetadataV1Schema,
-    SessionUserActionRequiredOccurrenceV1Schema,
-    SessionAgentStateActivitySummaryV1Schema,
-    SessionMetadataPublisherPreconditionV1Schema,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    type PrimaryTurnStatusV1,
-    type AccountEncryptionMigrateSessionsDirective,
-    type SessionMetadataInactiveModelIntentExpectationV1,
-    type SessionOwnerMetadataEnvelopeV1,
-    type SessionMetadataOwnerMigrationPatchV1,
-    type SessionMetadataOwnerPatchV1,
-    type SessionMetadataInactiveModelIntentOwnerPatchV1,
-    type SessionMetadataPublisherPreconditionV1,
-    type SessionMessageRole,
-    type SessionInputAdmissionReceiptV1,
-    type SessionRuntimeIssueV1,
-    type SessionMessageAttentionImpact,
-    type SessionRuntimeActivityState,
-    type SessionTurnMutationActionV1,
-    type SessionTurnMutationDecisionV1,
-    type SessionTurnMutationReceiptV1,
-    type SessionTurnMutationV1,
-    type SessionUserActionRequiredOccurrenceV1,
-    type SessionTranscriptObservationProvenanceV1,
-} from "@happier-dev/protocol";
+import { SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT, agentEventLocalIdAttentionImpact, TranscriptRawRecordV1Schema, type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { AccountEncryptionMigrateSessionsDirectiveSchema, type AccountEncryptionMigrateSessionsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
+import { ExactSessionTurnEndMutationV1Schema, SessionTurnMutationActionV1Schema, SessionTurnMutationV1Schema, type SessionTurnMutationActionV1, type SessionTurnMutationDecisionV1, type SessionTurnMutationReceiptV1, type SessionTurnMutationV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { PrimaryTurnStatusV1Schema, sanitizeSessionRuntimeIssueV1, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionRuntimeActivityProjectionSchema, SessionRuntimeActivitySnapshotSchema, type SessionRuntimeActivityState } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { SessionTranscriptObservationProvenanceV1Schema, isRecoveredHistoryTranscriptObservationProvenance, type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, encodeSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, SessionOwnerMetadataEnvelopeV1Schema, SessionSharedMetadataV1Schema, SessionAgentStateActivitySummaryV1Schema, SessionMetadataPublisherPreconditionV1Schema, SESSION_METADATA_LAYOUT_VERSION_V1, type SessionMetadataInactiveModelIntentExpectationV1, type SessionOwnerMetadataEnvelopeV1, type SessionMetadataOwnerMigrationPatchV1, type SessionMetadataOwnerPatchV1, type SessionMetadataInactiveModelIntentOwnerPatchV1, type SessionMetadataPublisherPreconditionV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionUserActionRequiredOccurrenceV1Schema, type SessionUserActionRequiredOccurrenceV1 } from '@happier-dev/protocol/sessions/userActionRequiredOccurrenceV1';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { isDeepStrictEqual } from "node:util";
 import {
     scheduleSessionActivityRemoteAlerts,
@@ -127,11 +92,7 @@ import { rejoinAutomationOccurrenceInsertRace } from "@/app/automations/automati
 import { producesAutomationSessionLifecycleOccurrence } from "@/app/automations/automationSessionLifecycleTerminalTruth";
 import { SESSION_MESSAGE_WRITE_SELECT, SessionMessageRowRevisionRaceError, updateSessionMessageAtCurrentRevisionInTx } from './sessionMessageRevisionWrite';
 import { loadSessionRollbackEligibleTurnStartsInTx } from "./turns/sessionRollbackEligibilityProjection";
-import {
-    SessionTeamCredentialBindingMetadataPatchV1Schema,
-    type SessionTeamCredentialBindingMetadataPatchV1,
-    type SessionTeamCredentialBindingRejectionV1,
-} from "@happier-dev/protocol/teams";
+import { SessionTeamCredentialBindingMetadataPatchV1Schema, type SessionTeamCredentialBindingMetadataPatchV1, type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import {
     readSessionTeamCredentialBindingInTx,
     isSessionTeamCredentialBindingIntentCurrentInTx,
@@ -2339,7 +2300,7 @@ export async function updateSessionAgentState(params: {
     const agentStateCiphertext =
         typeof params.agentStateCiphertext === "string" || params.agentStateCiphertext === null ? params.agentStateCiphertext : undefined;
     const parsedUserActionRequiredOccurrences =
-        SessionUserActionRequiredOccurrenceV1Schema.array().safeParse(
+        z.array(SessionUserActionRequiredOccurrenceV1Schema).safeParse(
             params.userActionRequiredOccurrences ?? [],
         );
 
@@ -2587,6 +2548,12 @@ export type ApplySessionTurnMutationNoOpReason =
     | "stale-in-progress"
     | "no-current-turn";
 
+export type TerminalTurnPendingRequestProjection = Readonly<{
+    pendingPermissionRequestCount: 0;
+    pendingUserActionRequestCount: 0;
+    pendingRequestObservedAt: null;
+}>;
+
 export type ApplySessionTurnMutationResult =
     | {
         ok: true;
@@ -2600,6 +2567,7 @@ export type ApplySessionTurnMutationResult =
         recipientCursors: RecipientCursor[];
         badgeAttentionChanged: boolean;
         rollbackEligibleTurnStarts?: number[];
+        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
       }
     | {
         ok: false;
@@ -3085,6 +3053,7 @@ function createSessionTurnAppliedResult(params: {
     recipientCursors: RecipientCursor[];
     badgeAttentionChanged: boolean;
     rollbackEligibleTurnStarts?: number[];
+    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
 }): Extract<ApplySessionTurnMutationResult, { ok: true }> {
     return {
         ok: true,
@@ -3098,6 +3067,9 @@ function createSessionTurnAppliedResult(params: {
         badgeAttentionChanged: params.badgeAttentionChanged,
         ...(params.rollbackEligibleTurnStarts !== undefined
             ? { rollbackEligibleTurnStarts: params.rollbackEligibleTurnStarts }
+            : {}),
+        ...(params.pendingRequestProjection
+            ? { pendingRequestProjection: params.pendingRequestProjection }
             : {}),
     };
 }
@@ -3630,13 +3602,13 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         const nextLatestTurnId = params.turnMutation.action === "begin" ? targetTurnId : session.latestTurnId ?? targetTurnId;
         const shouldMaterialize = nextLatestTurnId === targetTurnId
             && (params.turnMutation.action === "begin" || params.turnMutation.action === "touch_active" || terminalStatus !== null);
-        const terminalPendingRequestProjection = terminalStatus !== null
+        const terminalPendingRequestProjection: TerminalTurnPendingRequestProjection | undefined = terminalStatus !== null
             ? {
                 pendingPermissionRequestCount: 0,
                 pendingUserActionRequestCount: 0,
                 pendingRequestObservedAt: null,
             }
-            : {};
+            : undefined;
         const nextActivityInputs = {
             ...toSessionActivityBadgeInputs(session),
             ...(shouldMaterialize ? { latestTurnStatus: appliedTurn.status } : {}),
@@ -3682,6 +3654,9 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             turn: appliedTurn,
             receipt,
             ...(!shouldMaterialize ? { state: materializedSessionTurnState(session) } : {}),
+            ...(shouldMaterialize && terminalPendingRequestProjection
+                ? { pendingRequestProjection: terminalPendingRequestProjection }
+                : {}),
             recipientCursors,
             badgeAttentionChanged,
             ...(rollbackEligibleTurnStarts !== undefined ? { rollbackEligibleTurnStarts } : {}),

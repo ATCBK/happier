@@ -104,7 +104,7 @@ export type ComputerUseTranslations = Readonly<{
         onMachineBody: (params: Readonly<{ machine: string }>) => string;
         openPrivacy: (params: Readonly<{ machine: string }>) => string;
     }>;
-    viewer: Readonly<{
+    presentation: Readonly<{
         agentUsing: (params: Readonly<{ agent: string; target: string }>) => string;
         agentCanUse: (params: Readonly<{ agent: string; target: string }>) => string;
         agentCanSee: (params: Readonly<{ agent: string; target: string }>) => string;
@@ -279,7 +279,7 @@ export const computerUseTranslationsEnglish = { en: {
             onMachineBody: ({ machine }) => `It is granted on ${machine}, not on this device.`,
             openPrivacy: ({ machine }) => `Open privacy settings on ${machine}`,
         },
-        viewer: {
+        presentation: {
             agentUsing: ({ agent, target }) => `${agent} is using ${target}`,
             agentCanUse: ({ agent, target }) => `${agent} can use ${target}`,
             agentCanSee: ({ agent, target }) => `${agent} can see ${target}`,

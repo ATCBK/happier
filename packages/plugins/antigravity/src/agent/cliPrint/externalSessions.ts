@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+
 import type {
   AgentExternalSessionLinkData,
   AgentExternalSessionLinkDataValue,
@@ -64,6 +66,7 @@ type FullCandidateSearchCursorV2 = Readonly<{
   searchTarget?: 'content';
   /** Directory-scan position the next bounded chunk resumes at. */
   directoryEntryOffset: number;
+  contentProgress?: AntigravityContentSearchProgress;
   /**
    * Last candidate this search served. Matches ordering at or before it were
    * already delivered by earlier chunks; a new one means the ordering moved
@@ -75,6 +78,46 @@ type FullCandidateSearchCursorV2 = Readonly<{
     sourceRevision: string;
   }>;
 }>;
+
+type AntigravityContentSearchProgress = Readonly<{
+  conversationId: string;
+  sourceIdentity: string;
+  offsetBytes: number;
+  count: number;
+  partial: boolean;
+  pendingToolCallIds: readonly string[];
+  match?: Readonly<{
+    startOffsetBytes: number;
+    endOffsetBytes: number;
+    itemIndex: number;
+    messageIndex: number;
+  }>;
+}>;
+
+function parseContentSearchProgress(value: unknown): AntigravityContentSearchProgress | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.conversationId !== 'string' || !isSafeAntigravityConversationId(record.conversationId)
+    || typeof record.sourceIdentity !== 'string' || !record.sourceIdentity
+    || !Number.isSafeInteger(record.offsetBytes) || (record.offsetBytes as number) < 0
+    || !Number.isSafeInteger(record.count) || (record.count as number) < 0
+    || typeof record.partial !== 'boolean' || !Array.isArray(record.pendingToolCallIds)
+    || record.pendingToolCallIds.some((id) => typeof id !== 'string' || !id.trim())) return null;
+  let match: AntigravityContentSearchProgress['match'];
+  if (record.match !== undefined) {
+    if (!record.match || typeof record.match !== 'object' || Array.isArray(record.match)) return null;
+    const row = record.match as Record<string, unknown>;
+    for (const key of ['startOffsetBytes', 'endOffsetBytes', 'itemIndex', 'messageIndex'] as const) {
+      if (!Number.isSafeInteger(row[key]) || (row[key] as number) < 0) return null;
+    }
+    if ((row.endOffsetBytes as number) < (row.startOffsetBytes as number)) return null;
+    match = { startOffsetBytes: row.startOffsetBytes as number, endOffsetBytes: row.endOffsetBytes as number,
+      itemIndex: row.itemIndex as number, messageIndex: row.messageIndex as number };
+  }
+  return { conversationId: record.conversationId, sourceIdentity: record.sourceIdentity,
+    offsetBytes: record.offsetBytes as number, count: record.count as number, partial: record.partial,
+    pendingToolCallIds: record.pendingToolCallIds as string[], ...(match ? { match } : {}) };
+}
 
 type AntigravityExternalReadAfterCursorV1 = Readonly<{
   v: 1;
@@ -296,6 +339,8 @@ function decodeFullCandidateSearchCursor(raw: string | undefined): FullCandidate
       || (record.searchTarget !== undefined && record.searchTarget !== 'content')
     ) return null;
     let after: FullCandidateSearchCursorV2['after'];
+    const contentProgress = record.contentProgress === undefined ? undefined : parseContentSearchProgress(record.contentProgress);
+    if (record.contentProgress !== undefined && (!contentProgress || record.searchTarget !== 'content')) return null;
     if (record.after !== undefined) {
       if (!record.after || typeof record.after !== 'object' || Array.isArray(record.after)) return null;
       const anchor = record.after as Record<string, unknown>;
@@ -321,6 +366,7 @@ function decodeFullCandidateSearchCursor(raw: string | undefined): FullCandidate
       searchTerm: record.searchTerm,
       ...(record.searchTarget === 'content' ? { searchTarget: 'content' as const } : {}),
       directoryEntryOffset: record.directoryEntryOffset as number,
+      ...(contentProgress ? { contentProgress } : {}),
       ...(after ? { after } : {}),
     };
   } catch {
@@ -426,6 +472,16 @@ function toCandidate(candidate: Readonly<{
   };
 }
 
+function readContentSearchText(rawContent: unknown): string | null {
+  const content = rawContent && typeof rawContent === 'object' && !Array.isArray(rawContent)
+    ? rawContent as Readonly<Record<string, unknown>> : null;
+  const rawData = content?.type === 'acp' ? content.data : null;
+  const data = rawData && typeof rawData === 'object' && !Array.isArray(rawData)
+    ? rawData as Readonly<Record<string, unknown>> : null;
+  return content?.type === 'text' && typeof content.text === 'string' ? content.text
+    : data?.type === 'message' && typeof data.message === 'string' ? data.message : null;
+}
+
 function fullCandidateSearchAnchorCandidate(
   anchor: NonNullable<FullCandidateSearchCursorV2['after']>,
 ): AgentExternalSessionCandidate {
@@ -442,6 +498,7 @@ function encodeFullCandidateSearchCursor(params: Readonly<{
   searchTerm: string;
   searchTarget?: 'content';
   directoryEntryOffset: number;
+  contentProgress?: AntigravityContentSearchProgress;
   after?: AgentExternalSessionCandidate;
 }>): string | null {
   let after: FullCandidateSearchCursorV2['after'];
@@ -462,6 +519,7 @@ function encodeFullCandidateSearchCursor(params: Readonly<{
     searchTerm: params.searchTerm,
     ...(params.searchTarget ? { searchTarget: params.searchTarget } : {}),
     directoryEntryOffset: params.directoryEntryOffset,
+    ...(params.contentProgress ? { contentProgress: params.contentProgress } : {}),
     ...(after ? { after } : {}),
   });
 }
@@ -495,61 +553,113 @@ async function listFullCandidateSearch(params: Readonly<{
   });
 
   const retained: AgentExternalSessionCandidate[] = [];
-  const control = createExternalSessionContentSearchControl(params.invocation);
+  const control = createExternalSessionContentSearchControl({
+    signal: params.invocation.signal,
+    deadlineAtMs: params.searchTarget === 'content'
+      ? params.invocation.scanDeadlineAtMs ?? params.invocation.deadlineAtMs
+      : params.invocation.deadlineAtMs,
+  });
   let partial = false;
   let yielded = false;
   let processedOffset = params.cursor?.directoryEntryOffset ?? 0;
+  let contentProgress = params.cursor?.contentProgress;
+  if (contentProgress && page.candidates[0]?.conversationId !== contentProgress.conversationId) {
+    throw new AntigravityCandidateSourceChangedError('Antigravity content-search candidate changed during pagination.');
+  }
+  const nativeFileSystem = createExternalSessionContentSearchControl({ signal: params.invocation.signal }).fileSystem;
   for (const nativeCandidate of page.candidates) {
     let candidate = toCandidate(nativeCandidate);
     if (params.searchTarget === 'content') {
       try {
+        params.invocation.signal.throwIfAborted();
+        const file = await stat(nativeCandidate.transcriptPath, { bigint: true });
+        const sourceIdentity = `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
+        const sizeBytes = Number(file.size);
+        if (contentProgress && (contentProgress.sourceIdentity !== sourceIdentity || contentProgress.offsetBytes > sizeBytes)) {
+          throw new AntigravityCandidateSourceChangedError('Antigravity content-search transcript changed during pagination.');
+        }
+        const resumed = Boolean(contentProgress);
+        let progress: AntigravityContentSearchProgress = contentProgress ?? {
+          conversationId: nativeCandidate.conversationId, sourceIdentity, offsetBytes: 0,
+          count: 0, partial: false, pendingToolCallIds: [],
+        };
+        contentProgress = progress;
+        let scanFinished = progress.offsetBytes === sizeBytes;
+        const checkScanWork = () => scanFinished || progress.offsetBytes === sizeBytes ? control.assertNotYielded() : control.checkWork();
         const searched = await searchExternalSessionContent({
           query: params.searchTerm,
-          paths: [nativeCandidate.transcriptPath],
+          ...(resumed ? {} : { paths: [nativeCandidate.transcriptPath] }),
           ripgrep: params.invocation.ripgrep,
           control,
+          isScanComplete: () => scanFinished || progress.offsetBytes === sizeBytes,
           async decode(matchText) {
-            const records: { id: string; snippet?: string }[] = [];
-            let offsetBytes = 0;
-            let partial = false;
-            let pendingToolCallIds: readonly string[] = [];
-            while (true) {
-              control.checkWork();
-              const lines = await readJsonlFileForwardLines({ filePath: nativeCandidate.transcriptPath, offsetBytes, maxItems: params.maxItems, maxBytes: params.invocation.maxSerializedBytes, fileSystem: control.fileSystem });
-              control.assertNotYielded();
-              partial ||= lines.truncated || Boolean(lines.diagnostics?.length);
-              partial ||= lines.items.some((line) => !line.value || typeof line.value !== 'object' || Array.isArray(line.value));
-              const projected = projectAntigravityTranscriptRecordGroupsWithCorrelation({
-                conversationId: nativeCandidate.conversationId,
-                pendingToolCallIds,
-                records: lines.items.flatMap((line) => line.value && typeof line.value === 'object' && !Array.isArray(line.value)
-                  ? [{ record: line.value as Record<string, unknown>, startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes }]
-                  : []),
+            while (progress.offsetBytes < sizeBytes) {
+              checkScanWork();
+              const offsetBytes = progress.offsetBytes;
+              const lines = await readJsonlFileForwardLines({ filePath: nativeCandidate.transcriptPath, offsetBytes,
+                maxItems: params.maxItems, maxBytes: params.invocation.maxSerializedBytes, fileSystem: nativeFileSystem,
+                onDiagnostic() { progress = { ...progress, partial: true }; contentProgress = progress; },
+                onLine(line) {
+                  params.invocation.signal.throwIfAborted();
+                  const valid = line.value !== null && typeof line.value === 'object' && !Array.isArray(line.value);
+                  const projected = projectAntigravityTranscriptRecordGroupsWithCorrelation({
+                    conversationId: nativeCandidate.conversationId,
+                    pendingToolCallIds: progress.pendingToolCallIds,
+                    records: valid ? [{ record: line.value as Record<string, unknown>,
+                      startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes }] : [],
+                  });
+                  const group = projected.groups[0];
+                  let match = progress.match;
+                  for (const [itemIndex, item] of (group?.items ?? []).entries()) {
+                    const text = readContentSearchText(item.raw.content);
+                    if (!match && text !== null && matchText(text) !== null) {
+                      match = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes,
+                        itemIndex, messageIndex: progress.count + itemIndex };
+                    }
+                  }
+                  // A native row is indivisible. Retain byte, ordinal and tool
+                  // correlation facts before checking cooperative work time.
+                  progress = { ...progress, offsetBytes: Math.min(sizeBytes, line.endOffsetBytes + 1),
+                    count: progress.count + (group?.items.length ?? 0),
+                    pendingToolCallIds: projected.pendingToolCallIds,
+                    partial: progress.partial || !valid || Boolean(group?.unsupported), ...(match ? { match } : {}) };
+                  contentProgress = progress;
+                  checkScanWork();
+                },
               });
-              pendingToolCallIds = projected.pendingToolCallIds;
-              for (const group of projected.groups) {
-                partial ||= group.unsupported;
-                for (const item of group.items) {
-                  control.checkWork();
-                  const rawContent = item.raw.content;
-                  const content = rawContent && typeof rawContent === 'object' && !Array.isArray(rawContent)
-                    ? rawContent as Readonly<Record<string, unknown>> : null;
-                  const rawData = content?.type === 'acp' ? content.data : null;
-                  const data = rawData && typeof rawData === 'object' && !Array.isArray(rawData)
-                    ? rawData as Readonly<Record<string, unknown>> : null;
-                  const text = content?.type === 'text' && typeof content.text === 'string' ? content.text
-                    : data?.type === 'message' && typeof data.message === 'string' ? data.message : '';
-                  const snippet = text ? matchText(text) : null;
-                  records.push({ id: item.id, ...(snippet === null ? {} : { snippet }) });
-                }
-              }
-              if (lines.reachedEnd) break;
-              if (lines.nextOffsetBytes <= offsetBytes) { partial = true; break; }
-              offsetBytes = lines.nextOffsetBytes;
+              control.assertNotYielded();
+              progress = { ...progress, offsetBytes: lines.nextOffsetBytes,
+                partial: progress.partial || lines.truncated || Boolean(lines.diagnostics?.length) };
+              contentProgress = progress;
+              if (lines.reachedEnd) { scanFinished = true; break; }
+              if (lines.nextOffsetBytes <= offsetBytes) { progress = { ...progress, partial: true }; scanFinished = true; break; }
             }
-            return { records, partial };
+            // Opaque cursor data holds locations, never authoritative text.
+            // Finalization re-decodes the native row under hard cancellation.
+            const row = progress.match;
+            const lines = row ? await readJsonlFileForwardLines({ filePath: nativeCandidate.transcriptPath,
+              offsetBytes: row.startOffsetBytes, maxItems: 1,
+              maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), fileSystem: nativeFileSystem }) : null;
+            params.invocation.signal.throwIfAborted();
+            const line = lines?.items[0];
+            const items = line && row && line.startOffsetBytes === row.startOffsetBytes && line.endOffsetBytes === row.endOffsetBytes
+              && line.value && typeof line.value === 'object' && !Array.isArray(line.value)
+              ? projectAntigravityTranscriptRecordsToExternalItems({ conversationId: nativeCandidate.conversationId,
+                records: [{ record: line.value as Record<string, unknown>, startOffsetBytes: line.startOffsetBytes,
+                  endOffsetBytes: line.endOffsetBytes }] }) : [];
+            const item = row ? items[row.itemIndex] : undefined;
+            const text = item ? readContentSearchText(item.raw.content) : null;
+            const snippet = text !== null ? matchText(text) : null;
+            return { records: item && row && snippet !== null ? [{ id: item.id, snippet, messageIndex: row.messageIndex }] : [],
+              partial: progress.partial };
           },
         });
+        const finalFile = await stat(nativeCandidate.transcriptPath, { bigint: true });
+        if (`${finalFile.dev}:${finalFile.ino}:${finalFile.size}:${finalFile.mtimeNs}:${finalFile.ctimeNs}` !== sourceIdentity) {
+          throw new AntigravityCandidateSourceChangedError('Antigravity content-search transcript changed while scanning.');
+        }
+        params.invocation.signal.throwIfAborted();
+        contentProgress = undefined;
         partial ||= searched.partial;
         processedOffset = nativeCandidate.directoryEntryOffset;
         if (!searched.match) continue;
@@ -582,7 +692,7 @@ async function listFullCandidateSearch(params: Readonly<{
   retained.sort(compareExternalSessionCandidatePrecedence);
 
   const stopped = getAgentExternalSessionsInvocationFailure(params.invocation);
-  if (stopped && (!yielded || params.invocation.signal.aborted)) return stopped;
+  if (stopped) return stopped;
 
   const exhausted = !yielded && page.nextDirectoryEntryOffset === null;
   const nextOffset = yielded ? processedOffset : page.nextDirectoryEntryOffset;
@@ -603,6 +713,7 @@ async function listFullCandidateSearch(params: Readonly<{
       searchTerm: params.searchTerm,
       ...(params.searchTarget ? { searchTarget: params.searchTarget } : {}),
       directoryEntryOffset: nextOffset,
+      ...(contentProgress ? { contentProgress } : {}),
       ...(servedAnchor ? { after: servedAnchor } : {}),
     });
     if (!nextCursor) {

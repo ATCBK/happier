@@ -1,7 +1,4 @@
-import type {
-    ReorderSessionOrganizationRequest,
-    ReorderSessionOrganizationResponse,
-} from "@happier-dev/protocol";
+import type { ReorderSessionOrganizationRequest, ReorderSessionOrganizationResponse } from '@happier-dev/protocol/sessions/organization/mutations';
 
 import { inTx } from "@/storage/inTx";
 import { hashSessionOrganizationKey } from "./hashKeys";

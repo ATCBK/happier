@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { TeamCredentialSourceBindingV1Schema } from "@happier-dev/protocol/teams";
-import { ProviderBrokerRouteGrantPayloadV1Schema } from "@happier-dev/protocol";
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { ProviderBrokerRouteGrantPayloadV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type { Tx } from "@/storage/inTx";
 

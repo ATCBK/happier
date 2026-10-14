@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import {
@@ -17,18 +17,18 @@ export const MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_ENCODED_BYTES = 256 * 1024;
 
 const textEncoder = new TextEncoder();
 
-export const MessageStructuredPresentationOwnerV1Schema = lazyZodSchema(() => z.object({
+export const MessageStructuredPresentationOwnerV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type MessageStructuredPresentationOwnerV1 = z.infer<
   typeof MessageStructuredPresentationOwnerV1Schema
 >;
 
-const QualifiedActionReferenceV1Schema = lazyZodSchema(() => z.object({
+const QualifiedActionReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   localId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -83,41 +83,41 @@ function inspectSnapshot(
  * the transcript-node grammar; Message owns its persistence-only closure,
  * including qualified Action references and bounded serialized storage.
  */
-export const MessageStructuredPresentationV1Schema = lazyZodSchema(() => z.object({
+export const MessageStructuredPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   profile: z.literal('pluginTranscriptV1'),
   owner: MessageStructuredPresentationOwnerV1Schema,
   snapshot: PluginTranscriptPresentationNodeV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const inspected = inspectSnapshot(value.snapshot);
   if (inspected.nodeCount > MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_NODES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['snapshot'],
       message: `Structured presentation exceeds ${MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_NODES} nodes.`,
     });
   }
   if (inspected.maxDepth > MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_DEPTH) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['snapshot'],
       message: `Structured presentation exceeds depth ${MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_DEPTH}.`,
     });
   }
   for (const path of inspected.unqualifiedActionPaths) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['snapshot', ...path],
       message: 'Persisted structured-presentation Actions must use qualified plugin references.',
     });
   }
   if (textEncoder.encode(JSON.stringify(value)).byteLength > MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_ENCODED_BYTES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `Structured presentation exceeds ${MESSAGE_STRUCTURED_PRESENTATION_V1_MAX_ENCODED_BYTES} encoded bytes.`,
     });
   }
-}));
+})));
 export type MessageStructuredPresentationV1 = z.infer<typeof MessageStructuredPresentationV1Schema>;
 
 function qualifyLocalActionReferences(

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
 import { View, Platform, Pressable } from 'react-native';
@@ -94,11 +95,11 @@ export const projectSubAgentSummaryDisplayText: ToolDisplayTextProjector = (tool
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        paddingVertical: 4,
+        paddingVertical: theme.space.s4,
     },
     summaryItem: {
-        paddingVertical: 6,
-        paddingHorizontal: 4,
+        paddingVertical: theme.space.s6,
+        paddingHorizontal: theme.space.s4,
     },
     summaryText: {
         fontSize: 14,
@@ -108,24 +109,23 @@ const stylesheet = StyleSheet.create((theme) => ({
     toolItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 4,
-        paddingLeft: 4,
-        paddingRight: 2,
+        paddingVertical: theme.space.s4,
+        paddingLeft: theme.space.s4,
+        paddingRight: theme.space.s2,
     },
     toolTitle: {
-        fontSize: 14,
-        fontWeight: '500',
+        ...Typography.variant('label'),
         color: theme.colors.text.secondary,
         fontFamily: 'monospace',
         flex: 1,
     },
     statusContainer: {
         marginLeft: 'auto',
-        paddingLeft: 8,
+        paddingLeft: theme.space.s8,
     },
     moreToolsItem: {
-        paddingVertical: 4,
-        paddingHorizontal: 4,
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s4,
     },
     moreToolsText: {
         fontSize: 14,

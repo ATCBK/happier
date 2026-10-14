@@ -5,7 +5,7 @@ import type { RegistryFetchContextV1, RegistryFormatAdapterV1 } from './registry
 import { deriveRegistrySourceIdV1, type RegistrySourceV1 } from '../registrySourcesV1.js';
 import { RegistryItemV1Schema, type RegistryContentRefV1, type RegistryItemSummaryV1, type RegistryProvenanceV1 } from '../registryItemsV1.js';
 import { REGISTRY_FORMAT_ADAPTERS_V1 } from './index.js';
-import { registryPluginItemV1, registryPluginSummaryV1 } from './registryPluginListingV1.js';
+import { registryPluginItemV1, registryPluginSummaryV1, registryPluginSupportsKindV1 } from './registryPluginListingV1.js';
 import { bindRegistryMarketplaceCatalogV1 } from './registryMarketplaceCatalogBindingV1.js';
 
 async function readCatalog(ctx: RegistryFetchContextV1, source: RegistrySourceV1,
@@ -25,7 +25,8 @@ export const happierCatalogRegistryAdapterV1: RegistryFormatAdapterV1 = {
     const response = await ctx.http.getJson(url);
     if (!response.ok) return null;
     try { const catalog = parseMarketplaceIndexSourceSnapshotV1(response.value);
-      return { format: 'happier-catalog', kinds: [...new Set(['plugin' as const, ...catalog.picks.map(pick => pick.kind)])],
+      return { format: 'happier-catalog', kinds: [...new Set(['plugin' as const, ...catalog.picks.map(pick => pick.kind),
+        ...(catalog.entries.some(entry => registryPluginSupportsKindV1(entry, 'agent')) ? ['agent' as const] : [])])],
         title: catalog.source.title, itemCount: catalog.entries.length + catalog.picks.length };
     } catch { return null; }
   },
@@ -63,7 +64,11 @@ export const happierCatalogRegistryAdapterV1: RegistryFormatAdapterV1 = {
           }
         }))).filter((item): item is RegistryItemSummaryV1 => item !== null)
           .filter(item => !query || `${item.title} ${item.description ?? ''} ${item.itemId}`.toLocaleLowerCase().includes(query));
-        return { sourceId: req.source.id, status: { state: 'ok', fetchedAt }, total: items.length, items, nextCursor: null };
+        const plugins = catalog.entries.filter(entry => registryPluginSupportsKindV1(entry, req.kind)
+          && (!query || `${entry.display.title} ${entry.display.description ?? ''} ${entry.pluginId}`.toLocaleLowerCase().includes(query)))
+          .map(entry => registryPluginSummaryV1(req.source, entry));
+        return { sourceId: req.source.id, status: { state: 'ok', fetchedAt }, total: items.length + plugins.length,
+          items: [...items, ...plugins], nextCursor: null };
       }
       const entries = catalog.entries.filter(entry => !query || `${entry.display.title} ${entry.display.description ?? ''} ${entry.pluginId}`.toLocaleLowerCase().includes(query));
       return { sourceId: req.source.id, status: { state: 'ok', fetchedAt }, total: entries.length,
@@ -72,11 +77,16 @@ export const happierCatalogRegistryAdapterV1: RegistryFormatAdapterV1 = {
   },
   async read(ctx, req) {
     const { catalog, fetchedAt } = await readCatalog(ctx, req.source,
-      req.kind === 'plugin' && req.version ? { pluginId: req.itemId, version: req.version } : undefined);
+      (req.kind === 'plugin' || req.kind === 'agent') && req.version ? { pluginId: req.itemId, version: req.version } : undefined);
     if (req.kind !== 'plugin') {
       const picks = catalog.picks.filter(pick => pick.kind === req.kind && pickItemId(pick) === req.itemId);
       const pick = picks.length === 1 ? picks[0] : undefined;
       const adapter = pick && targetAdapter(pick);
+      if (picks.length === 0) {
+        const listing = catalog.entries.find(entry => entry.pluginId === req.itemId
+          && (!req.version || entry.distribution.version === req.version) && registryPluginSupportsKindV1(entry, req.kind));
+        if (listing) return registryPluginItemV1(req.source, listing, fetchedAt);
+      }
       if (!pick || !adapter) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
       const target = { source: pickSource(pick), kind: pick.kind, itemId: pick.itemId, ...(req.version === undefined ? {} : { version: req.version }) };
       const read = ctx.readTargetItem ? await ctx.readTargetItem(target) : await adapter.read(ctx, target);

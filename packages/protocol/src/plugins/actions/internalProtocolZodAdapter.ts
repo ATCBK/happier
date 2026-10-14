@@ -1,12 +1,4 @@
-/**
- * Protocol-internal bridge for legacy Zod parents.
- *
- * The public composable remains a neutral five-member value. This bridge is
- * deliberately not exported from a package entry point: it delegates parsing
- * and normalization straight back to that public value while an incumbent
- * internal Zod parent is migrated.
- */
-import { z } from 'zod';
+/** Protocol-internal Mini projection of the neutral composable schema. */
 import * as mini from 'zod/mini';
 import { createProtocolStoredReadSchema } from './protocolComposableSchema.js';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
@@ -16,11 +8,9 @@ import type {
 } from './jsonSchemaValidation.js';
 
 /**
- * This private bridge receives the neutral parser surface structurally. The
- * typed parser signature is deliberately separate from the broad public
- * admission overload so Zod parents retain concrete input/output projections
- * without publishing a validator identity or leaking private aliases into
- * generated SDK declarations.
+ * This private adapter receives the neutral parser surface structurally. Its
+ * typed signature retains concrete input/output projections without publishing
+ * a validator identity through the neutral authoring API.
  */
 type ProtocolComposableSchemaForZod<TInput, TOutput> = Readonly<{
   readonly jsonSchema: object;
@@ -31,18 +21,16 @@ type ProtocolComposableSchemaForZod<TInput, TOutput> = Readonly<{
 }>;
 
 // Catalog parents repeatedly compose the same immutable neutral definitions.
-// Share their one facade by definition identity, never by JSON document shape.
-const protocolZodFacades = new WeakMap<object, z.ZodType>();
+// Share their one adapter by definition identity, never by JSON document shape.
+const protocolZodFacades = new WeakMap<object, mini.ZodMiniType>();
 
 export function asProtocolZod<TInput, TOutput>(
   schema: ProtocolComposableSchemaForZod<TInput, TOutput>,
-): z.ZodType<TOutput, TInput> {
+): mini.ZodMiniType<TOutput, TInput> {
   const existing = protocolZodFacades.get(schema);
-  // Each definition identity fixes the input/output projections of its facade.
-  if (existing) return existing as z.ZodType<TOutput, TInput>;
-  // This bridge exposes only ZodType, so Zod's native lazy combinator can
-  // retain the actual adapter identity used by recursive JSON Schema exports.
-  const facade = z.lazy(() => {
+  // Each definition identity fixes the input/output projections of its adapter.
+  if (existing) return existing as mini.ZodMiniType<TOutput, TInput>;
+  const facade = mini.lazy(() => {
     // Keep refinement-before-transform: parent refinements explicitly opting
     // into failed admission must observe the original input, not NEVER.
     const createAdapter = (safeParse: (value: unknown) => ProtocolSchemaSafeParseResult<TOutput>) => {
@@ -75,7 +63,7 @@ export function asProtocolZod<TInput, TOutput>(
       Object.assign(jsonSchema, fragment);
     };
 
-    return defineStoredReadProjection<z.core.$ZodType<TOutput, TInput>>(adapter, () => {
+    return defineStoredReadProjection<mini.core.$ZodType<TOutput, TInput>>(adapter, () => {
       // The incumbent portable-schema owner already derives additive-open/drop
       // readers; keep its constraints rather than introducing another validator.
       const stored = createProtocolStoredReadSchema(schema);

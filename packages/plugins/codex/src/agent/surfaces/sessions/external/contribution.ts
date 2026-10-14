@@ -338,6 +338,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           includeThreads: request.includeThreads,
           signal: request.signal,
           deadlineAtMs: request.deadlineAtMs,
+          scanDeadlineAtMs: request.scanDeadlineAtMs,
           exec: request.exec,
           resultBudget: {
             fits(page) {

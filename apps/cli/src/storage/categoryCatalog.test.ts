@@ -36,6 +36,24 @@ async function fixture() {
 }
 
 describe('Happier storage category catalog', () => {
+    it.skipIf(process.platform === 'win32')('binds a managed uv item to the same guarded Storage remover', async () => {
+        const f = await fixture();
+        const installRoot = join(f.happyHomeDir, 'tools', 'providers', managedAcpInstallId({ accountId: 'alice', definitionId: 'uv-agent', version: '1.0' }));
+        await f.add(join(installRoot, 'current'));
+        await writeFile(join(installRoot, 'current', 'uv.json'), JSON.stringify({ definitionId: 'uv-agent', title: 'Uv Agent',
+            version: '1.0', kind: 'uv', package: 'fixture-agent', command: 'agent' }));
+        const uvDir = join(f.happyHomeDir, 'tools', 'uv', 'current', 'bin');
+        await mkdir(uvDir, { recursive: true });
+        await writeFile(join(uvDir, 'uv'), '#!/bin/sh\n[ "$1 $2 $3" = "tool uninstall fixture-agent" ]\n', { mode: 0o755 });
+        const catalog = createStorageCategoryCatalog({ ...f, acpAccountId: 'alice', isAcpDefinitionInUse: () => false,
+            readAcpCatalog: () => ({ status: 'ready', revision: 1, record: { v: 1, definitions: [] } }) });
+        const item = (await catalog.discover()).find(item => item.path === installRoot)!;
+        expect(item.title).toBe('Uv Agent · removed agent');
+        const adapter = await catalog.resolveAdapter(item);
+        await adapter.discard({});
+        await expect(filesystem.access(installRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('binds ACP cleanup to one Account version and keeps its live-use guard', async () => {
         const f = await fixture();
         const installed: string[] = [];
@@ -275,7 +293,8 @@ describe('Happier storage category catalog', () => {
             readWorktrees: () => readStorageWorktrees({ cwds: [cwd], registry }) });
         const uploads = await f.add(join(worktree, '.happier', 'uploads', 'messages', 'historic-session'));
         const items = await catalog.discover();
-        expect(items.find(item => item.path === repo)).toBeUndefined();
+        expect(items.find(item => item.path === repo)).toMatchObject({ categoryId: 'worktrees', kind: 'worktree', verdict: 'keep',
+            reason: { code: 'unsupported', detail: { cause: 'checkout_reference_owner_unavailable' } } });
         expect(items.find(item => item.path === worktree)).toMatchObject({ categoryId: 'worktrees',
             kind: 'worktree', verdict: 'keep', reason: { code: 'changed_files' }, collectable: true });
         expect(items.find(item => item.path === uploads)).toMatchObject({ categoryId: 'sessionFolders', verdict: 'check', collectable: false });

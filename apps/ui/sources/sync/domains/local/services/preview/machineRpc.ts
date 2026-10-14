@@ -5,6 +5,7 @@ import {
     DaemonLocalServicePreviewRevokeResponseV1Schema,
     DaemonLocalServicePreviewSnapshotRequestV1Schema,
     DaemonLocalServicePreviewSnapshotResponseV1Schema,
+    type LocalServicePreviewSnapshotV1,
 } from '@happier-dev/protocol/local/services/preview/v1';
 import { isRpcMethodNotFoundResult, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -24,6 +25,12 @@ import {
     type LocalServicePreviewSnapshotClientInput,
     type LocalServicePreviewSnapshotClientResult,
 } from './api';
+import type { LocalServicePreviewSnapshot } from './store';
+
+/** One admitted read supplies the Action DTO and the existing pane projection. */
+export type LocalServicePreviewSnapshotRpcResult =
+    | Readonly<{ ok: true; protocolSnapshot: LocalServicePreviewSnapshotV1; snapshot: LocalServicePreviewSnapshot }>
+    | Extract<LocalServicePreviewSnapshotClientResult, { ok: false }>;
 
 // The daemon lifecycle handler throws `local_service_preview_lifecycle_refused:<reasonCode>`
 // for an honest domain refusal (wrong machine, unknown inventory entry, non-loopback target).
@@ -54,7 +61,7 @@ function lifecycleFailureFromError(error: unknown): LocalServicePreviewLifecycle
 
 export async function fetchLocalServicePreviewSnapshotViaMachineRpc(
     input: LocalServicePreviewSnapshotClientInput,
-): Promise<LocalServicePreviewSnapshotClientResult> {
+): Promise<LocalServicePreviewSnapshotRpcResult> {
     if (input.signal?.aborted) {
         return { ok: false, reason: 'request_failed' };
     }
@@ -76,7 +83,7 @@ export async function fetchLocalServicePreviewSnapshotViaMachineRpc(
             return { ok: false, reason: 'invalid_response' };
         }
         const snapshot = normalizeLocalServicePreviewSnapshotPayload(parsed.data.snapshot, input.machineId);
-        return snapshot ? { ok: true, snapshot } : { ok: false, reason: 'invalid_response' };
+        return snapshot ? { ok: true, snapshot, protocolSnapshot: parsed.data.snapshot } : { ok: false, reason: 'invalid_response' };
     } catch {
         return { ok: false, reason: 'request_failed' };
     }

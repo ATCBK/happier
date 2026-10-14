@@ -1,6 +1,6 @@
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionPrepareResult } from '@happier-dev/protocol/actions/executor/types';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
 import { randomUUID } from '@/platform/randomUUID';
@@ -17,6 +17,10 @@ export type UiScmActionFailure = Readonly<{
 
 /** Legacy typed SCM facades retain their closed error vocabulary and approval handle. */
 export function normalizeUiScmFacadeResult<T extends { success: boolean; error?: string; errorCode?: string }>(result: unknown): T | ScmRpcFailure {
+    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
+        const refusal = ActionExecuteFailureSchema.safeParse(result);
+        if (refusal.success) result = { success: false, errorCode: refusal.data.errorCode, error: refusal.data.error };
+    }
     if (result && typeof result === 'object' && 'success' in result && result.success === false && 'errorCode' in result
         && !ScmOperationErrorCodeSchema.safeParse(result.errorCode).success) {
         return { ...result, success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,

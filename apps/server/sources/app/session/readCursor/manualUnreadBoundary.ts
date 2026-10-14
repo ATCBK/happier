@@ -1,9 +1,6 @@
-import {
-    PrimaryTurnStatusV1Schema,
-    SessionStoredMessageContentSchema,
-    isRecoveredHistoryTranscriptObservationProvenance,
-    type PrimaryTurnStatusV1,
-} from "@happier-dev/protocol";
+import { PrimaryTurnStatusV1Schema, type PrimaryTurnStatusV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import { db } from "@/storage/db";
 import {

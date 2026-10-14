@@ -1,3 +1,4 @@
+import { CONVERSATION_DELIVERY_CUSTODY_STATES_V1 } from '@happier-dev/channels-protocol/v1';
 import type {
   ConversationDeliveryArchiveRecoveryV1,
   ConversationDeliveryResultV1,
@@ -7,19 +8,7 @@ import type {
 
 import { conversationRetryDelayMs } from './retryBackoff.js';
 
-export const CONVERSATION_DELIVERY_CUSTODY_STATES = [
-  'ready',
-  'retryDue',
-  'attempting',
-  'delivered',
-  'notDelivered',
-  'suppressed',
-  'partial',
-  'outcomeUnknown',
-  'resolvedAccepted',
-  'resolvedDiscarded',
-  'connectionDeleted',
-] as const;
+export const CONVERSATION_DELIVERY_CUSTODY_STATES = CONVERSATION_DELIVERY_CUSTODY_STATES_V1;
 
 /**
  * The one custody-state vocabulary whose content may be replaced by the

@@ -48,7 +48,7 @@ import { resolvePendingInputServerWireMode } from '@/sync/engine/pending/pending
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { SessionMessageAccountByline } from '@/components/sessions/transcript/SessionMessageAccountByline';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
@@ -1536,7 +1536,7 @@ const PendingMessageCopyAction = React.memo(function PendingMessageCopyAction(pr
     message: PendingMessage | DiscardedPendingMessage;
     testID: string;
 }) {
-    const { markCopied, isCopied } = useTemporaryCopyFeedback();
+    const { markCopied, isCopied } = useHappierCopyFeedback();
     const copied = isCopied();
     const handlePress = React.useCallback(async () => {
         if (await copyPendingMessageText(props.message)) {

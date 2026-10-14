@@ -7,9 +7,6 @@ import {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 import { CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1 } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 import type { HookHandler } from '@happier-dev/plugin-sdk/hooks';
-import type {
-  McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint,
-} from '@happier-dev/plugin-sdk/mcp';
 import { CLAUDE_SUBSCRIPTION_OAUTH_PROFILE } from './connectedAccounts/claudeSubscriptionProfile.js';
 
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES } from './agent/auth/services/native/scopes.js';
@@ -98,20 +95,6 @@ async function launchClaudeTeammate(input: unknown, context: PluginInvocationCon
     },
     idempotencyKey: `member:${teamId}:${memberLabel}`,
   });
-}
-
-function toClaudeMcpEndpoint(
-  server: Awaited<ReturnType<typeof readClaudeMcpConfigServers>>['servers'][number],
-): PluginMcpDiscoveredEndpoint | null {
-  if ((server.transport === 'http' || server.transport === 'sse') && server.remote) {
-    return {
-      id: `claude.config.${server.name}`,
-      name: server.name,
-      kind: server.transport,
-      url: server.remote.url,
-    };
-  }
-  return null;
 }
 
 const {
@@ -311,7 +294,7 @@ export const CLAUDE_PLUGIN = definePlugin({
                 darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'] }],
                 linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'] }],
                 win32: [{
-                  cmd: 'powershell',
+                  cmd: 'powershell.exe',
                   args: [
                     '-NoProfile',
                     '-ExecutionPolicy',
@@ -585,9 +568,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           });
           return {
             items: [],
-            endpoints: detected.servers
-              .map(toClaudeMcpEndpoint)
-              .filter((endpoint): endpoint is PluginMcpDiscoveredEndpoint => endpoint !== null),
+            detectedServers: detected.servers,
             warnings: detected.warnings,
           };
         },

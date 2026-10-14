@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import type { LocalServicePublicAuditEventV1 } from "@happier-dev/protocol";
+import type { LocalServicePublicAuditEventV1 } from '@happier-dev/protocol/local/services/public/v1';
 
 import type { LocalServicePublicAuditDependencyEnv } from "@/app/features/catalog/readFeatureEnv";
 

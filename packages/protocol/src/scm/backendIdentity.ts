@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ScmBuiltInBackendIdSchema = lazyZodSchema(() => z.enum(['git', 'sapling']));
 export type ScmBuiltInBackendId = z.infer<typeof ScmBuiltInBackendIdSchema>;
 
-export const ScmBackendIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+export const ScmBackendIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type ScmBackendId = z.infer<typeof ScmBackendIdSchema>;
 
 export const ScmBackendPreferenceSchema = lazyZodSchema(() => z.object({

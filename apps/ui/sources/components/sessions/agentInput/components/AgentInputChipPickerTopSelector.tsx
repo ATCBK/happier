@@ -149,7 +149,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: 'transparent',
     },
     optionLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     iconSlot: {

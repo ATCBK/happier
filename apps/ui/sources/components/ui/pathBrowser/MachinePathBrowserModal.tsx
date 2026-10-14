@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -869,7 +870,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         footer: chromeFooter,
         scrollHost: 'body' as const,
         dimensions: {
-            width: 560,
+            width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide,
             maxHeightRatio: 0.96,
             size: 'lg' as const,
             viewportMargin: { horizontal: 12, vertical: 12 } as const,

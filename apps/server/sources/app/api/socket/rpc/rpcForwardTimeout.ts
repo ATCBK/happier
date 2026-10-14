@@ -1,4 +1,5 @@
-import { readServerConfig, SERVER_CONFIG } from '@happier-dev/protocol';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { readStartupHomeEnv } from '@/app/home/settings/startupHomeEnv';
 
 export function resolveRpcForwardTimeoutMs(requestedTimeoutMs?: number | null): number | null {

@@ -4,7 +4,7 @@ import {
   materializeHappierRenderableImage,
   type HappierRenderableImageSource,
 } from '@happier-dev/plugin-ui/advanced';
-import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contributionIdentity';
+import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import { createPluginContextualResourceReadClient } from '@/components/plugins/surfaces/pluginSurfaceResourceRead';
 

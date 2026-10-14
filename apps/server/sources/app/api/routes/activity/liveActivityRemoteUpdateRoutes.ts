@@ -1,4 +1,4 @@
-import { LiveActivityRemoteUpdateRequestV1Schema } from "@happier-dev/protocol";
+import { LiveActivityRemoteUpdateRequestV1Schema } from '@happier-dev/protocol/activity/live/remoteUpdates';
 
 import { resolveLiveActivityRemoteTransportConfig } from "@/app/activity/liveActivities/resolveLiveActivityRemoteTransport";
 import { sendDirectApnsLiveActivityUpdate } from "@/app/activity/liveActivities/providers/directApnsLiveActivityProvider";

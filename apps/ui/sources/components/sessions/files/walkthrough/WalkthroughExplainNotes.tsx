@@ -124,7 +124,7 @@ const styles = StyleSheet.create((theme) => ({
     noteDivided: { paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     noteHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
     noteTitle: { flex: 1, ...Typography.variant('label', 'semiBold'),  color: theme.colors.text.primary,  },
-    noteTitleSecondary: { fontSize: 13.5, color: theme.colors.text.secondary },
+    noteTitleSecondary: { ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
     noteBody: { marginTop: theme.space.s4, marginLeft: 30, ...Typography.variant('body'),  color: theme.colors.text.secondary,  },
     read: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, marginTop: theme.space.s6, marginLeft: 30 },
     readText: { ...Typography.variant('body', 'medium'), color: theme.colors.text.secondary,  },

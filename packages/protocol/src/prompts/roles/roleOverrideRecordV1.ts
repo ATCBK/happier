@@ -1,22 +1,22 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { RoleInstructionsOverrideV1Schema } from './rolesV1.js';
 
 /** Documents remain Artifacts; this catalog owns only the reader's overrides. */
-export const RoleOverrideCatalogV1Schema = lazyZodSchema(() => z.object({
-  overrides: z.record(z.string().min(1), RoleInstructionsOverrideV1Schema),
-}).strict().superRefine((value, context) => {
+export const RoleOverrideCatalogV1Schema = lazyZodSchema(() => z.strictObject({
+  overrides: z.record(z.string().check(z.minLength(1)), RoleInstructionsOverrideV1Schema),
+}).check(z.superRefine((value, context) => {
   for (const [roleId, override] of Object.entries(value.overrides)) {
     if (roleId !== override.roleId) context.addIssue({
       code: 'custom', path: ['overrides', roleId, 'roleId'], message: 'Role override id must match its record key',
     });
   }
-}));
+})));
 export type RoleOverrideCatalogV1 = z.infer<typeof RoleOverrideCatalogV1Schema>;
 export const StoredRoleOverrideCatalogV1Schema = createStoredReadSchema(RoleOverrideCatalogV1Schema);
 
-export const RoleOverrideRecordV1Schema = lazyZodSchema(() => RoleOverrideCatalogV1Schema.safeExtend({ v: z.literal(1) }));
+export const RoleOverrideRecordV1Schema = lazyZodSchema(() => z.safeExtend(RoleOverrideCatalogV1Schema, { v: z.literal(1) }));
 export type RoleOverrideRecordV1 = z.infer<typeof RoleOverrideRecordV1Schema>;
 export const StoredRoleOverrideRecordV1Schema = createStoredReadSchema(RoleOverrideRecordV1Schema);
 
@@ -26,8 +26,8 @@ export type AccountRoleOverridesReadV1 =
   | Readonly<{ status: 'unavailable'; reason: string }>;
 
 export const RoleOverrideMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('set'), override: RoleInstructionsOverrideV1Schema }).strict(),
-  z.object({ kind: z.literal('reset'), roleId: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('set'), override: RoleInstructionsOverrideV1Schema }),
+  z.strictObject({ kind: z.literal('reset'), roleId: z.string().check(z.minLength(1)) }),
 ]));
 export type RoleOverrideMutationV1 = z.infer<typeof RoleOverrideMutationV1Schema>;
 

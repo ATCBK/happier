@@ -30,11 +30,8 @@ import {
     type SessionAccessGrantSubject,
     type SessionAccessGrantSubjectError,
 } from "./sessionAccessGrantEligibility";
-import {
-    gainsSessionAccessDelegationCapabilityV1,
-    type SessionAccessGrantCapabilityValueV1,
-    type SessionInitialAccessMaterializedV1,
-} from "@happier-dev/protocol";
+import { gainsSessionAccessDelegationCapabilityV1, type SessionAccessGrantCapabilityValueV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { type SessionInitialAccessMaterializedV1 } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
 import {
     enforceSessionContextExternalSharingPolicyInTx,
     enforceSessionGrantExternalSharingPolicyInTx,

@@ -15,6 +15,8 @@ const EMPTY_FRAGMENTS: readonly WidgetLayoutFragmentSummaryV1[] = Object.freeze(
 /** Mount only for an open group-capable Gallery; summaries never read executable child bodies. */
 export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null): Readonly<{
     fragments: readonly WidgetLayoutFragmentSummaryV1[];
+    /** False until the Account's saved groups have been read (always true without an Account). */
+    loaded: boolean;
     actionsFor: (fragment: WidgetLayoutFragmentSummaryV1) => ItemAction[];
 }> {
     const [inventory, setInventory] = React.useState<Readonly<{
@@ -104,5 +106,6 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
         { id: 'duplicate', title: t('common.duplicate'), icon: 'copy', onPress: () => { void manage(fragment, 'duplicate'); } },
         { id: 'delete', title: t('common.delete'), icon: 'trash', destructive: true, onPress: () => { void manage(fragment, 'delete'); } },
     ], [manage]);
-    return { fragments: inventory && inventory.serverId === serverId && inventory.accountId === accountId ? inventory.fragments : EMPTY_FRAGMENTS, actionsFor };
+    const current = inventory !== null && inventory.serverId === serverId && inventory.accountId === accountId;
+    return { fragments: current ? inventory.fragments : EMPTY_FRAGMENTS, loaded: current || scope === null, actionsFor };
 }

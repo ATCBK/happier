@@ -27,7 +27,7 @@ const { DaemonTtsController } = await import("./DaemonTtsController");
 
 
 const daemonRpc = vi.fn();
-type ServiceRequest = Omit<Parameters<DaemonVoiceInferenceClient['startSegmentedTts']>[0], 'signal'>;
+type ServiceRequest = Omit<Parameters<InstanceType<typeof DaemonVoiceInferenceClient>['startSegmentedTts']>[0], 'signal'>;
 type DaemonServiceResponses = Readonly<{
     synthesizeText?: (request: ServiceRequest) => Promise<unknown>;
     startSegmentedTts?: (request: ServiceRequest) => Promise<unknown>;

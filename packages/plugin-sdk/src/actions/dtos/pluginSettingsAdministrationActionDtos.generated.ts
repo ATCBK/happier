@@ -169,9 +169,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -217,9 +215,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -240,9 +236,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -380,9 +374,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -428,9 +420,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -451,9 +441,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -591,9 +579,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -639,9 +625,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -662,9 +646,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -802,9 +784,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -850,9 +830,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -873,9 +851,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -1013,9 +989,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -1061,9 +1035,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -1084,9 +1056,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -1224,9 +1194,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -1272,9 +1240,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -1295,9 +1261,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -1435,9 +1399,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -1483,9 +1445,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -1506,9 +1466,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;
@@ -1646,9 +1604,7 @@ export type PluginSettingsAdministrationActionResultById = {
                 machineId: string;
             };
             revision: string;
-            values: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            values: Record<string, JsonValue>;
         } | {
             localId: string;
             custody: 'account';
@@ -1694,9 +1650,7 @@ export type PluginSettingsAdministrationActionResultById = {
             } | {
                 localId: string;
                 secret: false;
-                value: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
+                value: JsonValue;
                 title?: string | undefined;
                 description?: string | undefined;
             })[];
@@ -1717,9 +1671,7 @@ export type PluginSettingsAdministrationActionResultById = {
             };
             localId: string;
             revision: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         };
     } | {
         ok: true;

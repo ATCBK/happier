@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const VendorPluginMentionV1Schema = lazyZodSchema(() => z.object({
-  backendId: z.string().trim().min(1).optional(),
-  agentId: z.string().trim().min(1).optional(),
-  vendorPluginRef: z.string().trim().min(1),
-  label: z.string().trim().min(1).optional(),
-}).passthrough());
+export const VendorPluginMentionV1Schema = lazyZodSchema(() => z.looseObject({
+  backendId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  vendorPluginRef: z.string().check(z.trim(), z.minLength(1)),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 
 export type VendorPluginMentionV1 = z.infer<typeof VendorPluginMentionV1Schema>;

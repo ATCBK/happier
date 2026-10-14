@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { PromptArtifactRefV1Schema, type PromptArtifactRefV1 } from './promptArtifactRefsV1.js';
@@ -9,46 +9,46 @@ export const PromptStackRefV1Schema = PromptArtifactRefV1Schema;
 export type PromptStackRefV1 = PromptArtifactRefV1;
 
 /** Full-row custody preserves predecessor placements during unrelated list edits. */
-export const PromptStackEntryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
+export const PromptStackEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)),
   ref: PromptStackRefV1Schema,
-  enabled: z.boolean().default(true),
-  placement: PromptPlacementV1StoredSchema.default('system_append'),
-  maxChars: z.number().int().min(1).optional(),
-  required: z.boolean().optional(),
+  enabled: z._default(z.boolean(), true),
+  placement: z._default(PromptPlacementV1StoredSchema, 'system_append'),
+  maxChars: z.optional(z.number().check(z.int(), z.minimum(1))),
+  required: z.optional(z.boolean()),
   /** IR-101: consumed positive projection; retained ref/id still resolve exclusions. */
-  skillMigrationV1: z.literal(true).optional(),
-}).strict());
+  skillMigrationV1: z.optional(z.literal(true)),
+}));
 
 export type PromptStackEntryV1 = z.infer<typeof PromptStackEntryV1Schema>;
 export const PromptStackEntryV1StoredSchema = createStoredReadSchema(PromptStackEntryV1Schema);
 /** Only new attach operands use this narrower current authoring contract. */
-export const PromptStackEntryAuthoringV1Schema = lazyZodSchema(() => PromptStackEntryV1Schema.omit({ skillMigrationV1: true }).extend({
-  placement: PromptPlacementV1Schema.default('system_append'),
-}).strict());
+export const PromptStackEntryAuthoringV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(PromptStackEntryV1Schema, { skillMigrationV1: true }), {
+  placement: z._default(PromptPlacementV1Schema, 'system_append'),
+})));
 
 /** Semantic list edits shared by Account, Profile, Project, Source and Session Context owners. */
-export const PromptStackSetEnabledIntentV1Schema = lazyZodSchema(() => z.object({
-  kind: z.literal('set_enabled'), entryId: z.string().min(1), enabled: z.boolean(),
-}).strict());
+export const PromptStackSetEnabledIntentV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('set_enabled'), entryId: z.string().check(z.minLength(1)), enabled: z.boolean(),
+}));
 export const PromptStackIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('attach'), entry: PromptStackEntryAuthoringV1Schema }).strict(),
-  z.object({ kind: z.literal('detach'), entryId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('reorder'), entryId: z.string().min(1), siblingId: z.string().min(1), position: z.enum(['before', 'after']) }).strict(),
-  z.object({ kind: z.literal('set_budget'), entryId: z.string().min(1), maxChars: z.number().int().positive().nullable() }).strict(),
+  z.strictObject({ kind: z.literal('attach'), entry: PromptStackEntryAuthoringV1Schema }),
+  z.strictObject({ kind: z.literal('detach'), entryId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('reorder'), entryId: z.string().check(z.minLength(1)), siblingId: z.string().check(z.minLength(1)), position: z.enum(['before', 'after']) }),
+  z.strictObject({ kind: z.literal('set_budget'), entryId: z.string().check(z.minLength(1)), maxChars: z.nullable(z.number().check(z.int(), z.positive())) }),
   PromptStackSetEnabledIntentV1Schema,
 ]));
 export type PromptStackIntentV1 = z.infer<typeof PromptStackIntentV1Schema>;
-export const PromptLibraryStackUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const PromptLibraryStackUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   surface: z.enum(['coding', 'voice']),
-  expectedRevision: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.literal('absent')]),
+  expectedRevision: z.union([z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), z.literal('absent')]),
   intent: PromptStackIntentV1Schema,
-}).strict());
+}));
 export const PromptLibraryStackUpdateResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('updated'), revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1) }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict(),
-  z.object({ status: z.literal('invalid'), reason: z.enum(['entry_conflict', 'entry_not_found', 'invalid_parameters']) }).strict(),
+  z.strictObject({ status: z.literal('updated'), revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) }),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.string().check(z.minLength(1)) }),
+  z.strictObject({ status: z.literal('invalid'), reason: z.enum(['entry_conflict', 'entry_not_found', 'invalid_parameters']) }),
 ]));
 export type PromptStackMutationV1<Row> =
   | Readonly<{ ok: true; row: Row; changed: boolean }>
@@ -95,17 +95,15 @@ export function applyPromptStackIntentV1<Row extends Readonly<{ promptStack?: re
   return { ok: true, row: { ...row, promptStack: next }, changed: true };
 }
 
-export const PromptStacksV1Schema = lazyZodSchema(() => z
+export const PromptStacksV1Schema = lazyZodSchema(() => z.catch(z
   .object({
-    v: z.literal(1).default(1),
-    surfaces: z
+    v: z._default(z.literal(1), 1),
+    surfaces: z._default(z
       .object({
-        coding: z.array(PromptStackEntryV1StoredSchema).default([]),
-        voice: z.array(PromptStackEntryV1StoredSchema).default([]),
-        profilesById: z.record(z.string(), z.array(PromptStackEntryV1StoredSchema)).default({}),
-      })
-      .default({ coding: [], voice: [], profilesById: {} }),
-  })
-  .catch({ v: 1, surfaces: { coding: [], voice: [], profilesById: {} } }));
+        coding: z._default(z.array(PromptStackEntryV1StoredSchema), []),
+        voice: z._default(z.array(PromptStackEntryV1StoredSchema), []),
+        profilesById: z._default(z.record(z.string(), z.array(PromptStackEntryV1StoredSchema)), {}),
+      }), { coding: [], voice: [], profilesById: {} }),
+  }), { v: 1, surfaces: { coding: [], voice: [], profilesById: {} } }));
 
 export type PromptStacksV1 = z.infer<typeof PromptStacksV1Schema>;

@@ -1,4 +1,5 @@
-import { SERVER_CONFIG, readServerConfig, readServerConfigRaw } from '@happier-dev/protocol';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { readServerConfig, readServerConfigRaw } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import type { AuthEmailSmtpConfig } from './authEmailAdapters';
 
 /** Shared by delivery and the Home settings declaration, including before mail is configured. */

@@ -2,6 +2,12 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol/plugins/contributions/voice';
 import type {
   ServerAccountRequestAuthority,
@@ -58,7 +64,7 @@ describe('canonical History Account boundary', () => {
     setRuntimeFetch(historyHttp.request);
     const sessionId = 'history-carrier';
     const session = createSessionFixture({ id: sessionId, serverId: homeId, seq: 20, active: false,
-      metadata: { ...createSessionFixture().metadata, ...buildVoiceTranscriptHistorySessionMetadata() },
+      metadata: { ...fixtureMetadata, ...buildVoiceTranscriptHistorySessionMetadata() },
     });
     const metadata = createSessionMetadataHttpBoundary(() => ({ [sessionId]: session }));
     const response = metadata.handle(`https://history-owner.test/v2/sessions/${sessionId}`);
@@ -161,7 +167,7 @@ describe('createDefaultVoiceHistoryConsumerFromRuntime', () => {
       readHydratedSession: (sessionId) => createSessionFixture({
         id: sessionId,
         active: false,
-        metadata: { ...createSessionFixture().metadata, ...buildVoiceTranscriptHistorySessionMetadata() },
+        metadata: { ...fixtureMetadata, ...buildVoiceTranscriptHistorySessionMetadata() },
       }),
       refreshSessionMessages: async () => undefined,
       loadOlderMessages: async () => ({
@@ -336,7 +342,7 @@ describe('createDefaultVoiceHistoryConsumerFromRuntime', () => {
       readHydratedSession: (sessionId) => createSessionFixture({
         id: sessionId,
         active: false,
-        metadata: { ...createSessionFixture().metadata, ...buildVoiceTranscriptHistorySessionMetadata() },
+        metadata: { ...fixtureMetadata, ...buildVoiceTranscriptHistorySessionMetadata() },
       }),
       refreshSessionMessages: async (_sessionId, authority) => {
         seenAuthorities.push(authority);

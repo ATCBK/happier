@@ -149,6 +149,7 @@ export interface NewSessionWizardAgentProps {
     selectedBackendEntry?: ResolvedBackendCatalogEntry | null;
     modelOptions: ReadonlyArray<{ value: ModelMode; label: string; description: string }>;
     modelOptionsProbe?: React.ComponentProps<typeof AgentInput>['modelOptionsOverrideProbe'];
+    modelPickerPresentation?: React.ComponentProps<typeof AgentInput>['modelPickerPresentation'];
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     setFavoriteModelSelections?: (favorites: FavoriteModelSelectionV1[]) => void;
     acpSessionModeOptions?: ReadonlyArray<Readonly<{ id: string; name: string; description?: string }>>;
@@ -754,6 +755,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         onPermissionModeChange={handlePermissionModeChange}
                                         onPermissionClick={handleAgentInputPermissionClick}
                                         modelMode={modelMode}
+                                        modelPickerPresentation={props.agent.modelPickerPresentation}
                                         onModelModeChange={setModelMode}
                                         modelOptionsOverride={modelOptions}
                                         modelOptionsOverrideProbe={modelOptionsProbe}

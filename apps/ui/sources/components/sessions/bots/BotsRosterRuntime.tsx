@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 /**
  * The one way to open the Bots roster from anywhere (rail, palette, phone launcher). Where the rail
@@ -37,7 +38,7 @@ function showBotsRosterSheet(): void {
           scrollHost: 'overlay',
           bodyScroll: 'none',
           testID: 'bots-roster-sheet',
-          dimensions: { width: 420, maxHeightRatio: 0.86, size: 'md' },
+          dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' },
         },
         closeOnBackdrop: true,
       });

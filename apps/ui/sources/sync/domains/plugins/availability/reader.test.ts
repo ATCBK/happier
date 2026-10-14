@@ -12,9 +12,10 @@ import {
     createPluginAccountAvailabilityReaderStore,
     type PluginAccountAvailabilitySnapshot,
 } from './reader';
-import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import { normalizePluginUiDestinationBindingV1, PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { admitDeclarativeStaticModel } from '@/components/plugins/surfaces/declarativeStaticModel';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 
 const scope = { serverId: 'srv-local-a', accountId: 'account-a' } as const;
 
@@ -112,6 +113,61 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('selects the host bundled Account renderer without a machine or claimed release, and respects Account disablement', () => {
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({
+            schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture',
+            runtime: { apiVersion: 1 }, contributes: { ui: { renderers: [{
+                id: 'fixture', kind: 'reactNative', artifact: 'fixture', requiredHostMethods: [],
+            }], views: [{ id: 'fixture-page', container: 'appPage', title: 'Fixture', target: { kind: 'app' },
+                renderer: 'fixture' }] } },
+        });
+        const artifact = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'fixture', tier: 'reactNative',
+            entry: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest,
+            files: [{ relativePath: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+            builtWith: { bundler: 'esbuild' as const, version: '1.0.0' },
+            executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0' });
+        const input = { scope, snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
+            hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName: '@happier-dev/plugins-fixture',
+                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifact]) }] };
+        const reader = createPluginAccountAvailabilityReader(input);
+        const slot = { pluginId: manifest.id, contributionId: 'fixture', tier: 'reactNative' as const, platform: 'web' as const };
+        expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'available', artifact: {
+            pluginId: manifest.id, digest: artifactDigest, releaseVersion: manifest.version,
+        } });
+        expect(reader.readAccountUiProjection()?.surfacePlacementsById['surfacePlacement:happier.fixture:fixture-page'])
+            .toMatchObject({ availability: { state: 'available' }, renderer: { kind: 'reactNative' } });
+        expect(reader.readAccountUiProjection()?.reactNativeBundlesById['reactNativeBundle:happier.fixture:fixture'])
+            .toMatchObject({ artifactGraph: artifact, runtime: { decision: { state: 'load' } } });
+        expect(reader.readAccountUiProjection()?.installedPackagesById[manifest.id]?.source)
+            .toEqual({ kind: 'bundled', locator: '@happier-dev/plugins-fixture' });
+        const disabled = intentRead();
+        disabled.intent = { ...disabled.intent!, pluginId: manifest.id, desiredVersion: null, enabled: false };
+        disabled.release = null;
+        const disabledInput = { ...input, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response: disabled }],
+            materializations: [], snapshots: [] }) };
+        expect(createPluginAccountAvailabilityReader(disabledInput).readCurrentArtifact(slot))
+            .toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
+        expect(createPluginAccountAvailabilityReader(disabledInput).readAccountUiProjection()).toBeNull();
+        const portableDigest = `sha256:${'c'.repeat(64)}`;
+        const portable = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...intentRead(),
+            intent: { ...disabled.intent!, enabled: true, desiredVersion: '2.0.0' },
+            release: { ...intentRead().release!, ref: { pluginId: manifest.id, version: '2.0.0' },
+                normalizedManifest: { ...manifest, version: '2.0.0' }, uiSlots: [{ contributionId: slot.contributionId, tier: slot.tier, platform: slot.platform,
+                    artifactId: 'fixture', artifactDigest: portableDigest, hostUiApiRange: '^1.0.0' }] },
+            uiArtifacts: [],
+        });
+        const portableInput = { ...input, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response: portable }],
+            materializations: [], snapshots: [] }) };
+        expect(createPluginAccountAvailabilityReader(portableInput).readCurrentArtifact(slot))
+            .toMatchObject({ kind: 'available', artifact: { digest: portableDigest, releaseVersion: '2.0.0' } });
+        expect(createPluginAccountAvailabilityReader(portableInput).readAccountUiProjection()).toBeNull();
+        const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: input.hostBundledUi });
+        store.replace({ scope, snapshot: input.snapshot });
+        const bound = store.bind(scope);
+        store.retire([manifest.id]);
+        expect(bound.readCurrentArtifact(slot)).toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
+        expect(bound.readAccountUiProjection()).toBeNull();
+    });
     it('projects admitted registry declarations on a cold Account and retires their installation census', () => {
         const base = snapshot();
         const declaration = PluginPortableReleaseManifestV1Schema.parse({ ...intentRead().release!.normalizedManifest,
@@ -605,7 +661,7 @@ describe('Plugin Account Availability reader', () => {
         });
     });
 
-    it('projects only the exact immutable Collection ref admitted by the current release', () => {
+    it('projects an exact Collection ref for server admission without deciding digest compatibility', () => {
         const ref = {
             pluginId: 'com.acme.fixture',
             collectionId: 'tasks',
@@ -641,6 +697,10 @@ describe('Plugin Account Availability reader', () => {
             pluginId: 'com.acme.fixture',
             collectionId: 'tasks',
         })).not.toHaveProperty('contract');
+        const retained = { ...ref, contractDigest: `${'B'.repeat(42)}A` };
+        expect(reader.readCurrentCollectionContract({
+            pluginId: ref.pluginId, collectionId: ref.collectionId, ref: retained,
+        })).toEqual({ kind: 'available', availabilityCursor: 42, ref: retained });
         expect(reader.readCurrentCollectionContract({
             pluginId: 'com.acme.fixture',
             collectionId: 'projects',

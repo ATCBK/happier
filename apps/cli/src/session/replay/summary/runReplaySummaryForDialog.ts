@@ -1,19 +1,10 @@
-import type { BackendTargetRefV1, ExecutionRunIntent, LlmTaskRunnerConfigV1 } from '@happier-dev/protocol';
+import { LlmTaskRunnerConfigV1Schema, type LlmTaskRunnerConfigV1 } from '@happier-dev/protocol';
+import { convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import type { EphemeralExecutionRunTextPromptStartAction } from '@/agent/runtime/bridges/executionRun/runtime/textPrompt';
 
 import { runEphemeralExecutionRunTextPromptWithRunnerConfig } from '@/agent/executionRuns/tasks/textPromptWithRunnerConfig';
 
 import type { HappierReplayDialogItem } from '../types';
-
-export type ReplaySummaryTextPromptRunner = (params: Readonly<{
-  cwd: string;
-  sessionId: string;
-  backendTarget: BackendTargetRefV1;
-  modelId?: string;
-  permissionMode: string;
-  intent: ExecutionRunIntent;
-  prompt: string;
-  timeoutMs?: number | null;
-}>) => Promise<string>;
 
 function buildReplaySummaryPrompt(params: Readonly<{
   parentSessionId: string;
@@ -65,12 +56,12 @@ export async function runReplaySummaryForDialog(params: Readonly<{
   runner: LlmTaskRunnerConfigV1;
   dialog: readonly HappierReplayDialogItem[];
   deps?: Readonly<{
-    runTextPrompt?: ReplaySummaryTextPromptRunner;
+    executeStart?: EphemeralExecutionRunTextPromptStartAction;
   }>;
 }>): Promise<string> {
-  const backendTarget = params.runner?.backendTarget;
-  if (!backendTarget) return '';
-  const modelId = typeof params.runner.modelId === 'string' && params.runner.modelId.trim().length > 0 ? params.runner.modelId.trim() : undefined;
+  const runner = LlmTaskRunnerConfigV1Schema.parse(params.runner);
+  const modelSelection = runner.modelSelection;
+  const backendTarget = convertBackendTargetRefV2ToV1(readBackendTargetRefV2(parseBackendTargetKeyV2(modelSelection.agentTargetKey)));
   const permissionMode =
     typeof params.runner.permissionMode === 'string' && params.runner.permissionMode.trim().length > 0
       ? params.runner.permissionMode.trim()
@@ -81,25 +72,15 @@ export async function runReplaySummaryForDialog(params: Readonly<{
     dialog: params.dialog,
   });
 
-  const runTextPrompt = params.deps?.runTextPrompt ?? (async (p) => {
-    return await runEphemeralExecutionRunTextPromptWithRunnerConfig({
-      cwd: p.cwd,
-      sessionId: p.sessionId,
-      runner: { backendTarget: p.backendTarget, modelId: p.modelId, permissionMode: p.permissionMode },
-      intent: p.intent,
-      prompt: p.prompt,
-    });
-  });
-  const out = await runTextPrompt({
+  const out = await runEphemeralExecutionRunTextPromptWithRunnerConfig({
     cwd: params.cwd,
     sessionId: params.parentSessionId,
-    backendTarget,
-    modelId,
-    permissionMode,
+    runner: { backendTarget, modelSelection, permissionMode },
     // Replay summary is a generic bounded task; it does not own a separate
     // execution-run lifecycle or intent vocabulary.
     intent: 'task',
     prompt,
+    ...(params.deps?.executeStart ? { executeStart: params.deps.executeStart } : {}),
   });
 
   return String(out ?? '').trim();

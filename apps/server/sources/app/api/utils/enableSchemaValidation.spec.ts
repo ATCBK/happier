@@ -1,15 +1,15 @@
 import fastify from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { enableSchemaValidation } from './enableSchemaValidation';
 
 describe('API schema admission', () => {
     it('shares one parser handle for a canonical definition across routes and generated HEAD routes', async () => {
-        const shared = lazyZodSchema(() => z.object({ value: z.string() }).strict());
-        const concrete = z.object({ value: z.string() }).strict();
+        const shared = lazyZodSchema(() => z.strictObject({ value: z.string() }));
+        const concrete = z.strictObject({ value: z.string() });
         const first = { response: { 200: shared } };
         const second = { response: { 200: shared } };
         const built = { response: { 200: concrete } };
@@ -32,11 +32,11 @@ describe('API schema admission', () => {
         let outputs = 0;
         const body = lazyZodSchema(() => {
             inputs++;
-            return z.object({ value: z.string().trim().min(1) }).strict();
+            return z.strictObject({ value: z.string().check(z.trim(), z.minLength(1)) });
         });
         const response = lazyZodSchema(() => {
             outputs++;
-            return z.object({ value: z.string().min(1) }).strict();
+            return z.strictObject({ value: z.string().check(z.minLength(1)) });
         });
         const app = fastify().withTypeProvider<ZodTypeProvider>();
         enableSchemaValidation(app);
@@ -69,7 +69,7 @@ describe('API schema admission', () => {
         const small = mini.strictObject({ value: mini.string() });
         app.post('/core', { schema: { body: core, response: { 200: core } } }, async request => request.body);
         app.post('/mini', { schema: { body: small, response: { 200: small } } }, async request => request.body);
-        app.get('/envelope', { schema: { response: { 200: { properties: z.object({ value: z.string() }).strict() } } } },
+        app.get('/envelope', { schema: { response: { 200: { properties: z.strictObject({ value: z.string() }) } } } },
             async () => ({ value: 'kept' }));
         try {
             expect((await app.inject({ method: 'POST', url: '/core', payload: JSON.stringify(7), headers: { 'content-type': 'application/json' } })).statusCode).toBe(400);
@@ -89,9 +89,9 @@ describe('API schema admission', () => {
         const app = fastify().withTypeProvider<ZodTypeProvider>();
         enableSchemaValidation(app);
         app.get('/:id', { schema: {
-            params: lazyZodSchema(() => { constructed.params++; return z.object({ id: z.string().min(2) }).strict(); }),
-            querystring: lazyZodSchema(() => { constructed.querystring++; return z.object({ count: z.coerce.number().int().positive() }).strict(); }),
-            headers: lazyZodSchema(() => { constructed.headers++; return z.object({ 'x-probe': z.string().min(2) }).passthrough(); }),
+            params: lazyZodSchema(() => { constructed.params++; return z.strictObject({ id: z.string().check(z.minLength(2)) }); }),
+            querystring: lazyZodSchema(() => { constructed.querystring++; return z.strictObject({ count: z.coerce.number().check(z.int(), z.positive()) }); }),
+            headers: lazyZodSchema(() => { constructed.headers++; return z.looseObject({ 'x-probe': z.string().check(z.minLength(2)) }); }),
         } }, async request => ({ id: request.params.id, count: request.query.count }));
         try {
             await app.ready();

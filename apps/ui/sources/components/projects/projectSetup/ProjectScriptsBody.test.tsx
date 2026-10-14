@@ -101,6 +101,7 @@ vi.mock('@/text', async () => {
 });
 
 const { ProjectScriptsBody } = await import('./ProjectScriptsBody');
+const { AppPaneScopeLayoutProvider } = await import('@/components/appShell/panes/hooks/useAppPaneScopeLayout');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { actionOperationStore } =
   await import('@/sync/domains/actionOperations/actionOperationStore');
@@ -220,7 +221,7 @@ function operation(
 async function render(
   presentation: 'page' | 'widget',
   ready: string,
-  host: Readonly<{ outputScopeId?: string }> = {},
+  host: Readonly<{ outputScopeId?: string; bottomPresentation?: 'docked' | 'overlay' }> = {},
 ) {
   connection ??= await restoreServerAccountForTest({
     serverUrl: 'https://scripts-body.test',
@@ -265,13 +266,31 @@ async function render(
       revisionsByPhysicalKey: {},
     },
   });
-  const screen = await renderScreen(
+  const body = (
     <ProjectScriptsBody
       workspace={workspace}
       presentation={presentation}
       testID="scripts"
       outputScopeId={host.outputScopeId}
-    />,
+    />
+  );
+  const screen = await renderScreen(
+    host.bottomPresentation ? (
+      <AppPaneScopeLayoutProvider
+        value={{
+          containerWidthPx: 1440,
+          containerHeightPx: 600,
+          mainRegionWidthPx: 1440,
+          mainRegionHeightPx: 600,
+          multiPaneEnabled: true,
+          deviceType: 'tablet',
+          layout: { kind: 'single', right: 'hidden', details: 'hidden' },
+          bottomPresentation: host.bottomPresentation,
+        }}
+      >
+        {body}
+      </AppPaneScopeLayoutProvider>
+    ) : body,
   );
   await vi.waitFor(
     () => {
@@ -441,12 +460,14 @@ describe('ProjectScriptsBody runs', () => {
       await act(async () => { gate.resolve({ operation: operation('accepted', 1) }); });
     }
   });
-  it('withdraws current readiness on this checkout operation update until the same inspection owner refreshes', async () => {
+  it('retains proven readiness during Script refresh and replaces it only with the inspection result', async () => {
     const manifest = { version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] }, scripts: { test: { source: nativeRef('test') } } };
     shared.inspection = { definition: presentDefinition(manifest), detection, importCandidates: [],
       setupReadiness: { kind: 'current', reviewedEffectDigest: 'current-effect', completedAtMs: 123 } };
     const screen = await render('page', 'scripts.setup');
     expect(screen.getTextContent()).toContain('projects.scripts.setup.readySince');
+    // A Ready setup offers Run again, not a first Run.
+    expect(textOf(screen, 'scripts.setup.run')).toContain('projects.scripts.setup.runAgain');
     const initialReads = shared.calls.filter(call => call.actionId === 'projects.inspect').length;
     await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...operation('accepted', 1), scope: { accountId: 'other-account', machineId: 'm1' } }] }));
     expect(shared.calls.filter(call => call.actionId === 'projects.inspect')).toHaveLength(initialReads);
@@ -454,27 +475,28 @@ describe('ProjectScriptsBody runs', () => {
     shared.inspectionPending = new Promise(resolve => { finish = resolve; });
     const accepted = operation('accepted', 1);
     if (accepted.domainRef?.kind !== 'projectCommand') throw new Error('Expected project command fixture');
-    const setupAttempt = { ...accepted, operationId: 'new-attempt', actionId: 'projects.prepare',
-      domainRef: { ...accepted.domainRef, purpose: 'setup' as const, script: undefined } };
-    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [setupAttempt] }));
-    await vi.waitFor(() => expect(screen.getTextContent()).not.toContain('projects.scripts.setup.readySince'));
+    const scriptAttempt = { ...accepted, operationId: 'new-attempt' };
+    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [scriptAttempt] }));
+    await vi.waitFor(() => expect(shared.calls.filter(call => call.actionId === 'projects.inspect').length).toBeGreaterThan(initialReads));
+    expect(screen.getTextContent()).toContain('projects.scripts.setup.readySince');
+    expect(textOf(screen, 'scripts.setup.run')).toContain('projects.scripts.setup.runAgain');
     expect(screen.findByTestId('scripts.script:test')).not.toBeNull();
-    // Inspection may race the owner's setup invalidation. A held/live operation still cannot be Ready.
-    await act(async () => finish({ definition: presentDefinition(manifest), detection, importCandidates: [], setupReadiness: { kind: 'current', reviewedEffectDigest: 'current-effect', completedAtMs: 123 } }));
-    await vi.waitFor(() => expect(screen.getTextContent()).toContain('projects.scripts.run.waitsForSetup'));
-    expect(screen.getTextContent()).not.toContain('projects.scripts.setup.readySince');
+    // A completed inspection is new evidence; retained readiness cannot hide a proven change.
+    await act(async () => finish({ definition: presentDefinition(manifest), detection, importCandidates: [], setupReadiness: { kind: 'needsReview', code: 'project_setup_effect_changed' } }));
+    await vi.waitFor(() => expect(screen.getTextContent()).not.toContain('projects.scripts.setup.readySince'));
+    expect(screen.getTextContent()).not.toContain('projects.scripts.run.waitsForSetup');
     shared.inspectionPending = null;
     const beforeProgress = shared.calls.filter(call => call.actionId === 'projects.inspect').length;
-    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...setupAttempt, revision: 2, progress: { kind: 'phase', phase: 'setup', label: 'new output' } }] }));
+    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...scriptAttempt, revision: 2, progress: { kind: 'indeterminate', label: 'new output' } }] }));
     expect(shared.calls.filter(call => call.actionId === 'projects.inspect')).toHaveLength(beforeProgress);
-    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...setupAttempt, revision: 3, state: 'succeeded', settledAt: 2_000 }] }));
+    await act(async () => actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...scriptAttempt, revision: 3, state: 'succeeded', settledAt: 2_000 }] }));
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('projects.scripts.setup.readySince'));
     let fail!: (error: unknown) => void;
     shared.inspectionPending = new Promise((_resolve, reject) => { fail = reject; });
     await act(async () => actionOperationStore.setMachineObservation({ serverId: workspace.serverId, machineId: workspace.machineId }, 'unavailable'));
     await act(async () => fail({ code: 'project_definition_inspection_failed' }));
     expect(screen.findByTestId('scripts.script:test')).not.toBeNull();
-    expect(screen.getTextContent()).not.toContain('projects.scripts.setup.readySince');
+    expect(screen.getTextContent()).toContain('projects.scripts.setup.readySince');
     expect(screen.findByTestId('scripts.inspection-action')).not.toBeNull();
     shared.inspectionPending = null;
     await act(async () => screen.pressByTestIdAsync('scripts.inspection-action'));
@@ -515,9 +537,9 @@ describe('ProjectScriptsBody runs', () => {
     expect(screen.getTextContent()).not.toContain(
       'projects.scripts.setup.readySince',
     );
-    expect(screen.getTextContent()).toContain(
-      'projects.scripts.run.waitsForSetup',
-    );
+    // Setup says so once, from the producer's readiness; the script rows stay quiet.
+    expect(screen.getTextContent()).toContain('projects.scripts.setup.stateUnknown');
+    expect(screen.getTextContent()).not.toContain('projects.scripts.run.waitsForSetup');
     await screen.unmount();
     shared.inspection = {
       definition: presentDefinition(manifest),
@@ -623,6 +645,9 @@ describe('ProjectScriptsBody runs', () => {
         operation: { ...held, revision: 3, setupReview: undefined },
       });
     await act(async () => {
+      await screen.pressByTestIdAsync('scripts.setup.review.scope:untilChanged');
+    });
+    await act(async () => {
       await screen.pressByTestIdAsync('scripts.setup.review.run');
     });
     expect(
@@ -631,7 +656,7 @@ describe('ProjectScriptsBody runs', () => {
     expect(
       shared.calls.filter((call) => call.actionId === 'projects.script.run'),
     ).toHaveLength(1);
-    // "Until it changes" (the review's default) is the person's own grant for this Project's exact effect.
+    // "Until it changes" (chosen; This time is the default) is the person's own grant for this Project's exact effect.
     expect(shared.trustMutations).toEqual([
       expect.objectContaining({
         project: { serverId: workspace.serverId, projectId: 'w1' },
@@ -1106,28 +1131,17 @@ describe('ProjectScriptsBody project file editor', () => {
     expect(saved.scripts.missing).toBeUndefined();
   });
 
-  it('opens an invalid project file in JSON, keeps its bytes and turns Form and Save off', async () => {
-    const bytes = '{ "version": 1, ';
+  it.each(['{ "version": 1, ', '{"version":2}'])('opens an invalid project file in JSON, keeps its bytes and turns Form and Save off (%s)', async (bytes) => {
     shared.inspection = {
       definition: {
         basis: { kind: 'present', hash },
-        document: {
-          status: 'invalid',
-          bytes,
-          diagnostics: [
-            {
-              code: 'invalid_json',
-              path: [],
-              message: 'Unexpected end of JSON input',
-              offset: bytes.length,
-            },
-          ],
-        },
+        document: readProjectManifestDocument(bytes),
       },
       detection,
       importCandidates: [],
     };
     const screen = await render('page', 'scripts.invalid');
+    if (bytes === '{"version":2}') expect(screen.getTextContent()).toContain('version: Use 1.');
     await act(async () => {
       await screen.pressByTestIdAsync('scripts.openEditor');
     });
@@ -1138,6 +1152,10 @@ describe('ProjectScriptsBody project file editor', () => {
       screen.findByTestId('project-manifest-editor.code')?.props.value,
     ).toBe(bytes);
     expect(screen.findByTestId('project-manifest-editor.invalid')).toBeTruthy();
+    if (bytes === '{"version":2}') {
+      expect(screen.getTextContent()).toContain('version: Use 1.');
+      expect(screen.getTextContent()).not.toContain('version: version:');
+    }
     await act(async () => {
       await screen.pressByTestIdAsync('project-manifest-editor.save');
     });
@@ -1256,6 +1274,17 @@ describe('ProjectScriptsBody output', () => {
     });
     expect(show).not.toHaveBeenCalled();
     show.mockRestore();
+  });
+
+  it.each(['docked', 'overlay'] as const)('a Run never opens the output terminal by itself (%s)', async (bottomPresentation) => {
+    // The row owns the running state (elapsed time, latest output line); the terminal opens only when the person asks.
+    shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
+    shared.responses['projects.script.run'] = { operation: withTerminal() };
+    const screen = await render('widget', 'scripts.script:test.run', { outputScopeId, bottomPresentation });
+    await act(async () => { await screen.pressByTestIdAsync('scripts.script:test.run'); });
+    await vi.waitFor(() => expect(shared.calls.some((call) => call.actionId === 'projects.script.run')).toBe(true));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(shared.calls.some((call) => call.actionId === 'session.terminals.open')).toBe(false);
   });
 
   it('opens the operation detail where the host has no terminal or refuses the tab', async () => {

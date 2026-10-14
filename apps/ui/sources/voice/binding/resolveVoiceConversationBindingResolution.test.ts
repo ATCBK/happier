@@ -160,6 +160,48 @@ describe('ensureVoiceConversationBindingResolution', () => {
     expect(metadata.writes).not.toContain('voice-home');
   });
 
+  it.each(['voice-home', 'voice-root-s1'])('continues the exact synced carrier %s instead of making a carrier of it', async (conversationSessionId) => {
+    const settings = localSettings();
+    const resolution = await ensureVoiceConversationBindingResolution({ providerId: 'local_conversation',
+      controlSessionId: '__voice_agent__', requestedTargetSessionId: conversationSessionId,
+      requestedTargetServerId: connection.home.id, settings });
+    expect(resolution).toEqual({ controlSessionId: '__voice_agent__', conversationSessionId,
+      conversationSessionAddress: address(conversationSessionId), transcriptMode: 'native_session',
+      targetSessionAddress: conversationSessionId === 'voice-home' ? null : address('s1') });
+    expect(readVoiceConversationScopeMetadata(readVoiceSessionOwnerMetadataFromState(storage.getState(), conversationSessionId)))
+      .toEqual(conversationSessionId === 'voice-home' ? { kind: 'voice_home' } : { kind: 'session_root', sessionRootId: 's1' });
+    expect(network.requests.some(request => request.method === RPC_METHODS.SESSION_SPAWN_NEW)).toBe(false);
+  });
+
+  it('hydrates an explicitly addressed conversation before deciding carrier reuse', async () => {
+    // The Home owns this carrier; the new client has not opened/hydrated it yet.
+    const detail = metadata.handle(new URL('/v2/sessions/voice-root-s1', connection.home.serverUrl));
+    expect(detail?.status).toBe(200);
+    storage.setState(current => ({ sessions: Object.fromEntries(Object.entries(current.sessions)
+      .filter(([id]) => id !== 'voice-root-s1')), sessionListRowsByServerId: {} }));
+    expect(readVoiceSessionOwnerMetadataFromState(storage.getState(), address('voice-root-s1'))).toBeNull();
+    expect(await ensureVoiceConversationBindingResolution({ providerId: 'local_conversation', controlSessionId: '__voice_agent__',
+      requestedTargetSessionId: 'voice-root-s1', requestedTargetServerId: connection.home.id, settings: localSettings() }))
+      .toMatchObject({ conversationSessionId: 'voice-root-s1', targetSessionAddress: address('s1') });
+    expect(network.requests.some(request => request.method === RPC_METHODS.SESSION_SPAWN_NEW)).toBe(false);
+  });
+
+  it('keeps explicit continuation ahead of the voice-home preference and preserves its cleared coding target', async () => {
+    const { writeVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
+    const conversationSessionAddress = address('voice-root-s1');
+    storage.setState(current => ({ sessions: { ...current.sessions, 'voice-root-s1': {
+      ...current.sessions['voice-root-s1']!, metadata: writeVoiceConversationBindingMetadata(current.sessions['voice-root-s1']!.metadata!, {
+        adapterId: 'local_conversation', controlSessionId: '__voice_agent__',
+        conversationSessionId: conversationSessionAddress.sessionId, conversationSessionAddress,
+        targetSessionAddress: null, transcriptMode: 'native_session', updatedAt: 1,
+      }),
+    } } }));
+    metadata.replaceSession('voice-root-s1');
+    expect(await ensureVoiceConversationBindingResolution({ providerId: 'local_conversation', controlSessionId: '__voice_agent__',
+      requestedTargetSessionId: 'voice-root-s1', requestedTargetServerId: connection.home.id, settings: localSettings(true) }))
+      .toMatchObject({ conversationSessionId: 'voice-root-s1', targetSessionAddress: null });
+  });
+
   it('uses voice home when stayInVoiceHome is enabled even with a target', async () => {
     const settings = localSettings(true);
     storage.setState({ settings });

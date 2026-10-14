@@ -18,7 +18,6 @@ import {
 import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { getStorage } from '@/sync/domains/state/storage';
-import type { AutomationDefinition } from '@/sync/domains/automations/automationTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
@@ -75,7 +74,6 @@ export function useSessionWorkSources(): SessionWorkSources | null {
 
 const EMPTY_SESSIONS: readonly Session[] = Object.freeze([]);
 const EMPTY_TRIGGER_RUN_IDS: ReadonlySet<string> = new Set();
-const EMPTY_AUTOMATIONS: Readonly<Record<string, AutomationDefinition>> = Object.freeze({});
 
 function normalizeId(value: string | null | undefined): string | null {
     const trimmed = value?.trim();
@@ -108,7 +106,7 @@ function toManagedRunSources(state: SessionManagedWorkflowRunsState): readonly W
 
 /**
  * The Session's own trigger runs (INT §6 I4, ORC R-09): FIN's immutable cause names a trigger and the
- * origin Automation is scoped to this Session. Manual and unknown causes stay in Work, even when
+ * retained Automation scope is this Session. Manual and unknown causes stay in Work, even when
  * the Automation is session-scoped. A retired trigger retains its cause identity; no title, timing,
  * origin Session or current trigger-list membership is used to guess a Run's cause.
  * They belong to the Session's Triggers section, not to its Work.
@@ -116,14 +114,13 @@ function toManagedRunSources(state: SessionManagedWorkflowRunsState): readonly W
 export function readOwnTriggerRunIds(params: Readonly<{
     sessionId: string;
     runs: SessionManagedWorkflowRunsState['runs'];
-    automations: Readonly<Record<string, Pick<AutomationDefinition, 'scopeSessionId'>>>;
 }>): ReadonlySet<string> {
     let ids: Set<string> | null = null;
     for (const run of params.runs) {
         if (run.origin.kind !== 'automation') continue;
         const cause = run.origin.cause;
         if (cause?.kind !== 'trigger' && !(cause?.kind === 'conversation' && cause.triggerId !== undefined)) continue;
-        if (params.automations[run.origin.automationId]?.scopeSessionId !== params.sessionId) continue;
+        if (run.automationScopeSessionId !== params.sessionId) continue;
         (ids ??= new Set()).add(run.id);
     }
     return ids ?? EMPTY_TRIGGER_RUN_IDS;
@@ -173,11 +170,9 @@ export function useSessionWorkSourcesOwner(params: Readonly<{
     // Identity also depends on the named machine/workspace, not just the Session record. Only
     // changed displayed facts invalidate Work; unrelated machine or settings updates stay local.
     const reportContexts = getStorage()(useShallow(() => reportSessions.map(session => getSessionWorkContext(session, session.serverId))));
-    // The Account's Automation record is stable between Automation changes; only those re-derive.
-    const automations = getStorage()((state) => (enabled ? state.automations : EMPTY_AUTOMATIONS));
     const ownTriggerRunIds = React.useMemo(
-        () => readOwnTriggerRunIds({ sessionId: params.sessionId, runs: managedRuns.runs, automations }),
-        [automations, managedRuns.runs, params.sessionId],
+        () => readOwnTriggerRunIds({ sessionId: params.sessionId, runs: managedRuns.runs }),
+        [managedRuns.runs, params.sessionId],
     );
 
     const { entries } = params.agentActivity;

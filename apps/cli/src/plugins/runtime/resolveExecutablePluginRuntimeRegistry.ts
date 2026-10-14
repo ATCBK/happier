@@ -78,7 +78,8 @@ import type {
     ResolvedProviderCatalogParsers,
 } from '../projection/registry/types';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { arePluginMachineExecutionOriginsEqual, arePluginMachineMaterializationRefsEqual, PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { resolvePluginMachineExecutionOrigin } from './resolvePluginMachineExecutionOrigin';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { evaluatePluginFinalPolicy } from '@happier-dev/protocol/plugins/actions/policy';
 import { isDynamicPluginResourceContributionV2 } from '@happier-dev/protocol/plugins/contributions/v2';
@@ -103,6 +104,7 @@ import {
 } from './lifecycle/manager';
 import {
     createBundledActivationSourceResolver,
+    resolveBundledActivationSourceRepoRoot,
     resolvePackagedBundledActivationPaths,
 } from './bundledActivationSource';
 import { createPluginScmBackendRegistryFromRuntimeRegistry } from '../../scm/pluginBackends/runtimeRegistry';
@@ -136,7 +138,6 @@ import { createTargetComposerAttachmentRegistry } from './lifecycle/contribution
 import { createTargetComposerReferenceRegistry } from './lifecycle/contributions/targetComposerReferences';
 import { revalidateVoiceSpeechHttpEndpoint } from './lifecycle/contributions/voiceSpeechHttpPolicy';
 import { projectTargetProviderRuntimes } from './lifecycle/contributions/targetProviders';
-import { createTargetPromptAssetAdapterRegistry } from './lifecycle/contributions/targetPromptAssets';
 import {
     projectExternalSessionSourceRefusalDiagnostics,
 } from './lifecycle/contributions/externalSessionSourceRefusals';
@@ -247,13 +248,14 @@ import {
 } from './invocation/lifetime';
 import {
     PluginError,
+    isPluginError,
     type JsonValue,
     type PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
 import type { AgentCliSessionCommandPluginSettingsV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { type PluginEvents } from '@happier-dev/plugin-sdk/events';
 import { type McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint, type McpDiscoveryRequest as PluginMcpDiscoveryRequest, type McpDiscoveryResult as PluginMcpDiscoveryResult, type McpServerRef as PluginMcpServerRef } from '@happier-dev/plugin-sdk/mcp';
-import { type PluginResourceKind, type PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
+import { type PluginResourceKind } from '@happier-dev/plugin-sdk/resources';
 import type {
     ScopedSettingsService,
     SettingsScopeRef,
@@ -293,6 +295,7 @@ import { composeProviderBindingProcessAccess } from './providerBindings/invocati
 import {
     verifyRunnerAgentBindingAgainstGeneration,
 } from './runner/loadRetainedAgentRuntimeLeaf';
+import { retainedAgentSourceMatchesRunner } from './retainedPluginSourceAttestation';
 import type {
     AgentSessionRunnerBindingV1,
 } from './runner/agentSessionRunnerFactoryBinding';
@@ -644,7 +647,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     ): PluginMachineMaterializationRefV1 | null;
     /**
      * The same runtime owner combines a fresh server/machine context with the
-     * exact current materialization. Callers cannot construct this origin.
+     * exact current installed materialization or admitted source custody.
      */
     resolveCurrentPluginExecutionOrigin?(
         pluginId: string,
@@ -714,7 +717,6 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     composerReferences?: ReturnType<typeof createTargetComposerReferenceRegistry>;
     composerAttachments?: ReturnType<typeof createTargetComposerAttachmentRegistry>;
     pluginNotifications?: Pick<StablePluginNotificationsOwner, 'availableHostChannels' | 'sendHostNotification'>;
-    promptAssetAdapters?: ReadonlyMap<string, PromptAssetAdapter>;
     systemToolDefinitionsByPluginId?: Awaited<ReturnType<typeof activatePluginRuntimeRegistry>>['systemToolDefinitionsByPluginId'];
     envAllowedNamesByPluginId?: Awaited<ReturnType<typeof activatePluginRuntimeRegistry>>['envAllowedNamesByPluginId'];
     filesystemReadAllowedPathsByPluginId?: Awaited<ReturnType<typeof activatePluginRuntimeRegistry>>['filesystemReadAllowedPathsByPluginId'];
@@ -922,6 +924,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     acquireRetainedRunnerAgentPurposeContributions?(params: Readonly<{
         binding: AgentSessionRunnerBindingV1;
         pluginHardRevocationRevision: number;
+        runnerSnapshotIdentity?: string;
     }>): Promise<Readonly<{
         contributes: ResolvedContributionRegistry;
         isCurrent(): boolean;
@@ -930,6 +933,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     createRetainedRunnerAgentInvocationServices?(
         params: Readonly<{
             binding: AgentSessionRunnerBindingV1;
+            runnerSnapshotIdentity?: string;
             sessionId: string;
             managedDependencyRetention?:
                 RunnerManagedDependencyRetentionV1;
@@ -960,6 +964,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     createRetainedRunnerAgentCurrentGlobalActionsService?(
         params: Readonly<{
             binding: AgentSessionRunnerBindingV1;
+            runnerSnapshotIdentity?: string;
             sessionId: string;
             correlationId: string;
             processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
@@ -974,6 +979,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     createRetainedRunnerAgentCurrentGlobalMcpService?(
         params: Readonly<{
             binding: AgentSessionRunnerBindingV1;
+            runnerSnapshotIdentity?: string;
             sessionId: string;
             correlationId: string;
             signal: AbortSignal;
@@ -986,6 +992,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     createRetainedRunnerAgentCurrentGlobalExternalSessionsService?(
         params: Readonly<{
             binding: AgentSessionRunnerBindingV1;
+            runnerSnapshotIdentity?: string;
             sessionId: string;
             correlationId: string;
             signal: AbortSignal;
@@ -1963,6 +1970,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const candidatePluginIds = params?.pluginIds === undefined
         ? new Set([
             ...activationTargets.map((target) => target.pluginId),
+            ...(contributes.pluginDeclarations ?? []).map((declaration) => declaration.pluginId),
             ...contributes.agents.flatMap((agent) => agent.pluginId ? [agent.pluginId] : []),
             ...(contributes.roles ?? []).map((role) => role.pluginId),
             ...(contributes.workflows ?? []).map((workflow) => workflow.pluginId),
@@ -1979,8 +1987,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const admittedPluginSourceCustodiesByPluginId = new Map<string, PluginSourceCustody>();
     for (const pluginId of candidatePluginIds) {
         const target = activationTargets.find((candidate) => candidate.pluginId === pluginId);
+        const declaration = contributes.pluginDeclarations?.find((candidate) => candidate.pluginId === pluginId);
         // A plugin this candidate no longer declares (removal) has no occurrence.
         if (!target
+            && !declaration
             && !contributes.agents.some((agent) => agent.pluginId === pluginId)
             && !(contributes.roles ?? []).some((role) => role.pluginId === pluginId)
             && !(contributes.workflows ?? []).some((workflow) => workflow.pluginId === pluginId)
@@ -1993,6 +2003,28 @@ export async function resolveExecutablePluginRuntimeRegistry(
         let candidateSourceCustody = activationSource?.sourceAuthority
             ? resolvePluginSourceCustody(activationSource.sourceAuthority)
             : null;
+        // Client-only declarations have no daemon module to resolve or load,
+        // but use the same admitted package/development custody as executable
+        // peers. A bundled id alone never establishes source authority.
+        if (!target && declaration?.sourceSpec.kind === 'bundled') {
+            const metadata = BUNDLED_FIRST_PARTY_PLUGIN_METADATA.find((candidate) => (
+                candidate.pluginId === pluginId
+                && candidate.packageName === declaration.sourceSpec.locator
+            ));
+            if (metadata) {
+                if (packagedRuntimeRoot) {
+                    candidateSourceCustody = Object.freeze({
+                        kind: 'bundled_first_party', packagedRuntime: packagedRuntimeRoot.packagedRuntime,
+                    });
+                } else {
+                    const authority = params?.resolveDevelopmentSourceAuthority?.({
+                        pluginId,
+                        rootPath: resolve(resolveBundledActivationSourceRepoRoot(import.meta.url), 'packages', 'plugins', metadata.pluginPackageId),
+                    });
+                    if (authority) candidateSourceCustody = resolvePluginSourceCustody(authority);
+                }
+            }
+        }
         const admitted = committed?.generations.get(pluginId);
         if (!candidateSourceCustody && admitted?.installation?.trust) {
             candidateSourceCustody = {
@@ -2030,6 +2062,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 ? { occurrenceId: serving.occurrenceId, sourceCustody }
                 : undefined;
         })();
+        // Declaration-only sources must prove custody before receiving an occurrence.
+        if (!target && declaration && !candidateSourceCustody && !retainedIdentity) continue;
         candidateOccurrenceIdsByPluginId.set(
             pluginId,
             retainedIdentity?.occurrenceId ?? createPluginRuntimeOccurrenceId(pluginId),
@@ -2567,8 +2601,29 @@ export async function resolveExecutablePluginRuntimeRegistry(
     ): Promise<PluginMachineExecutionOriginV1 | null> => {
         signal?.throwIfAborted();
         if (!params?.resolveCurrentMachineExecutionOriginContext) return null;
-        const beforeMaterialization = resolveCurrentPluginMaterializationRef(pluginId);
-        if (!beforeMaterialization) return null;
+        const readCurrentCandidate = () => {
+            const occurrenceId = readCurrentPluginOccurrenceId(pluginId);
+            if (!occurrenceId) return null;
+            if (authoritativeContributes.materializationIdsByPluginId?.[pluginId] !== undefined) {
+                const materialization = resolveCurrentPluginMaterializationRef(pluginId);
+                return materialization ? {
+                    occurrenceId,
+                    machineId: materialization.machineId,
+                    materializationId: materialization.materializationId,
+                } : null;
+            }
+            const sourceCustody = readCurrentPluginSourceCustody(pluginId);
+            if (!sourceCustody || sourceCustody.kind === 'managed') return null;
+            let machineId: string | null | undefined;
+            try {
+                machineId = params.resolveCurrentMachineId?.();
+            } catch {
+                return null;
+            }
+            return machineId ? { occurrenceId, machineId, sourceCustody } : null;
+        };
+        const before = readCurrentCandidate();
+        if (!before) return null;
         let context: CurrentMachineExecutionOriginContext | null;
         try {
             context = await params.resolveCurrentMachineExecutionOriginContext(signal);
@@ -2576,21 +2631,18 @@ export async function resolveExecutablePluginRuntimeRegistry(
             return null;
         }
         signal?.throwIfAborted();
-        const afterMaterialization = resolveCurrentPluginMaterializationRef(pluginId);
+        const after = readCurrentCandidate();
         if (
             !context
-            || !afterMaterialization
-            || !arePluginMachineMaterializationRefsEqual(beforeMaterialization, afterMaterialization)
-            || context.machineId !== afterMaterialization.machineId
+            || !after
+            || before.occurrenceId !== after.occurrenceId
+            || context.machineId !== before.machineId
+            || context.machineId !== after.machineId
         ) return null;
-        const origin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse({
-            serverIdentityId: context.serverIdentityId,
-            materializationRef: afterMaterialization,
-        });
-        return origin.success ? Object.freeze({
-            serverIdentityId: origin.data.serverIdentityId,
-            materializationRef: Object.freeze({ ...origin.data.materializationRef }),
-        }) : null;
+        const beforeOrigin = resolvePluginMachineExecutionOrigin({ pluginId, context, ...before });
+        const afterOrigin = resolvePluginMachineExecutionOrigin({ pluginId, context, ...after });
+        return beforeOrigin && afterOrigin && arePluginMachineExecutionOriginsEqual(beforeOrigin, afterOrigin)
+            ? afterOrigin : null;
     };
     const resolveCurrentPluginApprovalReplayPlacement = async (
         pluginId: string,
@@ -2636,10 +2688,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         left.length === right.length
         && left.every((contract) => right.some((ref) => collectionContractMatchesRef(contract, ref)))
     );
-    const sameExecutionOrigin = (
-        left: PluginMachineExecutionOriginV1,
-        right: PluginMachineExecutionOriginV1,
-    ): boolean => arePluginMachineExecutionOriginsEqual(left, right);
+
     const resolveCollectionCandidateModuleCacheKey = (
         source: PluginActivationSource<PluginDaemonModuleNamespace>,
     ): string | undefined => {
@@ -2736,7 +2785,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         occurrenceId: captured.occurrenceId,
                     })
                     && currentOrigin !== null
-                    && sameExecutionOrigin(currentOrigin, input.candidate.origin);
+                    && arePluginMachineExecutionOriginsEqual(currentOrigin, input.candidate.origin);
             } catch {
                 return false;
             }
@@ -2962,34 +3011,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
             consumerAssembly.retirePlugins(pluginIds),
             projectManagedServicesOwner.retireSharedProviderServices(pluginIds),
         ]);
-    };
-    const buildPromptAssetAdapterRegistry = () => createTargetPromptAssetAdapterRegistry({
-        promptAssets: (authoritativeContributes.promptAssets ?? []).map((asset) => Object.freeze({
-            pluginId: asset.pluginId,
-            localId: asset.definition.id,
-            ...(asset.definition.adapterDescriptor
-                ? { adapterDescriptor: asset.definition.adapterDescriptor }
-                : {}),
-        })),
-        targetRegistrations: activatedRegistry.targetRegistrations,
-        resolveOccurrenceLifecycle: resolveRuntimeConsumerLifecycle,
-    });
-    // Prompt Asset adapters are re-projected when activation facts change, so a
-    // mis-authored adapter's refusal is recorded here and folded into the plugin's
-    // diagnostics by `refreshPluginDiagnostics` below.
-    let promptAssetProjectionDiagnosticsByPluginId:
-        Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>> = Object.freeze({});
-    const initialPromptAssetAdapterRegistry = buildPromptAssetAdapterRegistry();
-    promptAssetProjectionDiagnosticsByPluginId =
-        initialPromptAssetAdapterRegistry.diagnosticsByPluginId;
-    const promptAssetAdapters = new Map(initialPromptAssetAdapterRegistry.adapters);
-    const refreshPromptAssetAdapterRegistry = (): void => {
-        const next = buildPromptAssetAdapterRegistry();
-        promptAssetProjectionDiagnosticsByPluginId = next.diagnosticsByPluginId;
-        promptAssetAdapters.clear();
-        for (const [assetTypeId, adapter] of next.adapters) {
-            promptAssetAdapters.set(assetTypeId, adapter);
-        }
     };
     const createAgentInvocationServices: CreateAgentInvocationServices = async (
         agentParams,
@@ -3531,6 +3552,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     }
     const mcpDiscoveryAttachments = new Map<string, Readonly<{
         endpoints: NonNullable<PluginMcpDiscoveryResult['endpoints']>;
+        detectedServers?: PluginMcpDiscoveryResult['detectedServers'];
         warnings: NonNullable<PluginMcpDiscoveryResult['warnings']>;
     }>>();
     const mcpDiscoveryAttachmentKey = (
@@ -3701,6 +3723,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                             mcpDiscoveryAttachmentKey(callerSeed.correlationId, ref),
                             Object.freeze({
                                 endpoints: projectPluginMcpDiscoveredEndpoints(result.endpoints),
+                                ...(result.detectedServers ? { detectedServers: Object.freeze([...result.detectedServers]) } : {}),
                                 warnings: projectPluginMcpDiscoveryWarnings(result.warnings),
                             }),
                         );
@@ -4200,7 +4223,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ...(params?.machineAdmissionTransport
                 ? { machineAdmissionTransport: params.machineAdmissionTransport }
                 : {}),
-            readRegisteredPromptAssetAdapters: () => promptAssetAdapters,
             resolvePluginNotifications: () => invocationServiceOwners.notifications,
             readPluginVoiceProviders: () => resolvedRuntimeRegistryOwner?.contributes.voiceProviders ?? [],
             revalidatePluginActionCallerMaterialization,
@@ -4741,6 +4763,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
         pluginId: string,
     ): PluginFinalPolicyCurrentRuntime | null => {
         const activationTarget = resolveExactActivationTarget(pluginId);
+        const declaration = authoritativeContributes.pluginDeclarations?.find((candidate) => candidate.pluginId === pluginId);
+        const clientOnlyDeclaration = declaration
+            && !declaration.daemonEntryPath && !declaration.devDaemonEntryPath;
         // Final-policy readers retain the exact admitted runtime identity after
         // terminal fencing so they can distinguish `applied: false` from an
         // unknown plugin. Public currentness readers still fail closed through
@@ -4748,17 +4773,19 @@ export async function resolveExecutablePluginRuntimeRegistry(
         const occurrenceId = activatedRegistry.readPluginOccurrenceId(pluginId);
         const sourceCustody = activatedRegistry.readPluginSourceCustody(pluginId);
         if (
-            !activationTarget
+            (!activationTarget && !clientOnlyDeclaration)
             || !occurrenceId
             || !sourceCustody
         ) return null;
-        const activationApplied = Boolean(
-            activatedRegistry.activatedPluginIds.has(pluginId)
-            && activatedRegistry.targetActivationFacts.some((fact) => (
-                fact.pluginId === pluginId
-                && fact.status === 'active'
-            )),
-        );
+        const activationApplied = clientOnlyDeclaration
+            ? isPluginConsumerCurrent(pluginId)
+            : Boolean(
+                activatedRegistry.activatedPluginIds.has(pluginId)
+                && activatedRegistry.targetActivationFacts.some((fact) => (
+                    fact.pluginId === pluginId
+                    && fact.status === 'active'
+                )),
+            );
         const desiredOccurrenceId = isPluginConsumerCurrent(pluginId)
             ? occurrenceId
             : null;
@@ -5358,7 +5385,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 : []),
             ...(activatedRegistry.pluginDiagnosticsByPluginId[pluginId] ?? []),
             ...(providerProjectionDiagnosticsByPluginId[pluginId] ?? []),
-            ...(promptAssetProjectionDiagnosticsByPluginId[pluginId] ?? []),
             ...(externalSessionProjectionDiagnosticsByPluginId[pluginId] ?? []),
         ]);
     }
@@ -5541,7 +5567,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
         mergeActivatedHookHandlers();
         refreshAgentRuntimeRegistry();
         refreshSystemToolRegistries();
-        refreshPromptAssetAdapterRegistry();
     }
 
     async function activateContributionsOnDemand(
@@ -6724,10 +6749,19 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const verifyRetainedRunnerAgentServiceBinding = async (
         binding: AgentSessionRunnerBindingV1,
         unavailableCode: string,
+        runnerSnapshotIdentity?: string,
     ) => {
         try {
             const verifiedBinding = verifyAgentSessionRunnerBindingV1(binding);
             if (verifiedBinding.sourceCustody.kind === 'development') {
+                if (runnerSnapshotIdentity
+                    && retainedAgentSourceMatchesRunner(runnerSnapshotIdentity, verifiedBinding)) {
+                    return await verifyRunnerAgentBindingAgainstGeneration({
+                        paths: resolvePluginStorePaths({ happyHomeDir: params?.happyHomeDir }),
+                        binding: verifiedBinding,
+                        developmentRunnerSnapshotIdentity: runnerSnapshotIdentity,
+                    });
+                }
                 const currentSourceCustody = readCurrentPluginSourceCustody(
                     verifiedBinding.pluginId,
                 );
@@ -6983,7 +7017,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ))),
         async claimReleaseLessDeclarations(): Promise<void> {
             if (scopedActionRuntime) return;
-            const failures: unknown[] = [];
+            const failures: PluginError[] = [];
             for (const [pluginId, declaration] of releaseLessDeclarationsByPluginId) {
                 if (!declaration.claimsAccountIntent) continue;
                 const occurrenceId = readCurrentPluginOccurrenceId(pluginId);
@@ -6994,7 +7028,12 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         signal: lifecycle.retirementSignal,
                         isOccurrenceCurrent: () => lifecycle.isCurrent()
                             && readCurrentPluginOccurrenceId(pluginId) === occurrenceId });
-                } catch (error) { failures.push(error); }
+                } catch (error) {
+                    failures.push(new PluginError({
+                        code: isPluginError(error) ? error.code : 'plugin_account_declaration_publication_failed',
+                        details: { pluginId },
+                    }, { cause: error }));
+                }
             }
             if (failures.length > 0) throw new AggregateError(failures, 'Plugin Account declaration publication failed');
         },
@@ -7025,7 +7064,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
         ...(invocationServiceOwners.notifications
             ? { pluginNotifications: invocationServiceOwners.notifications }
             : {}),
-        promptAssetAdapters,
         systemToolDefinitionsByPluginId,
         envAllowedNamesByPluginId: activatedRegistry.envAllowedNamesByPluginId,
         filesystemReadAllowedPathsByPluginId: activatedRegistry.filesystemReadAllowedPathsByPluginId,
@@ -7447,6 +7485,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 const attachment = mcpDiscoveryAttachments.get(attachmentKey);
                 return Object.freeze({
                     endpoints: attachment?.endpoints ?? Object.freeze([]),
+                    ...(attachment?.detectedServers ? { detectedServers: attachment.detectedServers } : {}),
                     warnings: projectPluginMcpDiscoveryWarningsToLegacyDetection(
                         declaration.definition.metadata?.agentId,
                         attachment?.warnings,
@@ -7518,6 +7557,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 await verifyRetainedRunnerAgentServiceBinding(
                     input.binding,
                     'plugin_services_retained_generation_untrusted',
+                    input.runnerSnapshotIdentity,
                 );
             if (
                 await readHardRevocationRevision()
@@ -7572,6 +7612,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 await verifyRetainedRunnerAgentServiceBinding(
                     agentParams.binding,
                     'plugin_services_retained_generation_unavailable',
+                    agentParams.runnerSnapshotIdentity,
                 );
             if (!agentParams.isOccurrenceCurrent()) {
                 throw new PluginError({
@@ -7649,6 +7690,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 await verifyRetainedRunnerAgentServiceBinding(
                     agentParams.binding,
                     'plugin_services_retained_generation_unavailable',
+                    agentParams.runnerSnapshotIdentity,
                 );
             if (!agentParams.isOccurrenceCurrent()) {
                 throw new PluginError({
@@ -7729,6 +7771,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 await verifyRetainedRunnerAgentServiceBinding(
                     agentParams.binding,
                     'plugin_services_retained_generation_unavailable',
+                    agentParams.runnerSnapshotIdentity,
                 );
             if (!agentParams.isOccurrenceCurrent()) {
                 throw new PluginError({
@@ -7762,6 +7805,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 await verifyRetainedRunnerAgentServiceBinding(
                     agentParams.binding,
                     'plugin_services_retained_managed_dependency_unavailable',
+                    agentParams.runnerSnapshotIdentity,
                 );
             const {
                 binding,
@@ -7863,6 +7907,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 })()
                 : genericSystemTools;
             const retainedManagedDependencies = binding.sourceCustody.kind === 'development'
+                && currentOccurrenceId
                 ? managedDependencies
                 : await createRetainedRunnerManagedDependenciesHost({
                     paths: storePaths,
@@ -7873,6 +7918,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
                             agentParams.managedDependencyRetention,
                         ),
                     agentManifestAuthority: manifestAuthority,
+                    ...(agentParams.runnerSnapshotIdentity
+                        ? { runnerSnapshotIdentity: agentParams.runnerSnapshotIdentity }
+                        : {}),
                     env: process.env,
                 });
             const retainedExecutableResolver =

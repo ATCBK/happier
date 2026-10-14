@@ -59,6 +59,10 @@ export {
 } from './resolution.js';
 export { hasAgentCliManagedInstallForRuntime, readManagedAgentCliInstallMetadata, removeAgentCliManagedInstallForRuntime, type ManagedAgentCliAcpMetadata } from './removeManagedInstall.js';
 export { managedAcpAccountNamespace, managedAcpInstallId, readManagedAcpInstallNamespace } from './managedAcpInstallIdentity.js';
+export { buildManagedUvEnvironment, ensureManagedUvCommand, managedUvInstallDir, managedUvBinPath,
+  resolveExistingManagedUvCommand } from './managedUv.js';
+export { buildManagedUvAgentEnvironment, installManagedUvAgent, resolveManagedUvAgentCommand,
+  readManagedUvAgentMetadata, uninstallManagedUvAgent, type ManagedUvAgentSpec } from './install/managedUvInstall.js';
 export {
   ensureManagedJavaScriptRuntimeCommand,
   managedJavaScriptRuntimeBinPath,

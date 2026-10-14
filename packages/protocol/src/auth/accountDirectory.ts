@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
@@ -107,59 +107,44 @@ const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/u;
  * Application endpoint policy for Home enrollment and canonical Home URLs.
  * Account Service endpoint parsing is a separate client-owned contract.
  */
-export const HomeApplicationOriginV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(ACCOUNT_DIRECTORY_MAX_URL_UTF8_BYTES)
-  .superRefine((value, context) => {
+export const HomeApplicationOriginV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_URL_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_URL_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'URL exceeds its UTF-8 byte limit' });
     }
     try {
       const parsed = new URL(value);
       if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname))) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Home application URL must use HTTPS or loopback HTTP' });
+        context.addIssue({ code: "custom", message: 'Home application URL must use HTTPS or loopback HTTP' });
       }
       if (parsed.username || parsed.password || value.includes('?') || value.includes('#')) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Home application URL must not contain credentials, a query, or a fragment' });
+        context.addIssue({ code: "custom", message: 'Home application URL must not contain credentials, a query, or a fragment' });
       }
     } catch {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL must be absolute' });
+      context.addIssue({ code: "custom", message: 'URL must be absolute' });
     }
-  }));
+  })));
 export type HomeApplicationOriginV1 = z.infer<typeof HomeApplicationOriginV1Schema>;
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.preprocess(
-  normalizeServerIdentityIdCapability,
-  z.string().trim().min(1).max(64).regex(SERVER_IDENTITY_ID_PATTERN),
-));
+const ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z.string().check(z.trim(), z.minLength(1), z.maxLength(64), z.regex(SERVER_IDENTITY_ID_PATTERN))));
 
-const BoundedIdentifierSchema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(ACCOUNT_DIRECTORY_MAX_ID_UTF8_BYTES)
-  .superRefine((value, context) => {
+const BoundedIdentifierSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_ID_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_ID_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Identifier exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Identifier exceeds its UTF-8 byte limit' });
     }
-  }));
+  })));
 
-const LabelSchema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES)
-  .superRefine((value, context) => {
+const LabelSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Label exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Label exceeds its UTF-8 byte limit' });
     }
-  }));
+  })));
 
 function strictEncodedBytes(
   variant: 'base64' | 'base64url',
   expectedBytes: number | undefined,
   maxBytes: number,
-): z.ZodType<string> {
-  return z.string().min(1).max(Math.ceil(maxBytes / 3) * 4 + 4).refine((value) => {
+): z.ZodMiniType<string> {
+  return z.string().check(z.minLength(1), z.maxLength(Math.ceil(maxBytes / 3) * 4 + 4), z.refine((value) => {
     if (variant === 'base64') {
       if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 !== 0) return false;
     } else if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
@@ -173,7 +158,7 @@ function strictEncodedBytes(
     } catch {
       return false;
     }
-  }, `must be canonical ${variant} and contain a valid bounded byte payload`);
+  }, `must be canonical ${variant} and contain a valid bounded byte payload`));
 }
 
 const ClientBoxPublicKeyBase64Schema = strictEncodedBytes('base64', 32, 32);
@@ -186,34 +171,32 @@ const SealedHomeTokenBase64UrlSchema = strictEncodedBytes(
   ACCOUNT_DIRECTORY_MAX_SEALED_TOKEN_BYTES,
 );
 
-const PositiveRevisionSchema = lazyZodSchema(() => z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const PositiveRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 // The Iroh endpoint sub-descriptor is owned by the shared connectivity module
 // (`connectivity/iroh/endpointDescriptorV1.ts`) and re-exported above; the
 // union variant below composes it without redefining the wire shape.
-const HttpsEndpointDescriptorV1Schema = lazyZodSchema(() => z.object({
+const HttpsEndpointDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('https'),
   url: HomeApplicationOriginV1Schema,
-}).strict());
+}));
 
 export const HomeConnectionEndpointV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   HttpsEndpointDescriptorV1Schema,
   // Extend keeps the canonical schema's strict/unknown-field rejection while
   // adding the outer endpoint-union discriminant.
-  IrohEndpointDescriptorV1Schema.extend({ kind: z.literal('iroh') }),
+  z.extend(IrohEndpointDescriptorV1Schema, { kind: z.literal('iroh') }),
 ]));
 export type HomeConnectionEndpointV1 = z.infer<typeof HomeConnectionEndpointV1Schema>;
 
-export const HomeConnectionDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const HomeConnectionDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   homeServerIdentityId: ServerIdentityIdSchema,
   canonicalServerUrl: HomeApplicationOriginV1Schema,
   revision: PositiveRevisionSchema,
-  endpoints: z.array(HomeConnectionEndpointV1Schema)
-    .min(1)
-    .max(ACCOUNT_DIRECTORY_MAX_ENDPOINTS),
-}).strict());
+  endpoints: z.array(HomeConnectionEndpointV1Schema).check(z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_ENDPOINTS)),
+}));
 export type HomeConnectionDescriptorV1 = z.infer<typeof HomeConnectionDescriptorV1Schema>;
 
 /** Device-persisted read projection only; live descriptor admission remains strict. */
@@ -235,22 +218,15 @@ function isCanonicalSortedUnique(values: readonly string[]): boolean {
   return values.every((value, index) => index === 0 || values[index - 1]! < value);
 }
 
-const CanonicalHomeApplicationOriginV1Schema = lazyZodSchema(() => HomeApplicationOriginV1Schema.refine(
-  isCanonicalHomeApplicationOriginV1,
-  'Home application URL must use its canonical URL serialization',
-));
+const CanonicalHomeApplicationOriginV1Schema = lazyZodSchema(() => HomeApplicationOriginV1Schema.check(z.refine(isCanonicalHomeApplicationOriginV1, 'Home application URL must use its canonical URL serialization')));
 
-export const HomeCredentialDestinationV1Schema = lazyZodSchema(() => z.object({
+export const HomeCredentialDestinationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   homeServerIdentityId: ServerIdentityIdSchema,
   canonicalServerUrl: CanonicalHomeApplicationOriginV1Schema,
-  applicationEndpointUrls: z.array(CanonicalHomeApplicationOriginV1Schema)
-    .max(ACCOUNT_DIRECTORY_MAX_ENDPOINTS)
-    .refine(isCanonicalSortedUnique, 'Application endpoint URLs must be sorted and unique'),
-  irohEndpointIds: z.array(IrohEndpointIdV1Schema)
-    .max(ACCOUNT_DIRECTORY_MAX_ENDPOINTS)
-    .refine(isCanonicalSortedUnique, 'Iroh endpoint IDs must be sorted and unique'),
-}).strict());
+  applicationEndpointUrls: z.array(CanonicalHomeApplicationOriginV1Schema).check(z.maxLength(ACCOUNT_DIRECTORY_MAX_ENDPOINTS), z.refine(isCanonicalSortedUnique, 'Application endpoint URLs must be sorted and unique')),
+  irohEndpointIds: z.array(IrohEndpointIdV1Schema).check(z.maxLength(ACCOUNT_DIRECTORY_MAX_ENDPOINTS), z.refine(isCanonicalSortedUnique, 'Iroh endpoint IDs must be sorted and unique')),
+}));
 export type HomeCredentialDestinationV1 = z.infer<typeof HomeCredentialDestinationV1Schema>;
 
 export type HomeCredentialDestinationSelectionV1 =
@@ -328,42 +304,41 @@ export function isHomeCredentialDestinationAllowedV1(
   }
 }
 
-const HomeLoginTokenV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_TOKEN_UTF8_BYTES)
-  .superRefine((value, context) => {
+const HomeLoginTokenV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_TOKEN_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_TOKEN_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Home token exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Home token exceeds its UTF-8 byte limit' });
     }
-  }));
+  })));
 
 /** Exact strict sealed plaintext. Descriptor and legacy credential envelopes fail closed. */
-export const HomeLoginCredentialPayloadV1Schema = lazyZodSchema(() => z.object({
+export const HomeLoginCredentialPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   token: HomeLoginTokenV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(JSON.stringify(value)).byteLength > ACCOUNT_DIRECTORY_MAX_HOME_LOGIN_CREDENTIAL_PLAINTEXT_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Home credential payload exceeds its plaintext byte limit' });
+    context.addIssue({ code: "custom", message: 'Home credential payload exceeds its plaintext byte limit' });
   }
-}));
+})));
 export type HomeLoginCredentialPayloadV1 = z.infer<typeof HomeLoginCredentialPayloadV1Schema>;
 
-const AccountDirectoryHomeIdentityFieldsSchema = lazyZodSchema(() => z.object({
+const AccountDirectoryHomeIdentityFieldsSchema = lazyZodSchema(() => z.strictObject({
   homeServerIdentityId: ServerIdentityIdSchema,
   canonicalServerUrl: HomeApplicationOriginV1Schema,
-}).strict());
+}));
 
 function validateDescriptorIdentityAndUrl(
   value: Readonly<{ homeServerIdentityId: string; canonicalServerUrl: string; connectionDescriptor?: HomeConnectionDescriptorV1 }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (!value.connectionDescriptor) return;
   if (value.connectionDescriptor.homeServerIdentityId !== value.homeServerIdentityId) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['connectionDescriptor', 'homeServerIdentityId'], message: 'Descriptor identity must match its directory entry' });
+    context.addIssue({ code: "custom", path: ['connectionDescriptor', 'homeServerIdentityId'], message: 'Descriptor identity must match its directory entry' });
   }
   if (value.connectionDescriptor.canonicalServerUrl !== value.canonicalServerUrl) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['connectionDescriptor', 'canonicalServerUrl'], message: 'Descriptor canonical URL must match its directory entry' });
+    context.addIssue({ code: "custom", path: ['connectionDescriptor', 'canonicalServerUrl'], message: 'Descriptor canonical URL must match its directory entry' });
   }
 }
 
-export const AccountDirectoryHomeEntryV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryHomeEntryV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   homeServerIdentityId: ServerIdentityIdSchema,
   canonicalServerUrl: HomeApplicationOriginV1Schema,
@@ -372,125 +347,125 @@ export const AccountDirectoryHomeEntryV1Schema = lazyZodSchema(() => z.object({
   createdAtMs: TimestampMsSchema,
   updatedAtMs: TimestampMsSchema,
   preferred: z.boolean(),
-}).strict().superRefine(validateDescriptorIdentityAndUrl));
+}).check(z.superRefine(validateDescriptorIdentityAndUrl)));
 export type AccountDirectoryHomeEntryV1 = z.infer<typeof AccountDirectoryHomeEntryV1Schema>;
 
-export const AccountDirectoryHomePutRequestV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryHomePutRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   label: LabelSchema,
   connectionDescriptor: HomeConnectionDescriptorV1Schema,
-}).strict());
+}));
 export type AccountDirectoryHomePutRequestV1 = z.infer<typeof AccountDirectoryHomePutRequestV1Schema>;
 
 export const AccountDirectoryHomePutResponseV1Schema = AccountDirectoryHomeEntryV1Schema;
 export type AccountDirectoryHomePutResponseV1 = AccountDirectoryHomeEntryV1;
 
-export const AccountDirectoryHomeDeleteRequestV1Schema = lazyZodSchema(() => z.object({ v: z.literal(1) }).strict());
+export const AccountDirectoryHomeDeleteRequestV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1) }));
 export type AccountDirectoryHomeDeleteRequestV1 = z.infer<typeof AccountDirectoryHomeDeleteRequestV1Schema>;
 
-export const AccountDirectoryHomeDeleteParamsV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryHomeDeleteParamsV1Schema = lazyZodSchema(() => z.strictObject({
   homeServerIdentityId: ServerIdentityIdSchema,
-}).strict());
+}));
 export type AccountDirectoryHomeDeleteParamsV1 = z.infer<typeof AccountDirectoryHomeDeleteParamsV1Schema>;
 
-export const AccountDirectoryHomeDeleteResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryHomeDeleteResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   deleted: z.literal(true),
   homeServerIdentityId: ServerIdentityIdSchema,
-  preferredHomeServerIdentityId: ServerIdentityIdSchema.nullable(),
-}).strict());
+  preferredHomeServerIdentityId: z.nullable(ServerIdentityIdSchema),
+}));
 export type AccountDirectoryHomeDeleteResponseV1 = z.infer<typeof AccountDirectoryHomeDeleteResponseV1Schema>;
 
-export const AccountDirectoryHomesResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryHomesResponseV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
   v: z.literal(1),
   homes: z.array(AccountDirectoryHomeEntryV1Schema),
-  preferredHomeServerIdentityId: ServerIdentityIdSchema.nullable(),
-}).strict().superRefine((value, context) => {
+  preferredHomeServerIdentityId: z.nullable(ServerIdentityIdSchema),
+}).check(z.superRefine((value, context) => {
   const preferred = value.preferredHomeServerIdentityId;
   if (preferred && !value.homes.some((home) => home.homeServerIdentityId === preferred)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['preferredHomeServerIdentityId'], message: 'Preferred Home must be present in homes' });
+    context.addIssue({ code: "custom", path: ['preferredHomeServerIdentityId'], message: 'Preferred Home must be present in homes' });
   }
   const preferredEntries = value.homes.filter((home) => home.preferred);
   if (preferredEntries.length > 1) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['homes'], message: 'At most one Home may be marked preferred' });
+    context.addIssue({ code: "custom", path: ['homes'], message: 'At most one Home may be marked preferred' });
   }
   if (preferred === null && preferredEntries.length !== 0) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['homes'], message: 'No Home may be marked preferred when the preferred pointer is null' });
+    context.addIssue({ code: "custom", path: ['homes'], message: 'No Home may be marked preferred when the preferred pointer is null' });
   }
   if (preferred !== null && preferredEntries.length !== 1) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['homes'], message: 'Exactly one Home must be marked preferred when the preferred pointer is set' });
+    context.addIssue({ code: "custom", path: ['homes'], message: 'Exactly one Home must be marked preferred when the preferred pointer is set' });
   }
   if (preferred && preferredEntries.length === 1 && preferredEntries[0]!.homeServerIdentityId !== preferred) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['homes'], message: 'Entry preferred status must match preferredHomeServerIdentityId' });
+    context.addIssue({ code: "custom", path: ['homes'], message: 'Entry preferred status must match preferredHomeServerIdentityId' });
   }
-}).transform((value) => value));
+})), z.transform((value) => value)));
 export type AccountDirectoryHomesResponseV1 = z.infer<typeof AccountDirectoryHomesResponseV1Schema>;
 
-export const AccountDirectoryPreferredHomePatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryPreferredHomePatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  homeServerIdentityId: ServerIdentityIdSchema.nullable(),
-}).strict());
+  homeServerIdentityId: z.nullable(ServerIdentityIdSchema),
+}));
 export type AccountDirectoryPreferredHomePatchRequestV1 = z.infer<typeof AccountDirectoryPreferredHomePatchRequestV1Schema>;
 export const AccountDirectoryPreferredHomePatchResponseV1Schema = AccountDirectoryHomesResponseV1Schema;
 export type AccountDirectoryPreferredHomePatchResponseV1 = AccountDirectoryHomesResponseV1;
 
-export const AccountDirectoryLinkedAuthenticationMethodV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryLinkedAuthenticationMethodV1Schema = lazyZodSchema(() => z.strictObject({
   providerId: BoundedIdentifierSchema,
-  login: BoundedIdentifierSchema.nullable(),
-}).strict());
+  login: z.nullable(BoundedIdentifierSchema),
+}));
 export type AccountDirectoryLinkedAuthenticationMethodV1 = z.infer<typeof AccountDirectoryLinkedAuthenticationMethodV1Schema>;
 
-export const AccountDirectoryMeResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryMeResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   accountId: BoundedIdentifierSchema,
-  displayName: LabelSchema.nullable(),
-  avatar: z.string().trim().max(ACCOUNT_DIRECTORY_MAX_URL_UTF8_BYTES).url().nullable(),
-  linkedAuthenticationMethods: z.array(AccountDirectoryLinkedAuthenticationMethodV1Schema).max(32),
+  displayName: z.nullable(LabelSchema),
+  avatar: z.nullable(z.string().check(z.trim(), z.maxLength(ACCOUNT_DIRECTORY_MAX_URL_UTF8_BYTES), z.url())),
+  linkedAuthenticationMethods: z.array(AccountDirectoryLinkedAuthenticationMethodV1Schema).check(z.maxLength(32)),
   /**
    * How this Account's recovery key can be reached, from its stored mode: `none` for a Plain Account
    * (it has no key), `password_unlock` for an E2EE Account with a password envelope, `key_only` for
    * an E2EE Account without one. Absent from servers that predate it; clients then offer nothing.
    */
-  recoveryKey: z.enum(['none', 'password_unlock', 'key_only']).optional(),
-}).strict());
+  recoveryKey: z.optional(z.enum(['none', 'password_unlock', 'key_only'])),
+}));
 export type AccountDirectoryMeResponseV1 = z.infer<typeof AccountDirectoryMeResponseV1Schema>;
 
-export const AccountDirectoryLinkV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryLinkV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   issuerServerIdentityId: ServerIdentityIdSchema,
   issuerSubjectId: BoundedIdentifierSchema,
-  issuerSigningKeyId: z.string().regex(HEX_SHA256_PATTERN),
+  issuerSigningKeyId: z.string().check(z.regex(HEX_SHA256_PATTERN)),
   issuerSigningPublicKeyBase64Url: PublicKeyBase64UrlSchema,
-}).strict());
+}));
 export type AccountDirectoryLinkV1 = z.infer<typeof AccountDirectoryLinkV1Schema>;
 
-export const AccountDirectoryLinkPutRequestV1Schema = lazyZodSchema(() => AccountDirectoryLinkV1Schema.extend({
-  relink: z.boolean().optional().default(false),
-}).strict());
+export const AccountDirectoryLinkPutRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AccountDirectoryLinkV1Schema, {
+  relink: z._default(z.optional(z.boolean()), false),
+})));
 export type AccountDirectoryLinkPutRequestV1 = z.infer<typeof AccountDirectoryLinkPutRequestV1Schema>;
 export const AccountDirectoryLinkPutResponseV1Schema = AccountDirectoryLinkV1Schema;
 export type AccountDirectoryLinkPutResponseV1 = AccountDirectoryLinkV1;
-export const AccountDirectoryLinkDeleteRequestV1Schema = lazyZodSchema(() => z.object({ v: z.literal(1) }).strict());
+export const AccountDirectoryLinkDeleteRequestV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1) }));
 export type AccountDirectoryLinkDeleteRequestV1 = z.infer<typeof AccountDirectoryLinkDeleteRequestV1Schema>;
-export const AccountDirectoryLinkDeleteParamsV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryLinkDeleteParamsV1Schema = lazyZodSchema(() => z.strictObject({
   issuerServerIdentityId: ServerIdentityIdSchema,
-}).strict());
+}));
 export type AccountDirectoryLinkDeleteParamsV1 = z.infer<typeof AccountDirectoryLinkDeleteParamsV1Schema>;
-export const AccountDirectoryLinkDeleteResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryLinkDeleteResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   deleted: z.literal(true),
   issuerServerIdentityId: ServerIdentityIdSchema,
-}).strict());
+}));
 export type AccountDirectoryLinkDeleteResponseV1 = z.infer<typeof AccountDirectoryLinkDeleteResponseV1Schema>;
 
-export const HomeLoginAssertionRequestV1Schema = lazyZodSchema(() => z.object({
+export const HomeLoginAssertionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   homeServerIdentityId: ServerIdentityIdSchema,
   clientBoxPublicKeyBase64: ClientBoxPublicKeyBase64Schema,
-}).strict());
+}));
 export type HomeLoginAssertionRequestV1 = z.infer<typeof HomeLoginAssertionRequestV1Schema>;
 
-const HomeLoginAssertionSigningFactsV1Schema = lazyZodSchema(() => z.object({
+const HomeLoginAssertionSigningFactsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.home-login'),
   issuerServerIdentityId: ServerIdentityIdSchema,
@@ -500,17 +475,17 @@ const HomeLoginAssertionSigningFactsV1Schema = lazyZodSchema(() => z.object({
   clientBoxPublicKeyBase64: ClientBoxPublicKeyBase64Schema,
   issuedAtMs: TimestampMsSchema,
   expiresAtMs: TimestampMsSchema,
-  keyId: z.string().regex(HEX_SHA256_PATTERN),
-}).strict().superRefine((value, context) => {
+  keyId: z.string().check(z.regex(HEX_SHA256_PATTERN)),
+}).check(z.superRefine((value, context) => {
   const lifetime = value.expiresAtMs - value.issuedAtMs;
   if (lifetime < ACCOUNT_DIRECTORY_ASSERTION_MIN_LIFETIME_MS || lifetime > ACCOUNT_DIRECTORY_ASSERTION_MAX_LIFETIME_MS) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['expiresAtMs'], message: 'Assertion lifetime must be between two and five minutes' });
+    context.addIssue({ code: "custom", path: ['expiresAtMs'], message: 'Assertion lifetime must be between two and five minutes' });
   }
-}));
+})));
 
-export const HomeLoginAssertionV1Schema = lazyZodSchema(() => HomeLoginAssertionSigningFactsV1Schema.extend({
+export const HomeLoginAssertionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(HomeLoginAssertionSigningFactsV1Schema, {
   signatureBase64Url: SignatureBase64UrlSchema,
-}).strict());
+})));
 export type HomeLoginAssertionV1 = z.infer<typeof HomeLoginAssertionV1Schema>;
 
 export const HomeLoginAssertionResponseV1Schema = HomeLoginAssertionV1Schema;
@@ -554,11 +529,11 @@ export function createHomeLoginRequesterFingerprintV1(
   return digest.match(/.{1,4}/gu)!.join('-');
 }
 
-export const HomeLoginRedemptionRequestV1Schema = lazyZodSchema(() => z.object({
+export const HomeLoginRedemptionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   assertion: HomeLoginAssertionV1Schema,
-  approvalId: BoundedIdentifierSchema.optional(),
-}).strict());
+  approvalId: z.optional(BoundedIdentifierSchema),
+}));
 export type HomeLoginRedemptionRequestV1 = z.infer<typeof HomeLoginRedemptionRequestV1Schema>;
 
 /**
@@ -566,27 +541,27 @@ export type HomeLoginRedemptionRequestV1 = z.infer<typeof HomeLoginRedemptionReq
  * it is not the expiry of the durable ordinary Home token inside the sealed envelope.
  * The sealed plaintext is exactly `HomeLoginCredentialPayloadV1`: `{ token }`.
  */
-export const HomeLoginRedemptionResponseV1Schema = lazyZodSchema(() => z.object({
+export const HomeLoginRedemptionResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   homeServerIdentityId: ServerIdentityIdSchema,
   sealedHomeTokenBase64Url: SealedHomeTokenBase64UrlSchema,
   issuedAtMs: TimestampMsSchema,
   expiresAtMs: TimestampMsSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.expiresAtMs <= value.issuedAtMs) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['expiresAtMs'], message: 'Redemption validity expiry must be after issuance' });
+    context.addIssue({ code: "custom", path: ['expiresAtMs'], message: 'Redemption validity expiry must be after issuance' });
   }
-}));
+})));
 export type HomeLoginRedemptionResponseV1 = z.infer<typeof HomeLoginRedemptionResponseV1Schema>;
 
-export const HomeLoginRedemptionApprovalRequiredV1Schema = lazyZodSchema(() => z.object({
+export const HomeLoginRedemptionApprovalRequiredV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   outcome: z.literal('approval_required'),
   homeServerIdentityId: ServerIdentityIdSchema,
   approvalId: BoundedIdentifierSchema,
-  deviceLabel: LabelSchema.nullable(),
+  deviceLabel: z.nullable(LabelSchema),
   expiresAtMs: TimestampMsSchema,
-}).strict());
+}));
 export type HomeLoginRedemptionApprovalRequiredV1 = z.infer<typeof HomeLoginRedemptionApprovalRequiredV1Schema>;
 
 export const HomeLoginRedemptionResultV1Schema = lazyZodSchema(() => z.union([
@@ -594,34 +569,34 @@ export const HomeLoginRedemptionResultV1Schema = lazyZodSchema(() => z.union([
   HomeLoginRedemptionApprovalRequiredV1Schema,
 ]));
 
-export const HomeDeviceApprovalRequestV1Schema = lazyZodSchema(() => z.object({
+export const HomeDeviceApprovalRequestV1Schema = lazyZodSchema(() => z.strictObject({
   approvalId: BoundedIdentifierSchema,
   accountId: BoundedIdentifierSchema,
   flow: z.literal('account_assertion'),
   requesterBoxPublicKeyBase64: ClientBoxPublicKeyBase64Schema,
   issuerServerIdentityId: ServerIdentityIdSchema,
   issuerSubjectId: BoundedIdentifierSchema,
-  deviceLabel: z.string().max(256).nullable(),
+  deviceLabel: z.nullable(z.string().check(z.maxLength(256))),
   status: z.enum(['pending', 'approved', 'rejected']),
   expiresAtMs: TimestampMsSchema,
-  decidedAtMs: TimestampMsSchema.nullable(),
-}).strict());
+  decidedAtMs: z.nullable(TimestampMsSchema),
+}));
 export type HomeDeviceApprovalRequestV1 = z.infer<typeof HomeDeviceApprovalRequestV1Schema>;
 
 /** Lane 05 defines no approval-list cardinality cap; consumers must not invent one. */
 export const HomeDeviceApprovalListV1Schema = lazyZodSchema(() => z.array(HomeDeviceApprovalRequestV1Schema));
 export type HomeDeviceApprovalListV1 = z.infer<typeof HomeDeviceApprovalListV1Schema>;
 
-export const HomeDeviceApprovalDecisionRequestV1Schema = lazyZodSchema(() => z.object({
+export const HomeDeviceApprovalDecisionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   decision: z.enum(['approve', 'reject']),
-}).strict());
+}));
 export type HomeDeviceApprovalDecisionRequestV1 = z.infer<
   typeof HomeDeviceApprovalDecisionRequestV1Schema
 >;
 
-export const HomeDeviceApprovalDecisionResponseV1Schema = lazyZodSchema(() => z.object({
+export const HomeDeviceApprovalDecisionResponseV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['approved', 'rejected', 'already_decided']),
-}).strict());
+}));
 export type HomeDeviceApprovalDecisionResponseV1 = z.infer<
   typeof HomeDeviceApprovalDecisionResponseV1Schema
 >;
@@ -677,9 +652,9 @@ export const AccountDirectoryErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 export type AccountDirectoryErrorCodeV1 = z.infer<typeof AccountDirectoryErrorCodeV1Schema>;
 
 /** Error bodies intentionally contain no bearer, assertion, key, or account fields. */
-export const AccountDirectoryRouteErrorResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountDirectoryRouteErrorResponseV1Schema = lazyZodSchema(() => z.strictObject({
   error: AccountDirectoryErrorCodeV1Schema,
-}).strict());
+}));
 export type AccountDirectoryRouteErrorResponseV1 = z.infer<typeof AccountDirectoryRouteErrorResponseV1Schema>;
 
 /**

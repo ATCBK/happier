@@ -377,14 +377,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: 22,
         paddingBottom: 22,
         paddingLeft: 22,
-        paddingRight: 24,
+        paddingRight: theme.space.s24,
     },
     // Phone (lab SBp): the panel's own gutter tightens to the page's.
     rootStacked: {
-        paddingTop: 16,
+        paddingTop: theme.space.s16,
         paddingBottom: 18,
-        paddingLeft: 16,
-        paddingRight: 16,
+        paddingLeft: theme.space.s16,
+        paddingRight: theme.space.s16,
     },
     sideBySide: {
         flexDirection: 'row',
@@ -398,7 +398,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: PLANET_COLUMN_PX,
         alignSelf: 'stretch',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         paddingTop: 18,
         paddingBottom: 18,
         borderRadius: 16,
@@ -430,12 +430,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     description: {
         ...Typography.default(),
         ...happierPageTextMetrics('pageDescription'),
-        marginTop: 5,
+        marginTop: theme.space.s4,
         maxWidth: 460,
         color: theme.colors.text.secondary,
     },
     steps: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
     },
     gallery: {
         alignSelf: 'stretch',
@@ -451,7 +451,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     doneDetail: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     inlineLink: {
@@ -468,10 +468,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     gesture: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     key: {
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         paddingVertical: 1,
         borderRadius: 6,
         borderWidth: StyleSheet.hairlineWidth,
@@ -492,7 +492,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
         marginTop: 18,
     },
     close: {

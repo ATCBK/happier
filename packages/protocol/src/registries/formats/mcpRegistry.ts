@@ -1,27 +1,27 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { McpRegistryServerV1Schema, RegistryItemV1Schema, type McpRegistryInputV1, type RegistryItemSummaryV1 } from '../registryItemsV1.js';
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
 import type { RegistryFetchContextV1, RegistryFormatAdapterV1 } from './registryFormatAdapterV1.js';
 
 // v0.1 API and published 2025-12-11 server schema, captured 2026-10-13.
-const input = z.object({ description: z.string().optional(), isRequired: z.boolean().default(false),
-  isSecret: z.boolean().default(false), default: z.string().optional(), value: z.string().optional(), choices: z.array(z.string()).nullable().optional() });
-const keyInput = input.extend({ name: z.string().min(1), variables: z.record(z.string(), input).optional() });
-const argument = input.extend({ type: z.enum(['named', 'positional']), name: z.string().optional(),
-  valueHint: z.string().optional(), variables: z.record(z.string(), input).optional() });
-const remote = z.object({ type: z.enum(['streamable-http', 'sse']), url: z.string(), headers: z.array(keyInput).nullable().optional(), variables: z.record(z.string(), input).optional() });
-const wireServer = z.object({ name: z.string().min(1), description: z.string(), version: z.string().min(1), title: z.string().optional(),
-  repository: z.object({ url: z.string() }).optional(), websiteUrl: z.string().optional(), icons: z.array(z.object({ src: z.string() })).nullable().optional(),
-  remotes: z.array(remote).nullable().optional(), packages: z.array(z.object({ registryType: z.string(), identifier: z.string().min(1),
-    version: z.string().optional(), transport: z.object({ type: z.enum(['stdio', 'streamable-http', 'sse']) }), fileSha256: z.string().optional(),
-    runtimeArguments: z.array(argument).nullable().optional(), packageArguments: z.array(argument).nullable().optional(),
-    environmentVariables: z.array(keyInput).nullable().optional(),
-  })).nullable().optional(),
+const input = z.object({ description: z.optional(z.string()), isRequired: z._default(z.boolean(), false),
+  isSecret: z._default(z.boolean(), false), default: z.optional(z.string()), value: z.optional(z.string()), choices: z.optional(z.nullable(z.array(z.string()))) });
+const keyInput = z.extend(input, { name: z.string().check(z.minLength(1)), variables: z.optional(z.record(z.string(), input)) });
+const argument = z.extend(input, { type: z.enum(['named', 'positional']), name: z.optional(z.string()),
+  valueHint: z.optional(z.string()), variables: z.optional(z.record(z.string(), input)) });
+const remote = z.object({ type: z.enum(['streamable-http', 'sse']), url: z.string(), headers: z.optional(z.nullable(z.array(keyInput))), variables: z.optional(z.record(z.string(), input)) });
+const wireServer = z.object({ name: z.string().check(z.minLength(1)), description: z.string(), version: z.string().check(z.minLength(1)), title: z.optional(z.string()),
+  repository: z.optional(z.object({ url: z.optional(z.string()) })), websiteUrl: z.optional(z.string()), icons: z.optional(z.nullable(z.array(z.object({ src: z.string() })))),
+  remotes: z.optional(z.nullable(z.array(remote))), packages: z.optional(z.nullable(z.array(z.object({ registryType: z.string(), identifier: z.string().check(z.minLength(1)),
+    version: z.optional(z.string()), transport: z.object({ type: z.enum(['stdio', 'streamable-http', 'sse']) }), fileSha256: z.optional(z.string()),
+    runtimeArguments: z.optional(z.nullable(z.array(argument))), packageArguments: z.optional(z.nullable(z.array(argument))),
+    environmentVariables: z.optional(z.nullable(z.array(keyInput))),
+  })))),
 });
-const official = z.object({ status: z.enum(['active', 'deprecated', 'deleted']), publishedAt: z.string().optional(), updatedAt: z.string().optional(), isLatest: z.boolean().optional() });
-const record = z.object({ server: wireServer, _meta: z.object({ 'io.modelcontextprotocol.registry/official': official.optional() }).optional() });
-const page = z.object({ servers: z.array(record), metadata: z.object({ count: z.number().int().nonnegative(), nextCursor: z.string().optional() }) });
+const official = z.object({ status: z.enum(['active', 'deprecated', 'deleted']), publishedAt: z.optional(z.string()), updatedAt: z.optional(z.string()), isLatest: z.optional(z.boolean()) });
+const record = z.object({ server: wireServer, _meta: z.optional(z.object({ 'io.modelcontextprotocol.registry/official': z.optional(official) })) });
+const page = z.object({ servers: z.array(record), metadata: z.object({ count: z.number().check(z.int(), z.nonnegative()), nextCursor: z.optional(z.string()) }) });
 function endpoint(sourceUrl: string) {
   const url = new URL(sourceUrl); url.search = ''; url.hash = '';
   url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v0\.1(?:\/servers)?$/, '') + '/v0.1/servers'; return url;
@@ -43,7 +43,7 @@ function normalize(item: z.infer<typeof record>) {
   return McpRegistryServerV1Schema.parse({ name: server.name, description: server.description, version: server.version,
     ...(server.title ? { title: server.title } : {}), status: meta?.status === 'deprecated' ? 'deprecated' : 'active',
     ...(meta?.publishedAt && Number.isFinite(Date.parse(meta.publishedAt)) ? { publishedAt: Date.parse(meta.publishedAt) } : {}),
-    ...(server.repository ? { repository: server.repository.url } : {}), ...(server.websiteUrl ? { websiteUrl: server.websiteUrl } : {}), ...(server.icons?.[0] ? { iconUrl: server.icons[0].src } : {}),
+    ...(server.repository?.url ? { repository: server.repository.url } : {}), ...(server.websiteUrl ? { websiteUrl: server.websiteUrl } : {}), ...(server.icons?.[0] ? { iconUrl: server.icons[0].src } : {}),
     remotes: (server.remotes ?? []).map(remote => ({ transport: remote.type, url: remote.url,
       inputs: [...inputs(remote.headers ?? [], 'header'), ...Object.entries(remote.variables ?? {}).map(([name, item]) => ({ ...variable(item), name, target: 'url-variable' as const }))] })),
     packages: (server.packages ?? []).flatMap(pkg => ['npm', 'pypi', 'oci', 'mcpb', 'nuget', 'cargo'].includes(pkg.registryType) ? [{

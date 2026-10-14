@@ -1,13 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { UsageQuerySchema, normalizeUsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageAnalyticsQueryResponseSchema, UsageQueryAccountingSchema } from './usageAnalyticsContracts.js';
 
-export const UsageExportFieldSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.omit({ v: true }).keyof());
-export const UsageExportInputSchema = lazyZodSchema(() => z.object({
-  query: UsageQuerySchema, format: z.enum(['json', 'csv', 'text']), fields: z.array(UsageExportFieldSchema).min(1),
-}).strict());
+export const UsageExportFieldSchema = lazyZodSchema(() => z.keyof(z.omit(UsageAnalyticsQueryResponseSchema, { v: true })));
+export const UsageExportInputSchema = lazyZodSchema(() => z.strictObject({
+  query: UsageQuerySchema, format: z.enum(['json', 'csv', 'text']), fields: z.array(UsageExportFieldSchema).check(z.minLength(1)),
+}));
 export type UsageExportInput = z.infer<typeof UsageExportInputSchema>;
 export const USAGE_EXPORT_FORMATS = {
   json: { mediaType: 'application/json', extension: 'json' },
@@ -16,12 +16,12 @@ export const USAGE_EXPORT_FORMATS = {
 } as const;
 
 /** File bytes only: no path, upload destination, clipboard effect or public URL. */
-export const UsageFileResultSchema = lazyZodSchema(() => z.object({
-  v: z.literal(1), mediaType: z.string().trim().min(1),
-  fileName: z.string().min(1).refine(name => name !== '.' && name !== '..' && !/[\\/\u0000-\u001f\u007f]/.test(name), 'Unsafe display name'),
-  base64: z.string().refine(value => readCanonicalPaddedBase64DecodedLength(value) !== null, 'Invalid base64'),
-  fields: z.array(z.union([UsageExportFieldSchema, z.enum(['resets', 'renewals'])])).min(1), asOfMs: z.number().int().min(0).nullable(),
-}).strict());
+export const UsageFileResultSchema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), mediaType: z.string().check(z.trim(), z.minLength(1)),
+  fileName: z.string().check(z.minLength(1), z.refine(name => name !== '.' && name !== '..' && !/[\\/\u0000-\u001f\u007f]/.test(name), 'Unsafe display name')),
+  base64: z.string().check(z.refine(value => readCanonicalPaddedBase64DecodedLength(value) !== null, 'Invalid base64')),
+  fields: z.array(z.union([UsageExportFieldSchema, z.enum(['resets', 'renewals'])])).check(z.minLength(1)), asOfMs: z.nullable(z.number().check(z.int(), z.minimum(0))),
+}));
 export type UsageFileResult = z.infer<typeof UsageFileResultSchema>;
 
 export function formatUsageExportFileTimestamp(date: Date): string {
@@ -44,9 +44,9 @@ export function buildUsageCsvDocument(rows: readonly (readonly string[])[]): str
 }
 
 /** Serialize only explicitly selected authorized facts, identically on headless and UI hosts. */
-export function buildUsageFileResult(input: UsageExportInput, value: UsageAnalyticsQueryResponse, asOfMs: number | null): UsageFileResult {
+export function buildUsageFileResult(input: UsageExportInput, value: z.infer<typeof UsageQueryAccountingSchema>, asOfMs: number | null): UsageFileResult {
   const request = UsageExportInputSchema.parse(input);
-  const accounting = UsageAnalyticsQueryResponseSchema.parse(value);
+  const accounting = UsageQueryAccountingSchema.parse(value);
   const fields = [...new Set(request.fields)];
   const selected = Object.fromEntries(fields.map(field => [field, accounting[field]]));
   let content: string;

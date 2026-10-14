@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import {
@@ -99,11 +99,11 @@ export function readComposerReferenceMentionV1(value: unknown): Readonly<{
   };
 }
 
-export const ComposerReferenceContextBlockEntryV1Schema = lazyZodSchema(() => z.object({
+export const ComposerReferenceContextBlockEntryV1Schema = lazyZodSchema(() => z.strictObject({
   reference: asProtocolZod(PluginContributionIdentityV1Schema),
   candidateId: ComposerReferenceCandidateIdV1Schema,
   resolution: ComposerReferenceResolutionV1Schema,
-}).strict().superRefine((entry, context) => {
+}).check(z.superRefine((entry, context) => {
   if (entry.candidateId !== entry.resolution.id) {
     context.addIssue({
       code: 'custom',
@@ -111,17 +111,17 @@ export const ComposerReferenceContextBlockEntryV1Schema = lazyZodSchema(() => z.
       message: 'Composer reference resolution must match the requested candidate id.',
     });
   }
-}));
+})));
 export type ComposerReferenceContextBlockEntryV1 = Readonly<{
   reference: PluginContributionIdentityV1;
   candidateId: string;
   resolution: ComposerReferenceResolutionV1;
 }>;
 
-export const ComposerAttachmentContextBlockEntryV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentContextBlockEntryV1Schema = lazyZodSchema(() => z.strictObject({
   attachment: ResolvedComposerAttachmentDispatchV1Schema,
-  context: z.string().min(1).optional(),
-}).strict());
+  context: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ComposerAttachmentContextBlockEntryV1 = Readonly<{
   attachment: ResolvedComposerAttachmentDispatchV1;
   context?: string;

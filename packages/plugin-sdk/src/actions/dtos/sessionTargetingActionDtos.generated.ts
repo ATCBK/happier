@@ -75,9 +75,7 @@ export type SessionTargetingActionInputById = {
     };
 };
 export type SessionTargetingActionResultById = {
-    readonly "session.target.primary.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.target.primary.set": JsonValue;
     readonly "session.target.tracked.set": {
         sessionIds: string[];
         sessionAddresses: {
@@ -209,7 +207,7 @@ export type SessionTargetingActionResultById = {
     } | (({
         [x: string]: unknown;
         sessions: {
-            [x: string]: unknown;
+            [x: string]: any;
             id: string;
             createdAt: number;
             updatedAt: number;
@@ -219,15 +217,6 @@ export type SessionTargetingActionResultById = {
                 [x: string]: unknown;
                 type: 'legacy' | 'dataKey';
             } | null;
-            reportsTo?: {
-                sessionId: string;
-            } | undefined;
-            reports?: {
-                total: number;
-                working: number;
-                needsYou: number;
-                stalled: number;
-            } | undefined;
             archivedAt?: number | null | undefined;
             pendingCount?: number | undefined;
             pendingBlockedCount?: number | undefined;
@@ -241,244 +230,13 @@ export type SessionTargetingActionResultById = {
                 accessLevel: string;
                 canApprovePermissions: boolean;
             } | null | undefined;
-            effectiveAccess?: {
-                v: 1;
-                level: 'view' | 'edit' | 'admin' | 'owner';
-                sources: ({
-                    kind: 'owner';
-                } | {
-                    kind: 'direct';
-                    shareId: string;
-                } | {
-                    kind: 'team';
-                    teamId: string;
-                    requiredByTeamPolicy: boolean;
-                } | {
-                    kind: 'group';
-                    teamId: string;
-                    groupId: string;
-                })[];
-                capabilities: {
-                    readTranscript: boolean;
-                    submitAgentInput: boolean;
-                    editSessionRecords: boolean;
-                    approveRuntimePermissions: boolean;
-                    manageAccess: boolean;
-                    managePermissionDelegation: boolean;
-                    managePublicLink: boolean;
-                    archiveSession: boolean;
-                    renameSession: boolean;
-                    assignResponsibility: boolean;
-                    stopSession: boolean;
-                    deleteSession: boolean;
-                };
-                audienceContext?: {
-                    kind: 'team';
-                    teamId: string;
-                } | {
-                    kind: 'group';
-                    teamId: string;
-                    groupId: string;
-                } | null | undefined;
-                primaryTeamId?: string | null | undefined;
-            } | undefined;
             isSystem?: boolean | undefined;
             systemPurpose?: string | null | undefined;
-            encryptionMode?: 'plain' | 'e2ee' | undefined;
-            latestTurnId?: string | null | undefined;
-            latestTurnStatus?: 'failed' | 'cancelled' | 'in_progress' | 'completed' | null | undefined;
             latestTurnStatusObservedAt?: number | null | undefined;
-            lastRuntimeIssue?: Readonly<{
-                v: 1;
-                scope: 'primary_session';
-                status: 'failed';
-                code: string;
-                source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
-                occurredAt: number;
-                sessionSeq?: number | undefined;
-                agentId?: string | undefined;
-                agentTurnId?: string | undefined;
-                sanitizedPreview?: string | undefined;
-                usageLimit?: {
-                    v: 1;
-                    resetAtMs: number | null;
-                    retryAfterMs: number | null;
-                    quotaScope: 'unknown' | 'workspace' | 'account' | 'organization' | 'model' | 'provider';
-                    recoverability: 'unknown' | 'wait' | 'switch_account' | 'manual';
-                    providerLimitId?: string | undefined;
-                    planType?: string | null | undefined;
-                    utilization?: number | null | undefined;
-                    limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
-                    quotaSnapshotRef?: {
-                        serviceId: string;
-                        profileId?: string | undefined;
-                        groupId?: string | undefined;
-                        fetchedAtMs?: number | undefined;
-                    } | undefined;
-                    effectiveMeterId?: string | undefined;
-                    effectiveRemainingPct?: number | undefined;
-                    allWindows?: {
-                        meterId: string;
-                        scope?: string | undefined;
-                        remainingPct?: number | undefined;
-                        resetAtMs?: number | undefined;
-                        status?: string | undefined;
-                    }[] | undefined;
-                    recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
-                    overage?: {
-                        status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
-                        resetAtMs: number | null;
-                        disabledReason?: string | null | undefined;
-                    } | null | undefined;
-                    action?: {
-                        kind: 'open_url';
-                        url: string;
-                        labelKey?: string | undefined;
-                    } | {
-                        kind: 'settings';
-                    } | {
-                        kind: 'none';
-                    } | null | undefined;
-                    connectedService?: {
-                        serviceId: string;
-                        profileId: string | null;
-                        groupId: string | null;
-                        groupExhausted?: boolean | undefined;
-                    } | null | undefined;
-                } | undefined;
-                teamCredential?: {
-                    v: 1;
-                    resourceId: string;
-                    reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
-                    usageLimit?: {
-                        metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
-                        remaining: string;
-                        resetsAtUtc: string;
-                    } | undefined;
-                } | undefined;
-                temporaryThrottle?: {
-                    v: 1;
-                    retryAfterMs: number | null;
-                    recoverability: 'unknown' | 'wait' | 'manual' | 'retry';
-                } | undefined;
-                agentProcessExitAfterSwitch?: {
-                    exitCode: number | null;
-                    signal: string | null;
-                    lastStderrLine: string | null;
-                    vendorResumeId: string | null;
-                    materializationRoot: string | null;
-                    effectiveStateMode: 'shared' | 'isolated' | null;
-                } | undefined;
-            }> | null | undefined;
-            runtimeActivityState?: 'unknown' | 'active' | 'idle' | undefined;
             runtimeActivityActiveCount?: number | undefined;
             runtimeActivityObservedAt?: number | null | undefined;
             runtimeActivityRevision?: number | undefined;
             rollbackEligibleTurnStarts?: number[] | undefined;
-            pendingActivationAuthorization?: {
-                requestId: string;
-                requestedAt: number;
-                status: 'waiting';
-                managedWakeTargetV1?: {
-                    homeId: string;
-                    managedId: string;
-                    enrolledMachineId: string;
-                    expectedIntentRevision: number;
-                    controller: {
-                        machineId: string;
-                        installationId: string;
-                    };
-                    origin: {
-                        kind: 'session-input';
-                        session: {
-                            homeId: string;
-                            sessionId: string;
-                        };
-                        pendingRequestId: string;
-                        requestedAt: number;
-                    } | {
-                        kind: 'finite-command';
-                        actionRequestId: string;
-                    } | {
-                        kind: 'workflow-assignment';
-                        runId: string;
-                        revision: number;
-                        assignment: {
-                            machineId: string;
-                        };
-                    } | {
-                        kind: 'context-delivery';
-                        session: {
-                            homeId: string;
-                            sessionId: string;
-                        };
-                        delivery: {
-                            runId: string;
-                            revision: number;
-                        };
-                    };
-                    reason: 'admitted-work';
-                } | undefined;
-                admittedTarget?: {
-                    homeId: string;
-                    accountId: string;
-                    sessionId: string;
-                    machineId: string;
-                    installationId: string;
-                } | undefined;
-            } | {
-                requestId: string;
-                requestedAt: number;
-                status: 'failed';
-                failureCode: 'runtime_start_failed';
-                managedWakeTargetV1?: {
-                    homeId: string;
-                    managedId: string;
-                    enrolledMachineId: string;
-                    expectedIntentRevision: number;
-                    controller: {
-                        machineId: string;
-                        installationId: string;
-                    };
-                    origin: {
-                        kind: 'session-input';
-                        session: {
-                            homeId: string;
-                            sessionId: string;
-                        };
-                        pendingRequestId: string;
-                        requestedAt: number;
-                    } | {
-                        kind: 'finite-command';
-                        actionRequestId: string;
-                    } | {
-                        kind: 'workflow-assignment';
-                        runId: string;
-                        revision: number;
-                        assignment: {
-                            machineId: string;
-                        };
-                    } | {
-                        kind: 'context-delivery';
-                        session: {
-                            homeId: string;
-                            sessionId: string;
-                        };
-                        delivery: {
-                            runId: string;
-                            revision: number;
-                        };
-                    };
-                    reason: 'admitted-work';
-                } | undefined;
-                admittedTarget?: {
-                    homeId: string;
-                    accountId: string;
-                    sessionId: string;
-                    machineId: string;
-                    installationId: string;
-                } | undefined;
-            } | undefined;
         }[];
         nextCursor?: string | null | undefined;
         hasNext?: boolean | undefined;
@@ -590,7 +348,5 @@ export type SessionTargetingActionResultById = {
         pendingPermissionRequestCount: number;
         pendingUserActionRequestCount: number;
     };
-    readonly "session.messages.recent.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.messages.recent.get": JsonValue;
 };

@@ -9,7 +9,8 @@ import { projectPageLabel } from '@/components/projects/shell/ProjectShellHeader
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
-import { EMPTY_WORKSPACE_REFS, readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
+import { EMPTY_WORKSPACE_REFS, readProjectWorkspaceRefs, readCurrentProjectAccountRows, isProjectAccountRowsCensusComplete } from '@/sync/store/domains/projectAccountRows';
+import { isSessionRetiredForServer } from '@/sync/store/domains/sessions';
 import type {
     PluginUiDestinationPlacementV1,
     PluginUiDestinationReferenceV1,
@@ -42,7 +43,7 @@ import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-import { getStorage, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
+import { getStorage, selectSessionDisplayNameSource, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
 import { t, type TranslationKeyNoParams } from '@/text';
 import { UNIVERSAL_SEARCH_ROUTE } from '@/components/appShell/search/universalSearchRoutePresentation';
 import {
@@ -917,7 +918,10 @@ function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDesti
  * lands only when the verdict changes). `null` when nothing can name it yet.
  */
 export function readDestinationInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions): string | null {
-    const stored = resolveStoredInstanceTitle(ref, readRegisteredStorageState(), resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle));
+    const state = readRegisteredStorageState();
+    const missing = resolveKnownMissingInstanceTitle(ref, state);
+    if (missing) return missing;
+    const stored = resolveStoredInstanceTitle(ref, state, resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle));
     if (ref.kind === 'project') {
         const state = readRegisteredStorageState();
         const project = resolveProjectInstanceTitle(ref, state ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
@@ -982,6 +986,28 @@ function subscribeSettingsEntityTitles(listener: () => void): () => void {
     return () => disposers.forEach(dispose => dispose());
 }
 
+/** Absence is settled by a retirement or a complete owner census, never a scoped cache miss. */
+function resolveKnownMissingInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>): string | null {
+    if (!state?.profileScope || (ref.params.serverId
+        && !areServerProfileIdentifiersEquivalent(state.profileScope.serverId, ref.params.serverId))) return null;
+    if (isSessionTitleRef(ref) && ref.params.id
+        && !selectSessionDisplayNameSource(state, ref.params.id, ref.params.serverId ?? state.profileScope.serverId)
+        && isSessionRetiredForServer(state.deletedSessionIds, ref.params.id, ref.params.serverId ?? state.profileScope.serverId)) {
+        return t('errors.sessionDeleted');
+    }
+    if (ref.kind === 'project' && ref.params.workspaceRefId) {
+        const rows = readCurrentProjectAccountRows(state);
+        const resolution = resolveWorkspaceRefById(readProjectWorkspaceRefs(state), ref.params.workspaceRefId, ref.params.serverId);
+        return resolution.kind !== 'resolved' && resolution.kind !== 'ambiguous' && isProjectAccountRowsCensusComplete(rows)
+            ? t('projects.detail.notFoundTitle') : null;
+    }
+    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id
+        && !state.artifacts[ref.params.id] && state.artifactsLoaded) {
+        return t(ref.kind === 'artifacts' ? 'artifacts.notFound' : 'common.unavailable');
+    }
+    return null;
+}
+
 /** Retained tabs read the same Account projections as their pages, without mounting page effects. */
 function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>, fallbackTitle?: string | null): string | null {
     if (readSettingsEntityTitleDemand(ref)) return resolveSettingsEntityInstanceTitle(ref, state);
@@ -992,12 +1018,10 @@ function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeo
         return run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata))
             : fallbackTitle ?? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(null));
     }
-    if (ref.kind === 'workflow' && ref.params.id) {
+    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id) {
         const artifact = state.artifacts[ref.params.id];
         if (artifact) return artifact.isDecrypted ? artifact.title ?? t('common.unavailable') : t('common.unavailable');
-        // The Artifact list owner publishes headers only after completing its paged census.
-        // A restored pointer to a removed definition is unavailable, never a pending page read.
-        return state.artifactsLoaded ? t('common.unavailable') : null;
+        return null;
     }
     return null;
 }
@@ -1046,6 +1070,7 @@ export function useDestinationInstanceTitles(
     const storedTitles = getStorage()(useShallow(state => entries.map(entry => resolveStoredInstanceTitle(
         entry.ref, state, resolveSavedInstanceTitle(catalog, entry.ref, entry.fallbackTitle),
     ))));
+    const missingTitles = getStorage()(useShallow(state => entries.map(entry => resolveKnownMissingInstanceTitle(entry.ref, state))));
     const unreadRunIdsKey = getStorage()(state => JSON.stringify([...new Set(entries.flatMap(entry => {
         const { ref } = entry;
         if (ref.kind !== 'workflowRun' || !ref.params.runId || !state.profileScope
@@ -1096,6 +1121,10 @@ export function useDestinationInstanceTitles(
             const name = discussionTitles[index];
             if (name) titles.set(entry.key, name);
         });
+        entries.forEach((entry, index) => {
+            const missing = missingTitles[index];
+            if (missing) titles.set(entry.key, missing);
+        });
         return titles;
-    }, [catalog, entries, storedTitles, settingsTitles, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles, workspace?.destinationTitles]);
+    }, [catalog, entries, storedTitles, missingTitles, settingsTitles, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles, workspace?.destinationTitles]);
 }

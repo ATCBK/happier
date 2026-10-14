@@ -1,4 +1,4 @@
-import type { ArtifactAccountEncryptionMigrationInventoryV1, ArtifactAccountEncryptionMigrationOwnershipV1 } from '@happier-dev/protocol';
+import type { ArtifactAccountEncryptionMigrationInventoryV1, ArtifactAccountEncryptionMigrationOwnershipV1 } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
 import type { Tx } from '@/storage/inTx';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { qualifyPluginArtifactAccountEncryptionMigrationInTx } from '@/app/plugins/availability/operations';

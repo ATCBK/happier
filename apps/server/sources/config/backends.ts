@@ -3,7 +3,8 @@ export type ServerFlavor = "full" | "light";
 export type FilesBackend = "local" | "s3";
 export type SocketAdapter = "memory" | "redis-streams";
 
-import { readServerConfig, readServerConfigRaw, SERVER_CONFIG } from "@happier-dev/protocol";
+import { readServerConfig, readServerConfigRaw } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { getDbProviderFromEnv, resolveDefaultDbProvider } from './databaseProvider';
 
 export function resolveServerFlavorFromEnv(env: NodeJS.ProcessEnv, fallback: ServerFlavor): ServerFlavor {

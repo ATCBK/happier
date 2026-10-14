@@ -45,12 +45,7 @@ export function resolveDependencyRefreshLockPath(installDir, env = process.env) 
 
 const BUILD_DEPENDENCY_CUSTODY_ENV = 'HAPPIER_BUILD_DEPENDENCY_CUSTODY';
 
-// Parallel compiler children consume one containing finite build. Reuse its
-// live lock identity instead of queuing them behind their own parent. Writers
-// never accept inherited read custody and always acquire mutation exclusion.
-export async function withDependencyConsumption({ installDir, env = process.env, signal, wait = true }, consume) {
-  signal?.throwIfAborted();
-  const lockPath = resolveDependencyRefreshLockPath(installDir, env);
+function readInheritedDependencyCustody(lockPath, env) {
   let inherited;
   try { inherited = JSON.parse(env[BUILD_DEPENDENCY_CUSTODY_ENV] ?? 'null'); } catch {}
   const owner = readJsonOwnerLockSnapshot(lockPath).owner;
@@ -58,15 +53,31 @@ export async function withDependencyConsumption({ installDir, env = process.env,
   if (Array.isArray(inherited) && (inherited.length === 3 || inherited.length === 4)
     && inherited[0] === lockPath && owners.some(reader => inherited[1] === reader?.pid && inherited[2] === reader?.createdAtMs
       && isPidAlive(Number(reader?.pid)) && (inherited.length === 3 || inherited[3] === reader?.readerId))
-    && isJsonOwnerFileLockActive(lockPath)) return await consume(env);
+    && isJsonOwnerFileLockActive(lockPath)) return owner;
+  return null;
+}
+
+// Parallel compiler children consume one containing finite build. Reuse its
+// live lock identity instead of queuing them behind their own parent. Writers
+// must prepare before this consumption rather than upgrade inherited reads.
+export async function withDependencyConsumption({ installDir, env = process.env, signal, wait = true }, consume) {
+  signal?.throwIfAborted();
+  const lockPath = resolveDependencyRefreshLockPath(installDir, env);
+  if (readInheritedDependencyCustody(lockPath, env)) return await consume(env);
   return await withDependencyRefreshLock({ installDir, env, signal, wait, writerPriority: false }, async ({ owner }) => {
     return await consume({ ...env, [BUILD_DEPENDENCY_CUSTODY_ENV]: JSON.stringify([lockPath, owner.pid, owner.createdAtMs, owner.readerId]) });
   });
 }
 
 export async function withDependencyRefreshLock({ installDir, env = process.env, signal, wait = true, writerPriority = true }, action) {
+  signal?.throwIfAborted();
+  const lockPath = resolveDependencyRefreshLockPath(installDir, env);
+  if (writerPriority && readInheritedDependencyCustody(lockPath, env)?.priority === 'reader') {
+    throw Object.assign(new Error(`HSTACK_WORKSPACE_ADMISSION_ORDER: a dependency writer cannot wait on inherited read custody (${lockPath}); prepare the producer before finite consumption`),
+      { code: 'HSTACK_WORKSPACE_ADMISSION_ORDER' });
+  }
   return await withJsonOwnerFileLock(action, {
-    lockPath: resolveDependencyRefreshLockPath(installDir, env),
+    lockPath,
     errorLabel: 'dependency refresh lock',
     // Synchronous package-manager children can outlive or delay heartbeats.
     // Wait for the live installer; the existing PID check reclaims dead owners.

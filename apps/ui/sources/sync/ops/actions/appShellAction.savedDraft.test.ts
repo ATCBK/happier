@@ -7,6 +7,8 @@ import { createSecretSettingsTestHarness } from '@/components/settings/secrets/s
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 
 const navigation = vi.hoisted(() => ({ pushes: [] as unknown[] }));
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -69,7 +71,7 @@ describe('saved New Session draft Action', () => {
     it('reports a missing draft without opening or creating one', async () => {
         if (!account) throw new Error('Account fixture missing');
         const originalRequest = account.request.getMockImplementation()!;
-        account.request.mockImplementation(async (input, init) => new URL(String(input)).pathname === SESSION_DRAFT_V2_ROUTE_READ
+        account.request.mockImplementation(async (...[input, init]: Parameters<RuntimeFetch>) => new URL(String(input)).pathname === SESSION_DRAFT_V2_ROUTE_READ
             ? Response.json({ status: 'absent' }) : originalRequest(input, init));
         const missingId = '00000000-0000-4000-8000-000000000099';
         const result = await createDefaultActionExecutor().execute(ActionIdSchema.parse('session.draft.open'), { draftId: missingId },
@@ -81,7 +83,7 @@ describe('saved New Session draft Action', () => {
     it('refuses another Account when supplied the captured saved-draft owner', async () => {
         const owner = await captureLazyActionAccountContext(serverId);
         try {
-            const executor = createActionExecutor({ appShellAction: createAppShellAction(owner) });
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({ appShellAction: createAppShellAction(owner) }));
             const result = await executor.execute(ActionIdSchema.parse('session.draft.open'), { draftId },
                 { surface: 'ui', authority: 'present_user', serverId, runtimeAccountId: 'another-account' });
             expect(result).toMatchObject({ ok: true, result: { status: 'unavailable' } });

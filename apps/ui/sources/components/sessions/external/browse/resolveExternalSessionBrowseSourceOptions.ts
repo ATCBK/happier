@@ -4,7 +4,7 @@ import type { AccountProfile } from '@happier-dev/protocol/account/profile';
 import type { ExternalSessionsAgentId, ExternalSessionsSource } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type { PluginBackendExternalSessionSourceDeclarationV1 } from '@happier-dev/protocol/plugins/backendDefinitionV1';
 import type { PluginProjectedAgentV2, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { parseQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { resolveQualifiedConnectedAccountLabel } from '@happier-dev/protocol/connect/connectedServiceProfilePreferences';
 
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
@@ -16,7 +16,6 @@ import type {
 import { resolveQualifiedConnectedAccountServiceKey } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveCompatibleExternalSessionBrowseLinkSource } from './resolveCompatibleExternalSessionBrowseLinkSource';
-import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contributionIdentity';
 
 /** Presentation input from the scoped catalog, not a live Account Settings root. */
 export type ExternalSessionBrowseLabels = Readonly<Record<string, string | undefined>>;

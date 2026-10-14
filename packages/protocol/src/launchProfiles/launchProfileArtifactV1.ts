@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import type { ArtifactSharingKindAdapterV1, ArtifactSharingResourceV1 } from '../artifacts/artifactSharingV1.js';
 import { listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
@@ -22,7 +22,7 @@ function retainsAllKeys(raw: unknown, parsed: unknown, path = ''): boolean {
 }
 
 function profileSchema(stored: boolean) {
-  return z.unknown().transform((raw, ctx) => {
+  return z.pipe(z.unknown(), z.transform((raw, ctx) => {
     const version = raw && typeof raw === 'object' ? Reflect.get(raw, 'v') : undefined;
     // Publication relocates an admitted logical Profile; it does not author a
     // new identity. Preserve the body owner's predecessor identity/size seam,
@@ -30,27 +30,27 @@ function profileSchema(stored: boolean) {
     const schema = version === undefined ? AIBackendProfileSchema : StoredLaunchProfileV2Schema;
     const parsed = (stored ? createStoredReadSchema(schema) : schema).safeParse(raw);
     if (!parsed.success || (!stored && !retainsAllKeys(raw, parsed.data))) {
-      ctx.addIssue({ code: 'custom', message: 'Invalid or unknown launch profile fields' });
+      ctx.issues.push({ code: 'custom', message: 'Invalid or unknown launch profile fields', input: ctx.value });
       return z.NEVER;
     }
     return parsed.data;
-  });
+  }));
 }
 export const PublishableLaunchProfileV1Schema = defineStoredReadProjection(
   lazyZodSchema(() => profileSchema(false)), () => profileSchema(true),
 );
 
-export const LaunchProfileArtifactV1Schema = lazyZodSchema(() => z.object({
+export const LaunchProfileArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('launch-profile.v1'),
   profile: PublishableLaunchProfileV1Schema,
-  secretBindings: z.record(EnvVarRequirementSchema.shape.name, z.string().refine((ref) => {
+  secretBindings: z._default(z.record(EnvVarRequirementSchema.shape.name, z.string().check(z.refine((ref) => {
     if (!isCanonicalProviderSavedSecretIdV1(ref)) return false;
     try { parseSavedSecretRefV1(ref); return true; } catch { return false; }
-  })).default({}),
-}).strict().superRefine((content, ctx) => {
+  }))), {}),
+}).check(z.superRefine((content, ctx) => {
   const variables = 'v' in content.profile ? content.profile.extraEnvironmentVariables : content.profile.environmentVariables;
   if (variables.length > 0) ctx.addIssue({ code: 'custom', path: ['profile'], message: 'Shared launch profiles carry requirements, never environment values' });
-}));
+})));
 export type LaunchProfileArtifactV1 = z.infer<typeof LaunchProfileArtifactV1Schema>;
 
 /** The profile owner supplies the header projection used by opening and sharing. */
@@ -66,14 +66,14 @@ export type SharedLaunchProfileArtifactV1 = Readonly<LaunchProfileArtifactV1 & {
 }>;
 
 export const LaunchProfileArtifactReferenceV1Schema = defineStoredReadProjection(
-  lazyZodSchema(() => z.object({ artifactId: z.string().min(1) }).strict()),
-  () => z.preprocess((raw) => {
+  lazyZodSchema(() => z.strictObject({ artifactId: z.string().check(z.minLength(1)) })),
+  () => z.pipe(z.transform((raw) => {
     // Inline profile discriminators remain authoritative even when a row also
     // carries an additive Artifact id. Never reinterpret a corrupt/future profile.
     if (raw && typeof raw === 'object'
       && (Object.hasOwn(raw, 'v') || Object.hasOwn(raw, 'id'))) return undefined;
     return raw;
-  }, z.object({ artifactId: z.string().min(1) })),
+  }), z.object({ artifactId: z.string().check(z.minLength(1)) })),
 );
 
 function readArtifact(resource: ArtifactSharingResourceV1, schema: typeof LaunchProfileArtifactV1Schema,

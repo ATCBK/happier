@@ -22,7 +22,7 @@ export type ApplyMachineEnvironmentInput = Readonly<{
   userHomeDirectory: string;
   environment: MachineEnvironmentV1;
   operation: ProjectSetupOperationContext;
-  terminalSessions: Pick<TerminalPtySessionManager, 'ensure' | 'waitForExit' | 'requestStop'>;
+  terminalSessions: Pick<TerminalPtySessionManager, 'ensure' | 'waitForExit' | 'requestStop' | 'observeOutput'>;
   environmentIo: ProjectNativeEnvironmentIo;
   secretEnvironment?: Omit<SecretReferenceOverlayEnvironmentInput, 'secretReferenceOverlay'>;
   hostEnvironment?: NodeJS.ProcessEnv;

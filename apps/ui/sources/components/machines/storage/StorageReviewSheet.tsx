@@ -56,6 +56,7 @@ import {
   storageVolumeName,
   type StorageSummary,
 } from './storageViewModel';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type StorageReviewSheetInput = Readonly<{
   /** The Home the machine is reached through; a holding session stops through the same Home. */
@@ -520,7 +521,7 @@ export function showStorageReviewSheet(input: StorageReviewSheetInput): void {
       // One size from checking to loaded; the body scrolls between the header and the pinned footer.
       scrollHost: 'body',
       bodyScroll: 'auto',
-      dimensions: { width: 600, maxHeightRatio: 0.9, size: 'md' },
+      dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' },
     },
     closeOnBackdrop: true,
   });
@@ -554,11 +555,11 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 44,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   warning: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.state.attention.textForeground,
   },
   struck: {

@@ -19,6 +19,7 @@ import { createVoiceConversationRuntimeMachine } from '@/voice/runtime/machine/V
 import { useVoiceConversationRuntimeStore } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
 import { createVoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
+import { readVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { createOpenAiRealtimeProtocolAdapter, encodeOpenAiRealtimeClientEvent } from '../../../../../../packages/plugins/openai/src/ui/voice/protocol';
 import { OPENAI_CLIENT_AUTH_EXPIRY_SAFETY_WINDOW_MS } from '../../../../../../packages/plugins/openai/src/ui/voice/connection';
 import {
@@ -499,7 +500,7 @@ describe('VoiceConversationController', () => {
     const voice = environment.persistedAccountSettings.voiceSettingsV1;
     const providerId = environment.entry.providerId;
     await environment.configureVoice({ ...voice, providers: { ...voice.providers,
-      [providerId]: { schemaVersion: 1, config: { ...voice.providers[providerId]?.config, turnDetection: 'not-a-turn-mode' } },
+      [providerId]: { schemaVersion: 1, config: { ...readVoiceProviderSettingsConfig(voice, providerId), turnDetection: 'not-a-turn-mode' } },
     } });
     const browser = installVoiceWebRtcBrowserBoundary();
     const composed = await environment.createRuntime(browser);
@@ -1100,7 +1101,7 @@ describe('VoiceConversationController', () => {
     const voice = environment.persistedAccountSettings.voiceSettingsV1;
     const providerId = environment.entry.providerId;
     await environment.configureVoice({ ...voice, providers: { ...voice.providers,
-      [providerId]: { schemaVersion: 1, config: { ...voice.providers[providerId]?.config, turnDetection: 'not-a-turn-mode' } },
+      [providerId]: { schemaVersion: 1, config: { ...readVoiceProviderSettingsConfig(voice, providerId), turnDetection: 'not-a-turn-mode' } },
     } });
     const browser = installVoiceWebRtcBrowserBoundary();
     const composed = await environment.createRuntime(browser);
@@ -1370,7 +1371,7 @@ describe('VoiceConversationController', () => {
     const voice = environment.persistedAccountSettings.voiceSettingsV1;
     const providerId = environment.entry.providerId;
     await environment.configureVoice({ ...voice, providers: { ...voice.providers,
-      [providerId]: { schemaVersion: 1, config: { ...voice.providers[providerId]?.config,
+      [providerId]: { schemaVersion: 1, config: { ...readVoiceProviderSettingsConfig(voice, providerId),
         turnDetection: inputCommitRequired ? 'manual' : 'server_vad',
       } },
     } });
@@ -1436,7 +1437,7 @@ describe('VoiceConversationController', () => {
     const voice = environment.persistedAccountSettings.voiceSettingsV1;
     await environment.configureVoice({ ...voice, providers: { ...voice.providers,
       [environment.entry.providerId]: { schemaVersion: 1, config: {
-        ...voice.providers[environment.entry.providerId]?.config, turnDetection: 'manual',
+        ...readVoiceProviderSettingsConfig(voice, environment.entry.providerId), turnDetection: 'manual',
       } },
     } });
     const browser = installVoiceWebRtcBrowserBoundary();

@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
@@ -53,7 +54,7 @@ export function showDocumentShareSheet(params: Omit<DocumentShareSheetProps, 'on
             // Content-sized card chrome; the sheet's SelectionList owns its rows, not a body ScrollView.
             scrollHost: 'overlay',
             bodyScroll: 'none',
-            dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },
         closeOnBackdrop: true,
     });

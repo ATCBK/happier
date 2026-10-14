@@ -64,19 +64,11 @@ installAgentInputCommonModuleMocks({
     },
 });
 
-// The MCP owner's boundaries: the server-owned feature decision, the daemon
-// preview RPC, the overlay shell and the heavy selection panel. The chip, its
-// controlled value adaptation and the reported selection stay real.
-const mcpPreviewSpy = vi.hoisted(() => vi.fn());
-const mcpContentProps = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
+// The overlay shell is substituted while the authoring controls remain real.
+// The capabilities chip's Action-backed preview is covered by
+// useSessionCapabilitiesPopover.test.ts through its Home/transport harness.
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => true,
-}));
-vi.mock('@/sync/ops/machineMcpServers', () => ({
-    machineMcpServersPreview: (...args: unknown[]) => {
-        mcpPreviewSpy(...args);
-        return Promise.resolve({ ok: true, detected: [], managed: [], happier: [] });
-    },
 }));
 vi.mock('@/components/sessions/agentInput/components/AgentInputContentPopover', () => ({
     AgentInputContentPopover: (props: { open: boolean; content: unknown }) => (
@@ -87,12 +79,6 @@ vi.mock('@/components/sessions/agentInput/components/AgentInputContentPopover', 
                     : (props.content as React.ReactNode))
             : null
     ),
-}));
-vi.mock('@/components/sessions/new/components/NewSessionMcpSelectionContent', () => ({
-    NewSessionMcpSelectionContent: (props: Record<string, unknown>) => {
-        mcpContentProps.value = props;
-        return React.createElement('NewSessionMcpSelectionContentStub', { testID: 'mcp-content-stub' });
-    },
 }));
 // The Connected Services selection panel is the same kind of heavy boundary as
 // the MCP one. Its props — the supported services, the current bindings, the
@@ -408,52 +394,6 @@ describe('SessionAuthoringControls', () => {
         await screen.unmount();
     });
 
-    /**
-     * The MCP selection is edited through the incumbent New Session MCP owner
-     * — its chip, its preview against the exact Machine and folder for the
-     * resolved Agent, and its selection panel — adapted to the controlled
-     * value. The reported value is the canonical selection policy object.
-     */
-    it('edits the MCP selection through the incumbent New Session MCP owner for the resolved Agent', async () => {
-        mcpPreviewSpy.mockClear();
-        const { screen, onChangeField } = await renderControls({
-            fields: ['capabilitySelection'],
-            values: { agentTarget: CLAUDE_TARGET, capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['review-tools'], forceExcludeServerIds: [] } } },
-            facts: {
-                agentTargets: [directCapableClaude()],
-                mcp: { machineId: 'machine-1', machineName: 'Mac Studio', directory: '/Users/me/project', serverId: 'server-a', enabled: true },
-            },
-        });
-        await act(async () => {});
-        expect(screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeNull();
-        expect(screen.findByTestId('new-session-mcp-chip')).toBeTruthy();
-        expect(mcpPreviewSpy).not.toHaveBeenCalled();
-        // Native/web press intent precedes onPress; the render harness only
-        // dispatches onPress automatically, so deliver its genuine event too.
-        await act(async () => { screen.findByTestId('new-session-mcp-chip')?.props.onPressIn(); });
-        await act(async () => { screen.pressByTestId('new-session-mcp-chip'); });
-        // The preview is asked for this Agent on this exact Machine and folder,
-        // with the controlled selection — the same request New Session makes.
-        expect(mcpPreviewSpy).toHaveBeenCalledWith(
-            'machine-1',
-            expect.objectContaining({
-                agentId: 'claude',
-                directory: '/Users/me/project',
-                selection: expect.objectContaining({ forceIncludeServerIds: ['review-tools'] }),
-            }),
-            expect.objectContaining({ serverId: 'server-a' }),
-        );
-
-        expect(screen.findByTestId('mcp-content-stub')).toBeTruthy();
-        const onSelectionChange = mcpContentProps.value?.onSelectionChange as (selection: unknown) => void;
-        await act(async () => {
-            onSelectionChange({ v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['noisy'] });
-        });
-        expect(onChangeField).toHaveBeenCalledWith('capabilitySelection', {
-            v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['noisy'],
-        });
-        await screen.unmount();
-    });
 
     /**
      * Connected Service bindings are authored through the incumbent New Session
@@ -916,10 +856,21 @@ describe('SessionAuthoringControls', () => {
     });
 
     it('states the MCP selection unavailable without a resolved Agent or an exact Machine and folder', async () => {
+        const scoped = await renderControls({
+            fields: ['capabilitySelection'],
+            facts: {
+                agentTargets: [directCapableClaude()],
+                mcp: { machineId: 'machine-1', machineName: null, directory: '/p', serverId: null },
+            },
+        });
+        expect(scoped.screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeNull();
+        expect(scoped.screen.findByTestId('session-capabilities-chip')).toBeTruthy();
+        await scoped.screen.unmount();
+
         const noAgent = await renderControls({
             fields: ['capabilitySelection'],
             values: {},
-            facts: { mcp: { machineId: 'machine-1', machineName: null, directory: '/p', serverId: null, enabled: true } },
+            facts: { mcp: { machineId: 'machine-1', machineName: null, directory: '/p', serverId: null } },
         });
         expect(noAgent.screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeTruthy();
         await noAgent.screen.unmount();

@@ -563,6 +563,11 @@ describe('ModalProvider', () => {
         ]);
 
         expect(result).toBe(false);
+        // The answer settles at the choice; the dialog then leaves through the shared exit before it unmounts.
+        expect(screen.findByType('WebAlertModal' as any).props.visible).toBe(false);
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, motionTokens.overlay.modal.exitMs + 50));
+        });
         expect(screen.findAllByType('WebAlertModal' as any)).toHaveLength(0);
     });
 
@@ -589,6 +594,11 @@ describe('ModalProvider', () => {
         ]);
 
         expect(result).toBeNull();
+        // The answer settles at the choice; the dialog then leaves through the shared exit before it unmounts.
+        expect(screen.findByType('WebPromptModal' as any).props.visible).toBe(false);
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, motionTokens.overlay.modal.exitMs + 50));
+        });
         expect(screen.findAllByType('WebPromptModal' as any)).toHaveLength(0);
     });
 });

@@ -1,32 +1,32 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderAgentTargetKeySchema, ProviderConnectionIdSchema, ProviderModelIdSchema } from '../ids.js';
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from './v1.js';
 import { TeamCredentialRouteV1Schema, type TeamCredentialRouteV1 } from '../../teams/credentials/resourceV1.js';
 
-export const NativeSessionModelRefV2Schema = lazyZodSchema(() => z.object({
+export const NativeSessionModelRefV2Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('native'),
   agentTargetKey: ProviderAgentTargetKeySchema,
   modelId: ProviderModelIdSchema,
-}).strict());
+}));
 
-export const AccountProviderConnectionSessionModelRefV2Schema = lazyZodSchema(() => z.object({
+export const AccountProviderConnectionSessionModelRefV2Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('account_provider_connection'),
   agentTargetKey: ProviderAgentTargetKeySchema,
   providerConnectionId: ProviderConnectionIdSchema,
   modelId: ProviderModelIdSchema,
-}).strict());
+}));
 
-export const TeamResourceSessionModelRefV2Schema = lazyZodSchema(() => z.object({
+export const TeamResourceSessionModelRefV2Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('team_resource'),
-  resourceId: z.string().min(1),
-  teamId: z.string().min(1),
-  expectedResourceRevision: z.number().int().nonnegative(),
+  resourceId: z.string().check(z.minLength(1)),
+  teamId: z.string().check(z.minLength(1)),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
   deliveryMode: TeamCredentialRouteV1Schema,
   agentTargetKey: ProviderAgentTargetKeySchema,
   modelId: ProviderModelIdSchema,
-}).strict());
+}));
 
 export const SessionModelRefV2Schema = lazyZodSchema(() => z.discriminatedUnion('source', [
   NativeSessionModelRefV2Schema,
@@ -37,23 +37,23 @@ export type SessionModelRefV2 = z.infer<typeof SessionModelRefV2Schema>;
 
 const SessionModelSelectionV2BaseShape = {
   v: z.literal(2),
-  updatedAt: z.number().finite().nonnegative(),
+  updatedAt: z.number().check(z.nonnegative()),
 } as const;
 
-const TeamResourceSessionModelSelectionV2Schema = lazyZodSchema(() => z.object({
+const TeamResourceSessionModelSelectionV2Schema = lazyZodSchema(() => z.strictObject({
   ...SessionModelSelectionV2BaseShape,
   ref: TeamResourceSessionModelRefV2Schema,
-}).strict());
+}));
 
 export const SessionModelSelectionV2Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ...SessionModelSelectionV2BaseShape,
     ref: NativeSessionModelRefV2Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ...SessionModelSelectionV2BaseShape,
     ref: AccountProviderConnectionSessionModelRefV2Schema,
-  }).strict(),
+  }),
   TeamResourceSessionModelSelectionV2Schema,
 ]));
 export type SessionModelSelectionV2 = z.infer<typeof SessionModelSelectionV2Schema>;

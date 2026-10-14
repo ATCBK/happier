@@ -47,7 +47,7 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import { HubStatusLine } from './header/HubStatusLine';
 import { useHomeGreeting } from './header/homeGreeting';
 import { findHomeHubBuiltinSection, homeHubSectionTitle } from './homeHubSections';
-import { HomeHubSectionList } from './HomeHubSectionList';
+import { HOME_HUB_COMPOSER_SECTION_ID, HomeHubSectionList } from './HomeHubSectionList';
 import { HubWidgetSection } from './HubWidgetSection';
 import type { HomeHubSection } from './layout/homeHubLayout';
 import { HubSectionMenu } from './layout/HubSectionMenu';
@@ -117,6 +117,7 @@ type HubGroupChildPlacement = Readonly<{ group: HubGroupSection; index: number; 
  */
 const HubSectionSlot = React.memo(function HubSectionSlot(props: SlotProps & Readonly<{
     section: HomeHubSection<WidgetCandidate>;
+    ownsRow?: boolean;
 }>) {
     const section = props.section;
     if (section.kind === 'widget') return <HubWidgetSlot {...props} section={section} />;
@@ -260,6 +261,8 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
 function HubWidgetSlot(props: SlotProps & Readonly<{
     section: HubWidgetSectionModel;
     parent?: HubGroupChildPlacement;
+    /** Alone in its row: the card presents at its full-row size. */
+    ownsRow?: boolean;
 }>) {
     const hover = useRowActionHoverHost();
     const frameStyle = useWidgetFrameStyle('home', props.section.frameStyle);
@@ -325,6 +328,7 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
                 widget={props.section.widget}
                 instance={props.section.instance}
                 size={props.section.size}
+                ownsRow={props.ownsRow === true}
                 menu={menu}
                 frameStyle={frameStyle}
                 tracker={props.tracker}
@@ -536,7 +540,7 @@ export const HomeHub = React.memo(function HomeHub() {
     // still loading the hero keeps the composer's room (the default places it first), so the status line
     // and everything under it do not drop ~170 px when the layout arrives.
     const heroComposer = heroActive && (layout.status === 'loading'
-        || layout.sections.find(section => !section.hidden)?.id === 'start');
+        || layout.sections.find(section => !section.hidden)?.id === HOME_HUB_COMPOSER_SECTION_ID);
     const headerActions = (
         <View style={styles.headerActions}>
             {!heroActive ? <LookChip target={HOME_LOOK_TARGET} /> : null}
@@ -566,13 +570,13 @@ export const HomeHub = React.memo(function HomeHub() {
                 />
             ) : <HomeHubSectionList
                 // Under the atmosphere a composer that leads Home stands in the hero; moved lower, it stays where it was put.
-                sections={heroComposer ? layout.sections.filter(section => section.id !== 'start') : layout.sections}
-                renderSection={(section, index) => section.kind === 'builtin' ? (
+                sections={heroComposer ? layout.sections.filter(section => section.id !== HOME_HUB_COMPOSER_SECTION_ID) : layout.sections}
+                renderSection={(section, index, placement) => section.kind === 'builtin' ? (
                     <HubSectionSlot key={section.id} section={section} index={index} {...slotProps} />
                 ) : (
                     // Ungroup fans its widgets out to their own cards; Group with merges cards into one.
                     <WidgetGroupMembershipArrivalView key={section.id} arrival={arrivals.get(section.id)} style={styles.card}>
-                        <HubSectionSlot section={section} index={index} {...slotProps} />
+                        <HubSectionSlot section={section} index={index} ownsRow={placement.ownsRow} {...slotProps} />
                     </WidgetGroupMembershipArrivalView>
                 )}
             />}
@@ -590,6 +594,7 @@ export const HomeHub = React.memo(function HomeHub() {
                     ref={homeListRef}
                     innerViewRef={contentRef as React.RefObject<View>}
                     testID="home-hub"
+                    pageColumn="dashboard"
                     onScroll={event => { tracker.onScroll(event); heroFrame.onScroll(event); }}
                     onLayout={event => { tracker.onLayout(event); homeDrop.onLayout(event); }}
                     onContentSizeChange={tracker.onContentSizeChange}
@@ -635,6 +640,7 @@ export const HomeHub = React.memo(function HomeHub() {
             ref={homeListRef}
             innerViewRef={contentRef as React.RefObject<View>}
             testID="home-hub"
+            pageColumn="dashboard"
             onScroll={tracker.onScroll}
             onLayout={event => { tracker.onLayout(event); homeDrop.onLayout(event); }}
             onContentSizeChange={tracker.onContentSizeChange}

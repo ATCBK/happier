@@ -1,13 +1,7 @@
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
-import {
-    ACCOUNT_DIRECTORY_ASSERTION_CLOCK_SKEW_MS,
-    ACCOUNT_DIRECTORY_ASSERTION_SIGNING_DOMAIN_V1,
-    createHomeLoginAssertionSigningBytesV1,
-    decodeBase64,
-    encodeBase64,
-    HomeLoginAssertionV1Schema,
-} from "@happier-dev/protocol";
+import { ACCOUNT_DIRECTORY_ASSERTION_CLOCK_SKEW_MS, ACCOUNT_DIRECTORY_ASSERTION_SIGNING_DOMAIN_V1, createHomeLoginAssertionSigningBytesV1, HomeLoginAssertionV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import {
     createEd25519PublicKeyId,

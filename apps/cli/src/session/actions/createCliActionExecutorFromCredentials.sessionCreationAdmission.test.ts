@@ -89,11 +89,14 @@ describe('paired terminal Action admission', () => {
 
     it.each([
         { outerTarget: false, daemonAccountId: 'owner', terminalPolicy: 'allowed', authority: undefined, errorCode: null },
+        { outerTarget: false, daemonAccountId: 'owner', terminalPolicy: 'allowed', authority: undefined, errorCode: null, discoverIdentity: true },
+        { outerTarget: false, daemonAccountId: 'owner', terminalPolicy: 'allowed', authority: undefined, errorCode: null, discoverIdentity: true, prepare: true },
         { outerTarget: true, daemonAccountId: 'owner', terminalPolicy: 'allowed', authority: undefined, errorCode: null },
         { outerTarget: false, daemonAccountId: 'different-account', terminalPolicy: 'allowed', authority: undefined, errorCode: 'target_unavailable' },
         { outerTarget: false, daemonAccountId: 'owner', terminalPolicy: 'allowed', authority: 'account_automation', errorCode: 'invalid_parameters' },
         { outerTarget: false, daemonAccountId: 'owner', terminalPolicy: 'disallowed', authority: undefined, errorCode: 'invalid_parameters' },
-    ] as const)('preserves exact Home/Account and terminal policy ($outerTarget/$daemonAccountId/$terminalPolicy/$authority)', async ({ outerTarget, daemonAccountId, terminalPolicy, authority, errorCode }) => {
+    ] as const)('preserves exact Home/Account and terminal policy (%j)', async scenario => {
+        const { outerTarget, daemonAccountId, terminalPolicy, authority, errorCode } = scenario;
         await withConfiguredDaemonTestHome({ prefix: 'happier-terminal-create-admission-',
             env: { HAPPIER_CLI_PRESENT_USER: terminalPolicy } }, async () => {
             const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner', tokenEpoch: 4,
@@ -127,10 +130,17 @@ describe('paired terminal Action admission', () => {
                 return Response.json({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } });
             });
             const executor = createCliActionExecutorFromCredentials({ credentials, externalActionClient: true,
-                serverId, serverIdentityId: 'srv_home', serverApiUrl: 'https://home.test',
+                serverId, serverIdentityId: 'discoverIdentity' in scenario ? undefined : 'srv_home', serverApiUrl: 'https://home.test',
+                resolveServerFeaturesSnapshot: async () => ({ status: 'unsupported', reason: 'endpoint_missing' }),
                 ...(outerTarget ? { machineId: 'own-machine' } : {}),
                 actionsSettingsProvider: { getActionsSettings: () => ActionsSettingsV1Schema.parse({ v: 1 }) } });
-            const result = await executor.execute('session.spawn_new', input, { surface: 'cli', ...(authority ? { authority } : {}) });
+            const context = { surface: 'cli' as const, ...(authority ? { authority } : {}) };
+            const result = 'prepare' in scenario
+                ? await (async () => {
+                    const prepared = await executor.prepare('session.spawn_new', input, context);
+                    return prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
+                })()
+                : await executor.execute('session.spawn_new', input, context);
             expect(result).toEqual(errorCode === null
                 ? { ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } }
                 : { ok: false, errorCode, error: errorCode });

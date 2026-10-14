@@ -261,8 +261,6 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
             ...actual.Typography,
             default: () => ({}),
             mono: () => ({}),
-            pillLabel: () => ({}),
-            rowMeta: () => ({}),
         },
     };
 });

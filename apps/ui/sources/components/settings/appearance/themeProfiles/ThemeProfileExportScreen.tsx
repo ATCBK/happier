@@ -9,7 +9,7 @@ import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
@@ -38,7 +38,7 @@ const resolveExportMode = (profile: ThemeProfileV1): ThemeProfileMode => {
 
 export const ThemeProfileExportScreen = React.memo(function ThemeProfileExportScreen() {
     const styles = stylesheet;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const params = useLocalSearchParams();
     const [themeProfiles] = useLocalSettingMutable('themeProfiles');
     const profileId = getProfileIdParam(params.profileId);

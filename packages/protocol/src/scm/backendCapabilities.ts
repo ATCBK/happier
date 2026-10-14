@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ScmChangeSetModelSchema,
@@ -44,19 +44,17 @@ export const ScmBackendCapabilityUnavailableReasonSchema = lazyZodSchema(() => z
 ]));
 export type ScmBackendCapabilityUnavailableReason = z.infer<typeof ScmBackendCapabilityUnavailableReasonSchema>;
 
-export const ScmBackendCapabilityLeafSchema = lazyZodSchema(() => z
-  .object({
+export const ScmBackendCapabilityLeafSchema = lazyZodSchema(() => z.strictObject({
     support: ScmBackendCapabilitySupportLevelSchema,
-    reason: ScmBackendCapabilityUnavailableReasonSchema.optional(),
-    declaredSupport: ScmBackendCapabilitySupportLevelSchema.optional(),
-  })
-  .strict());
+    reason: z.optional(ScmBackendCapabilityUnavailableReasonSchema),
+    declaredSupport: z.optional(ScmBackendCapabilitySupportLevelSchema),
+  }));
 export type ScmBackendCapabilityLeaf = z.infer<typeof ScmBackendCapabilityLeafSchema>;
 
 const capabilityLeafMap = <const T extends readonly [string, ...string[]]>(keys: T) =>
-  z.object(Object.fromEntries(keys.map((key) => [key, ScmBackendCapabilityLeafSchema.optional()])) as {
-    [K in T[number]]: z.ZodOptional<typeof ScmBackendCapabilityLeafSchema>;
-  }).strict();
+  z.strictObject(Object.fromEntries(keys.map((key) => [key, z.optional(ScmBackendCapabilityLeafSchema)])) as {
+    [K in T[number]]: z.ZodMiniOptional<typeof ScmBackendCapabilityLeafSchema>;
+  });
 
 export const ScmBackendDetectionCapabilitiesSchema = capabilityLeafMap([
   'repository',
@@ -80,14 +78,14 @@ export const ScmBackendReadCapabilitiesSchema = capabilityLeafMap([
   'pullRequestStatus',
 ]);
 
-export const ScmBackendChangeSetCapabilitiesSchema = capabilityLeafMap([
+export const ScmBackendChangeSetCapabilitiesSchema = z.extend(capabilityLeafMap([
   'include',
   'exclude',
   'discard',
   'stashCreate',
-]).extend({
+]), {
   model: ScmChangeSetModelSchema,
-  diffAreas: z.array(ScmDiffAreaSchema).min(1),
+  diffAreas: z.array(ScmDiffAreaSchema).check(z.minLength(1)),
 });
 
 export const ScmBackendCommitCapabilitiesSchema = capabilityLeafMap([
@@ -181,16 +179,15 @@ export const ScmBackendToolingCapabilitiesSchema = capabilityLeafMap([
   'binarySafe',
 ]);
 
-export const ScmBackendFreshnessCapabilitiesSchema = capabilityLeafMap([
+export const ScmBackendFreshnessCapabilitiesSchema = z.extend(capabilityLeafMap([
   'observed',
   'expiry',
-]).extend({
-  state: VcsLocalStateFreshnessSchema.optional(),
-  refreshPolicy: ProviderRefreshPolicySchema.optional(),
+]), {
+  state: z.optional(VcsLocalStateFreshnessSchema),
+  refreshPolicy: z.optional(ProviderRefreshPolicySchema),
 });
 
-export const ScmBackendCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
+export const ScmBackendCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
     detection: ScmBackendDetectionCapabilitiesSchema,
     read: ScmBackendReadCapabilitiesSchema,
     changeSet: ScmBackendChangeSetCapabilitiesSchema,
@@ -204,20 +201,16 @@ export const ScmBackendCapabilitiesSchema = lazyZodSchema(() => z
     workspaceIntegration: ScmBackendWorkspaceIntegrationCapabilitiesSchema,
     tooling: ScmBackendToolingCapabilitiesSchema,
     freshness: ScmBackendFreshnessCapabilitiesSchema,
-    operationLabels: z
-      .object({
-        commit: z.string().optional(),
-        include: z.string().optional(),
-        exclude: z.string().optional(),
-        backout: z.string().optional(),
-        fetch: z.string().optional(),
-        pull: z.string().optional(),
-        push: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict());
+    operationLabels: z.optional(z.strictObject({
+        commit: z.optional(z.string()),
+        include: z.optional(z.string()),
+        exclude: z.optional(z.string()),
+        backout: z.optional(z.string()),
+        fetch: z.optional(z.string()),
+        pull: z.optional(z.string()),
+        push: z.optional(z.string()),
+      })),
+  }));
 export type ScmBackendCapabilities = z.infer<typeof ScmBackendCapabilitiesSchema>;
 
 export function supportedCapability(): ScmBackendCapabilityLeaf {

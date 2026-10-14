@@ -17,6 +17,7 @@ import { bindFilesystemItem, filesystemAdapterForEntry } from './categories/file
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/storageV1';
 import { physicalStoragePathWithoutFollowingLeaf } from './storagePath';
+import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 export type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem, StorageProjectFacts, StorageCategoryDiscoverySnapshot } from './categories/types';
 
 const categories: readonly StorageCategoryDefinition[] = [worktrees, caches, modelPacks, sessionFolders, logs,
@@ -49,7 +50,7 @@ export function foldStorageDescendantVerdicts(item: StorageCategoryVerdict, chil
 export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
     const dataRoots = () => [deps.happyHomeDir, deps.activeServerDir, getHappierTempRoot(deps.tempRoot)].filter((path, index, paths) =>
         !paths.slice(0, index).some(previous => canonicalAbsolutePathsEqual(previous, path)));
-    const context = async (): Promise<StorageCategoryContext> => {
+    const context = async (paths: readonly string[] = []): Promise<StorageCategoryContext> => {
         const now = deps.now?.() ?? Date.now();
         const [allocations, modelPacks, recordings, temporaryFacts, isolationFacts, inUse, projectFacts, worktrees] = await Promise.all([
             deps.managedSessionDirectories?.listRecords() ?? [], (deps.readModelPackRuntime?.() ?? deps.modelPackRuntime)?.list() ?? deps.readModelPacks?.() ?? [],
@@ -57,11 +58,28 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             deps.readIsolationFacts?.() ?? [], deps.readInUsePaths?.() ?? { reliable: false, paths: [] },
             deps.readProjects?.() ?? UNAVAILABLE_PROJECT_FACTS, deps.readWorktrees?.() ?? [],
         ]);
+        const missingPaths = paths.filter(path => !worktrees.some(worktree => canonicalAbsolutePathsEqual(worktree.path, path)));
+        const scannedWorktrees = missingPaths.length ? await readStorageWorktrees({ cwds: [], candidatePaths: missingPaths,
+            knownRoots: worktrees.map(worktree => worktree.path),
+            happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() }) : [];
         return { deps, now, unusedBefore: now - (deps.readPolicy?.().suggestUnusedAfterDays ?? DEFAULT_UNUSED_AFTER_DAYS) * DAY_MS,
             sessions: deps.readTrackedSessions?.() ?? [], allocations, modelPacks, recordings, temporaryFacts,
             isolationFacts, inUse, projects: projectFacts.projects ?? [],
-            projectsAvailable: projectFacts.status === 'ready', worktrees, discoveryIssues: [] };
+            projectsAvailable: projectFacts.status === 'ready',
+            worktrees: [...new Map([...worktrees, ...scannedWorktrees].map(worktree => [worktree.path, worktree])).values()], discoveryIssues: [] };
     };
+    async function projectSnapshot(facts: StorageCategoryContext): Promise<StorageCategoryDiscoverySnapshot> {
+        const discovered = [...(await Promise.all(categories.map(category => category.items(facts)))).flat(), ...facts.discoveryIssues];
+        // Recording files can also live in session uploads; the specialized owner wins exact duplicates.
+        const byPath = new Map<string, StorageCategoryItem>();
+        for (const item of discovered) {
+            if (!byPath.has(item.path) || item.categoryId === 'recordings') byPath.set(item.path, item);
+        }
+        const items = [...byPath.values()];
+        return { items: items.map(item => ({ ...item, ...foldStorageDescendantVerdicts(item,
+            items.filter(child => child.path !== item.path && contains(item.path, child.path))) })),
+            incompleteCategoryIds: facts.projectsAvailable ? [] : ['worktrees', 'sessionFolders'] };
+    }
     const catalog = {
         categoryIds: STORAGE_CATEGORY_IDS,
         dataRoots,
@@ -69,25 +87,27 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             const facts = await context();
             return categories.map(category => ({ categoryId: category.id, paths: category.roots(facts) }));
         },
-        async discoverSnapshot(): Promise<StorageCategoryDiscoverySnapshot> {
-            const facts = await context();
-            const discovered = [...(await Promise.all(categories.map(category => category.items(facts)))).flat(), ...facts.discoveryIssues];
-            // Recording files can also live in session uploads; the specialized owner wins exact duplicates.
-            const byPath = new Map<string, StorageCategoryItem>();
-            for (const item of discovered) {
-                if (!byPath.has(item.path) || item.categoryId === 'recordings') byPath.set(item.path, item);
-            }
-            const items = [...byPath.values()];
-            // An eligible container cannot conceal a known retained/unavailable descendant.
-            // This is catalog evidence folding, not the future arbitrary-path deletion policy.
-            return { items: items.map(item => ({ ...item, ...foldStorageDescendantVerdicts(item,
-                items.filter(child => child.path !== item.path && contains(item.path, child.path))) })),
-                incompleteCategoryIds: facts.projectsAvailable ? [] : ['worktrees', 'sessionFolders'] };
+        async discoverSnapshot(paths: readonly string[] = []): Promise<StorageCategoryDiscoverySnapshot> {
+            return projectSnapshot(await context(paths));
         },
-        async discover(): Promise<readonly StorageCategoryItem[]> { return (await catalog.discoverSnapshot()).items; },
+        async discover(paths: readonly string[] = [], current?: readonly StorageCategoryItem[]): Promise<readonly StorageCategoryItem[]> {
+            if (!current) return (await catalog.discoverSnapshot(paths)).items;
+            // Indexed aliases keep the same freshly inspected SCM path, even when their item ids differ.
+            const missingPaths = paths.filter(path => !current.some(item => item.categoryId === 'worktrees'
+                && canonicalAbsolutePathsEqual(item.path, path)));
+            if (!missingPaths.length) return current;
+            const scanned = await readStorageWorktrees({ cwds: [], candidatePaths: missingPaths,
+                knownRoots: current.filter(item => item.categoryId === 'worktrees').map(item => item.path),
+                happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() });
+            if (!scanned.length) return current;
+            const facts = await context();
+            return (await projectSnapshot({ ...facts,
+                worktrees: [...new Map([...facts.worktrees, ...scanned].map(worktree => [worktree.path, worktree])).values()] })).items;
+        },
         descendantCleanupLimitation(path: string, discovered: readonly StorageCategoryItem[]): StorageReasonV1 | null {
             const owner = discovered.find(item => !canonicalAbsolutePathsEqual(item.path, path) && contains(item.path, path)
-                && categories.find(category => category.id === item.categoryId)?.descendantCleanup === 'whole-item-only');
+                && (item.retirementKind === 'common'
+                    || categories.find(category => category.id === item.categoryId)?.descendantCleanup === 'whole-item-only'));
             return owner ? { code: 'unsupported', detail: { cause: 'owner_requires_whole_item', categoryId: owner.categoryId, path: owner.path } } : null;
         },
         async cleanupLimitation(path: string, items: readonly StorageCleanupItem[]): Promise<StorageReasonV1 | null> {
@@ -98,15 +118,16 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
                 ...items.flatMap(item => item.repositoryRoot ? [item.repositoryRoot] : [])])];
             const main = (await Promise.all(roots.map(physicalStoragePathWithoutFollowingLeaf)))
                 .find(repositoryRoot => contains(path, repositoryRoot));
-            // Git refuses worktree move/remove for the main checkout. Its common
-            // directory also owns registrations outside the managed worktree list.
-            return main ? { code: 'unsupported', detail: { cause: 'main_checkout_lifecycle_unsupported', owner: 'scm', path: main } } : null;
+            // Never give an unbound container a filesystem bypass around SCM retirement.
+            return main && !items.some(item => item.retirementKind === 'main' && canonicalAbsolutePathsEqual(item.path, main)
+                && item.fingerprint && item.referenceOwnerData !== undefined)
+                ? { code: 'unsupported', detail: { cause: 'checkout_reference_owner_unavailable', owner: 'scm', path: main } } : null;
         },
         async resolveAdapter(item: StorageCleanupItem): Promise<StorageCategoryAdapter> {
             if (item.categoryId === undefined) return bindFilesystemItem(item);
             const category = categories.find(category => category.id === item.categoryId);
             if (!category?.bindAdapter) throw new StorageCategoryAdapterError('owner_unavailable');
-            const facts = await context();
+            const facts = await context([item.path]);
             const current = (await category.items(facts)).find(candidate => candidate.itemId === (item.canonicalItemId ?? item.itemId)
                 && canonicalAbsolutePathsEqual(candidate.path, item.path));
             if (!current) throw new StorageCategoryAdapterError('owner_unavailable');

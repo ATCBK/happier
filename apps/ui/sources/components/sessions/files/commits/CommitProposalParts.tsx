@@ -203,7 +203,7 @@ export const CommitGroupHeader = React.memo(function CommitGroupHeader(props: Re
         else if (id === 'down') onMoveGroup?.(group.id, 1);
         else if (id === 'merge') onMergeWithNext?.(group.id);
     }, [group.id, onMergeWithNext, onMoveGroup]);
-    const titleStyle = [styles.message, props.phone ? styles.messagePhone : null];
+    const titleStyle = styles.message;
     return (
         <View style={styles.header}>
             <View style={styles.markSlot}><CommitGroupMark number={group.number} state={group.state} /></View>
@@ -233,7 +233,7 @@ export const CommitGroupHeader = React.memo(function CommitGroupHeader(props: Re
                         {group.message}
                     </Text>
                 )}
-                {group.rationale ? <Text style={[styles.rationale, props.phone ? styles.rationalePhone : null]}>{group.rationale}</Text> : null}
+                {group.rationale ? <Text style={styles.rationale}>{group.rationale}</Text> : null}
                 <View style={styles.meta}>{props.meta}</View>
             </View>
             {editable ? (
@@ -295,7 +295,7 @@ export const commitPartsStyles = StyleSheet.create((theme) => ({
 const styles = StyleSheet.create((theme) => ({
     mark: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
     markFilled: { borderRadius: 11 },
-    markGlyph: { fontSize: 12.5, color: theme.colors.surface.base, ...Typography.default('bold') },
+    markGlyph: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.surface.base },
     header: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12, paddingLeft: theme.space.s16, paddingRight: theme.space.s10, paddingTop: 14, paddingBottom: 14 },
     markSlot: { paddingTop: 1 },
     headerText: { flex: 1, minWidth: 0 },
@@ -304,7 +304,6 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 23,
         color: theme.colors.text.primary,
     },
-    messagePhone: { fontSize: 17, lineHeight: 24 },
     messageInput: {
         marginHorizontal: -7,
         marginVertical: -3,
@@ -316,7 +315,6 @@ const styles = StyleSheet.create((theme) => ({
         ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as object : null),
     },
     rationale: { marginTop: 3, ...Typography.variant('reading'),  color: theme.colors.text.secondary,  },
-    rationalePhone: { fontSize: 15, lineHeight: 22 },
     meta: { marginTop: theme.space.s6, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s6 },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2, marginTop: -3 },
     row: {

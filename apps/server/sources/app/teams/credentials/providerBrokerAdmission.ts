@@ -1,27 +1,13 @@
-import {
-    pluginJsonValuesEqual,
-    PROVIDER_BROKER_ROUTE_AUDIENCE_V1,
-    DIRECT_ROUTE_GRANT_TTL_MS,
-    ProviderBrokerOpenRequestV1Schema,
-    IrohEndpointDescriptorV1Schema,
-    ProviderBrokerRequestAdmissionV1Schema,
-    SignedProviderBrokerRouteGrantV1Schema,
-    readMachineIrohEndpointAuthorityV1,
-    type ProviderBrokerAdmissionFailureCodeV1,
-    type ProviderBrokerOpenRequestV1,
-    type ProviderBrokerOpenResponseV1,
-    type MachineIrohEndpointAuthorityV1,
-    type ProviderBrokerRequestAdmissionV1,
-    type SignedProviderBrokerRouteGrantV1,
-    type AuthTokenAuthenticationEvidenceV1,
-} from '@happier-dev/protocol';
-import {
-    TeamCredentialRequestPolicyV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    type SessionTeamCredentialBindingRejectionV1,
-    type TeamCredentialSourceBindingV1,
-    type TeamCredentialUsageLimitDenialV1,
-} from '@happier-dev/protocol/teams';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { PROVIDER_BROKER_ROUTE_AUDIENCE_V1, ProviderBrokerOpenRequestV1Schema, ProviderBrokerRequestAdmissionV1Schema, SignedProviderBrokerRouteGrantV1Schema, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerOpenRequestV1, type ProviderBrokerOpenResponseV1, type ProviderBrokerRequestAdmissionV1, type SignedProviderBrokerRouteGrantV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { IrohEndpointDescriptorV1Schema } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
+import { readMachineIrohEndpointAuthorityV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
+import { TeamCredentialRequestPolicyV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
+import { type TeamCredentialUsageLimitDenialV1 } from '@happier-dev/protocol/teams';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/protocol/ephemeralRunner/principal';
 
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';

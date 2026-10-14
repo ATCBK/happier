@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SessionMetadata } from '@happier-dev/protocol';
 
 import {
   createSummaryTextMetadataUpdater,
@@ -7,6 +8,33 @@ import {
 import { createSessionStateFieldMetadataUpdater } from './publishField.js';
 
 describe('summaryTextBinding', () => {
+  describe.each(['binding', 'metadata updater'] as const)('zero-time title arbitration through %s', (entryPoint) => {
+    const writeTitle = (metadata: SessionMetadata) => entryPoint === 'binding'
+      ? summaryTextBinding.write(metadata, {
+        value: { title: 'Older zero-time title', updatedAt: 0, staleBehavior: 'drop' },
+      })
+      : createSummaryTextMetadataUpdater({
+        title: 'Older zero-time title', updatedAt: 0, staleBehavior: 'drop',
+      })(metadata);
+
+    it.each([
+      { name: 'missing timestamp', summary: { text: 'Retained title' } },
+      { name: 'non-finite timestamp', summary: { text: 'Retained title', updatedAt: Number.NaN } },
+      { name: 'empty title text', summary: { text: '' } },
+      { name: 'stored zero timestamp', summary: { text: 'Retained title', updatedAt: 0 } },
+      { name: 'newer timestamp', summary: { text: 'Retained title', updatedAt: 1 } },
+    ])('preserves a present title with $name', ({ summary }) => {
+      const metadata = { summary };
+      expect(writeTitle(metadata)).toBe(metadata);
+    });
+
+    it('accepts the first zero-time title when title text is absent', () => {
+      expect(writeTitle({})).toEqual({
+        summary: { text: 'Older zero-time title', updatedAt: 0 },
+      });
+    });
+  });
+
   it('reads display.title from metadata summary text', () => {
     expect(summaryTextBinding.read({
       summary: {

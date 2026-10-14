@@ -60,6 +60,10 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
           message: 'Browser command payload failed protocol validation.',
         });
       }
+      if (context?.signal?.aborted) {
+        return browserCommandDispatchFailure({ commandId: command.data.commandId,
+          code: 'adapter_unavailable', message: 'Browser control request was cancelled.', completion: 'known' });
+      }
 
       // Focus and other control Actions can otherwise bypass automation admission. A retained
       // confidential view accepts only verified human control, regardless of approval bypass.
@@ -94,10 +98,10 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
         } finally { unsubscribe(); }
       }
 
-      if ((context?.authority === 'present_user' || context?.authority === 'account_automation') && (
+      if (command.data.kind === 'focusView' || ((context?.authority === 'present_user' || context?.authority === 'account_automation') && (
         command.data.kind === 'navigate' || command.data.kind === 'goBack' || command.data.kind === 'goForward'
         || command.data.kind === 'reload' || command.data.kind === 'stop'
-      )) {
+      ))) {
         const automation = input.automation?.();
         if (automation) {
           const view = input.broker.listViews?.(command.data.browserSessionId).find(candidate => candidate.viewId === command.data.viewId);
@@ -108,14 +112,16 @@ export function createBrowserDaemonControlRoutes(input: Readonly<{
             if (event.browserSessionId === view.browserSessionId && 'viewId' in event && event.viewId === view.viewId) events.push(event);
           });
           try {
-            const execution = await automation.executeControlCommand(view, context.authority, () => dispatchToBroker(command.data, context.signal));
+            const execution = await automation.executeControlCommand(command.data,
+              context?.authority === 'present_user' ? 'present_user' : 'account_automation',
+              () => dispatchToBroker(command.data, context?.signal));
             if (!execution.ok) return browserCommandDispatchFailure({ commandId: command.data.commandId,
               code: 'permission_denied', message: `Browser input controller refused the command: ${execution.errorCode}.` });
             const result = execution.value;
             return result.status === 'dispatched' ? { ...result, events: [...events, ...result.events] } : result;
           } finally { unsubscribe(); }
         }
-        if (context.authority === 'account_automation') return browserCommandDispatchFailure({ commandId: command.data.commandId,
+        if (context?.authority === 'account_automation') return browserCommandDispatchFailure({ commandId: command.data.commandId,
           code: 'adapter_unavailable', message: 'Browser input controller is unavailable.' });
       }
       return dispatchToBroker(command.data, context?.signal);

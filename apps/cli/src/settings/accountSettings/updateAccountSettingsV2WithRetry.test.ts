@@ -71,6 +71,30 @@ function mutableConfigurationForTest(): {
 }
 
 describe('updateAccountSettingsV2WithRetry', () => {
+  it('restores an encrypted Machine offline preference while preserving a retained Replay budget', async () => {
+    const credentials = createLegacyCredentialsStub();
+    const raw = { sessionReplayMaxSeedChars: 1024, machineOfflineAlertsV1: { machineIds: ['peer', 'qa-machine'] } };
+    let content: AccountSettingsStoredContentEnvelope = { t: 'encrypted', c: sealAccountScopedBlobCiphertext({
+      kind: 'account_settings', material: credentials.encryption, payload: raw,
+      randomBytes: n => new Uint8Array(n).fill(9),
+    }) };
+    const result = await updateAccountSettingsV2WithRetry({ credentials,
+      mutation: { operations: [{ op: 'set', key: 'machineOfflineAlertsV1', value: { machineIds: ['peer'] } }] },
+      deps: { fetchSettings: async () => ({ content, version: 5 }),
+        resolveAccountEncryptionMode: resolveE2eeAccountEncryptionMode,
+        updateSettings: async request => {
+          const admitted = AccountSettingsV2UpdateRequestSchema.parse(request);
+          if (!admitted.content) throw new Error('Expected encrypted Settings');
+          content = admitted.content;
+          return { success: true, version: 6 };
+        }, writeCache: async () => {} },
+    });
+    expect(result).toMatchObject({ status: 'applied', version: 6,
+      settings: { sessionReplayMaxSeedChars: 120000, machineOfflineAlertsV1: { machineIds: ['peer'] } } });
+    if (content.t !== 'encrypted') throw new Error('Expected encrypted readback');
+    expect(openAccountScopedBlobCiphertext({ kind: 'account_settings', material: credentials.encryption, ciphertext: content.c })?.value)
+      .toEqual({ ...raw, machineOfflineAlertsV1: { machineIds: ['peer'] } });
+  });
   it.each(['immutable', 'callback'] as const)('reuses a validated unchanged plain baseline for less CPU than parsing its bytes twice (%s)', async (kind) => {
     const credentials = createTokenOnlyCredentialsStub();
     const raw = { schemaVersion: 6, analyticsOptOut: false, unrelated: { retained: true } };

@@ -104,17 +104,17 @@ export const CodeSearchView = React.memo<ToolViewProps>(({ tool, detailLevel, me
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 10,
+        gap: theme.space.s10,
     },
     summary: {
         fontSize: 13,
         color: theme.colors.text.secondary,
     },
     row: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     label: {
         fontSize: 12,

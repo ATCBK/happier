@@ -1,17 +1,11 @@
 import { isSessionTurnTranscriptAnchorProjectionProtocolActive } from "@/app/session/turns/sessionTurnTranscriptAnchorProjectionProtocolContract";
 import { featuresSchema, type FeaturesResponse } from '../types';
-import {
-    applyFeatureDependencies,
-    evaluateFeatureBuildPolicy,
-    evaluateServerFeatureDecisions,
-    FEATURE_IDS,
-    FEATURE_CATALOG,
-    FeatureGatesSchema,
-    isFeatureServerRepresented,
-    tryWriteServerEnabledBitInPlace,
-    type FeatureDecision,
-    type FeatureId,
-} from '@happier-dev/protocol';
+import { applyFeatureDependencies, evaluateServerFeatureDecisions } from '@happier-dev/protocol/features/featureDecisionEngine';
+import { evaluateFeatureBuildPolicy } from '@happier-dev/protocol/features/buildPolicy';
+import { FEATURE_IDS, FEATURE_CATALOG, isFeatureServerRepresented, type FeatureId } from '@happier-dev/protocol/features/catalog';
+import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { type FeatureDecision } from '@happier-dev/protocol/features/decision';
 
 import type { ServerFeatureResolver } from './serverFeatureRegistry';
 import { resolveServerFeatureBuildPolicy } from './serverFeatureBuildPolicy';

@@ -14,7 +14,6 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
 
 vi.mock('./warmCachePersistence', () => ({
     peekMachineDisplayWarmCacheEntries: () => boundary.previous,
-    resolveWarmCacheAccountScope: (accountId: string) => accountId,
     scheduleMachineDisplayWarmCacheEntriesSave: (...args: unknown[]) => boundary.schedule(...args),
 }));
 

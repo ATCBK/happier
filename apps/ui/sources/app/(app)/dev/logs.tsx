@@ -7,7 +7,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Item } from '@/components/ui/lists/Item';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Modal } from '@/modal';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -15,7 +15,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 export default function LogsScreen() {
     const [logs, setLogs] = React.useState<string[]>([]);
     const listRef = React.useRef<VirtualizedListRef>(null);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     // Subscribe to log changes
     React.useEffect(() => {

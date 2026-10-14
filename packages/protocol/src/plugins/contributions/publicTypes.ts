@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   defineProtocolObject,
@@ -22,17 +22,17 @@ export {
 } from './jsonSchema.js';
 
 export const PluginLocalizedStringV2Schema = lazyZodSchema(() => z.union([
-  z.string().trim().min(1),
-  z.object({ key: z.string().trim().min(1), fallback: z.string().trim().min(1) }).strict(),
+  z.string().check(z.trim(), z.minLength(1)),
+  z.strictObject({ key: z.string().check(z.trim(), z.minLength(1)), fallback: z.string().check(z.trim(), z.minLength(1)) }),
 ]));
 export type PluginLocalizedStringV2 = z.infer<typeof PluginLocalizedStringV2Schema>;
 
 // Markdown indentation and trailing spaces carry formatting semantics. Keep the
 // existing nonblank admission rule without transforming the authored content.
-const PluginMarkdownTextV2Schema = lazyZodSchema(() => z.string().refine((value) => value.trim().length > 0));
+const PluginMarkdownTextV2Schema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0)));
 export const PluginLocalizedMarkdownV2Schema = lazyZodSchema(() => z.union([
   PluginMarkdownTextV2Schema,
-  z.object({ key: z.string().trim().min(1), fallback: PluginMarkdownTextV2Schema }).strict(),
+  z.strictObject({ key: z.string().check(z.trim(), z.minLength(1)), fallback: PluginMarkdownTextV2Schema }),
 ]));
 
 export const PluginContributionReferenceV2Schema = defineProtocolUnion([
@@ -47,15 +47,15 @@ export type PluginPolicyExpressionV2 =
   | { all: PluginPolicyExpressionV2[] }
   | { any: PluginPolicyExpressionV2[] }
   | { not: PluginPolicyExpressionV2 };
-export const PluginPolicyExpressionV2Schema: z.ZodType<PluginPolicyExpressionV2> = z.lazy(() => z.union([
-  z.object({ fact: z.enum(['plugin.enabled', 'session.exists', 'project.exists', 'browser.exists']), operator: z.literal('equals'), value: z.boolean() }).strict(),
-  z.object({ fact: z.literal('host.platform'), operator: z.enum(['equals', 'notEquals']), value: z.enum(['web', 'ios', 'android', 'desktop']) }).strict(),
-  z.object({ fact: z.literal('host.feature'), operator: z.literal('enabled'), value: z.string().trim().min(1) }).strict(),
-  z.object({ fact: z.enum(['session.agentId', 'session.state', 'project.id', 'machine.id', 'browser.origin']), operator: z.enum(['equals', 'notEquals']), value: z.string() }).strict(),
-  z.object({ fact: z.literal('session.capability'), operator: z.literal('contains'), value: z.string().trim().min(1) }).strict(),
-  z.object({ all: z.array(PluginPolicyExpressionV2Schema) }).strict(),
-  z.object({ any: z.array(PluginPolicyExpressionV2Schema) }).strict(),
-  z.object({ not: PluginPolicyExpressionV2Schema }).strict(),
+export const PluginPolicyExpressionV2Schema: z.ZodMiniType<PluginPolicyExpressionV2> = z.lazy(() => z.union([
+  z.strictObject({ fact: z.enum(['plugin.enabled', 'session.exists', 'project.exists', 'browser.exists']), operator: z.literal('equals'), value: z.boolean() }),
+  z.strictObject({ fact: z.literal('host.platform'), operator: z.enum(['equals', 'notEquals']), value: z.enum(['web', 'ios', 'android', 'desktop']) }),
+  z.strictObject({ fact: z.literal('host.feature'), operator: z.literal('enabled'), value: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ fact: z.enum(['session.agentId', 'session.state', 'project.id', 'machine.id', 'browser.origin']), operator: z.enum(['equals', 'notEquals']), value: z.string() }),
+  z.strictObject({ fact: z.literal('session.capability'), operator: z.literal('contains'), value: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ all: z.array(PluginPolicyExpressionV2Schema) }),
+  z.strictObject({ any: z.array(PluginPolicyExpressionV2Schema) }),
+  z.strictObject({ not: PluginPolicyExpressionV2Schema }),
 ]));
 
 export type PluginPolicyFactValueV2 = boolean | string | readonly string[] | undefined;
@@ -108,7 +108,7 @@ export function evaluatePluginPolicyExpressionV2(
 }
 
 export const PluginAvailabilityDescriptorV2Schema = lazyZodSchema(() => z.union([
-  z.object({ when: PluginPolicyExpressionV2Schema.optional(), disabledWhen: z.never().optional(), disabledReason: z.never().optional() }).strict(),
-  z.object({ when: PluginPolicyExpressionV2Schema.optional(), disabledWhen: PluginPolicyExpressionV2Schema, disabledReason: PluginLocalizedStringV2Schema }).strict(),
+  z.strictObject({ when: z.optional(PluginPolicyExpressionV2Schema), disabledWhen: z.optional(z.never()), disabledReason: z.optional(z.never()) }),
+  z.strictObject({ when: z.optional(PluginPolicyExpressionV2Schema), disabledWhen: PluginPolicyExpressionV2Schema, disabledReason: PluginLocalizedStringV2Schema }),
 ]));
 export type PluginAvailabilityDescriptorV2 = z.infer<typeof PluginAvailabilityDescriptorV2Schema>;

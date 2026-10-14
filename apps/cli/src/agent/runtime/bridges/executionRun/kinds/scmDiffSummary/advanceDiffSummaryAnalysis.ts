@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
-import { ScmDiffSummaryMetadataSchema, ScmDiffSummaryModelOutputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryMetadataSchema, ScmDiffSummaryModelOutputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryOutputLanguageSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmComparison, ScmDiffSummaryModelOutput, ScmDiffSummaryOutputs } from '@happier-dev/protocol';
 import type { ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { buildDiffSummaryPrompt } from './buildDiffSummaryPrompt';
 import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { presentScmDiffSummaryModelContext } from './presentScmDiffSummaryModelContext';
+import { buildReviewNarrationInputContext, readReviewNarration } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
+import { findingCitationInstructions } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
 const FragmentSchema = z.object({ path: z.string(), startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().nonnegative(), hunkHeader: z.string(), contextBefore: z.string(), contextAfter: z.string(),
@@ -18,6 +20,9 @@ const AnalysisStateSchema = z.object({
   failures: z.array(z.string()), failedRefs: z.array(z.string()),
   expectedInputId: z.string().optional(),
   instructions: z.string().optional(),
+  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
+  evidenceContext: z.string().optional(),
+  taskInstructions: z.string().optional(),
   admitted: z.number().int().nonnegative().optional(), completed: z.number().int().nonnegative().optional(),
   failedAdmissions: z.number().int().nonnegative().optional(), lastAdmittedInputId: z.string().optional(),
   totalParts: z.number().int().nonnegative().optional(),
@@ -83,7 +88,11 @@ function evidencePrompt(comparison: ScmComparison, metadata: z.infer<typeof ScmD
   const part = currentComparison(comparison, state);
   const fragment = state.currentFragment;
   return buildDiffSummaryPrompt({ comparison: part, metadata, outputs,
-    instructions: [state.instructions,
+    outputLanguage: state.outputLanguage,
+    instructions: state.instructions,
+    evidenceContext: state.evidenceContext,
+    taskInstructions: [
+      state.taskInstructions,
       `Analyse only this ${fragment ? 'textual fragment' : 'part'} of the captured comparison. Other parts are retained by the host. Keep its captured identity and describe only supplied text.`,
       ...(fragment ? [`Fragment offsets: ${fragment.path} unified diff UTF-16 [${fragment.startOffset}, ${fragment.endOffset}).`,
         `Original file/hunk headers: ${fragment.hunkHeader}`, `Context before (partial line orientation, not additional analysed evidence): ${fragment.contextBefore}`,
@@ -140,12 +149,14 @@ function splitCurrent(comparison: ScmComparison, state: AnalysisState): boolean 
  * Unknown capacity and indivisible framing keep native admission authoritative. */
 export function planDiffSummaryAnalysis(params: Readonly<{ comparison: ScmComparison;
   metadata: z.infer<typeof ScmDiffSummaryMetadataSchema>; outputs: z.infer<typeof ScmDiffSummaryOutputKindSchema>[];
-  instructions?: string; prompt: string; contextWindowTokens?: number }>) {
+  instructions?: string; outputLanguage?: string; evidenceContext?: string; taskInstructions?: string;
+  prompt: string; contextWindowTokens?: number }>) {
   const capacity = params.contextWindowTokens;
   if (!capacity || !Number.isSafeInteger(capacity) || capacity <= 0
     || new TextEncoder().encode(params.prompt).byteLength <= capacity) return null;
   const state: AnalysisState = { phase: 'evidence', current: allRefs(params.comparison), pending: [],
-    parts: [], supplied: [], analysed: [], failures: [], failedRefs: [], instructions: params.instructions,
+    parts: [], supplied: [], analysed: [], failures: [], failedRefs: [], instructions: params.instructions, outputLanguage: params.outputLanguage,
+    evidenceContext: params.evidenceContext, taskInstructions: params.taskInstructions,
     admitted: 0, completed: 0 };
   // Each split shrinks real evidence; no guessed minimum fragment or local cutoff.
   const planned: z.infer<typeof PartSchema>[] = [];
@@ -251,6 +262,9 @@ export function advanceDiffSummaryAnalysis(params: ExecutionRunProfileTurnComple
   const state: AnalysisState = saved.success ? saved.data : {
     phase: 'evidence', current: allRefs(comparison), pending: [], parts: [], supplied: [], analysed: [], failures: [], failedRefs: [],
     instructions: typeof input.instructions === 'string' ? input.instructions : undefined,
+    outputLanguage: typeof input.outputLanguage === 'string' ? input.outputLanguage : undefined,
+    evidenceContext: buildReviewNarrationInputContext(input) || undefined,
+    taskInstructions: readReviewNarration(input) ? findingCitationInstructions : undefined,
   };
   if (state.phase === 'done') return null;
   if (state.expectedInputId && !params.inputIds?.includes(state.expectedInputId)) return null;
@@ -303,7 +317,9 @@ export function advanceDiffSummaryAnalysis(params: ExecutionRunProfileTurnComple
     } else if (state.parts.length) {
       state.phase = 'merge';
       next = [buildDiffSummaryPrompt({ comparison, metadata: metadata.data, outputs, files: [],
-        instructions: [state.instructions, 'Integrate the retained part outputs into one coherent requested result. No new evidence is supplied in this turn. Keep unanalysed changes explicitly reachable.'].filter(Boolean).join('\n\n') }),
+        instructions: state.instructions, outputLanguage: state.outputLanguage,
+        evidenceContext: state.evidenceContext,
+        taskInstructions: [state.taskInstructions, 'Integrate the retained part outputs into one coherent requested result. No new evidence is supplied in this turn. Keep unanalysed changes explicitly reachable.'].filter(Boolean).join('\n') }),
         `Retained part outputs: ${JSON.stringify(presentScmDiffSummaryModelContext(value, comparison))}`,
         `Unanalysed changes: ${JSON.stringify(presentScmDiffSummaryModelContext({ remainingChangeRefs:
           allRefs(comparison).filter((ref) => !state.analysed.includes(ref)) }, comparison))}`,

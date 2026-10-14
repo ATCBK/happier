@@ -1,4 +1,5 @@
-import { getActionSpec, type ActionId } from "@happier-dev/protocol/actions";
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { type ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { resolveCredentialActionAdmissionV1 } from "@happier-dev/protocol/actions/decisionAuthority";
 import type { FastifyReply, FastifyRequest } from "fastify";
 

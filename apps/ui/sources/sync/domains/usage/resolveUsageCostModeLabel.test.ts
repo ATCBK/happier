@@ -20,5 +20,10 @@ describe('resolveUsageCostModeLabel', () => {
             availableCostModes: ['auto', 'reported', 'estimated'],
             mode: 'estimated',
         })).toBe('Estimated');
+
+        expect(resolveUsageCostModeLabel({
+            availableCostModes: ['auto', 'reported', 'api_equivalent'],
+            mode: 'api_equivalent',
+        })).toBe('Worth at API prices');
     });
 });

@@ -388,6 +388,7 @@ export function resolveConfiguredAcpAgentCatalogProjection(definition: AcpBacken
         backendTargetKey,
         qualifiedId: `${identity.pluginId}/${identity.localId}`,
         title: definition.title ?? definition.name,
+        iconName: 'hard-drives',
         subtitle: null,
         enabled: readBackendTargetEnabled({ backendEnabledByTargetKey: params.backendEnabledByTargetKey,
             canonicalTargetKey: backendTargetKey }),

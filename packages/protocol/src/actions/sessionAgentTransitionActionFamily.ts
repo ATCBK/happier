@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { SessionAgentTransitionRequestV1Schema, SessionAgentTransitionSelectionV1Schema,
   SessionAgentTransitionResultV1Schema, SessionContinuationInspectionV1Schema } from '../sessions/agentTransition.js';
@@ -7,15 +7,15 @@ import type { PreNormalizedActionSpec } from './actionSpecs.js';
 export const SESSION_AGENT_TRANSITION_ACTION_IDS = ['session.continuation.inspect', 'session.agent.transition'] as const;
 export type SessionAgentTransitionActionId = typeof SESSION_AGENT_TRANSITION_ACTION_IDS[number];
 export const SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS = {
-  'session.continuation.inspect': lazyZodSchema(() => z.object({
-    sessionId: z.string().trim().min(1), selection: SessionAgentTransitionSelectionV1Schema,
-  }).strict()),
-  'session.agent.transition': lazyZodSchema(() => SessionAgentTransitionRequestV1Schema.omit({ v: true }).strict()),
+  'session.continuation.inspect': lazyZodSchema(() => z.strictObject({
+    sessionId: z.string().check(z.trim(), z.minLength(1)), selection: SessionAgentTransitionSelectionV1Schema,
+  })),
+  'session.agent.transition': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.omit(SessionAgentTransitionRequestV1Schema, { v: true }))),
 } as const;
 export const SESSION_AGENT_TRANSITION_ACTION_OUTPUT_SCHEMAS = {
   'session.continuation.inspect': lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({ status: z.literal('answered'), inspection: SessionContinuationInspectionV1Schema }).strict(),
-    z.object({ status: z.literal('indeterminate') }).strict(),
+    z.strictObject({ status: z.literal('answered'), inspection: SessionContinuationInspectionV1Schema }),
+    z.strictObject({ status: z.literal('indeterminate') }),
   ])),
   'session.agent.transition': SessionAgentTransitionResultV1Schema,
 } as const;

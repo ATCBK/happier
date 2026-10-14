@@ -160,7 +160,6 @@ async function setup(options: SetupOptions = {}) {
       retire: privateOwner.retire,
     },
     machineId: 'machine-1',
-    readAccountRevision: () => 'account-revision-1',
     authorizeCurrent,
     authorizeActiveTurn,
     ...(options.resolveRetainedExternalSessionAgentContribution

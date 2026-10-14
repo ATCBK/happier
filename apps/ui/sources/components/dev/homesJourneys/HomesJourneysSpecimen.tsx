@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -12,6 +13,7 @@ import { HomeAddForm } from '@/components/homes/add/HomeAddForm';
 import { PhoneWelcomeDoorway } from '@/components/homes/journeys/phone/PhoneWelcomeDoorway';
 import { WelcomeActionList, type WelcomeActionAdmission } from '@/components/onboarding/preAuth/WelcomeActionList';
 import { useJourneyAccountService } from '@/components/homes/journeys/useJourneyAccountService';
+import type { AccountDirectoryAuthMethodDiscovery } from '@/auth/accountDirectory/accountDirectoryAuthClient';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
@@ -21,6 +23,13 @@ import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
 import { HeaderLogo } from '@/components/ui/navigation/HeaderLogo';
 import { AccountServiceMark } from '@/components/settings/account/AccountServiceMark';
 import { t } from '@/text';
+import { AccountServiceContinuation } from '@/components/account/auth/AccountServiceContinuation';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { AccountDirectorySession } from '@/sync/domains/accountDirectory/accountDirectorySession';
+import { resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
+import type { AccountPostAuthInput, AccountPostAuthResult } from '@/sync/ops/accountDirectory/completeAccountServicePostAuth';
+import type { AccountDirectoryHomeEntryV1 } from '@happier-dev/protocol/auth/accountDirectory';
 
 /**
  * Dev-only specimen of the Homes journeys (lab `hjourneys`), rendered through the real components
@@ -28,16 +37,29 @@ import { t } from '@/text';
  * reachable (a browser is never offered "Already use Happier?", which needs a computer that can run a
  * Personal Home). The service is this device's real sign-in service; the Homes in J2 are this
  * device's real saved Homes. J6 uses an illustrative miss count for this visual specimen.
- * `?only=K1|K1a|K1b|K1c|K1p|J2|J3|J4|J6|label` renders one frame.
+ * `?only=<frame>` renders one frame. The six `continuation-*` frames are intentionally excluded
+ * from the all-frames board: only the selected card may own the current UI command.
  */
-const FRAMES = ['label', 'K1', 'K1a', 'K1b', 'K1c', 'K1p', 'J2', 'J3', 'J4', 'J6'] as const;
+const VISUAL_FRAMES = ['label', 'K1', 'K1a', 'K1b', 'K1c', 'K1p', 'J2', 'J3', 'J4', 'J6'] as const;
+const CONTINUATION_FRAMES = [
+    'continuation-choose',
+    'continuation-retry',
+    'continuation-refresh',
+    'continuation-stop-waiting',
+    'continuation-relink',
+    'continuation-open',
+] as const;
+const FRAMES = [...VISUAL_FRAMES, ...CONTINUATION_FRAMES] as const;
 type Frame = typeof FRAMES[number];
+type ContinuationFrame = typeof CONTINUATION_FRAMES[number];
 
 const noop = () => {};
 const IMMEDIATE_ADMISSION: WelcomeActionAdmission = { pendingActionId: null, run: async (_id, action) => { await action(); } };
 
 export function HomesJourneysSpecimen(props: Readonly<{ only: string | null }>) {
-    const frames = FRAMES.filter((frame) => !props.only || props.only === frame);
+    const frames = props.only
+        ? FRAMES.filter((frame) => props.only === frame)
+        : VISUAL_FRAMES;
     return (
         <ScrollView style={styles.root} contentContainerStyle={styles.content}>
             {frames.map((frame) => (
@@ -93,7 +115,7 @@ function FrameBody(props: Readonly<{ frame: Frame }>) {
                     leading={<HeaderLogo size={32} />}
                     title={t(phone ? 'homesJourneys.phone.reconcileTitle' : 'homesJourneys.reconcileTitle')}
                     subtitle={phone ? t('homesJourneys.phone.reconcileLead') : t('homesJourneys.reconcileLead', { count: Math.min(profiles.length, 2) })}
-                    dimensions={{ width: 560 }}
+                    dimensions={{ width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide }}
                     presentation={phone ? 'sheet' : 'card'}
                     onClose={noop}
                 >
@@ -106,7 +128,7 @@ function FrameBody(props: Readonly<{ frame: Frame }>) {
                     leading={<AccountServiceMark url={service.discovery?.endpointUrl ?? service.entry.endpoint.url} size={36} />}
                     title={t('homesJourneys.serviceAsHomeTitle', { service: service.name })}
                     subtitle={t(phone ? 'homesJourneys.phone.serviceAsHomeLead' : 'homesJourneys.serviceAsHomeLead', { service: service.name })}
-                    dimensions={{ width: 560 }}
+                    dimensions={{ width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide }}
                     presentation={phone ? 'sheet' : 'card'}
                     onClose={noop}
                 >
@@ -125,19 +147,135 @@ function FrameBody(props: Readonly<{ frame: Frame }>) {
                     onDismiss={noop}
                 />
             );
+        case 'continuation-choose':
+        case 'continuation-retry':
+        case 'continuation-refresh':
+        case 'continuation-stop-waiting':
+        case 'continuation-relink':
+        case 'continuation-open':
+            return <AccountServiceContinuationSpecimen frame={props.frame} discovery={service.discovery} />;
     }
+}
+
+const inertController = new AbortController();
+inertController.abort();
+const INERT_FIXTURE_SIGNAL = inertController.signal;
+const FIXTURE_CREDENTIAL_TOKEN_DIGEST = 'fixture-account-credential-binding';
+
+function createFixtureHome(
+    homeServerIdentityId: string,
+    label: string,
+    canonicalServerUrl: string,
+    preferred: boolean,
+): AccountDirectoryHomeEntryV1 {
+    return {
+        v: 1,
+        homeServerIdentityId,
+        canonicalServerUrl,
+        label,
+        preferred,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        connectionDescriptor: {
+            v: 1,
+            homeServerIdentityId,
+            canonicalServerUrl,
+            revision: 1,
+            endpoints: [{ kind: 'https', url: canonicalServerUrl }],
+        },
+    };
+}
+
+function createContinuationResult(
+    frame: ContinuationFrame,
+    openHomeServerIdentityId: string,
+): AccountPostAuthResult {
+    switch (frame) {
+        case 'continuation-choose':
+            return { kind: 'choose_home', homes: [
+                createFixtureHome('fixture-studio-home', 'Studio Home', 'https://studio-home.invalid', true),
+                createFixtureHome('fixture-travel-home', 'Travel Home', 'https://travel-home.invalid', false),
+            ] };
+        case 'continuation-retry':
+            return { kind: 'failure', stage: 'refresh', code: { source: 'directory', code: 'account-disabled' },
+                recovery: 'retry_stage', accountCredentialCommitted: true, homeCredentialCommitted: false };
+        case 'continuation-refresh':
+            return { kind: 'account_connected_no_homes' };
+        case 'continuation-stop-waiting':
+            return { kind: 'approval_required', homeServerIdentityId: 'fixture-awaiting-home', expiresAtMs: Date.now() + 300_000 };
+        case 'continuation-relink':
+            return { kind: 'failure', stage: 'link', code: { source: 'local', code: 'link_failed' },
+                recovery: 'relink_home', accountCredentialCommitted: true, homeCredentialCommitted: false,
+                targetHomeServerIdentityId: 'fixture-relink-home' };
+        case 'continuation-open':
+            return { kind: 'home_enrolled', homeServerIdentityId: openHomeServerIdentityId };
+    }
+}
+
+/**
+ * Authenticated C16 fixture. It uses the device's existing journey-service discovery and injects
+ * only the real card's result props while borrowing every Account, approval and current-context
+ * provider from the signed-in app shell. Mutating operations retain an already-aborted signal, so
+ * an approved request settles before it can reach Account/Home state. Stop-waiting remains live:
+ * without a matching pending enrollment it changes only this card.
+ */
+function AccountServiceContinuationSpecimen(props: Readonly<{
+    frame: ContinuationFrame;
+    discovery: AccountDirectoryAuthMethodDiscovery | null;
+}>) {
+    const generation = useServerProfilesGeneration();
+    const activeHome = useActiveServerSnapshot();
+    const profile = React.useMemo(() => listServerProfiles().find(
+        (candidate) => resolveServerProfileScopeId(candidate) === activeHome.serverId,
+    ) ?? null, [activeHome.serverId, generation]);
+    const openHomeServerIdentityId = profile?.serverIdentityId ?? null;
+    const session = React.useMemo(() => props.discovery ? new AccountDirectorySession({
+        endpoint: props.discovery.endpointUrl,
+        serverIdentityId: props.discovery.serverIdentityId,
+    }, { capability: props.discovery.capability }) : null, [
+        props.discovery?.endpointUrl,
+        props.discovery?.serverIdentityId,
+        props.discovery?.capability,
+    ]);
+    const initialResult = React.useMemo(() => openHomeServerIdentityId
+        ? createContinuationResult(props.frame, openHomeServerIdentityId)
+        : null, [openHomeServerIdentityId, props.frame]);
+    const [result, setResult] = React.useState<AccountPostAuthResult | null>(initialResult);
+    React.useEffect(() => setResult(initialResult), [initialResult]);
+    const input = React.useMemo<AccountPostAuthInput | null>(() => props.discovery && session && openHomeServerIdentityId ? {
+        service: props.discovery,
+        session,
+        credentialTokenDigest: FIXTURE_CREDENTIAL_TOKEN_DIGEST,
+        intent: props.frame === 'continuation-refresh' || props.frame === 'continuation-retry' || props.frame === 'continuation-choose'
+            ? { kind: 'enter', target: { kind: 'automatic' } }
+            : { kind: 'enroll', homeServerIdentityId: openHomeServerIdentityId },
+        ...(props.frame === 'continuation-stop-waiting' ? {} : { signal: INERT_FIXTURE_SIGNAL }),
+    } : null, [openHomeServerIdentityId, props.discovery, props.frame, session]);
+    if (!input || !result) {
+        return <Text style={styles.caption}>The signed-in Account Service and current Home are required for this frame.</Text>;
+    }
+    return (
+        <PluginSurfaceFocusEligibilityProvider active currentUiContextActive>
+            <AccountServiceContinuation
+                input={input}
+                result={result}
+                onResult={(next) => { setResult(next); }}
+                onBack={noop}
+            />
+        </PluginSurfaceFocusEligibilityProvider>
+    );
 }
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.base },
-    content: { padding: 24, gap: 28, maxWidth: 1048, width: '100%', alignSelf: 'center' },
+    content: { padding: theme.space.s24, gap: 28, maxWidth: 1048, width: '100%', alignSelf: 'center' },
     // Home's column (lab: the S1 page column, 1000 px).
-    block: { gap: 12 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.secondary },
-    tiles: { flexDirection: 'row', gap: 10 },
+    block: { gap: theme.space.s12 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary },
+    tiles: { flexDirection: 'row', gap: theme.space.s10 },
     span2: { flex: 2, minWidth: 0 },
     span1: { flex: 1 },
-    phoneDoorway: { width: 358, maxWidth: '100%', alignSelf: 'center', gap: 12 },
+    phoneDoorway: { width: 358, maxWidth: '100%', alignSelf: 'center', gap: theme.space.s12 },
     panelFrame: {
         overflow: 'hidden',
         borderRadius: 16,
@@ -153,6 +291,6 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
 }));

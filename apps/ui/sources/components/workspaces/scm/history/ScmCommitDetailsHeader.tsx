@@ -54,9 +54,9 @@ export const ScmCommitDetailsHeader = React.memo(function ScmCommitDetailsHeader
             titleTextStyle={{ fontSize: 17, lineHeight: 22 }}
             leading={<Icon name="git-commit" size={20} color={theme.colors.text.secondary} />}
             metaLeading={entry?.authorName ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}>
                     <Avatar id={entry.authorEmail || entry.authorName} size={16} />
-                    <Text style={{ color: theme.colors.text.primary, fontSize: 12, ...Typography.default('semiBold') }}>{entry.authorName}</Text>
+                    <Text style={{ color: theme.colors.text.primary, ...Typography.variant('meta', 'semiBold'),  }}>{entry.authorName}</Text>
                 </View>
             ) : undefined}
             meta={meta}

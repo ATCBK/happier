@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod/mini';
+import { actionInputFieldAcceptsNull, unwrapActionInputSchema } from './actionInputSchemaPath.js';
 import { updatePersonalProjectContextV1 } from '../projects/projectContextV1.js';
 import type { ProjectAccountOrganizationV1 } from '../projects/projectAccountRowsV1.js';
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
@@ -36,6 +38,9 @@ import { SPAWN_SESSION_ERROR_CODES } from '../sessions/spawnSession.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
 import { ExecutionRunLaunchOriginSchema } from '../execution/runs/startRequest.js';
 import { getUsageQueryKey, normalizeUsageQuery } from '../inputs/usageQuery.js';
+import { readUsagePeriodOptions } from '../inputs/usageQuery.js';
+import { createWorkflowDefinitionActions } from './executor/workflowDefinitions.js';
+import { WorkflowActionInputSchemasV1 } from '../workflows/actionsV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
@@ -262,6 +267,17 @@ const inventoryAgentStartContext = {
 } satisfies AgentStartContextV1;
 
 describe('createActionExecutor (inventory/discovery)', () => {
+  it('reads optional, defaulted and piped Mini fields and nullable array alternatives through canonical discovery', () => {
+    const value = z.string();
+    const field = z.pipe(z.optional(z._default(z.nullable(value), 'fallback')), z.transform(v => v));
+    expect(unwrapActionInputSchema(field)).toEqual({ schema: value, optional: true, nullable: true });
+    const spec = { inputSchema: z.strictObject({ field, rows: z.array(z.union([
+      z.strictObject({ value }), z.strictObject({ value: z.nullable(value) }),
+    ])) }) };
+    expect(actionInputFieldAcceptsNull(spec, 'field')).toBe(true);
+    expect(actionInputFieldAcceptsNull(spec, 'rows.[].value')).toBe(true);
+    expect(actionInputFieldAcceptsNull(spec, 'rows.[].missing')).toBe(false);
+  });
   it('discovers Usage own-value choices on Home from accounting and retains chosen values without page slots', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
     const usageActions: NonNullable<ActionExecutorDeps['usageActions']> = { query: async ({ queries }) => ({ v: 1, results: queries.map(query => ({ key: getUsageQueryKey(query), requestedQuery: query, shownQuery: query,
@@ -318,9 +334,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
       surface: { ...surface, accountId: 'other' } } }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     expect(await executor.execute('action.options.resolve', request, { serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
   });
-  it('discovers every Home machine including offline choices through the typed widget input', async () => {
+  it('discovers every Home machine including offline choices, available ones first, through the typed widget input', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
-    const machines = Array.from({ length: 251 }, (_, index) => ({ serverId: 'home', machineId: `m-${index}`, label: `Machine ${index}`, active: index !== 250 }));
+    const machines = Array.from({ length: 251 }, (_, index) => ({ serverId: 'home', machineId: `m-${index}`, label: `Machine ${index}`, active: index !== 0 }));
     const executor = createActionExecutor({ ...createDeps(), machinesList: async () => ({ items: machines }),
       widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
     const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
@@ -329,8 +345,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
     if (!result.ok) return;
     const options = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options;
     expect(options).toHaveLength(251);
-    expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Online' });
-    expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-250' }, label: 'Machine 250', description: 'Offline' });
+    // A machine that can answer now leads; the offline ones follow in their listed order.
+    expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-1' }, label: 'Machine 1', description: 'Online' });
+    expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Offline' });
   });
   it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
@@ -463,6 +480,33 @@ describe('createActionExecutor (inventory/discovery)', () => {
         .resolves.toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
     }
     expect(reads).toHaveLength(4);
+  });
+  it('discovers type-only Workflow Period choices through the same owner as an explicit Action source, including a saved range', async () => {
+    const workflow = 'plugin:com.acme.inputs/period';
+    const definitions = createWorkflowDefinitionActions({
+      readPluginWorkflows: () => [{ workflow, pluginId: 'com.acme.inputs', version: '1.0.0', title: 'Period',
+        definition: { version: 1, inputs: [{ name: 'period', valueType: 'json', required: true,
+          inputType: { hostType: 'usageQuery', field: 'period' } }], defaults: {},
+          blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] }, result: { kind: 'text' } }] } }],
+      artifactStore: { list: async () => ({ items: [] }), read: async () => null,
+        create: async () => { throw new Error('Discovery cannot write'); },
+        update: async () => { throw new Error('Discovery cannot write'); },
+        delete: async () => { throw new Error('Discovery cannot write'); } },
+      readWorkflowTriggerSummaries: async () => new Map(), encodeListCursor: row => row.artifactId,
+      assertDefinitionWriteAllowed: () => { throw new Error('Discovery cannot write'); },
+    });
+    const executor = createActionExecutor({ ...createDeps(), workflowAction: async args => {
+      if (args.actionId !== 'workflow.definition.list') throw new Error('Discovery only lists admitted Workflows');
+      return definitions.list(WorkflowActionInputSchemasV1['workflow.definition.list'].parse(args.input));
+    } });
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const period of [undefined, { startMs: 100, endMs: 200 }]) {
+      const explicit = await executor.execute('action.options.resolve', { optionsSourceId: 'usage.query.period', draftInput: { period } }, context);
+      const typed = await executor.execute('action.options.resolve', { consumer: { kind: 'workflow', workflow }, fieldPath: 'period',
+        draftInput: { period } }, context);
+      expect(explicit).toMatchObject({ ok: true, result: { options: readUsagePeriodOptions(period) } });
+      expect(typed, JSON.stringify(typed)).toMatchObject({ ok: true, result: { options: readUsagePeriodOptions(period) } });
+    }
   });
   it('resolves the Workflow-admitted notification source through headless Action discovery', async () => {
     const executor = createActionExecutor({ ...createDeps(), notificationChannelsList: async () => ({

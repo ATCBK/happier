@@ -1,7 +1,4 @@
-import type {
-    SessionDiscussionErrorCodeV1,
-    SESSION_DISCUSSION_NOT_TRACKED_CODE_V1,
-} from "@happier-dev/protocol";
+import type { SessionDiscussionErrorCodeV1, SESSION_DISCUSSION_NOT_TRACKED_CODE_V1 } from '@happier-dev/protocol/sessions/discussions/api';
 
 export type SessionDiscussionFailureCode =
     | SessionDiscussionErrorCodeV1

@@ -1,29 +1,29 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const PendingQueueWakeUnavailableV1Schema = lazyZodSchema(() => z.object({
+export const PendingQueueWakeUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   error: z.literal('pending_materialization_wake_unavailable'),
   errorCode: z.literal('runtime_upgrade_required'),
-}).strict());
+}));
 
-export const SessionPendingQueueLegacyMaterializeDeferredResponseV0Schema = lazyZodSchema(() => z.object({
+export const SessionPendingQueueLegacyMaterializeDeferredResponseV0Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   didMaterialize: z.literal(false),
-  result: z.object({ type: z.literal('deferred'), reason: z.literal('runtime_upgrade_required') }).strict(),
-}).strict());
-export const SessionPendingQueueWakeCapabilityRequestV1Schema = lazyZodSchema(() => z.object({}).strict());
+  result: z.strictObject({ type: z.literal('deferred'), reason: z.literal('runtime_upgrade_required') }),
+}));
+export const SessionPendingQueueWakeCapabilityRequestV1Schema = lazyZodSchema(() => z.strictObject({}));
 export const SessionPendingQueueWakeCapabilityResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true), capability: z.literal('pending_queue_wake_v1'), protocolVersion: z.literal(1),
     method: z.literal('session.pendingQueue.wake.v1'),
-  }).strict(),
+  }),
   PendingQueueWakeUnavailableV1Schema,
 ]));
-export const SessionPendingQueueWakeRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingQueueWakeRequestV1Schema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(1),
-}).strict());
+}));
 export const SessionPendingQueueWakeResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), result: z.literal('wake_published') }).strict(),
+  z.strictObject({ ok: z.literal(true), result: z.literal('wake_published') }),
   PendingQueueWakeUnavailableV1Schema,
 ]));

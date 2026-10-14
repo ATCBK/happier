@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
     buildQualifiedPluginContributionKey,
@@ -25,11 +25,7 @@ export type ConnectedServiceId = z.infer<typeof ConnectedServiceIdSchema>;
 
 /** Exact qualified identity key for a current Connected Account service. */
 export const ConnectedAccountServiceKeySchema = lazyZodSchema(() => z
-    .string()
-    .refine(
-        (value) => parseQualifiedPluginContributionKey(value) !== null,
-        'Invalid qualified Connected Account service key',
-    ));
+    .string().check(z.refine((value) => parseQualifiedPluginContributionKey(value) !== null, 'Invalid qualified Connected Account service key')));
 
 export type ConnectedAccountServiceKey = z.infer<typeof ConnectedAccountServiceKeySchema>;
 
@@ -41,61 +37,46 @@ export type ConnectedAccountServiceKey = z.infer<typeof ConnectedAccountServiceK
  * non-canonical, or unknown scalar ids — are rejected with a typed issue.
  * Current writers emit canonical qualified keys only.
  */
-export const ConnectedAccountServiceKeyIngressSchema = lazyZodSchema(() => z
-    .string()
-    .transform((value, context) => {
+export const ConnectedAccountServiceKeyIngressSchema = lazyZodSchema(() => z.pipe(z
+    .string(), z.transform((value, context) => {
         const canonical = readBuiltInLegacyConnectedAccountServiceKeyIngress(value);
         if (!canonical) {
-            context.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: 'Invalid Connected Account service key',
-            });
+            context.issues.push({
+                code: "custom",
+                message: 'Invalid Connected Account service key', input: context.value });
             return z.NEVER;
         }
         return canonical;
-    }));
+    })));
 
 export type ConnectedAccountServiceKeyIngress = z.infer<typeof ConnectedAccountServiceKeyIngressSchema>;
 
 export const ConnectedServiceProfileIdSchema = lazyZodSchema(() => z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/, 'Invalid profile id'));
+    .string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/, 'Invalid profile id')));
 
 export type ConnectedServiceProfileId = z.infer<typeof ConnectedServiceProfileIdSchema>;
 
 export const ConnectedServiceAuthGroupIdSchema = lazyZodSchema(() => z
-    .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/, 'Invalid connected service account group id'));
+    .string().check(z.trim(), z.minLength(1), z.maxLength(64), z.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/, 'Invalid connected service account group id')));
 
 export type ConnectedServiceAuthGroupId = z.infer<typeof ConnectedServiceAuthGroupIdSchema>;
 
-const ConnectedServiceNativeBindingV1Schema = lazyZodSchema(() => z
-    .object({
+const ConnectedServiceNativeBindingV1Schema = lazyZodSchema(() => z.looseObject({
         source: z.literal('native'),
-    })
-    .passthrough());
+    }));
 
-const ConnectedServiceProfileBindingV1Schema = lazyZodSchema(() => z
-    .object({
+const ConnectedServiceProfileBindingV1Schema = lazyZodSchema(() => z.looseObject({
         source: z.literal('connected'),
-        selection: z.literal('profile').optional().default('profile'),
+        selection: z._default(z.optional(z.literal('profile')), 'profile'),
         profileId: ConnectedServiceProfileIdSchema,
-    })
-    .passthrough());
+    }));
 
-const ConnectedServiceGroupBindingV1Schema = lazyZodSchema(() => z
-    .object({
+const ConnectedServiceGroupBindingV1Schema = lazyZodSchema(() => z.looseObject({
         source: z.literal('connected'),
         selection: z.literal('group'),
         groupId: ConnectedServiceAuthGroupIdSchema,
-        profileId: ConnectedServiceProfileIdSchema.optional(),
-    })
-    .passthrough());
+        profileId: z.optional(ConnectedServiceProfileIdSchema),
+    }));
 
 export const ConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.union([
     ConnectedServiceNativeBindingV1Schema,
@@ -105,19 +86,19 @@ export const ConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.un
 
 export type ConnectedServiceBindingSelectionV1 = z.infer<typeof ConnectedServiceBindingSelectionV1Schema>;
 
-export const TeamResourceBrokeredConnectedServiceSelectionV2Schema = lazyZodSchema(() => z.object({
+export const TeamResourceBrokeredConnectedServiceSelectionV2Schema = lazyZodSchema(() => z.strictObject({
     source: z.literal('team_resource'),
-    resourceId: z.string().trim().min(1).max(256),
+    resourceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     deliveryMode: z.literal('brokered'),
-    disclosedMember: z.never().optional(),
-}).strict());
+    disclosedMember: z.optional(z.never()),
+}));
 
-export const TeamResourceDirectConnectedServiceSelectionV2Schema = lazyZodSchema(() => z.object({
+export const TeamResourceDirectConnectedServiceSelectionV2Schema = lazyZodSchema(() => z.strictObject({
     source: z.literal('team_resource'),
-    resourceId: z.string().trim().min(1).max(256),
+    resourceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     deliveryMode: z.literal('direct'),
     disclosedMember: asProtocolZod(QualifiedConnectedAccountRefSchema),
-}).strict());
+}));
 
 /**
  * Session-owned Team resource selection. Brokered selection carries only the
@@ -134,9 +115,9 @@ export type TeamResourceConnectedServiceSelectionV2 = z.infer<
 >;
 
 export const ConnectedServiceBindingSelectionV2Schema = lazyZodSchema(() => z.union([
-    ConnectedServiceNativeBindingV1Schema.strict(),
-    ConnectedServiceGroupBindingV1Schema.strict(),
-    ConnectedServiceProfileBindingV1Schema.strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceNativeBindingV1Schema),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceGroupBindingV1Schema),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceProfileBindingV1Schema),
     TeamResourceConnectedServiceSelectionV2Schema,
 ]));
 
@@ -145,30 +126,29 @@ export type ConnectedServiceBindingSelectionV2 = z.infer<
 >;
 
 const ConnectedServiceBindingsByServiceIdV2Schema = lazyZodSchema(() => z
-    .record(z.string(), ConnectedServiceBindingSelectionV2Schema)
-    .superRefine((bindings, ctx) => {
+    .record(z.string(), ConnectedServiceBindingSelectionV2Schema).check(z.superRefine((bindings, ctx) => {
         for (const serviceId of Object.keys(bindings)) {
             if (!ConnectedAccountServiceKeySchema.safeParse(serviceId).success) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: 'Invalid qualified Connected Account service key',
                     path: [serviceId],
                 });
             }
         }
-    }));
+    })));
 
-export const ConnectedServiceBindingsV2Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceBindingsV2Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(2),
-    bindingsByServiceId: ConnectedServiceBindingsByServiceIdV2Schema.default({}),
-}).strict());
+    bindingsByServiceId: z._default(ConnectedServiceBindingsByServiceIdV2Schema, {}),
+}));
 
 export type ConnectedServiceBindingsV2 = z.infer<typeof ConnectedServiceBindingsV2Schema>;
 
 export const PersistedConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.union([
-    ConnectedServiceNativeBindingV1Schema.strict(),
-    ConnectedServiceProfileBindingV1Schema.strict(),
-    ConnectedServiceGroupBindingV1Schema.strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceNativeBindingV1Schema),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceProfileBindingV1Schema),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceGroupBindingV1Schema),
 ]));
 
 export type PersistedConnectedServiceBindingSelectionV1 = z.infer<
@@ -176,25 +156,22 @@ export type PersistedConnectedServiceBindingSelectionV1 = z.infer<
 >;
 
 const ConnectedServiceBindingsByServiceIdV1Schema = lazyZodSchema(() => z
-    .record(z.string(), ConnectedServiceBindingSelectionV1Schema)
-    .superRefine((bindings, ctx) => {
+    .record(z.string(), ConnectedServiceBindingSelectionV1Schema).check(z.superRefine((bindings, ctx) => {
         for (const serviceId of Object.keys(bindings)) {
             if (!ConnectedAccountServiceKeySchema.safeParse(serviceId).success) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: 'Invalid qualified Connected Account service key',
                     path: [serviceId],
                 });
             }
         }
-    }));
+    })));
 
-export const ConnectedServiceBindingsV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceBindingsV1Schema = lazyZodSchema(() => z.strictObject({
         v: z.literal(1),
-        bindingsByServiceId: ConnectedServiceBindingsByServiceIdV1Schema.default({}),
-    })
-    .strict());
+        bindingsByServiceId: z._default(ConnectedServiceBindingsByServiceIdV1Schema, {}),
+    }));
 
 export type ConnectedServiceBindingsV1 = z.infer<typeof ConnectedServiceBindingsV1Schema>;
 
@@ -250,19 +227,16 @@ export function readBuiltInLegacyConnectedAccountServiceKeyIngress(
  * those historical bindings; all current schemas and writers use qualified
  * keys and arbitrary bare local ids remain invalid.
  */
-export const BuiltInLegacyConnectedServiceBindingsV1IngressSchema = lazyZodSchema(() => z
-    .object({
+export const BuiltInLegacyConnectedServiceBindingsV1IngressSchema = lazyZodSchema(() => z.pipe(z.strictObject({
         v: z.literal(1),
         bindingsByServiceId: z.record(z.string(), PersistedConnectedServiceBindingSelectionV1Schema),
-    })
-    .strict()
-    .superRefine((value, context) => {
+    }).check(z.superRefine((value, context) => {
         const canonicalKeys = new Set<string>();
         for (const serviceId of Object.keys(value.bindingsByServiceId)) {
             const canonicalKey = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
             if (!canonicalKey) {
                 context.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: 'Unknown bundled legacy Connected Account service id',
                     path: ['bindingsByServiceId', serviceId],
                 });
@@ -270,15 +244,14 @@ export const BuiltInLegacyConnectedServiceBindingsV1IngressSchema = lazyZodSchem
             }
             if (canonicalKeys.has(canonicalKey)) {
                 context.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: 'Duplicate canonical Connected Account service binding',
                     path: ['bindingsByServiceId', serviceId],
                 });
             }
             canonicalKeys.add(canonicalKey);
         }
-    })
-    .transform((value) => ConnectedServiceBindingsV1Schema.parse({
+    })), z.transform((value) => ConnectedServiceBindingsV1Schema.parse({
         v: 1,
         bindingsByServiceId: Object.fromEntries(
             Object.entries(value.bindingsByServiceId).map(([serviceId, binding]) => {
@@ -287,26 +260,24 @@ export const BuiltInLegacyConnectedServiceBindingsV1IngressSchema = lazyZodSchem
                 return [canonicalKey, binding];
             }),
         ),
-    })));
+    }))));
 
-export const PersistedConnectedServiceBindingsV1Schema = lazyZodSchema(() => z
-    .object({
+export const PersistedConnectedServiceBindingsV1Schema = lazyZodSchema(() => z.strictObject({
         v: z.literal(1),
         bindingsByServiceId: z.record(
             z.string(),
             PersistedConnectedServiceBindingSelectionV1Schema,
-        ).superRefine((bindings, ctx) => {
+        ).check(z.superRefine((bindings, ctx) => {
             for (const serviceId of Object.keys(bindings)) {
                 if (ConnectedAccountServiceKeySchema.safeParse(serviceId).success) continue;
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: 'Invalid qualified Connected Account service key',
                     path: [serviceId],
                 });
             }
-        }),
-    })
-    .strict());
+        })),
+    }));
 
 export type PersistedConnectedServiceBindingsV1 = z.infer<
     typeof PersistedConnectedServiceBindingsV1Schema
@@ -314,14 +285,14 @@ export type PersistedConnectedServiceBindingsV1 = z.infer<
 
 export const ConnectedServiceBindingsV2IngressSchema = lazyZodSchema(() => z.union([
     ConnectedServiceBindingsV2Schema,
-    PersistedConnectedServiceBindingsV1Schema.transform((value) =>
+    z.pipe(PersistedConnectedServiceBindingsV1Schema, z.transform((value) =>
         ConnectedServiceBindingsV2Schema.parse({
             v: 2,
             bindingsByServiceId: value.bindingsByServiceId,
-        })),
-    BuiltInLegacyConnectedServiceBindingsV1IngressSchema.transform((value) =>
+        }))),
+    z.pipe(BuiltInLegacyConnectedServiceBindingsV1IngressSchema, z.transform((value) =>
         ConnectedServiceBindingsV2Schema.parse({
             v: 2,
             bindingsByServiceId: value.bindingsByServiceId,
-        })),
+        }))),
 ]));

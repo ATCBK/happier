@@ -102,6 +102,18 @@ the owner compares the complete state with its sealed transaction. The PKCE
 verifier never enters the completion request. These are development-source
 contracts, not released or loaded-runtime certification.
 
+MCP sign-in uses the host service `happier/mcp-sign-in` and the same attempt
+owner. Its stable client metadata URL is
+`https://app.happier.dev/oauth/mcp/client-metadata.json`, with callback
+`https://app.happier.dev/oauth/mcp/callback`. The app callback controller removes
+code/state from the browser URL before handoff, forwards only to its pinned
+origin, or completes through an admitted same-Account Machine. The full callback
+URL is retained for the paste fallback when no answering app/attempt owner is
+available. Registration attempts client metadata first and dynamic registration
+second; paste is completion of an existing attempt, not a registration bypass.
+Production publication and installed-app return remain release checks. See
+[plugin authentication ownership](plugin-platform.md#public-seam-and-authority).
+
 An authentication `read` may request `waitForProviderStart: true` to await the
 existing background begin operation; ordinary reads remain nonblocking. This
 does not poll or create another deadline. Cancellation and owner disposal

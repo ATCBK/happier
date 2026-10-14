@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View, Pressable } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -9,12 +10,12 @@ export function FriendsGateCentered(props: { title: string; body?: string; child
     const { theme } = useUnistyles();
 
     return (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-            <Text style={{ fontSize: 20, fontWeight: '600', marginBottom: 8, color: theme.colors.text.primary }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: theme.space.s24 }}>
+            <Text style={{ ...Typography.variant('title'),  marginBottom: theme.space.s8, color: theme.colors.text.primary }}>
                 {props.title}
             </Text>
             {props.body ? (
-                <Text style={{ textAlign: 'center', marginBottom: 16, color: theme.colors.text.secondary }}>
+                <Text style={{ textAlign: 'center', marginBottom: theme.space.s16, color: theme.colors.text.secondary }}>
                     {props.body}
                 </Text>
             ) : null}
@@ -45,8 +46,8 @@ export function FriendsProviderConnectControls(props: {
                 onPress={props.onConnect}
                 disabled={props.connecting === true || props.connectDisabled === true}
                 style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 12,
+                    paddingHorizontal: theme.space.s16,
+                    paddingVertical: theme.space.s12,
                     borderRadius: 10,
                     backgroundColor: props.connectButtonColor ?? theme.colors.button.primary.background,
                     minWidth: 180,
@@ -69,8 +70,8 @@ export function FriendsProviderConnectControls(props: {
                 accessibilityLabel={props.notAvailableLabel}
                 onPress={() => setShowHint((v) => !v)}
                 style={{
-                    paddingVertical: 8,
-                    paddingHorizontal: 12,
+                    paddingVertical: theme.space.s8,
+                    paddingHorizontal: theme.space.s12,
                     marginTop: props.notAvailableMarginTop ?? 0,
                 }}
             >
@@ -80,7 +81,7 @@ export function FriendsProviderConnectControls(props: {
             </Pressable>
 
             {showHint && props.unavailableReason ? (
-                <Text style={{ textAlign: 'center', marginTop: 8, color: theme.colors.text.secondary }}>
+                <Text style={{ textAlign: 'center', marginTop: theme.space.s8, color: theme.colors.text.secondary }}>
                     {props.unavailableReason}
                 </Text>
             ) : null}

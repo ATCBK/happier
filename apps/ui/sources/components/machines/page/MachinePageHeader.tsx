@@ -54,6 +54,7 @@ import { formatMachineBytes, resolveMachineCoreCount } from '@/components/machin
 import type { MachineVitalsHostFactsV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 import { machineHeaderOriginKey, takeMachineHeaderOrigin } from './machineHeaderOrigin';
 import type { MachinePageTarget } from './useMachinePageTarget';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 const styles = StyleSheet.create(() => ({
     actions: {
@@ -359,7 +360,7 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
                 testID: 'machine-replacement-picker-modal',
                 scrollHost: 'body',
                 bodyScroll: 'auto',
-                dimensions: { width: 520, maxHeightRatio: 0.86, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'md' },
             },
             closeOnBackdrop: true,
         });

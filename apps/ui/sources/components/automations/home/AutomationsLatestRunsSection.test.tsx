@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutomationDefinitionListItemSchema, AutomationV3RunListItemSchema } from '@happier-dev/protocol';
@@ -256,6 +257,25 @@ describe('Automations · Latest runs on Home', () => {
         // Nothing has run: that is known now, so no skeleton stands in for it.
         expect(screen.findByTestId('home-automations.loading')).toBeNull();
         expect(screen.findByTestId('home-automations.empty')).toBeTruthy();
+    });
+
+    it('reserves room for the Runs it has, not for rows that will never come', async () => {
+        const reservedHeight = (screen: Awaited<ReturnType<typeof renderSection>>, rowTestId: string) => {
+            for (let node = screen.findByTestId(rowTestId)?.parent ?? null; node; node = node.parent) {
+                const minHeight = StyleSheet.flatten(node.props?.style)?.minHeight;
+                if (typeof minHeight === 'number') return minHeight;
+            }
+            return null;
+        };
+        server.automations = [automation('deps', 'Nightly deps', 1_000)];
+        server.runsByAutomationId = { deps: [run('d1', 'deps', 1_000, 'failed')] };
+        const oneRun = reservedHeight(await renderSection(), 'home-automations.run.d1');
+        standardCleanup();
+
+        serveTwoAutomations();
+        const threeRuns = reservedHeight(await renderSection(), 'home-automations.run.t2');
+        expect(oneRun).not.toBeNull();
+        expect(threeRuns).toBe(oneRun! * 3);
     });
 
     it('offers Try again when the first read fails, and recovers in place', async () => {

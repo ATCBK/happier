@@ -1,8 +1,5 @@
-import {
-    type AccountEncryptionMigrateAuthoringMemoryDirective,
-    type AuthoringMemoryContentV1,
-    type AuthoringMemoryRowV1,
-} from "@happier-dev/protocol";
+import { type AccountEncryptionMigrateAuthoringMemoryDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import { type AuthoringMemoryContentV1, type AuthoringMemoryRowV1 } from '@happier-dev/protocol/account/authoringMemory';
 import type { Tx } from "@/storage/inTx";
 
 import { AUTHORING_MEMORY_ACCOUNT_KV_PREFIX, buildAuthoringMemoryPhysicalKey, parseAuthoringMemoryPhysicalKey } from "./accountScopedKv";

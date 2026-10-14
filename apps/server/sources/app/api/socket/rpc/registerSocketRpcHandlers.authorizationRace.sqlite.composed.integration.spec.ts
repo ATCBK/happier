@@ -12,7 +12,7 @@ import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { createAuthenticatedFakeSocket, triggerSocketHandler } from "../../testkit/socketHarness";
+import { createAuthenticatedFakeSocket, createFakeSocket, triggerSocketHandler } from "../../testkit/socketHarness";
 import { registerSocketRpcHandlers } from "./registerSocketRpcHandlers";
 import { dispatchMachineAccessLossCustody } from '@/app/machines/machineAccessCustody';
 import { removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
@@ -26,6 +26,8 @@ import { createActionOperationStore } from '../../../../../../cli/src/daemon/act
 import { createActionOperationRunner } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationRpcHandlers } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRpcHandlers';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { createTestGitRpcManager } from '../../../../../../cli/src/scm/rpc/__tests__/testRpcHarness';
+import { ScmBranchListResponseSchema } from '@happier-dev/protocol/scm';
 
 // These fake transport peers advertise the same declaration as current clients;
 // Plain Machine routing must retain its real compatibility admission underneath.
@@ -54,6 +56,41 @@ describe("Session RPC final access admission on SQLite", () => {
     }, 120_000);
     beforeEach(() => harness.resetEnv());
     afterAll(async () => { if (harness) await harness.close(); });
+
+    it('retains exact Work Session proof from Home admission through the real SCM ingress', async () => {
+        const owner = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
+        const machineId = `machine-${randomUUID()}`;
+        await db.machine.create({ data: { id: machineId, accountId: owner.id, metadata: "{}" } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}" } });
+        const stranger = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
+        const foreign = await db.session.create({ data: { accountId: stranger.id, tag: randomUUID(), metadata: "{}" } });
+        // No repository: an admitted read reaches NOT_REPOSITORY. Lost proof instead
+        // fails INVALID_REQUEST before the backend. Both internal owners remain real.
+        const scm = createTestGitRpcManager({ workingDirectory: harness.baseDir });
+        const request = { cwd: harness.baseDir, workEvidence: { sessionId: session.id } };
+        const effect = vi.fn(async (_event: string, forwarded: SocketRpcRequestPayload) =>
+            scm.call(RPC_METHODS.SCM_BRANCH_LIST, request, forwarded.authorization));
+        const method = `${machineId}:${RPC_METHODS.SCM_BRANCH_LIST}`;
+        const target = { id: "work-daemon", data: { clientType: "machine-scoped", machineId },
+            timeout: () => ({ emitWithAck: effect }) };
+        // Socket.IO is the transport boundary; SQLite authorization, server stamp,
+        // encrypted CLI codec, registration and SCM scope admission execute in process.
+        const io = { in: () => ({ timeout: () => ({ fetchSockets: async () => [target] }),
+            fetchSockets: async () => [target] }) } as unknown as Server;
+        const caller = createFakeSocket({ data: { clientType: "user-scoped", authAuthority: "present_user",
+            authTokenAuthenticationEvidence: [] } });
+        registerSocketRpcHandlers({ userId: owner.id, socket: caller as unknown as Socket, io });
+        const callback = vi.fn();
+        await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, params: "sealed-work-request",
+            authorization: { kind: "session.write", sessionId: foreign.id } }, callback);
+        expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN }));
+        expect(effect).not.toHaveBeenCalled();
+        await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, params: "sealed-work-request",
+            authorization: { kind: "session.write", sessionId: session.id } }, callback);
+        expect(callback).toHaveBeenLastCalledWith({ ok: true, result: expect.objectContaining({ success: false, errorCode: 'NOT_REPOSITORY' }) });
+        const result = await effect.mock.results[0]!.value;
+        expect(ScmBranchListResponseSchema.parse(result)).toMatchObject({ success: false, errorCode: 'NOT_REPOSITORY' });
+    });
 
     async function seedDirectEditor() {
         const owner = await db.account.create({

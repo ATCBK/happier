@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -11,30 +11,29 @@ export const USAGE_SOURCE_ACTION_IDS = [
 ] as const;
 export type UsageSourceActionId = typeof USAGE_SOURCE_ACTION_IDS[number];
 export const UsageSourceActionIdSchema = lazyZodSchema(() => z.enum(USAGE_SOURCE_ACTION_IDS));
-const id = lazyZodSchema(() => z.string().trim().min(1));
-const target = lazyZodSchema(() => z.object({ serverId: id, machineId: id }).strict());
-const sourceTarget = lazyZodSchema(() => target.extend({ sourceId: id }).strict());
-export const UsageSourceDateRangeV1Schema = lazyZodSchema(() => z.object({
-  startMs: z.number().finite().nonnegative().optional(), endMs: z.number().finite().nonnegative().optional(),
-}).strict().refine(range => range.startMs === undefined || range.endMs === undefined || range.startMs <= range.endMs,
-  { message: 'Invalid date range' }));
+const id = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const target = lazyZodSchema(() => z.strictObject({ serverId: id, machineId: id }));
+const sourceTarget = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(target, { sourceId: id })));
+export const UsageSourceDateRangeV1Schema = lazyZodSchema(() => z.strictObject({
+  startMs: z.optional(z.number().check(z.nonnegative())), endMs: z.optional(z.number().check(z.nonnegative())),
+}).check(z.refine(range => range.startMs === undefined || range.endMs === undefined || range.startMs <= range.endMs, { message: 'Invalid date range' })));
 export type UsageSourceDateRangeV1 = z.infer<typeof UsageSourceDateRangeV1Schema>;
 
 /** Paths travel only over the admitted Machine transport, never accounting ingest/query or observations. */
-export const UsageSourceV1Schema = lazyZodSchema(() => z.object({
+export const UsageSourceV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: id, machineId: id, sourceId: id,
   agent: asProtocolZod(PluginContributionIdentityV1Schema),
   /** Accounting identity is independent of the opaque root and its client-only display path. */
-  accountingSources: z.array(id).optional(),
-  captureKind: z.literal('from_logs').optional(),
-  externalSessionSource: ExternalSessionsSourceSchema.optional(),
-  root: z.object({ kind: z.enum(['default', 'configured', 'materialized', 'override']), path: id.nullable() }).strict(),
+  accountingSources: z.optional(z.array(id)),
+  captureKind: z.optional(z.literal('from_logs')),
+  externalSessionSource: z.optional(ExternalSessionsSourceSchema),
+  root: z.strictObject({ kind: z.enum(['default', 'configured', 'materialized', 'override']), path: z.nullable(id) }),
   consent: z.enum(['enabled', 'disabled']),
   status: z.enum(['found', 'reading', 'ready', 'stopped', 'unavailable', 'error', 'unsupported']),
   coverage: z.enum(['unknown', 'partial', 'complete', 'unsupported']),
-  pendingCount: z.number().int().nonnegative(), asOfMs: z.number().finite().nonnegative().nullable(),
-  errorCode: id.optional(),
-}).strict());
+  pendingCount: z.number().check(z.int(), z.nonnegative()), asOfMs: z.nullable(z.number().check(z.nonnegative())),
+  errorCode: z.optional(id),
+}));
 export type UsageSourceV1 = z.infer<typeof UsageSourceV1Schema>;
 
 /** Exact accounting selections never match an Agent, capture path, or source-root key. */
@@ -43,23 +42,23 @@ export function matchesUsageSourceAccountingScope(source: Pick<UsageSourceV1, 'a
   return selected.length === 0 || source.captureKind === 'from_logs'
     && selected.some(id => source.accountingSources?.includes(id));
 }
-export const UsageSourcesListV1Schema = lazyZodSchema(() => z.object({ sources: z.array(UsageSourceV1Schema) }).strict());
-export const UsageSourceResultV1Schema = lazyZodSchema(() => z.object({ source: UsageSourceV1Schema }).strict());
-export const UsageSourceDeleteResultV1Schema = lazyZodSchema(() => z.object({
-  success: z.literal(true), deletedEventCount: z.number().int().nonnegative(),
-}).strict());
-export const UsageSourceDismissResultV1Schema = lazyZodSchema(() => z.object({
+export const UsageSourcesListV1Schema = lazyZodSchema(() => z.strictObject({ sources: z.array(UsageSourceV1Schema) }));
+export const UsageSourceResultV1Schema = lazyZodSchema(() => z.strictObject({ source: UsageSourceV1Schema }));
+export const UsageSourceDeleteResultV1Schema = lazyZodSchema(() => z.strictObject({
+  success: z.literal(true), deletedEventCount: z.number().check(z.int(), z.nonnegative()),
+}));
+export const UsageSourceDismissResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['dismissed', 'unavailable']),
-}).strict());
+}));
 
 export const USAGE_SOURCE_ACTION_INPUT_SCHEMAS = {
   'usage.sources.discover': target,
-  'usage.sources.get': lazyZodSchema(() => target.extend({ sourceId: id.optional() }).strict()),
+  'usage.sources.get': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(target, { sourceId: z.optional(id) }))),
   'usage.sources.dismiss': sourceTarget,
-  'usage.sources.consent.set': lazyZodSchema(() => sourceTarget.extend({ enabled: z.boolean() }).strict()),
+  'usage.sources.consent.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(sourceTarget, { enabled: z.boolean() }))),
   'usage.sources.stop': sourceTarget,
-  'usage.sources.root.set': lazyZodSchema(() => sourceTarget.extend({ root: id.nullable() }).strict()),
-  'usage.sources.history.delete': lazyZodSchema(() => sourceTarget.extend({ dateRange: UsageSourceDateRangeV1Schema.optional() }).strict()),
+  'usage.sources.root.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(sourceTarget, { root: z.nullable(id) }))),
+  'usage.sources.history.delete': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(sourceTarget, { dateRange: z.optional(UsageSourceDateRangeV1Schema) }))),
 } as const;
 export const USAGE_SOURCE_ACTION_OUTPUT_SCHEMAS = {
   'usage.sources.discover': UsageSourcesListV1Schema,
@@ -91,9 +90,9 @@ export const USAGE_SOURCE_CONSENT_DISCLOSURE = 'Usage numbers, models, Agents an
 
 /** V1 is a skippable, content-free read invalidation, never a source-state projection. */
 export const USAGE_SOURCES_INVALIDATION_EVENT_V1 = 'usage-sources-invalidated' as const;
-export const UsageSourcesInvalidationV1Schema = lazyZodSchema(() => z.object({
+export const UsageSourcesInvalidationV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal(USAGE_SOURCES_INVALIDATION_EVENT_V1),
   machineId: id,
   installationId: id,
-}).strict());
+}));
 export type UsageSourcesInvalidationV1 = z.infer<typeof UsageSourcesInvalidationV1Schema>;

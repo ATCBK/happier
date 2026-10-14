@@ -94,7 +94,6 @@ export type WalkthroughReading = Readonly<{
     titleEdited?: boolean;
     intro: string | null;
     readingHint: string | null;
-    failureReason: string | null;
     source: Readonly<{
         fileCount: number;
         changeCount: number;
@@ -396,7 +395,6 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         ...(input.provenance ? { titleEdited: input.provenance.titleEdited } : {}),
         intro: value?.intro && value.intro.trim().length > 0 ? value.intro : null,
         readingHint: value?.readingHint ?? null,
-        failureReason: input.walkthrough?.reason ?? null,
         source: {
             fileCount: comparison.inventory.files.length,
             changeCount,
@@ -424,7 +422,6 @@ export const EMPTY_WALKTHROUGH_READING: WalkthroughReading = {
     title: null,
     intro: null,
     readingHint: null,
-    failureReason: null,
     source: { fileCount: 0, changeCount: 0, added: 0, removed: 0, linesKnown: true, unavailableCount: 0, inventoryState: 'complete' },
     analysis: null,
     stops: [],

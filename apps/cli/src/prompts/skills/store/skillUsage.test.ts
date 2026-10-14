@@ -86,23 +86,35 @@ describe('daemon Account skill-use writer', () => {
         await createSkillUsageRecorder({ credentials: f.credentials }).recordSkillUse({ skillIds: ['guide'], account: f.account });
         expect(f.writes).toHaveLength(1);
     });
-    it('drops a rejected write without replaying the observation', async () => {
+    it('drops a rejected observation, releases its in-flight reservation and records a fresh use after recovery', async () => {
         const f = fixture();
         vi.spyOn(Date, 'now').mockReturnValue(100_000_000);
-        vi.mocked(axios.post).mockRejectedValue(new Error('FST_ERR_VALIDATION: params/key'));
+        const post = vi.mocked(axios.post).getMockImplementation()!;
+        const admitted = createDeferred<void>(); const release = createDeferred<void>();
+        vi.mocked(axios.post).mockImplementationOnce(async () => {
+            admitted.resolve(); await release.promise;
+            return { status: 503, data: { error: 'fixture_no_write' } };
+        });
         const recorder = createSkillUsageRecorder({ credentials: f.credentials });
-        await Promise.all([
-            recorder.recordSkillUse({ skillIds: ['guide'], account: f.account }),
-            recorder.recordSkillUse({ skillIds: ['guide'], account: f.account }),
-        ]);
-        await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
-        expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1);
+        const first = recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+        await admitted.promise;
+        try {
+            await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+            expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1);
+        } finally { release.resolve(); await first; }
         expect(f.read()).toEqual({ revision: 1, value: { v: 1, lastUsedAt: {} } });
-        await recorder.recordSkillUse({ skillIds: ['guide', 'second'], account: f.account });
-        expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2);
+        vi.mocked(axios.post).mockImplementation(post);
+        vi.mocked(Date.now).mockReturnValue(100_000_100);
+        await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+        expect(f.read()).toEqual({ revision: 2, value: { v: 1, lastUsedAt: { guide: 100_000_100 } } });
+        // The interval starts at the stored use, not the rejected earlier attempt.
         vi.mocked(Date.now).mockReturnValue(186_400_000);
         await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
-        expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(3);
+        expect(f.writes).toHaveLength(1);
+        vi.mocked(Date.now).mockReturnValue(186_400_100);
+        await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+        expect(f.read().value.lastUsedAt.guide).toBe(186_400_100);
+        expect(f.writes).toHaveLength(2);
     });
     it('cannot write into an Account lifetime retired during storage currentness validation', async () => {
         const f = fixture();

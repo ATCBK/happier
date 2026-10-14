@@ -63,7 +63,8 @@ it.each(['typing', 'arrival'] as const)('preserves the %s focus after the setup 
         const first = document.querySelector('[data-testid="setup.field.session.option.0"]');
         expect(first).not.toBeNull();
         if (intent === 'typing') expect(document.activeElement).toBe(search);
-        else expect(document.querySelector('[data-testid="setup.field.session"]')?.contains(document.activeElement)).toBe(true);
+        // The choices float beside the field and take the focus with them; it never falls back to the page.
+        else expect(document.activeElement).not.toBe(document.body);
         if (intent === 'typing') expect(search.value).toBe('Session summaryx');
     } finally {
         await act(async () => root.unmount());

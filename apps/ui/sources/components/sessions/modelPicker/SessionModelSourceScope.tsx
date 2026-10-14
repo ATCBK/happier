@@ -117,9 +117,9 @@ const styles = StyleSheet.create((theme) => ({
     rowGap: theme.space.s2,
   },
   linkSlot: { flexDirection: 'row', alignItems: 'center' },
-  meta: { ...Typography.rowMeta(), color: theme.colors.text.tertiary },
+  meta: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
   link: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
   },
@@ -132,7 +132,7 @@ const styles = StyleSheet.create((theme) => ({
     marginLeft: -4,
   },
   scopeText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     flexShrink: 1,
   },

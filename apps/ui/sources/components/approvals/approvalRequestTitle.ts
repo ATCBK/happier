@@ -1,5 +1,6 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import { WidgetLayoutFragmentActionIdV1Schema, readWidgetLayoutFragmentApprovalNameV1 } from '@happier-dev/protocol/widgets';
 
 import { t } from '@/text';
 
@@ -16,6 +17,8 @@ export function resolveApprovalRequestTitle(
     storedTitle: string | null | undefined;
     actionId?: string | null;
     qualifiedActionId?: string | null;
+    actionArgs?: unknown;
+    preview?: unknown;
     /** Session ids the request carries; a legacy " — <id>" suffix naming one of them is dropped. */
     sessionIds?: ReadonlyArray<string | null | undefined>;
   }>,
@@ -39,7 +42,9 @@ export function resolveApprovalRequestTitle(
   const isRawId =
     firstLine !== '' &&
     (firstLine === actionId || firstLine === qualifiedActionId);
-  const title =
+  const libraryName = WidgetLayoutFragmentActionIdV1Schema.safeParse(actionId).success
+    ? readWidgetLayoutFragmentApprovalNameV1(input.actionArgs, input.preview) : null;
+  const title = libraryName && actionTitle ? `${actionTitle} · ${libraryName}` :
     isRawId || firstLine === ''
       ? (actionTitle ?? t('inbox.work.rows.approvalUntitled'))
       : firstLine;

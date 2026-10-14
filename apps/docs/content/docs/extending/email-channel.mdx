@@ -180,6 +180,8 @@ copy of `/stop` stays content.
 ### Attachments and machine placement
 
 Attachment descriptors travel with the observation; bytes are fetched at dispatch.
+Each consuming operation fetches and parses the message once for all its files;
+temporary transfer files are released when their consumers finish or cancel.
 On the same machine, Happier materializes files in the Session's attachment folder.
 PDF text layers and `text/*` are also inlined with untrusted/forwarded provenance,
 so an exclusive MCP-only recipe can read their text without a file tool.
@@ -214,6 +216,12 @@ SMTP 4xx responses are retryable known failures, while 5xx responses are typed
 failures. Email declares no per-message text limit; mail-host and Agent limits
 still apply.
 
+To trigger a saved brief Automation from your backend, grant only
+`workflow.trigger.run_now`, its execution machine and
+`automationIds: ["brief-automation-id"]`. This exact selector refuses another
+Automation on the same machine. See the [scoped-token example](/extending/sdk#trigger-a-workflow-with-a-scoped-token)
+for the full grant and HTTP request; Action approval policy still applies.
+
 ## Add an email transport
 
 Plugin authors can contribute to `happier.channel.email`'s targeted `transports`
@@ -227,13 +235,16 @@ Use `EmailTransportsContributionProtocolV1` from
 `protocol.operations.<role>.bind(localActionId)` and
 `protocol.contribute({ operations })`. Declare the resulting contribution at
 `contributesTo['happier.channel.email'].transports.<contributionId>`.
-`fetchRaw` returns `{ kind: 'raw', mimeBase64 }`; `submitRaw` receives MIME,
+`fetchRaw` returns `{ kind: 'raw', mimeBase64, receivedAtMs }`, where
+`receivedAtMs` is the transport's immutable receipt time (IMAP INTERNALDATE for
+the bundled transport), reused on replay rather than the current fetch time.
+`submitRaw` receives MIME,
 the core-selected envelope and Message-ID. `listSince` returns refs and an opaque
 checkpoint or a history gap. Without `findSent`, an uncertain submission uses
 ordinary Channels delivery resolution.
 
 Declare handlers with each operation's input/result schemas, surface and danger
-metadata. Keep operations plugin-only and require the host-stamped Email-core
+metadata. Include the required plugin surface and require the host-stamped Email-core
 caller. Never create a transport-specific parser, router or outbound sender.
 See [Plugin contributions](/plugins/manifest/contributions) for host admission and
 lifecycle, and [SDK entrypoints](/plugins/api/sdk-entrypoints) for public imports.

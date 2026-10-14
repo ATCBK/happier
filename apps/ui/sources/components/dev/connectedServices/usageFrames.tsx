@@ -57,7 +57,7 @@ function entry(service: Svc, serviceLabel: string, legacyServiceId: string, acco
 }
 
 function useFixture(scope: 'rail' | 'session') {
-    const privacy = useConnectedAccountIdentityPrivacy();
+    const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
     const now = React.useMemo(() => Date.now(), []);
     const usage = React.useMemo(() => buildUsageSummary({
         live: {
@@ -136,8 +136,8 @@ function UsageFrame(props: Readonly<{ scope: 'rail' | 'session'; phone: boolean 
 const styles = StyleSheet.create((theme) => ({
     popover: {
         width: RAIL_POPOVER_WIDE_WIDTH_PX,
-        margin: 24,
-        paddingVertical: 4,
+        margin: theme.space.s24,
+        paddingVertical: theme.space.s4,
         borderRadius: 14,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.surface,
@@ -145,9 +145,9 @@ const styles = StyleSheet.create((theme) => ({
     },
     sheet: {
         marginTop: 'auto',
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
         paddingBottom: 28,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         backgroundColor: theme.colors.surface.elevated,

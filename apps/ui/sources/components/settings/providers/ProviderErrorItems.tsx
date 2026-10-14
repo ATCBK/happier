@@ -2,18 +2,12 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { useUnistyles } from 'react-native-unistyles';
-import { Platform, View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
 
 import { SurfaceStateCard, type SurfaceStateSize } from '@/components/ui/surfaces/SurfaceStateCard';
 import { presentProviderError, presentProviderRecoveryAction } from '@/providers/connection/errorPresentation';
 import { dispatchProviderRecoveryAction } from '@/providers/connection/recovery';
 import { t } from '@/text';
-import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
-import { IconButton } from '@/components/ui/buttons/IconButton';
-import { Tooltip } from '@/components/ui/overlays/Tooltip';
-import { Text } from '@/components/ui/text/Text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { NoticeLine } from '@/components/ui/lists/NoticeLine';
 
 export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: Readonly<{
     error: unknown;
@@ -87,7 +81,7 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
         const code = typedError.success ? typedError.data.code : 'unknown';
         const actionTitle = actionPresentation && typedError.success ? t(actionPresentation.titleKey) : null;
         return (
-            <ProviderPickerLine
+            <NoticeLine
                 testID={`provider-error:${code}`}
                 tooltipTestID={`provider-error-detail:${code}`}
                 iconName={iconName}
@@ -123,62 +117,3 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
         } : undefined}
     />;
 });
-
-/**
- * One compact status line inside a picker: a glyph (its tooltip carries the detail), the title, and
- * at most one next step as an icon-only control. Provider errors and a request waiting for its
- * approval share it, so a picker's summary reads as one list of lines.
- */
-export function ProviderPickerLine(props: Readonly<{
-    testID: string;
-    tooltipTestID?: string;
-    iconName: IconName;
-    iconColor: string;
-    tooltip?: string;
-    title: string;
-    action?: Readonly<{
-        testID: string;
-        label: string;
-        iconName: IconName;
-        disabled?: boolean;
-        onPress: () => void;
-    }>;
-}>) {
-    const icon = <Icon name={props.iconName} size={ICON_SIZE.sm} color={props.iconColor} />;
-    return (
-        <View testID={props.testID} accessibilityLiveRegion="polite" style={lineStyles.line}>
-            {props.tooltip ? <Tooltip testID={props.tooltipTestID} label={props.tooltip}>{icon}</Tooltip> : icon}
-            <Text numberOfLines={1} style={lineStyles.title}>{props.title}</Text>
-            {props.action ? (
-                <IconButton
-                    testID={props.action.testID}
-                    iconName={props.action.iconName}
-                    accessibilityLabel={props.action.label}
-                    tooltip={props.action.label}
-                    variant="plain"
-                    size={24}
-                    iconSize={ICON_SIZE.sm}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                    disabled={props.action.disabled}
-                    onPress={props.action.onPress}
-                />
-            ) : null}
-        </View>
-    );
-}
-
-const lineStyles = StyleSheet.create((theme) => ({
-    line: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s6,
-        minHeight: 24,
-    },
-    title: {
-        flex: 1,
-        minWidth: 0,
-        fontSize: 12,
-        lineHeight: 16,
-        color: theme.colors.text.secondary,
-    },
-}));

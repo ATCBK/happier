@@ -108,6 +108,7 @@ import {
 } from './createDaemonExternalActionContributedInvoker';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 import { executeExternalAction } from './executeExternalAction';
+import { isTriageHostActionCaller } from '../../../../../packages/plugins/triage/src/actions/callerSource';
 
 const EXTERNAL_ACTION_ENCRYPTION_KEY = new Uint8Array(32).fill(7);
 
@@ -412,6 +413,25 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it('preserves API caller provenance accepted by the Triage caller owner through real dispatch', async () => {
+    let hostCallerAccepted: boolean | undefined;
+    const runtime = createExternalActionRuntime('global', 'happier.triage', (context) => {
+      expect(context.surface).toBe('api');
+      expect(context.caller).toBeUndefined();
+      hostCallerAccepted = isTriageHostActionCaller(context);
+    });
+    const invoker = createDaemonExternalActionContributedInvoker({
+      acquireRuntimeRegistryLease: async () => ({ registry: runtime, source: 'ephemeral',
+        durableRevision: runtime.durableRevision ?? -1, release: async () => {} }),
+    });
+    try {
+      expect(await invoker({ action: { pluginId: 'happier.triage', localId: 'inspect' }, input: {},
+        context: { surface: 'cli', actionCaller: { kind: 'host' } } }))
+        .toMatchObject({ ok: true, result: { surface: 'api', caller: null } });
+      expect(hostCallerAccepted).toBe(true);
+    } finally { await runtime.dispose(); }
+  });
 
   it.each(['host', 'host_ask', 'session', 'retired'] as const)('preserves the accepted workflow caller and canonical approval gate (%s)', async origin => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;

@@ -3,7 +3,7 @@ import { readStoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import type { InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
-import { ConnectedServicesProviderStateSharingSettingsV1Schema } from '@happier-dev/protocol';
+import { ConnectedServicesProviderStateSharingSettingsV1Schema } from '@happier-dev/protocol/account/settings/connected-services';
 import { createCapabilityChecklists } from '@/capabilities/checklists';
 import { buildDetectContext } from '@/capabilities/context/buildDetectContext';
 import { buildCliCapabilityData } from '@/capabilities/probes/cliBase';

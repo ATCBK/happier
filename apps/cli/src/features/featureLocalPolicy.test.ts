@@ -16,8 +16,14 @@ describe('resolveCliLocalFeaturePolicyEnabled', () => {
     }
   });
 
-  it('defaults voice.daemonInference to disabled when no local env override is present', () => {
-    expect(resolveCliLocalFeaturePolicyEnabled('voice.daemonInference', {} as NodeJS.ProcessEnv)).toBe(false);
+  it('defaults voice.daemonInference to enabled when no local env override is present', () => {
+    expect(resolveCliLocalFeaturePolicyEnabled('voice.daemonInference', {})).toBe(true);
+  });
+
+  it.each(['0', 'false'])('disables voice.daemonInference with the explicit %s opt-out', (value) => {
+    expect(resolveCliLocalFeaturePolicyEnabled('voice.daemonInference', {
+      HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED: value,
+    })).toBe(false);
   });
 
   it('enables voice.daemonInference when the explicit local env gate is on', () => {

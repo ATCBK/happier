@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
 import { ACTION_ID_FAMILIES_V1 } from '../actions/actionIds.js';
@@ -47,7 +48,7 @@ import {
 export const MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE = 500;
 export { MAX_AUTOMATION_EVENT_FILTER_CLAUSES, MAX_AUTOMATION_EVENT_FILTER_IN_VALUES, MAX_AUTOMATION_EVENT_FILTER_VALUE_CODE_POINTS } from './automationEventFilterV1.js';
 
-export const OPAQUE_CURSOR_SCHEMA = z.string().min(1).max(1024).regex(/^[A-Za-z0-9_-]+$/u);
+export const OPAQUE_CURSOR_SCHEMA = z.string().check(z.minLength(1), z.maxLength(1024), z.regex(/^[A-Za-z0-9_-]+$/u));
 import { AutomationEventFilterV1Schema } from './automationEventFilterV1.js';
 export { AutomationEventFilterV1Schema, AutomationJsonPointerV1Schema } from './automationEventFilterV1.js';
 export type { AutomationEventFilterV1, AutomationEventFilterClauseV1, AutomationJsonScalarV1, AutomationJsonPointerV1 } from './automationEventFilterV1.js';
@@ -56,26 +57,26 @@ export { UNSIGNED_DECIMAL_BIGINT_SCHEMA, AutomationEventSourceStatusStateV1Schem
 export type { AutomationEventSourceStatusStateV1, AutomationEventSourceStatusCodeV1, AutomationEventSourceCatalogStatusStateV1 } from './automationEventSourceStatusV1.js';
 
 export const AutomationEventSourceObservationTransportV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('checkpointedPull'),
     watcherMaterializationRef: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('socket'),
     watcherMaterializationRef: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('durablePush'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     endpointMaterializationRef: PluginMachineMaterializationRefV1Schema,
     observationStartsAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA,
-  }).strict(),
+  }),
 ]));
 export type AutomationEventSourceObservationTransportV1 = z.infer<
   typeof AutomationEventSourceObservationTransportV1Schema
 >;
 
-export const AutomationEventSourceDefinitionV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventSourceDefinitionV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
@@ -85,24 +86,24 @@ export const AutomationEventSourceDefinitionV1Schema = lazyZodSchema(() => z.obj
   sourceContractVersion: POSITIVE_SAFE_INTEGER_SCHEMA,
   sourceConfig: asProtocolZod(AutomationEventSourceConfigV1Schema),
   observationTransport: AutomationEventSourceObservationTransportV1Schema,
-  filter: AutomationEventFilterV1Schema.nullable(),
-  maximumObservationAgeMs: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-}).strict());
+  filter: zMini.nullable(AutomationEventFilterV1Schema),
+  maximumObservationAgeMs: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+}));
 export type AutomationEventSourceDefinitionV1 = z.infer<typeof AutomationEventSourceDefinitionV1Schema>;
 
 export const AutomationEventSourcesListTransportV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('checkpointedPull') }).strict(),
-  z.object({ kind: z.literal('socket') }).strict(),
-  z.object({ kind: z.literal('durablePush') }).strict(),
+  z.strictObject({ kind: z.literal('checkpointedPull') }),
+  z.strictObject({ kind: z.literal('socket') }),
+  z.strictObject({ kind: z.literal('durablePush') }),
 ]));
 export type AutomationEventSourcesListTransportV1 = z.infer<
   typeof AutomationEventSourcesListTransportV1Schema
 >;
 
 export const AutomationEventSourceCatalogScopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('checkpointedPull') }).strict(),
-  z.object({ kind: z.literal('socket') }).strict(),
-  z.object({ kind: z.literal('durablePush'), webhookEndpointId: PluginWebhookEndpointIdV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('checkpointedPull') }),
+  z.strictObject({ kind: z.literal('socket') }),
+  z.strictObject({ kind: z.literal('durablePush'), webhookEndpointId: PluginWebhookEndpointIdV1Schema }),
 ]));
 export type AutomationEventSourceCatalogScopeV1 = z.infer<
   typeof AutomationEventSourceCatalogScopeV1Schema
@@ -128,7 +129,7 @@ export function automationEventSourceCatalogScopeKeyV1(
  * A stored scope key is valid exactly when it names one canonical scope, so
  * the key grammar is read back through the same union rather than restated.
  */
-export const AutomationEventSourceCatalogScopeKeyV1Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+export const AutomationEventSourceCatalogScopeKeyV1Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   const durablePushEndpointId = value.startsWith(AUTOMATION_EVENT_DURABLE_PUSH_CATALOG_SCOPE_KEY_PREFIX)
     ? value.slice(AUTOMATION_EVENT_DURABLE_PUSH_CATALOG_SCOPE_KEY_PREFIX.length)
     : null;
@@ -138,9 +139,9 @@ export const AutomationEventSourceCatalogScopeKeyV1Schema = lazyZodSchema(() => 
       : { kind: 'durablePush', webhookEndpointId: durablePushEndpointId },
   );
   if (!scope.success) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unknown Automation source catalog scope' });
+    context.addIssue({ code: "custom", message: 'Unknown Automation source catalog scope' });
   }
-}));
+})));
 export type AutomationEventSourceCatalogScopeKeyV1 = z.infer<
   typeof AutomationEventSourceCatalogScopeKeyV1Schema
 >;
@@ -150,14 +151,14 @@ export type AutomationEventSourceCatalogScopeKeyV1 = z.infer<
  * it has completed a source scan. The catalog owner alone decides whether the
  * checkpoint is now retired; the provider keeps its incumbent row-level CAS.
  */
-export const AutomationEventCheckpointRetirementCandidateV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventCheckpointRetirementCandidateV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
   eventRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
   sourceSelectorId: AutomationSourceSelectorIdV1Schema,
   sourceContractVersion: POSITIVE_SAFE_INTEGER_SCHEMA,
-}).strict());
+}));
 export type AutomationEventCheckpointRetirementCandidateV1 = z.infer<
   typeof AutomationEventCheckpointRetirementCandidateV1Schema
 >;
@@ -168,14 +169,14 @@ function checkpointRetirementCandidateKey(value: AutomationEventCheckpointRetire
 
 function addDuplicateCheckpointRetirementCandidateIssues(
   values: readonly AutomationEventCheckpointRetirementCandidateV1[],
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const seen = new Set<string>();
   values.forEach((value, index) => {
     const key = checkpointRetirementCandidateKey(value);
     if (seen.has(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [index],
         message: 'Checkpoint retirement candidates must be unique',
       });
@@ -187,29 +188,21 @@ function addDuplicateCheckpointRetirementCandidateIssues(
 
 export const AutomationEventCheckpointRetirementsV1Schema = lazyZodSchema(() => z.array(
   AutomationEventCheckpointRetirementCandidateV1Schema,
-)
-  .max(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE)
-  .superRefine(addDuplicateCheckpointRetirementCandidateIssues));
+).check(z.maxLength(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE), z.superRefine(addDuplicateCheckpointRetirementCandidateIssues)));
 export type AutomationEventCheckpointRetirementsV1 = z.infer<
   typeof AutomationEventCheckpointRetirementsV1Schema
 >;
 
-export const AutomationEventSourcesListInputV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventSourcesListInputV1Schema = lazyZodSchema(() => z.strictObject({
   transport: AutomationEventSourcesListTransportV1Schema,
-  pageSize: z.number().int().min(1).max(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE).default(
-    MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE,
-  ),
-  cursor: OPAQUE_CURSOR_SCHEMA.optional(),
-  knownRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA.optional(),
-  checkpointRetirementCandidates: z.array(AutomationEventCheckpointRetirementCandidateV1Schema)
-    .min(1)
-    .max(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE)
-    .superRefine(addDuplicateCheckpointRetirementCandidateIssues)
-    .optional(),
-}).strict().superRefine((value, context) => {
+  pageSize: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE)), MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE),
+  cursor: z.optional(OPAQUE_CURSOR_SCHEMA),
+  knownRevision: zMini.optional(UNSIGNED_DECIMAL_BIGINT_SCHEMA),
+  checkpointRetirementCandidates: z.optional(z.array(AutomationEventCheckpointRetirementCandidateV1Schema).check(z.minLength(1), z.maxLength(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE), z.superRefine(addDuplicateCheckpointRetirementCandidateIssues))),
+}).check(z.superRefine((value, context) => {
   if (value.cursor !== undefined && value.knownRevision !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['knownRevision'],
       message: 'knownRevision is valid only on the first source-list page',
     });
@@ -217,42 +210,41 @@ export const AutomationEventSourcesListInputV1Schema = lazyZodSchema(() => z.obj
   if (value.checkpointRetirementCandidates === undefined) return;
   if (value.transport.kind !== 'checkpointedPull') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['checkpointRetirementCandidates'],
       message: 'Checkpoint retirement classification is valid only for checkpointed pulls',
     });
   }
   if (value.knownRevision === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['knownRevision'],
       message: 'Checkpoint retirement classification requires a known catalog revision',
     });
   }
   if (value.cursor !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['cursor'],
       message: 'Checkpoint retirement classification requires a complete no-cursor catalog read',
     });
   }
-}));
+})));
 export type AutomationEventSourcesListInputV1 = z.infer<typeof AutomationEventSourcesListInputV1Schema>;
 
 export const AutomationEventSourcesListResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('page'),
     revision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
-    definitions: z.array(AutomationEventSourceDefinitionV1Schema)
-      .max(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE),
-    nextCursor: OPAQUE_CURSOR_SCHEMA.nullable(),
-  }).strict(),
-  z.object({
+    definitions: z.array(AutomationEventSourceDefinitionV1Schema).check(z.maxLength(MAX_AUTOMATION_EVENT_SOURCE_DEFINITIONS_PER_PAGE)),
+    nextCursor: z.nullable(OPAQUE_CURSOR_SCHEMA),
+  }),
+  z.strictObject({
     kind: z.literal('unchanged'),
     revision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
-    checkpointRetirements: AutomationEventCheckpointRetirementsV1Schema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('cursorStale'), currentRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA }).strict(),
+    checkpointRetirements: z.optional(AutomationEventCheckpointRetirementsV1Schema),
+  }),
+  z.strictObject({ kind: z.literal('cursorStale'), currentRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA }),
 ]));
 export type AutomationEventSourcesListResultV1 = z.infer<typeof AutomationEventSourcesListResultV1Schema>;
 
@@ -277,12 +269,12 @@ export function isAutomationEventSourcesListPageProgressingV1(
     || result.definitions.length > 0;
 }
 
-export const AutomationEventAdmitDefinitionSelectorV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitDefinitionSelectorV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
   sourceSelectorId: AutomationSourceSelectorIdV1Schema,
-}).strict());
+}));
 export type AutomationEventAdmitDefinitionSelectorV1 = z.infer<
   typeof AutomationEventAdmitDefinitionSelectorV1Schema
 >;
@@ -295,11 +287,10 @@ const AutomationEventAdmitInputFieldsV1 = {
   payload: asProtocolZod(AutomationEventPayloadV1Schema),
 } as const;
 
-export const AutomationEventAdmitInputV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitInputV1Schema = lazyZodSchema(() => z.strictObject({
   ...AutomationEventAdmitInputFieldsV1,
-  definitions: z.array(AutomationEventAdmitDefinitionSelectorV1Schema)
-    .min(1),
-}).strict());
+  definitions: z.array(AutomationEventAdmitDefinitionSelectorV1Schema).check(z.minLength(1)),
+}));
 export type AutomationEventAdmitInputV1 = z.infer<typeof AutomationEventAdmitInputV1Schema>;
 
 /**
@@ -308,11 +299,10 @@ export type AutomationEventAdmitInputV1 = z.infer<typeof AutomationEventAdmitInp
  * Every definition stays individually bounded; the request body itself is
  * bounded by the owning server transport limit, not by a Protocol count.
  */
-export const AutomationEventAdmitHttpInputV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitHttpInputV1Schema = lazyZodSchema(() => z.strictObject({
   ...AutomationEventAdmitInputFieldsV1,
-  definitions: z.array(AutomationEventAdmitDefinitionSelectorV1Schema)
-    .min(1),
-}).strict());
+  definitions: z.array(AutomationEventAdmitDefinitionSelectorV1Schema).check(z.minLength(1)),
+}));
 export type AutomationEventAdmitHttpInputV1 = z.infer<typeof AutomationEventAdmitHttpInputV1Schema>;
 
 export {
@@ -321,47 +311,47 @@ export {
 };
 
 export const AutomationEventAdmitItemResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('admitted'), runId: asProtocolZod(HostIdentifierV1Schema), checkpointSafe: z.literal(true) }).strict(),
-  z.object({ kind: z.literal('rejoined'), runId: asProtocolZod(HostIdentifierV1Schema), checkpointSafe: z.literal(true) }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('admitted'), runId: asProtocolZod(HostIdentifierV1Schema), checkpointSafe: z.literal(true) }),
+  z.strictObject({ kind: z.literal('rejoined'), runId: asProtocolZod(HostIdentifierV1Schema), checkpointSafe: z.literal(true) }),
+  z.strictObject({
     kind: z.literal('skipped'),
     reason: z.enum(['filtered', 'beforeObservationStart', 'outsideFreshness', 'definitionRetired', 'occurrenceRejected']),
     checkpointSafe: z.literal(true),
-  }).strict(),
-  AutomationEventRefreshDefinitionStatusV1Schema.extend({
+  }),
+  zMini.extend(AutomationEventRefreshDefinitionStatusV1Schema, {
     checkpointSafe: z.literal(false),
   }),
-  AutomationEventBlockedStatusV1Schema.extend({
+  zMini.extend(AutomationEventBlockedStatusV1Schema, {
     checkpointSafe: z.literal(false),
   }),
 ]));
 export type AutomationEventAdmitItemResultV1 = z.infer<typeof AutomationEventAdmitItemResultV1Schema>;
 
-export const AutomationEventAdmitResultV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitResultV1Schema = lazyZodSchema(() => z.strictObject({
   results: z.array(AutomationEventAdmitItemResultV1Schema),
-}).strict());
+}));
 export type AutomationEventAdmitResultV1 = z.infer<typeof AutomationEventAdmitResultV1Schema>;
 
 /** The server-owned continuation of one bounded private admission request. */
 export const AutomationEventAdmitContinuationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('ready'),
     accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('stopped'),
     reason: z.enum(['accountCurrentnessMoved', 'accountUnavailable']),
-  }).strict(),
+  }),
 ]));
 export type AutomationEventAdmitContinuationV1 = z.infer<
   typeof AutomationEventAdmitContinuationV1Schema
 >;
 
 /** Private response sibling for exactly one complete HTTP admission request. */
-export const AutomationEventAdmitHttpResultV1Schema = lazyZodSchema(() => z.object({
+export const AutomationEventAdmitHttpResultV1Schema = lazyZodSchema(() => z.strictObject({
   results: z.array(AutomationEventAdmitItemResultV1Schema),
   continuation: AutomationEventAdmitContinuationV1Schema,
-}).strict());
+}));
 export type AutomationEventAdmitHttpResultV1 = z.infer<typeof AutomationEventAdmitHttpResultV1Schema>;
 
 /**
@@ -370,38 +360,38 @@ export type AutomationEventAdmitHttpResultV1 = z.infer<typeof AutomationEventAdm
  * or Run Now operation. Verification therefore asks only whether the caller is
  * naming a current target, and several bindings may name the same one.
  */
-export const AutomationConversationTargetVerifyInputV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationTargetVerifyInputV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
-  scopedTrigger: AutomationConversationScopedTriggerRefV1Schema.optional(),
+  scopedTrigger: zMini.optional(AutomationConversationScopedTriggerRefV1Schema),
   /**
    * A final-result author asks the Automation owner to validate that
    * capability against the current target; ordinary delivery omits it.
    */
-  resultDelivery: z.literal('finalResult').optional(),
-}).strict());
+  resultDelivery: z.optional(z.literal('finalResult')),
+}));
 export type AutomationConversationTargetVerifyInputV1 = z.infer<
   typeof AutomationConversationTargetVerifyInputV1Schema
 >;
 
 export const AutomationConversationTargetVerifyResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('verified') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('verified') }),
+  z.strictObject({
     kind: z.literal('notVerified'),
     reason: z.enum([
       'notFound',
       'resultDeliveryUnsupported',
       'scopedTriggerIdentityMismatch',
     ]),
-  }).strict(),
+  }),
 ]));
 export type AutomationConversationTargetVerifyResultV1 = z.infer<
   typeof AutomationConversationTargetVerifyResultV1Schema
 >;
 
-export const AutomationConversationTargetsListInputV1Schema = lazyZodSchema(() => z.object({
-  limit: z.number().int().min(1).max(100).optional(),
-  cursor: asProtocolZod(AutomationIdV1Schema).nullable().optional(),
-}).strict());
+export const AutomationConversationTargetsListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(100))),
+  cursor: zMini.optional(zMini.nullable(asProtocolZod(AutomationIdV1Schema))),
+}));
 export type AutomationConversationTargetsListInputV1 = z.infer<typeof AutomationConversationTargetsListInputV1Schema>;
 
 /**
@@ -411,25 +401,25 @@ export type AutomationConversationTargetsListInputV1 = z.infer<typeof Automation
  * Account-owned columns; no prompt, recipe, secret, or template content is
  * projected, and nothing here is readable only in plain mode.
  */
-export const AutomationConversationTargetExecutionV1Schema = lazyZodSchema(() => z.object({
-  targetType: z.enum(['new_session', 'existing_session', 'execution_run']).nullable(),
+export const AutomationConversationTargetExecutionV1Schema = lazyZodSchema(() => z.strictObject({
+  targetType: z.nullable(z.enum(['new_session', 'existing_session', 'execution_run'])),
   enabled: z.boolean(),
-}).strict());
+}));
 export type AutomationConversationTargetExecutionV1 = z.infer<
   typeof AutomationConversationTargetExecutionV1Schema
 >;
 
-export const AutomationConversationTargetsListItemV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationTargetsListItemV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
-  label: z.string().min(1).max(256),
+  label: z.string().check(z.minLength(1), z.maxLength(256)),
   execution: AutomationConversationTargetExecutionV1Schema,
-}).strict());
+}));
 export type AutomationConversationTargetsListItemV1 = z.infer<typeof AutomationConversationTargetsListItemV1Schema>;
 
-export const AutomationConversationTargetsListResultV1Schema = lazyZodSchema(() => z.object({
-  items: z.array(AutomationConversationTargetsListItemV1Schema).max(100),
-  nextCursor: asProtocolZod(AutomationIdV1Schema).nullable(),
-}).strict());
+export const AutomationConversationTargetsListResultV1Schema = lazyZodSchema(() => z.strictObject({
+  items: z.array(AutomationConversationTargetsListItemV1Schema).check(z.maxLength(100)),
+  nextCursor: zMini.nullable(asProtocolZod(AutomationIdV1Schema)),
+}));
 export type AutomationConversationTargetsListResultV1 = z.infer<typeof AutomationConversationTargetsListResultV1Schema>;
 
 
@@ -442,7 +432,7 @@ function compareUnsignedDecimalStrings(left: string, right: string): number {
 }
 
 export const AutomationEventSourceStatusReportV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('source'),
     automationId: asProtocolZod(AutomationIdV1Schema),
     triggerId: AutomationTriggerIdSchema,
@@ -454,34 +444,34 @@ export const AutomationEventSourceStatusReportV1Schema = lazyZodSchema(() => z.d
     // Connection-health projections do not own occurrence history. Omitting
     // these fields preserves the current-revision timestamps, while an
     // occurrence report still supplies the exact nullable values it owns.
-    lastObservedAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable().optional(),
-    lastDispositionAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable().optional(),
-    nextRetryAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-    observedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.max(100),
-    admittedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.max(100),
-    skippedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.max(100),
-  }).strict().superRefine((value, context) => {
+    lastObservedAt: zMini.optional(zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA)),
+    lastDispositionAt: zMini.optional(zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA)),
+    nextRetryAt: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+    observedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.check(zMini.maximum(100)),
+    admittedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.check(zMini.maximum(100)),
+    skippedDelta: NONNEGATIVE_SAFE_INTEGER_SCHEMA.check(zMini.maximum(100)),
+  }).check(z.superRefine((value, context) => {
     if (value.state === 'attention' && value.code === 'none') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['code'],
         message: 'Attention source status requires a non-none code',
       });
     }
-  }),
-  z.object({
+  })),
+  z.strictObject({
     kind: z.literal('catalogReconciliation'),
     scope: AutomationEventSourceCatalogScopeV1Schema,
     observedRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA,
-    adoptedRevision: UNSIGNED_DECIMAL_BIGINT_SCHEMA.nullable(),
+    adoptedRevision: zMini.nullable(UNSIGNED_DECIMAL_BIGINT_SCHEMA),
     state: AutomationEventSourceCatalogStatusStateV1Schema,
-    scanStartedAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-    nextRetryAt: NONNEGATIVE_SAFE_INTEGER_SCHEMA.nullable(),
-  }).strict().superRefine((value, context) => {
+    scanStartedAt: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+    nextRetryAt: zMini.nullable(NONNEGATIVE_SAFE_INTEGER_SCHEMA),
+  }).check(z.superRefine((value, context) => {
     if (value.state === 'current') {
       if (value.adoptedRevision !== value.observedRevision) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['adoptedRevision'],
           message: 'Current catalog status requires the observed revision to be adopted',
         });
@@ -491,18 +481,18 @@ export const AutomationEventSourceStatusReportV1Schema = lazyZodSchema(() => z.d
     if (value.adoptedRevision !== null
       && compareUnsignedDecimalStrings(value.adoptedRevision, value.observedRevision) >= 0) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['adoptedRevision'],
         message: 'Reconciling catalog status requires an older adopted revision',
       });
     }
-  }),
+  })),
 ]));
 export type AutomationEventSourceStatusReportV1 = z.infer<
   typeof AutomationEventSourceStatusReportV1Schema
 >;
 
-export const AutomationEventSourceStatusReportResultV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const AutomationEventSourceStatusReportResultV1Schema = lazyZodSchema(() => z.strictObject({}));
 export type AutomationEventSourceStatusReportResultV1 = z.infer<
   typeof AutomationEventSourceStatusReportResultV1Schema
 >;
@@ -515,13 +505,13 @@ export const AutomationEventActionInputSchemasV1 = Object.freeze({
   'automation.event.sources.list': AutomationEventSourcesListInputV1Schema,
   'automation.event.admit': AutomationEventAdmitInputV1Schema,
   'automation.event.source.status.report': AutomationEventSourceStatusReportV1Schema,
-} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodMiniType>>);
 
 export const AutomationEventActionOutputSchemasV1 = Object.freeze({
   'automation.event.sources.list': AutomationEventSourcesListResultV1Schema,
   'automation.event.admit': AutomationEventAdmitResultV1Schema,
   'automation.event.source.status.report': AutomationEventSourceStatusReportResultV1Schema,
-} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<AutomationEventActionIdV1, z.ZodMiniType>>);
 
 export const AUTOMATION_CONVERSATION_ACTION_IDS_V1 = ACTION_ID_FAMILIES_V1.automation_conversation;
 export const AutomationConversationActionIdV1Schema = lazyZodSchema(() => z.enum(AUTOMATION_CONVERSATION_ACTION_IDS_V1));
@@ -531,10 +521,10 @@ export const AutomationConversationActionInputSchemasV1 = Object.freeze({
   'automation.conversation.targets.list': AutomationConversationTargetsListInputV1Schema,
   'automation.conversation.target.verify': AutomationConversationTargetVerifyInputV1Schema,
   'automation.conversation.admit': AutomationConversationAdmitInputV1Schema,
-} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodMiniType>>);
 
 export const AutomationConversationActionOutputSchemasV1 = Object.freeze({
   'automation.conversation.targets.list': AutomationConversationTargetsListResultV1Schema,
   'automation.conversation.target.verify': AutomationConversationTargetVerifyResultV1Schema,
   'automation.conversation.admit': AutomationConversationAdmitResultV1Schema,
-} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<AutomationConversationActionIdV1, z.ZodMiniType>>);

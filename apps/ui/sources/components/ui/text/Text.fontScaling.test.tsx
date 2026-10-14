@@ -32,6 +32,30 @@ async function renderTextHosts(platform: 'web' | 'ios', disabled = false, varian
 }
 
 describe('Text metric scaling ownership', () => {
+    it.each(['web', 'ios'] as const)('resolves session-list density chrome through the owned %s type column', async (platform) => {
+        settings.fontScale = 1;
+        const { Platform } = await import('react-native');
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
+        const { SessionListRowTitle, SessionListRowSubtitle } = await import('@/components/sessions/shell/row/SessionListRowPresentation');
+        const { resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation/typeScale');
+        const cases = [
+            { density: 'default', title: 'label', subtitle: 'meta' },
+            { density: 'compact', title: 'label', subtitle: 'micro' },
+            { density: 'minimal', title: 'meta', subtitle: 'micro' },
+            { density: 'minimal', readableNativePhoneMinimal: true, title: 'heading', subtitle: 'meta' },
+        ] as const;
+        for (const entry of cases) {
+            const readableNativePhoneMinimal = 'readableNativePhoneMinimal' in entry;
+            const screen = await renderScreen(<>
+                <SessionListRowTitle testID="session-title" density={entry.density} readableNativePhoneMinimal={readableNativePhoneMinimal}>Session</SessionListRowTitle>
+                <SessionListRowSubtitle testID="session-subtitle" density={entry.density} readableNativePhoneMinimal={readableNativePhoneMinimal}>Status</SessionListRowSubtitle>
+            </>);
+            for (const [id, role] of [['session-title', entry.title], ['session-subtitle', entry.subtitle]] as const) {
+                const { weight: _weight, ...expected } = resolveHappierTypeScale(role, platform);
+                expect(flattenTestStyle(screen.findByTestId(id)!.props.style)).toMatchObject(expected);
+            }
+        }
+    });
     it.each(['web', 'ios'] as const)('resolves every type role through Text and the plugin host projection on %s', async (platform) => {
         settings.fontScale = 1;
         const { Platform } = await import('react-native');

@@ -9,7 +9,7 @@ import { SecretStringV1Schema, type SecretStringV1 } from '../../crypto/settings
 import { VoiceCredentialBindingV1Schema, type VoiceCredentialBindingV1, type VoiceProviderSettingsEnvelopeV1 } from '../realtime/providerSettings.js';
 import { VoiceSpeechDiagnosticsSettingsV1Schema, type VoiceSpeechDiagnosticsSettingsV1 } from '../diagnostics.js';
 import { resolvePredecessorVoiceProviderContributionIdentityV1 } from '../providerContributionIdentity.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
 
@@ -253,7 +253,7 @@ function parseVoiceSettingsPersistenceV1(value: unknown): VoiceSettingsPersisten
     }), value);
 }
 
-const VoiceSettingsPersistenceV1Schema = z.unknown().transform(parseVoiceSettingsPersistenceV1);
+const VoiceSettingsPersistenceV1Schema = z.pipe(z.unknown(), z.transform(parseVoiceSettingsPersistenceV1));
 const voiceSettingsPersistenceV1Defaults = parseVoiceSettingsPersistenceV1(voiceSettingsDefaults);
 
 function withDiagnostics(

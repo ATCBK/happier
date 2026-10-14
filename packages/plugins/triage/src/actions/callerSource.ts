@@ -9,7 +9,7 @@ import type { TriageAdmittedSourceV1 } from './listEntries.js';
  * The one owner of "who is calling a caller-bound Triage Action".
  *
  * Plugin callers remain bound to their own admitted contribution. Authenticated
- * host agent/MCP/CLI invocations may select an admitted source address; that
+ * host agent/MCP/CLI/API invocations may select an admitted source address; that
  * address is never caller provenance. Nested plugin calls cannot inherit host
  * authority merely by claiming an origin surface.
  */
@@ -34,7 +34,7 @@ const INVALID_CALLER: TriageCallerSourceResolutionV1 = Object.freeze({ kind: 'in
 
 export function isTriageHostActionCaller(context: PluginInvocationContext): boolean {
     return context.caller === undefined
-        && (context.surface === 'agent' || context.surface === 'mcp' || context.surface === 'cli');
+        && (context.surface === 'agent' || context.surface === 'mcp' || context.surface === 'cli' || context.surface === 'api');
 }
 
 export function isTriageAccountCaller(context: PluginInvocationContext): boolean {

@@ -95,9 +95,9 @@ export async function completePluginEventAutomationEditor(
 }
 
 const styles = StyleSheet.create((theme) => ({
-    content: { minWidth: 0, paddingHorizontal: theme.margins.lg, paddingBottom: theme.margins.lg },
+    content: { minWidth: 0, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s16 },
     footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        gap: theme.margins.sm, padding: theme.margins.lg },
+        gap: theme.space.s8, padding: theme.space.s16 },
 }));
 
 export function InlinePluginEventEditor(props: Readonly<{

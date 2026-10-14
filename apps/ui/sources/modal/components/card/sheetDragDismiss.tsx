@@ -87,6 +87,6 @@ export function SheetGrabber(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    zone: { alignSelf: 'stretch', alignItems: 'center', paddingTop: 8, paddingBottom: 4 },
+    zone: { alignSelf: 'stretch', alignItems: 'center', paddingTop: theme.space.s8, paddingBottom: theme.space.s4 },
     grabber: { width: 36, height: 5, borderRadius: 2.5, backgroundColor: theme.colors.border.strong },
 }));

@@ -139,7 +139,6 @@ export type PluginTestkitRegistrationByFamily = Readonly<{
     'mcp.discoverySources': Parameters<PluginApi['mcp']['registerDiscoverySource']>[1];
     voiceProviders: Parameters<PluginApi['voiceProviders']['register']>[1];
     backgroundServices: Parameters<PluginApi['backgroundServices']['register']>[1];
-    promptAssets: Parameters<PluginApi['resources']['registerPromptAssetAdapter']>[1];
     resources: Parameters<PluginApi['resources']['registerDynamicResource']>[1];
     composerReferences: Parameters<
         PluginApi['composerReferences']['register']
@@ -194,6 +193,7 @@ export type PluginTestkitOptions = Readonly<{
 }>;
 
 export type PluginTestkitInvokeActionOptions = Readonly<{
+    /** Handler context only; direct invocation does not run production host admission policy. */
     surface?: PluginInvocationSurface;
     sessionId?: string;
     /**

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../../actions/internalProtocolZodAdapter.js';
 import { PluginContributionLocalIdSchema } from '../../contributionIdentity.js';
@@ -16,26 +16,26 @@ const PluginContributionLocalIdZodSchema = asProtocolZod(PluginContributionLocal
 const PluginIdZodSchema = asProtocolZod(PluginIdSchema);
 
 /** Presentation metadata shared by Session and app-page header actions. */
-export const PluginUiHeaderActionPresentationV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiHeaderActionPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginContributionLocalIdZodSchema,
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
-  order: z.number().int().optional(),
-}).strict());
+  description: z.optional(PluginLocalizedStringV2Schema),
+  icon: z.optional(PluginUiIconTokenV1Schema),
+  order: z.optional(z.number().check(z.int())),
+}));
 
 /** A static app-page header action; dynamic status remains host-owned. */
-export const PluginUiPageHeaderActionV1Schema = lazyZodSchema(() => PluginUiHeaderActionPresentationV1Schema.extend({
+export const PluginUiPageHeaderActionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginUiHeaderActionPresentationV1Schema, {
   command: PluginUiSemanticActionDeclarationV1Schema,
-}).strict());
+})));
 export type PluginUiPageHeaderActionV1 = z.infer<typeof PluginUiPageHeaderActionV1Schema>;
 /** Author input: `command` also admits the bare same-plugin Action local id. */
 export type PluginUiPageHeaderActionV1Input = z.input<typeof PluginUiPageHeaderActionV1Schema>;
 
-export const PluginSessionHeaderActionDescriptorV1Schema = lazyZodSchema(() => PluginUiHeaderActionPresentationV1Schema.extend({
+export const PluginSessionHeaderActionDescriptorV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginUiHeaderActionPresentationV1Schema, {
   command: PluginUiSemanticActionDeclarationV1Schema,
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-}).strict());
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+})));
 export type PluginSessionHeaderActionDescriptorV1 = z.infer<typeof PluginSessionHeaderActionDescriptorV1Schema>;
 export type PluginSessionHeaderActionDescriptor = z.infer<typeof PluginSessionHeaderActionDescriptorV1Schema>;
 export type PluginSessionHeaderActionDescriptorInput = z.input<typeof PluginSessionHeaderActionDescriptorV1Schema>;
@@ -56,10 +56,10 @@ export type NormalizedPluginSessionHeaderActionDescriptorV1 = Readonly<
 export function normalizePluginSessionHeaderActionDescriptorV1(
   input: unknown,
 ): NormalizedPluginSessionHeaderActionDescriptorV1 | null {
-  const parsed = z.object({
+  const parsed = z.strictObject({
     pluginId: PluginIdZodSchema,
     descriptor: PluginSessionHeaderActionDescriptorV1Schema,
-  }).strict().safeParse(input);
+  }).safeParse(input);
   if (!parsed.success) return null;
   const command = normalizePluginUiSemanticCommandV1({
     pluginId: parsed.data.pluginId,

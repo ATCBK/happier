@@ -231,7 +231,7 @@ function FileContentSnippet({ match }: Readonly<{ match: FileContentLine }>): Re
         end: shownLead.length + column.column16 - 1 - start + column.length16, current: false }));
     return (
         <View style={{ marginTop: theme.space.s2 }}>
-            <Text useDefaultTypography={false} numberOfLines={1} style={{ ...Typography.rowMeta(), ...Typography.mono(), color: theme.colors.text.secondary }}>
+            <Text useDefaultTypography={false} numberOfLines={1} style={{ ...Typography.variant('meta'), ...Typography.mono(), color: theme.colors.text.secondary }}>
                 <FindHighlightedText text={text} ranges={ranges} />
             </Text>
         </View>
@@ -249,7 +249,7 @@ function FileContentPreview({ match, gutterDigits, tone = 'secondary', wrap = fa
     const { theme } = useUnistyles();
     const lines = [...match.before, match.text, ...match.after];
     const indent = Math.min(...lines.filter((line) => line.trim().length > 0).map((line) => line.length - line.trimStart().length));
-    const textStyle = { ...Typography.rowMeta(), ...Typography.mono(), color: tone === 'primary' ? theme.colors.text.primary : theme.colors.text.secondary };
+    const textStyle = { ...Typography.variant('meta'), ...Typography.mono(), color: tone === 'primary' ? theme.colors.text.primary : theme.colors.text.secondary };
     const digits = gutterDigits ?? String(match.line + match.after.length).length;
     const gutter = { minWidth: Math.ceil(digits * (textStyle.fontSize ?? 12) * 0.6), textAlign: 'right' as const };
     return <View testID="file-content-preview" style={{ marginTop: theme.space.s2 }}>
@@ -305,16 +305,16 @@ function FileContentDetail({ match: hit, scope }: Readonly<{ match: FileContentL
     return <View testID="file-content-detail" style={{ paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingVertical: MENU_ROW_METRICS.paddingVerticalPx, gap: theme.space.s10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: MENU_ROW_METRICS.iconMarginRightPx }}>
             <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />
-            <Text numberOfLines={1} style={[Typography.rowTitle(), { flexShrink: 1, color: theme.colors.text.primary }]}>
+            <Text numberOfLines={1} style={[Typography.variant('label', 'semiBold'), { flexShrink: 1, color: theme.colors.text.primary }]}>
                 <Text style={Typography.default('medium')}>{name}</Text>
-                <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`  ${match.line}`}</Text>
+                <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`  · ${t('universalSearch.content.atLine', { line: match.line })}`}</Text>
             </Text>
         </View>
         {/* The column has room to show whole lines (lab G1s wraps them). */}
         <FileContentPreview match={match} tone="primary" wrap bandHit />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
             <KeyHint label="↵" />
-            <Text style={[Typography.rowMeta(), { color: theme.colors.text.tertiary }]}>{t('commandPalette.hints.openAtLine')}</Text>
+            <Text style={[Typography.variant('meta'), { color: theme.colors.text.tertiary }]}>{t('commandPalette.hints.openAtLine')}</Text>
         </View>
     </View>;
 }
@@ -340,7 +340,7 @@ function compactDirectory(directory: string): string {
 function FileContentLabel({ match }: Readonly<{ match: FileContentMatch }>) {
     const { theme } = useUnistyles();
     const split = Math.max(match.path.lastIndexOf('/'), match.path.lastIndexOf('\\'));
-    return <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.rowTitle(), { color: theme.colors.text.primary }]}>
+    return <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.variant('label', 'semiBold'), { color: theme.colors.text.primary }]}>
         <Text style={[Typography.default(), { color: theme.colors.text.tertiary }]}>{compactDirectory(match.path.slice(0, split + 1))}</Text>
         <Text style={Typography.default('medium')}>{match.path.slice(split + 1)}</Text>
         <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`:${match.line}`}</Text>
@@ -354,22 +354,22 @@ function FileContentGroupHeader({ path, matches }: Readonly<{ path: string; matc
     return <View style={{ flexDirection: 'row', alignItems: 'center', gap: MENU_ROW_METRICS.iconMarginRightPx,
         paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingTop: MENU_ROW_METRICS.paddingVerticalPx, paddingBottom: theme.space.s2 }}>
         <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx, alignItems: 'center' }}><FileIcon fileName={path.slice(split + 1)} size={ICON_SIZE.sm} appearance="line" /></View>
-        <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.rowTitle(), { flex: 1, color: theme.colors.text.primary }]}>
+        <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.variant('label', 'semiBold'), { flex: 1, color: theme.colors.text.primary }]}>
             <Text style={Typography.default('medium')}>{path.slice(split + 1)}</Text>
             {split >= 0 ? <Text style={[Typography.default(), { color: theme.colors.text.tertiary }]}>{`  ${compactDirectory(path.slice(0, split)).replace(/\/$/, '')}`}</Text> : null}
         </Text>
-        <Text style={[Typography.rowMeta(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{matches}</Text>
+        <Text style={[Typography.variant('meta'), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{matches}</Text>
     </View>;
 }
 
 function AllMatchesLabel({ label }: Readonly<{ label: string }>) {
     const { theme } = useUnistyles();
-    return <Text numberOfLines={1} style={[Typography.rowMeta(), { color: theme.colors.text.secondary }]}>{label}</Text>;
+    return <Text numberOfLines={1} style={[Typography.variant('meta'), { color: theme.colors.text.secondary }]}>{label}</Text>;
 }
 
 function FileContentScopeStatus({ label }: Readonly<{ label: string }>) {
     const { theme } = useUnistyles();
-    return <Text style={[Typography.rowMeta(), Typography.tabular(), { color: theme.colors.text.secondary,
+    return <Text style={[Typography.variant('meta'), Typography.tabular(), { color: theme.colors.text.secondary,
         paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingTop: MENU_ROW_METRICS.paddingVerticalPx }]}>{label}</Text>;
 }
 
@@ -383,7 +383,7 @@ function FileContentLineLabel({ match, gutterDigits }: Readonly<{ match: FileCon
     const text = match.text.trimStart();
     const shift = match.text.length - text.length;
     const ranges = match.columns.map((column) => ({ start: column.column16 - 1 - shift, end: column.column16 - 1 - shift + column.length16, current: false }));
-    const style = { ...Typography.rowMeta(), ...Typography.mono() };
+    const style = { ...Typography.variant('meta'), ...Typography.mono() };
     // The same right-aligned gutter as the expanded context, so the code never shifts when a row becomes active.
     const gutter = { minWidth: Math.ceil(gutterDigits * (style.fontSize ?? 12) * 0.6), textAlign: 'right' as const };
     return <View style={{ flexDirection: 'row', gap: theme.space.s8 }}>
@@ -600,13 +600,14 @@ function buildDynamicSection(
             }
             // Inside the Text in files scope there is nowhere further to go: an incomplete page says so.
             const scopeHint = input.groupByFile && page.hasMore ? t('universalSearch.moreResultsAvailable') : undefined;
+            const resultHint = page.resultHint ?? scopeHint ?? source.resultHint;
+            // Coverage still describes the searched corpus when it yields no rows.
+            // SelectionList needs its empty-state hint to retain that section.
+            const emptyHint = page.emptyHint ?? (options.length === 0 ? resultHint : undefined);
             return {
                 options,
-                ...(page.emptyHint !== undefined ? { emptyHint: page.emptyHint } : {}),
-                ...(page.resultHint !== undefined
-                    ? { resultHint: page.resultHint }
-                    : scopeHint !== undefined ? { resultHint: scopeHint }
-                        : source.resultHint !== undefined ? { resultHint: source.resultHint } : {}),
+                ...(emptyHint !== undefined ? { emptyHint } : {}),
+                ...(resultHint !== undefined ? { resultHint } : {}),
             };
         },
     }];

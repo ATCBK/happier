@@ -1,27 +1,6 @@
-import {
-    PROVIDER_BROKER_OPEN_HTTP_PATH_V1,
-    PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1,
-    PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1,
-    RPC_METHODS,
-    ProviderBrokerOpenRequestV1Schema,
-    ProviderBrokerModelCatalogAuthorizationV1Schema,
-    ProviderBrokerModelCatalogAuthorizationResponseV1Schema,
-    ProviderBrokerOpenResponseV1Schema,
-    ProviderBrokerRequestAdmissionV1Schema,
-    ProviderBrokerRequestAdmissionResponseV1Schema,
-} from '@happier-dev/protocol';
-import {
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_ADMISSION_HTTP_PATH_V1,
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_TERMINAL_USAGE_HTTP_PATH_V1,
-    TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1,
-    TeamCredentialExternalProviderAdmissionResponseV1Schema,
-    TeamCredentialExternalProviderAdmissionV1Schema,
-    TeamCredentialExternalProviderTerminalUsageResponseV1Schema,
-    TeamCredentialExternalProviderTerminalUsageV1Schema,
-    TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema,
-    TeamCredentialResourceTestAdmissionResponseV1Schema,
-    TeamCredentialResourceTestAdmissionV1Schema,
-} from '@happier-dev/protocol/teams';
+import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1, PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1, ProviderBrokerOpenRequestV1Schema, ProviderBrokerModelCatalogAuthorizationV1Schema, ProviderBrokerModelCatalogAuthorizationResponseV1Schema, ProviderBrokerOpenResponseV1Schema, ProviderBrokerRequestAdmissionV1Schema, ProviderBrokerRequestAdmissionResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_ADMISSION_HTTP_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_TERMINAL_USAGE_HTTP_PATH_V1, TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1, TeamCredentialExternalProviderAdmissionResponseV1Schema, TeamCredentialExternalProviderAdmissionV1Schema, TeamCredentialExternalProviderTerminalUsageResponseV1Schema, TeamCredentialExternalProviderTerminalUsageV1Schema, TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema, TeamCredentialResourceTestAdmissionResponseV1Schema, TeamCredentialResourceTestAdmissionV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 
 import type { Fastify } from '@/app/api/types';
 import { getMachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';

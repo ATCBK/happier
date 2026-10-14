@@ -28,6 +28,7 @@ import {
 } from './outwardDeliverySupervisor.js';
 import { finalizeConversationConnectionDeletesForInvocation } from './management.js';
 import { startConversationForInvocation } from './conversationStart.js';
+import { isChannelStateJsonRecord } from './accountLocalBindingPolicy.js';
 import { resolveConversationDeliveryForInvocation } from './management.js';
 import {
   importHmacSha256Key,
@@ -594,7 +595,7 @@ async function seedFinalizingIngressRelations(input: Readonly<{
   return { bindingIds, finalObligationId, reservationId: reservation.id };
 }
 
-function outwardObligation(): ConversationOutwardDeliveryObligation {
+function outwardObligation(): Extract<ConversationOutwardDeliveryObligation, Readonly<{ bindingId: string }>> {
   return {
     connectionId: 'connection-1',
     bindingId: 'binding-1',
@@ -3212,7 +3213,11 @@ describe('Channels outward-delivery supervisor', () => {
     ) => {
       // Consume the real core-produced request at the exact provider boundary.
       const request = ConversationDeliveryInputV1Schema.parse(JSON.parse(JSON.stringify(input)));
-      if (deliveredTexts.length === 0) retainedContent = [...deliveries.rows.values()][0]?.value.payload.content;
+      if (deliveredTexts.length === 0) {
+        const payload = [...deliveries.rows.values()][0]?.value.payload;
+        if (!isChannelStateJsonRecord(payload)) throw new Error('Expected retained outward-delivery payload.');
+        retainedContent = payload.content;
+      }
       deliveredTexts.push(request.content.text);
       const messageId = `projected-message-${deliveredTexts.length}`;
       providerMessageIds.push(messageId);
@@ -3232,7 +3237,9 @@ describe('Channels outward-delivery supervisor', () => {
     expect([...deliveries.rows.values()]).toHaveLength(1);
     expect(ConversationDeliveryContentV1Schema.parse(retainedContent))
       .toEqual({ text: body });
-    expect([...deliveries.rows.values()][0]?.value.payload.content).toBeNull();
+    const settledPayload = [...deliveries.rows.values()][0]?.value.payload;
+    if (!isChannelStateJsonRecord(settledPayload)) throw new Error('Expected settled outward-delivery payload.');
+    expect(settledPayload.content).toBeNull();
     expect([...deliveries.rows.values()][0]?.value).toMatchObject({
       terminal: true,
       attention: false,

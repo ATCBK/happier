@@ -121,7 +121,7 @@ test.skip('switch mid-turn refusal: blocked pending consumed 0.2 handoff contrac
   assert.ok(calls.every(call => !call.args.some(arg => String(arg).includes("'quiesce'"))));
 });
 
-test('standby capture freshness uses a fresh authenticated SSH connection and both session states', async t => {
+test('standby capture freshness uses the shared authenticated SSH configuration and both session states', async t => {
   const fixture = await createTempFixture(t);
   const env = { HAPPIER_STACK_STORAGE_DIR: fixture.root };
   const stackBaseDir = fixture.path('stack');
@@ -133,8 +133,9 @@ test('standby capture freshness uses a fresh authenticated SSH connection and bo
     sourceDir: '/home/pswitch/workspace/dev', target: { ssh: 'primary-a', sshConfigFile: '/fixture/transport' },
     env }, { runProcess: async input => {
       if (input.command === 'ssh') {
-        assert.ok(input.args.includes('ControlMaster=no'));
-        assert.ok(input.args.includes('ControlPath=none'));
+        assert.ok(input.args.includes('BatchMode=yes'));
+        assert.ok(!input.args.includes('ControlMaster=no'));
+        assert.ok(!input.args.includes('ControlPath=none'));
         assert.equal(input.args[input.args.indexOf('-F') + 1], config);
         return { code: 0, out: JSON.stringify({ capturedAt: '2026-10-09T20:55:00Z', agentSqliteCount: 1 }) };
       }

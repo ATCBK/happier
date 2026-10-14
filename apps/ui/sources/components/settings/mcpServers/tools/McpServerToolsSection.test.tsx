@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 
 import { McpServerToolsSection } from './McpServerToolsSection';
 import {
@@ -147,6 +148,26 @@ const label = (
     .find((value) => typeof value === 'string');
 
 describe('McpServerToolsSection', () => {
+  it.each(['ask', 'allow_read_only', 'allow_all'] as const)('projects %s through the canonical default-mode decision, including unknown annotations', async serverDefault => {
+    const tools = [
+      { name: 'read', annotations: { readOnlyHint: true } },
+      { name: 'unknown' },
+      { name: 'write', annotations: { readOnlyHint: false } },
+    ];
+    const projected = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse({
+      ...list, settings: { default: serverDefault, tools: {} },
+      tools: tools.map(tool => ({ ...tool, tokens: 1, setting: 'inherit', source: 'server_default' })),
+    });
+    const screen = await renderScreen(<McpServerToolsSection testID="projection" status="ready" list={projected}
+      agentName={id => id} installedAgentIds={[]} onChange={async () => null} />);
+    for (const tool of tools) {
+      const decision = resolveMcpToolDecisionV1({ policy: { default: serverDefault, overrides: {} },
+        toolName: tool.name, annotations: tool.annotations, permissionMode: 'default' });
+      const selected = screen.findAllByTestId(`projection:tool:${tool.name}:${decision.approval}`)
+        .some(node => node.props.accessibilityState?.checked === true || node.props.accessibilityState?.selected === true);
+      expect(selected, tool.name).toBe(true);
+    }
+  });
   it('draws a tool on the default as inherited and a tool the person set as theirs', async () => {
     const { screen, onChange } = await mount();
     // On "Allow read-only", a read-only tool inherits Allow; it says so to assistive tech.

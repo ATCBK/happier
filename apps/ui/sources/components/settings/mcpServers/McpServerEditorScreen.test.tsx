@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
@@ -148,6 +149,7 @@ const {
 } = await import('./mcpServersTestHelpers');
 
 const mcpServersCommonModuleMockOptions = {
+    realComponents: true,
     // The default text mock serializes parameters (`key(name=value)`), so copy can be checked for what it names.
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -236,42 +238,13 @@ const { resetMcpServerCatalogSnapshotsForTests } = await import('@/sync/store/se
 const { resetSavedSecretCatalogEngineForTests } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
 const { resetSavedSecretCatalogSnapshotsForTests } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
 
-// These neighboring presentation hosts do not supply draft values, target
-// resolution, validation, policy or results. Configure/import/quick-install
-// forms and the Administration/Action/row/Artifact owners below stay real.
-// This suite makes no whole-widget or accessibility rendering claim.
-vi.mock('@/components/ui/forms/InlineAddExpander', () => ({
-    InlineAddExpander: (props: any) =>
-        React.createElement('InlineAddExpander', props, props.isOpen ? props.children : null),
-}));
-
-vi.mock('@/components/settings/mcpServers/McpServerTestPanel', () => ({
-    McpServerTestPanel: () => React.createElement('McpServerTestPanel'),
-}));
-
-vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', () => ({
-    MachineAdministrationTargetSelector: (props: any) => React.createElement('MachineAdministrationTargetSelector', props),
-}));
-
 vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => ++uuidBoundary.sequence === 1 ? 'uuid' : `uuid-${uuidBoundary.sequence}`,
 }));
 
-vi.mock('@/constants/Typography', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/constants/Typography')>();
-    return {
-        ...actual,
-        Typography: {
-            ...actual.Typography,
-            default: () => ({}),
-        },
-    };
-});
-
 /** The draft rule's target select (the page header also holds a `⋯` menu). */
 function findBindingTargetDropdown(screen: Awaited<ReturnType<typeof renderEditorScreen>>) {
-    return screen.findAllByType('DropdownMenu')
-        .find((dropdown) => dropdown.props.itemTrigger?.title === 'settings.mcpServersBindingTarget')!;
+    return screen.find((node) => node.props.itemTrigger?.title === 'settings.mcpServersBindingTarget');
 }
 
 async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; ask?: boolean;
@@ -314,7 +287,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
         }, approvalWaivedSurfaces: {
             ...(!options.ask ? { 'secrets.shared.promote': ['ui'], 'secrets.shared.create': ['ui'] } : {}),
             ...(!options.ask ? { 'mcp.servers.import': ['ui'] } : {}),
-            'mcp.servers.create': ['ui'], 'mcp.servers.delete': ['ui'],
+            'mcp.servers.create': ['ui'],
             ...(!options.mcpUpdatePolicy ? { 'mcp.servers.update': ['ui'] } : {}),
         } }) };
     approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
@@ -707,6 +680,8 @@ describe('McpServerEditorScreen', () => {
         expect(rowMutationRequests[0]?.content).toEqual({ t: 'plain', v: {
             v: 1, servers: [], bindings: [],
         } });
+        expect(approvalArtifacts!.list()).toHaveLength(0);
+        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
         expect(routerBackSpy).not.toHaveBeenCalled();
     });
 
@@ -818,10 +793,8 @@ describe('McpServerEditorScreen', () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'qa_remote_http_20260306');
         });
 
-        const transportTabs = screen.findAllByType('SegmentedTabBar')[1];
-        expect(transportTabs).toBeTruthy();
         await act(async () => {
-            transportTabs?.props.onSelectTab?.('http');
+            screen.pressByTestId('mcp.server.transport:http');
         });
 
         await typeConfig(screen, 'mcp.server.editor.url', 'http://127.0.0.1:63254/mcp');
@@ -840,315 +813,11 @@ describe('McpServerEditorScreen', () => {
 
         expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('qa_remote_http_20260306');
         expect(configField(screen, 'mcp.server.editor.url').props.value).toBe('http://127.0.0.1:63254/mcp');
-        expect(screen.findAllByType('SegmentedTabBar')[1]?.props.activeTabId).toBe('http');
+        expect(screen.find((node) => node.props.testIDPrefix === 'mcp.server.transport'
+            && typeof node.props.onSelectTab === 'function').props.activeTabId).toBe('http');
     });
 
-    it('shows configure/import-json/quick-install add-flow tabs for new servers', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        const addFlowTabs = screen.findAllByType('SegmentedTabBar')[0];
-        expect(addFlowTabs).toBeTruthy();
-        await act(async () => {
-            addFlowTabs?.props.onSelectTab?.('importJson');
-        });
-        expect(screen.findByTestId('mcp.server.importJson.input')).toBeTruthy();
-
-        await act(async () => {
-            addFlowTabs?.props.onSelectTab?.('quickInstall');
-        });
-        expect(screen.findByTestId('mcp.server.quickInstall.preset.github')).toBeTruthy();
-    });
-
-    it('disables JSON import when a saved-secret mapping is missing a value', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        const addFlowTabs = screen.findAllByType('SegmentedTabBar')[0];
-        await act(async () => {
-            addFlowTabs?.props.onSelectTab?.('importJson');
-        });
-
-        await act(async () => {
-            screen.changeTextByTestId('mcp.server.importJson.input', `{
-                "mcp": {
-                    "inputs": {
-                        "github_token": {
-                            "type": "promptString",
-                            "password": true
-                        }
-                    },
-                    "servers": {
-                        "github": {
-                            "command": "npx",
-                            "args": ["-y", "@modelcontextprotocol/server-github"],
-                            "env": {
-                                "GITHUB_TOKEN": "\${input:github_token}"
-                            }
-                        }
-                    }
-                }
-            }`);
-        });
-
-        expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(true);
-    });
-
-    it('imports JSON without value rows through the canonical Action and catalog owner', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
-            one: { command: 'tool', args: ['serve'] },
-        } })); });
-        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-    });
-
-    it('imports a key only after an explicit From the machine choice through the canonical Action', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
-            one: { command: 'tool', env: { API_KEY: '${input:token}' } },
-        }, inputs: [{ id: 'token', password: true }] })); });
-        expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(true);
-        const mode = screen.findAllByType('SegmentedTabBar').find(node => node.props.testIDPrefix === 'mcp.server.importInput.token.mode')!;
-        await act(async () => { mode.props.onSelectTab('machineEnv'); });
-        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        const committed = rowMutationRequests[0]!.content;
-        expect(committed?.t === 'plain' && committed.v.servers[0]?.env.API_KEY).toEqual({ t: 'literal', v: '${API_KEY}' });
-    });
-
-    it('saves an imported credential through the private secret Action and commits its MCP defaults in one catalog write', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        await act(async () => {
-            screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ mcp: {
-                inputs: { github_token: { type: 'promptString', password: true } },
-                servers: { github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } } },
-            } }));
-        });
-        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true);
-        expect(valueField).toBeTruthy();
-        await act(async () => { valueField!.props.onChangeText('imported-credential-value'); });
-        expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(false);
-        modalAlertSpy.mockClear();
-        await act(async () => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(settingsHttpWriteSpy.mock.calls.length + standaloneResourceMutationRequests.length
-            + compoundMutationRequests.length + modalAlertSpy.mock.calls.length).toBeGreaterThan(0));
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(1);
-        const input = standaloneResourceMutationRequests[0]!;
-        const mutation = rowMutationRequests[0]!;
-        expect(input).toMatchObject({ accountGrants: [], teamGrants: [], groupGrants: [] });
-        if (mutation.content?.t !== 'plain') throw new Error('Expected plain MCP catalog content');
-        expect(mutation.content.v.servers[0]?.env.GITHUB_TOKEN).toEqual({ t: 'savedSecret', secretId: `happier:shared-secret:v1:${input.resourceId}` });
-        expect(mutation.content.v.bindings).toMatchObject([{ enabled: true, target: { t: 'allMachines' } }]);
-        expect(mutation).toMatchObject({ expectedRevision: 3,
-            savedSecretRevisions: [{ resourceId: input.resourceId, expectedRevision: 1 }] });
-    });
-
-    it('awaits one catalog acknowledgement for the quick-install credential and selected servers', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'quick-install' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        await act(async () => {
-            screen.pressByTestId('mcp.server.quickInstall.preset.github');
-            screen.pressByTestId('mcp.server.quickInstall.preset.sequential-thinking');
-        });
-        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true);
-        expect(valueField).toBeTruthy();
-        await act(async () => { valueField!.props.onChangeText('quick-install-credential'); });
-        rowMutationGate = new Promise(resolve => { releaseRowMutation = resolve; });
-        modalAlertSpy.mockClear();
-        act(() => { screen.pressByTestId('mcp.server.quickInstall.install'); });
-        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(compoundMutationRequests).toHaveLength(0);
-        const input = standaloneResourceMutationRequests[0]!;
-        const mutation = rowMutationRequests[0]!;
-        if (mutation.content?.t !== 'plain') throw new Error('Expected plain quick-install catalog');
-        expect(mutation.content.v.servers.map(server => server.name).sort()).toEqual(['github', 'sequential_thinking']);
-        expect(mutation.content.v.servers.find(server => server.name === 'github')?.env.GITHUB_TOKEN).toEqual({
-            t: 'savedSecret', secretId: `happier:shared-secret:v1:${input.resourceId}`,
-        });
-        releaseRowMutation!();
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(rowMutationRequests).toHaveLength(1);
-    });
-
-    it('keeps an imported credential Save pending and consumes its original deferred approval without replay', async () => {
-        let phase = 'mount Ask-enabled editor';
-        onTestFailed(async () => {
-            const { storage } = await import('@/sync/domains/state/storageStore');
-            console.error('Deferred MCP import approval phase:', phase, {
-            artifacts: approvalArtifacts?.list().length ?? 0,
-            compoundWrites: compoundMutationRequests.length,
-            alerts: modalAlertSpy.mock.calls,
-            navigations: routerReplaceSpy.mock.calls,
-            settingsScope: storage.getState().settingsScope,
-            settingsVersion: storage.getState().settingsVersion,
-            syncStatus: storage.getState().accountSettingsSyncStatus,
-        }); });
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true, ask: true });
-        phase = 'author JSON import and credential';
-        await act(async () => {
-            screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ mcp: {
-                inputs: { github_token: { type: 'promptString', password: true } },
-                servers: { github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } } },
-            } }));
-        });
-        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!;
-        await act(async () => { valueField.props.onChangeText('deferred-import-value'); });
-        phase = 'submit original Save and wait for approval Artifact';
-        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(approvalArtifacts!.list()).toHaveLength(1));
-        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.editor.approval')).toBeTruthy());
-        expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(true);
-        phase = 'inspect pending Artifact';
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
-        const artifact = approvalArtifacts!.list()[0]!;
-        const request = StoredApprovalRequestSchema.parse(JSON.parse(approvalArtifacts!.readPlainBody(artifact.id)!));
-        expect(request.v).toBe(2);
-        expect(JSON.stringify(request)).not.toContain('deferred-import-value');
-        phase = 'approve original live-input custody through the Inbox';
-        expect((await decideApprovalAsInbox(accountScope!.serverId, artifact.id, 'approve')).ok).toBe(true);
-        phase = 'await mounted continuation completion';
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(approvalArtifacts!.list()).toHaveLength(1);
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-    });
-
-    it.each(['import-json', 'quick-install'] as const)('retains an acknowledged credential across a catalog conflict and retries using its canonical ref (%s)', async addMode => {
-        mcpServersModuleState.routerSearchParams = { addMode };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        const source = JSON.stringify({ mcp: {
-            inputs: { github_token: { type: 'promptString', password: true } },
-            servers: { github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } } },
-        } });
-        await act(async () => {
-            if (addMode === 'import-json') screen.changeTextByTestId('mcp.server.importJson.input', source);
-            else screen.pressByTestId('mcp.server.quickInstall.preset.github');
-        });
-        const submitId = addMode === 'import-json' ? 'mcp.server.importJson.import' : 'mcp.server.quickInstall.install';
-        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true);
-        expect(valueField).toBeTruthy();
-        await act(async () => { valueField!.props.onChangeText('unknown-import-value'); });
-        rowMutationOutcome = 'conflict';
-        modalAlertSpy.mockClear();
-        act(() => { screen.pressByTestId(submitId); });
-        await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'mcp_catalog_conflict'));
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
-        if (addMode === 'import-json') expect(screen.findByTestId('mcp.server.importJson.input')?.props.value).toBe(source);
-        expect(screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)?.props.value).toBe('unknown-import-value');
-        await vi.waitFor(() => expect(screen.findByTestId(submitId)?.props.disabled).toBe(false));
-        rowMutationOutcome = 'updated';
-        modalAlertSpy.mockClear();
-        act(() => { screen.pressByTestId(submitId); });
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(2);
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        const retried = rowMutationRequests[1]!;
-        if (retried.content?.t !== 'plain') throw new Error('Expected the retried current catalog');
-        expect(retried.content.v.servers[0]?.env.GITHUB_TOKEN).toEqual({ t: 'savedSecret',
-            secretId: `happier:shared-secret:v1:${standaloneResourceMutationRequests[0]!.resourceId}` });
-    });
-
-    it('reobserves an unknown catalog acknowledgement and avoids duplicating the created credential or server', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
-        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const screen = await renderEditorScreen({ activeAccount: true });
-        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
-            github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } },
-        }, inputs: [{ id: 'github_token', password: true }] })); });
-        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!;
-        await act(async () => { valueField.props.onChangeText('unknown-import-value'); });
-        loseCompoundAcknowledgement = true;
-        modalAlertSpy.mockClear();
-        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'outcome_unknown'));
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(false));
-        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(standaloneResourceMutationRequests).toHaveLength(1);
-        expect(rowMutationRequests).toHaveLength(1);
-        expect(compoundMutationRequests).toHaveLength(0);
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-    });
-
-    it('allows selecting multiple quick-install presets while preserving required-auth validation', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        const addFlowTabs = screen.findAllByType('SegmentedTabBar')[0];
-        await act(async () => {
-            addFlowTabs?.props.onSelectTab?.('quickInstall');
-        });
-
-        await act(async () => {
-            screen.pressByTestId('mcp.server.quickInstall.preset.github');
-        });
-
-        await act(async () => {
-            screen.pressByTestId('mcp.server.quickInstall.preset.sequential-thinking');
-        });
-
-        expect(screen.findByTestId('mcp.server.quickInstall.preset.github')?.props.selected).toBe(true);
-        expect(screen.findByTestId('mcp.server.quickInstall.preset.sequential-thinking')?.props.selected).toBe(true);
-        expect(screen.findByTestId('mcp.server.quickInstall.install')?.props.disabled).toBe(true);
-    });
-
-    it('opens add binding as a draft expander instead of creating a binding immediately', async () => {
+    it('keeps a new machine rule local until the server is saved, then persists its selected scope', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMcpSettings = {
             v: 1,
@@ -1161,21 +830,40 @@ describe('McpServerEditorScreen', () => {
 
         expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
 
-        const addBindingExpander = screen.findByType('InlineAddExpander');
+        const addBindingExpander = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+            && typeof node.props.onOpenChange === 'function');
         expect(addBindingExpander).toBeTruthy();
-        expect(addBindingExpander.props.title).toBe('settings.mcpServersAddApplyRule');
         expect(addBindingExpander.props.isOpen).toBe(false);
 
         await act(async () => {
             addBindingExpander.props.onOpenChange?.(true);
         });
 
-        const addBindingExpanderAfterOpen = screen.findByType('InlineAddExpander');
+        const addBindingExpanderAfterOpen = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+            && typeof node.props.onOpenChange === 'function');
         expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
         expect(addBindingExpanderAfterOpen?.props.isOpen).toBe(true);
+        expect(rowMutationRequests).toHaveLength(0);
+        await act(async () => { findBindingTargetDropdown(screen).props.onSelect('machine'); });
+        await act(async () => {
+            screen.find(node => node.props.itemTrigger?.title === 'settings.mcpServersBindingMachine').props.onSelect('machine-1');
+        });
+        await act(async () => {
+            screen.find(node => node.props.title === 'settings.mcpServersAddApplyRule'
+                && typeof node.props.onSave === 'function').props.onSave();
+        });
+        expect(rowMutationRequests).toHaveLength(0);
+        await typeConfig(screen, 'mcp.server.editor.command', 'machine-server');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await act(async () => { screen.pressByTestId('mcp.server.editor.save'); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
+            servers: [{ id: 'uuid', stdio: { command: 'machine-server' } }],
+            bindings: [{ serverId: 'uuid', enabled: true, target: { t: 'machine', machineId: 'machine-1' } }],
+        } });
     });
 
-    it('keeps a draft binding on all machines when no machine-scoped target can be selected', async () => {
+    it('refuses a machine rule without a machine and preserves the everywhere draft', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMachines = [];
         liveMcpSettings = {
@@ -1188,66 +876,21 @@ describe('McpServerEditorScreen', () => {
         const screen = await renderEditorScreen();
 
         await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
+            screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+                && typeof node.props.onOpenChange === 'function').props.onOpenChange(true);
         });
 
         expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
         expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
-
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('machine');
-        });
-
-        expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
-        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
-    });
-
-    it('updates the binding target scope from the draft editor', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
-        });
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('allMachines');
-        });
-
-        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
-    });
-
-    it('shows a validation alert when no machine is selected for the add binding draft', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMachines = [];
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
-        });
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('allMachines');
-        });
 
         await act(async () => {
             findBindingTargetDropdown(screen).props.onSelect?.('machine');
         });
 
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'settings.mcpServersNoMachineSelected');
-        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
+        expect(findBindingTargetDropdown(screen).props.selectedId).toBe('allMachines');
         expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
+        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
+        expect(rowMutationRequests).toHaveLength(0);
     });
 });

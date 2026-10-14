@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows';
-import { isTerminalWorkflowRunState } from '@/components/work/status/resolveWorkStatusTone';
+import { hasWorkingWorkflowLibraryRun } from './workflowRunStrip';
 import { formatWorkflowDefinitionLibraryTitle } from '../presentation/workflowProblemPresentation';
 import type { WorkflowLibraryDefinition } from './workflowLibraryReads';
 import type { WorkflowLibraryRunSummary } from './useWorkflowLibrarySummaries';
@@ -25,7 +25,7 @@ function resolveLibraryViews(rows: readonly WorkflowLibraryRow[], summaries: Rea
     for (const row of rows) {
         if (row.group === 'fromPlugins') continue;
         if (row.definition.triggers.length > 0) triggered.add(row.key);
-        if (summaries?.get(row.definition.definitionId)?.recent.some((run) => !isTerminalWorkflowRunState(run.state))) running.add(row.key);
+        if (hasWorkingWorkflowLibraryRun(summaries?.get(row.definition.definitionId))) running.add(row.key);
     }
     const offered: WorkflowLibraryView[] = ['all', ...(triggered.size > 0 ? ['triggered' as const] : []), ...(running.size > 0 ? ['running' as const] : [])];
     return { offered, members: { triggered, running } };

@@ -6,6 +6,7 @@ import type { PeerRouteEphemeralProofV2 } from '@happier-dev/protocol/machines/p
 import type { SignedDirectRouteGrantV2 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { markRpcRequestDisposition, readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { createMachineRpcPeerFallbackReceipt, type MachineRpcPeerFallbackReceipt } from './fallback';
@@ -119,9 +120,8 @@ function createRelayFallbackDisabledError(params: Readonly<{
 }
 
 function createDirectOutcomeUnknownError(): unknown {
-    return markRpcRequestDisposition(Object.assign(new Error('Machine RPC direct outcome is unknown'), {
-        code: 'MACHINE_RPC_OUTCOME_UNKNOWN',
-    }), 'outcomeUnknown');
+    return markRpcRequestDisposition(new RpcError('Machine RPC direct outcome is unknown',
+        RPC_ERROR_CODES.OUTCOME_UNKNOWN), 'outcomeUnknown');
 }
 
 async function useServerFallback<R, A>(

@@ -905,6 +905,7 @@ describe('Account plugin Data storage host', () => {
             calls: string[],
             claimResponse = { status: 200, data: {} as unknown },
             manifest: ParsedPluginManifestV2 = declaredManifest,
+            readResponse = { status: 200, data: { row: null, absenceEpoch: 0 } as unknown },
         ) {
             return async (url: string, body: string) => {
                 calls.push(url);
@@ -914,7 +915,7 @@ describe('Account plugin Data storage host', () => {
                     expect(JSON.parse(body)).toEqual({ manifest: JSON.parse(JSON.stringify(manifest)) });
                     return claimResponse;
                 }
-                return { status: 200, data: { row: null, absenceEpoch: 0 } };
+                return readResponse;
             };
         }
 
@@ -994,7 +995,8 @@ describe('Account plugin Data storage host', () => {
             const bind = claimingHost({
                 resolveReleaseLessDeclaration: () => declaredManifest,
                 scopeKey: () => 'gu-refused-account',
-                post: recordingPost(calls, { status: 409, data: { error: 'plugin_collection_contract_conflict' } }),
+                post: recordingPost(calls, { status: 409, data: { error: 'plugin_collection_contract_conflict' } }, declaredManifest,
+                    { status: 404, data: { error: 'collection_unavailable' } }),
             });
             const collection = bind().collection(collectionDefinition);
             const first = await Promise.allSettled([collection.get('task-1')]);
@@ -1002,7 +1004,7 @@ describe('Account plugin Data storage host', () => {
             const operations = await Promise.allSettled(Array.from({ length: 12 }, (_, index) => (
                 bind().collection(collectionDefinition).get(`task-${index + 2}`)
             )));
-            expect(calls).toEqual([CLAIM_URL]);
+            expect(calls.filter(url => url === CLAIM_URL)).toEqual([CLAIM_URL]);
             expect(first[0]).toMatchObject({ status: 'rejected', reason: {
                 code: 'plugin_collection_contract_conflict',
                 message: expect.stringMatching(/schemaVersion.*migration/i),
@@ -1012,6 +1014,42 @@ describe('Account plugin Data storage host', () => {
                 && result.reason.code === 'plugin_collection_contract_conflict')).toBe(true);
         });
 
+        it('reads through server admission after a writer conflict while retaining the exact write refusal', async () => {
+            const calls: string[] = [];
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => 'compatible-retained-reader',
+                post: async (url) => {
+                    calls.push(url);
+                    if (url === CLAIM_URL) return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
+                    return { status: 200, data: { row: { rowId: 'task-1', revision: 2,
+                        content: { t: 'plain', v: { privateNote: 'retained', addedPrivateField: 'new' } },
+                        projection: { status: 'open' } }, absenceEpoch: 0 } };
+                },
+            });
+            const collection = bind().collection(collectionDefinition);
+            await expect(collection.get('task-1')).resolves.toEqual({ rowId: 'task-1', revision: 2,
+                value: { id: 'task-1', status: 'open', privateNote: 'retained' } });
+            await expect(collection.put({ id: 'task-1', status: 'open', privateNote: 'old' }, { expectedRevision: 2 }))
+                .rejects.toMatchObject({ code: 'plugin_collection_contract_conflict' });
+            expect(calls).toEqual([CLAIM_URL, 'https://data.example.test/v1/plugins/data/get']);
+        });
+        it.each(['route', 'network', '503-with-read-refusal'] as const)('preserves a genuine %s read failure after a writer conflict', async failure => {
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => `retained-reader-${failure}`,
+                post: async url => {
+                    if (url === CLAIM_URL) return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
+                    if (failure === 'network') throw new Error('Connection reset');
+                    return failure === 'route' ? { status: 404, data: { error: 'Not Found' } }
+                        : { status: 503, data: { error: 'collection_unavailable' } };
+                },
+            });
+            await expect(bind().collection(collectionDefinition).get('task-1')).rejects.toMatchObject({
+                code: failure === '503-with-read-refusal' ? 'collection_unavailable' : 'plugin_account_storage_unavailable',
+            });
+        });
+
         it('reclaims a refused declaration only when its declaration, occurrence or Account changes', async () => {
             let manifest = declaredManifest;
             let scope = 'gu-changed-account-a';
@@ -1019,7 +1057,8 @@ describe('Account plugin Data storage host', () => {
             const bind = claimingHost({
                 resolveReleaseLessDeclaration: () => manifest,
                 scopeKey: () => scope,
-                post: async () => {
+                post: async url => {
+                    if (url !== CLAIM_URL) return { status: 404, data: { error: 'collection_unavailable' } };
                     claims += 1;
                     return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
                 },
@@ -1048,7 +1087,8 @@ describe('Account plugin Data storage host', () => {
             const bind = claimingHost({
                 resolveReleaseLessDeclaration: () => declaredManifest,
                 scopeKey: () => scopeKey,
-                post: async () => {
+                post: async url => {
+                    if (url !== CLAIM_URL) return { status: 404, data: { error: 'collection_unavailable' } };
                     claims += 1;
                     return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
                 },

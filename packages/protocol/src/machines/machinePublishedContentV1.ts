@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -15,98 +15,98 @@ import { ActivityDecisionV1Schema } from './managed/managedIntentV1.js';
 import { DevcontainerChildProjectionV1Schema, managedDevcontainerChildProjectionsEqualV1, type DevcontainerChildProjectionV1 } from './managed/devcontainerV1.js';
 
 /** Install facts only: paths, sign-in and launch admission remain private/demanded reads. */
-export const MachinePublishedAgentInventoryV1Schema = lazyZodSchema(() => z.object({
-  checkedAt: z.number().int().nonnegative(),
-  installedAgentIds: z.array(z.string().min(1)),
-}).strict());
+export const MachinePublishedAgentInventoryV1Schema = lazyZodSchema(() => z.strictObject({
+  checkedAt: z.number().check(z.int(), z.nonnegative()),
+  installedAgentIds: z.array(z.string().check(z.minLength(1))),
+}));
 
 /** One share-wide projection: neither owner nor recipient receives private work here. */
-export const MachinePublishedMetadataV1Schema = lazyZodSchema(() => z.object({
+export const MachinePublishedMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   devcontainerChild: z.optional(DevcontainerChildProjectionV1Schema),
-  finitePolicyV1: MachineFinitePolicyV1Schema.optional(),
-  resourcesPolicyV1: MachineResourcesPolicyV1Schema.optional(),
+  finitePolicyV1: z.optional(MachineFinitePolicyV1Schema),
+  resourcesPolicyV1: z.optional(MachineResourcesPolicyV1Schema),
   host: z.string(),
   platform: z.string(),
   happyCliVersion: z.string(),
   homeDir: z.string(),
   happyHomeDir: z.string(),
-  happyLibDir: z.string().optional(),
-  username: z.string().optional(),
-  arch: z.string().optional(),
-  displayName: z.string().optional(),
-  windowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchModeSchema.optional(),
-  windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
-  daemonTerminalSessionAttachSupported: z.boolean().optional(),
-  daemonSessionGoalControlsSupported: z.boolean().optional(),
-  daemonLastKnownStatus: z.enum(['running', 'shutting-down']).optional(),
-  daemonLastKnownPid: z.number().optional(),
-  shutdownRequestedAt: z.number().optional(),
-  shutdownSource: z.enum(['happy-app', 'happy-cli', 'os-signal', 'unknown']).optional(),
-  cliUpdate: CliUpdateFactsSchema.optional(),
-  agentInventory: MachinePublishedAgentInventoryV1Schema.optional(),
-}).strict());
+  happyLibDir: z.optional(z.string()),
+  username: z.optional(z.string()),
+  arch: z.optional(z.string()),
+  displayName: z.optional(z.string()),
+  windowsRemoteSessionLaunchMode: z.optional(WindowsRemoteSessionLaunchModeSchema),
+  windowsRemoteSessionConsole: z.optional(z.enum(['hidden', 'visible'])),
+  daemonTerminalSessionAttachSupported: z.optional(z.boolean()),
+  daemonSessionGoalControlsSupported: z.optional(z.boolean()),
+  daemonLastKnownStatus: z.optional(z.enum(['running', 'shutting-down'])),
+  daemonLastKnownPid: z.optional(z.number()),
+  shutdownRequestedAt: z.optional(z.number()),
+  shutdownSource: z.optional(z.enum(['happy-app', 'happy-cli', 'os-signal', 'unknown'])),
+  cliUpdate: z.optional(CliUpdateFactsSchema),
+  agentInventory: z.optional(MachinePublishedAgentInventoryV1Schema),
+}));
 
-export const MachinePublishedTransferListenerV1Schema = lazyZodSchema(() => z.object({
-  enabled: z.boolean(), configured: z.boolean(), active: z.boolean(), available: z.boolean().optional(),
-}).strict());
+export const MachinePublishedTransferListenerV1Schema = lazyZodSchema(() => z.strictObject({
+  enabled: z.boolean(), configured: z.boolean(), active: z.boolean(), available: z.optional(z.boolean()),
+}));
 
-export const MachinePublishedTransferRuntimeV1Schema = lazyZodSchema(() => z.object({
-  supported: z.object({ import: z.boolean(), export: z.boolean() }).strict(),
-  listenerClasses: z.object({
+export const MachinePublishedTransferRuntimeV1Schema = lazyZodSchema(() => z.strictObject({
+  supported: z.strictObject({ import: z.boolean(), export: z.boolean() }),
+  listenerClasses: z.strictObject({
     loopback_http: MachinePublishedTransferListenerV1Schema,
     tailscale_serve_https: MachinePublishedTransferListenerV1Schema,
-  }).strict(),
-  lifecycle: z.object({ mode: z.literal('lazy_idle_shutdown'), version: z.literal(1) }).strict(),
-}).strict());
+  }),
+  lifecycle: z.strictObject({ mode: z.literal('lazy_idle_shutdown'), version: z.literal(1) }),
+}));
 
 export const MachinePublishedWorkspaceSyncV1Schema = WorkspaceSyncRuntimeEventV1Schema;
 
-const PeerFlowSchema = lazyZodSchema(() => z.object({ active: z.boolean() }).strict());
+const PeerFlowSchema = lazyZodSchema(() => z.strictObject({ active: z.boolean() }));
 
-export const MachinePublishedDaemonStateV1Schema = lazyZodSchema(() => z.object({
+export const MachinePublishedDaemonStateV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.string(),
-  pid: z.number().optional(),
-  httpPort: z.number().optional(),
-  startedAt: z.number().optional(),
-  runtimeId: z.string().optional(),
-  contributionRegistryProjectionRevision: z.number().int().nonnegative().optional(),
-  cliVersion: z.string().optional(),
-  startedWithCliVersion: z.string().optional(),
-  publicReleaseChannel: z.enum(['stable', 'preview', 'dev']).optional(),
-  startupSource: z.enum(['manual', 'background-service', 'self-restart', 'installer', 'unknown']).optional(),
-  serviceManaged: z.boolean().optional(),
-  serviceLabel: z.string().optional(),
-  daemonPendingSessionActivationSupported: z.boolean().optional(),
-  shutdownRequestedAt: z.number().optional(),
-  shutdownSource: z.string().optional(),
-  transfer: MachinePublishedTransferRuntimeV1Schema.optional(),
-  peerMediation: z.object({
-    loopback: z.object({
-      endpoint: PeerLoopbackEndpointCandidateV1Schema.optional(),
-      flows: z.object({
-        machine_rpc: PeerFlowSchema.optional(),
-        live_stream: PeerFlowSchema.optional(),
-        tcp_tunnel: PeerFlowSchema.optional(),
-        voice_media: PeerFlowSchema.optional(),
-      }).strict().optional(),
-    }).strict().optional(),
-    iroh: z.object({ endpoint: IrohEndpointDescriptorV1Schema }).strict().optional(),
-  }).strict().optional(),
-  workspaceSync: MachinePublishedWorkspaceSyncV1Schema.optional(),
-  localServices: LocalServiceMachineSummaryV1Schema.optional(),
+  pid: z.optional(z.number()),
+  httpPort: z.optional(z.number()),
+  startedAt: z.optional(z.number()),
+  runtimeId: z.optional(z.string()),
+  contributionRegistryProjectionRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  cliVersion: z.optional(z.string()),
+  startedWithCliVersion: z.optional(z.string()),
+  publicReleaseChannel: z.optional(z.enum(['stable', 'preview', 'dev'])),
+  startupSource: z.optional(z.enum(['manual', 'background-service', 'self-restart', 'installer', 'unknown'])),
+  serviceManaged: z.optional(z.boolean()),
+  serviceLabel: z.optional(z.string()),
+  daemonPendingSessionActivationSupported: z.optional(z.boolean()),
+  shutdownRequestedAt: z.optional(z.number()),
+  shutdownSource: z.optional(z.string()),
+  transfer: z.optional(MachinePublishedTransferRuntimeV1Schema),
+  peerMediation: z.optional(z.strictObject({
+    loopback: z.optional(z.strictObject({
+      endpoint: z.optional(PeerLoopbackEndpointCandidateV1Schema),
+      flows: z.optional(z.strictObject({
+        machine_rpc: z.optional(PeerFlowSchema),
+        live_stream: z.optional(PeerFlowSchema),
+        tcp_tunnel: z.optional(PeerFlowSchema),
+        voice_media: z.optional(PeerFlowSchema),
+      })),
+    })),
+    iroh: z.optional(z.strictObject({ endpoint: IrohEndpointDescriptorV1Schema })),
+  })),
+  workspaceSync: z.optional(MachinePublishedWorkspaceSyncV1Schema),
+  localServices: z.optional(LocalServiceMachineSummaryV1Schema),
   resources: z.optional(MachinePublishedResourceSummaryV1Schema),
   managedActivity: z.optional(ActivityDecisionV1Schema),
-}).strict());
+}));
 
 /** Persistence readers discard additive/retired fields; these are not disclosure proofs. */
-export const StoredMachinePublishedMetadataV1Schema = lazyZodSchema(() => createStoredReadSchema(MachinePublishedMetadataV1Schema).extend({
+export const StoredMachinePublishedMetadataV1Schema = lazyZodSchema(() => z.extend(createStoredReadSchema(MachinePublishedMetadataV1Schema), {
   // The released UI treats a malformed optional update projection as absent.
-  cliUpdate: createStoredReadSchema(CliUpdateFactsSchema).optional().catch(undefined),
-  agentInventory: createStoredReadSchema(MachinePublishedAgentInventoryV1Schema).optional().catch(undefined),
+  cliUpdate: z.catch(z.optional(createStoredReadSchema(CliUpdateFactsSchema)), undefined),
+  agentInventory: z.catch(z.optional(createStoredReadSchema(MachinePublishedAgentInventoryV1Schema)), undefined),
 }));
-export const StoredMachinePublishedDaemonStateV1Schema = lazyZodSchema(() => createStoredReadSchema(MachinePublishedDaemonStateV1Schema).extend({
+export const StoredMachinePublishedDaemonStateV1Schema = lazyZodSchema(() => z.extend(createStoredReadSchema(MachinePublishedDaemonStateV1Schema), {
   // Optional service presentation failures cannot erase unrelated daemon facts.
-  localServices: createStoredReadSchema(LocalServiceMachineSummaryV1Schema).optional().catch(undefined),
+  localServices: z.catch(z.optional(createStoredReadSchema(LocalServiceMachineSummaryV1Schema)), undefined),
 }));
 
 export type MachinePublishedMetadataV1 = z.infer<typeof MachinePublishedMetadataV1Schema>;

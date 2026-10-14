@@ -4,11 +4,22 @@ import {
     ConnectedPurposeCatalogV1Schema,
     openConnectedAccountCatalogContentV1,
     sealConnectedAccountCatalogContentV1,
+    type ConnectedAccountCatalogRowMutationV1,
     type ConnectedPurposeCatalogV1,
 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ConnectedAccountCatalogValueSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+
+export type ConnectedPurposeCatalogHttpBoundary = {
+    path: string;
+    writes: ConnectedAccountCatalogRowMutationV1[];
+    readonly value: ConnectedPurposeCatalogV1;
+    replace(next: ConnectedPurposeCatalogV1): void;
+    handle(url: string | URL | Request, init?: RequestInit): Promise<Response | null>;
+    hydrate(scope: ServerAccountScope): Promise<ConnectedAccountCatalogValueSnapshot<'purposes'>>;
+};
 
 /** HTTP row/CAS boundary; catalog parsing, Account admission and publication stay real. */
 export function createConnectedPurposeCatalogHttpBoundary(options: Readonly<{
@@ -16,14 +27,14 @@ export function createConnectedPurposeCatalogHttpBoundary(options: Readonly<{
     mode?: 'plain' | 'e2ee';
     material?: AccountScopedCryptoMaterial | null;
     settingsRequest?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
-}> = {}) {
+}> = {}): ConnectedPurposeCatalogHttpBoundary {
     const path = `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`;
     const mode = options.mode ?? 'plain';
     const material = options.material ?? null;
     let value = ConnectedPurposeCatalogV1Schema.parse(options.initialValue ?? { v: 1, bindings: [] });
     let revision = 1;
-    let content = sealConnectedAccountCatalogContentV1({ record: { key: 'purposes', value }, mode, material });
-    const writes: ReturnType<typeof ConnectedAccountCatalogRowMutationV1Schema.parse>[] = [];
+    let content: ConnectedAccountCatalogRowMutationV1['content'] = sealConnectedAccountCatalogContentV1({ record: { key: 'purposes', value }, mode, material });
+    const writes: ConnectedAccountCatalogRowMutationV1[] = [];
     return {
         path,
         writes,
@@ -49,7 +60,12 @@ export function createConnectedPurposeCatalogHttpBoundary(options: Readonly<{
                         content: input.settingsMutation.content }),
                 });
                 const receipt = AccountSettingsV2UpdateResponseSchema.parse(await response.json());
-                if (!receipt.success) return Response.json({ status: 'settings-conflict', revision: receipt.currentVersion });
+                if (!receipt.success) {
+                    if (receipt.error === 'version-mismatch') {
+                        return Response.json({ status: 'settings-conflict', revision: receipt.currentVersion });
+                    }
+                    throw new Error(`Unsupported Settings receipt in purpose fixture: ${receipt.error}`);
+                }
                 settingsVersion = receipt.version;
             }
             value = opened.record.value;

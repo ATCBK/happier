@@ -1,4 +1,5 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
 import type { FilesystemTransferActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
 import { invokeWorkspaceFileSystemAction } from '@/sync/ops/workspaceFileSystem/actionInvocation';
@@ -21,7 +22,7 @@ export async function callAdmittedFilesystemTransferActionRpc(params: Filesystem
     return await callGuardedMachineRpcWithPolicy({ machineId: params.machineId,
         ...(typeof params.serverId === 'string' ? { serverId: params.serverId } : {}),
         accountId: params.accountId, requestId: params.requestId,
-        method, payload: { kind: 'targeted_action_rpc', target: { kind: 'machine', machineId: params.machineId }, input: params.input },
+        method, payload: createTargetedActionRpcRequestV1(params.input, { kind: 'machine', machineId: params.machineId }),
         ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
         ...(params.actionId !== 'daemon.filesystem.transfer.cancel' ? { operationTimeoutMs: null } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
@@ -31,10 +32,10 @@ export async function callAdmittedFilesystemTransferActionRpc(params: Filesystem
 /** The mounted transfer borrows UI Action admission before its daemon transport prepares bytes. */
 export async function callFilesystemTransferAction(params: FilesystemTransferActionParams): Promise<unknown> {
     const result = await invokeWorkspaceFileSystemAction({ machineId: params.machineId,
-        serverId: params.serverId, rootPath: '' }, params.actionId, params.input, {
+        serverId: params.serverId ?? undefined, rootPath: '' }, params.actionId, params.input, {
         signal: params.signal, accountId: params.accountId,
         delivery: async ({ input, context }) => await callAdmittedFilesystemTransferActionRpc({ ...params, input,
-            serverId: context.serverId, accountId: context.runtimeAccountId, requestId: context.actionRequestId, signal: context.signal }),
+            serverId: context.serverId ?? undefined, accountId: context.runtimeAccountId ?? undefined, requestId: context.actionRequestId ?? undefined, signal: context.signal }),
     });
     return result.ok ? result.result : result;
 }

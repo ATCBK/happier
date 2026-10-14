@@ -1,40 +1,37 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PromptAssetExternalRefV1Schema, PromptAssetScopeV1Schema } from './promptAssetsV1.js';
 import { MachineAdministrationTargetV1Schema, type MachineAdministrationTargetV1 } from '../../account/settings/machineAdministrationSelectionsV1.js';
 
 /** Predecessor export modes are inert; current receipts have one manual mode. */
-export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => z.preprocess(
-  value => value === 'export_on_save' || value === 'read_only' ? 'manual' : value,
-  z.literal('manual'),
-));
+export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => z.pipe(z.transform(value => value === 'export_on_save' || value === 'read_only' ? 'manual' : value), z.literal('manual')));
 export type PromptExternalLinkSyncModeV1 = z.infer<typeof PromptExternalLinkSyncModeV1Schema>;
 
-export const PromptExternalLinkEntryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  artifactId: z.string().min(1),
-  assetTypeId: z.string().min(1),
+export const PromptExternalLinkEntryV1Schema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  artifactId: z.string().check(z.minLength(1)),
+  assetTypeId: z.string().check(z.minLength(1)),
   scope: PromptAssetScopeV1Schema,
-  machineId: z.string().min(1),
-  serverIdentityId: MachineAdministrationTargetV1Schema.shape.serverIdentityId.optional(),
-  workspacePath: z.string().nullable().optional(),
+  machineId: z.string().check(z.minLength(1)),
+  serverIdentityId: z.optional(MachineAdministrationTargetV1Schema.shape.serverIdentityId),
+  workspacePath: z.optional(z.nullable(z.string())),
   externalRef: PromptAssetExternalRefV1Schema,
-  syncMode: PromptExternalLinkSyncModeV1Schema.optional(),
-  baseDigest: z.string().min(1).nullable().optional(),
-  lastLibraryDigest: z.string().min(1).nullable().optional(),
-  lastExternalDigest: z.string().min(1).nullable().optional(),
-  lastSyncAtMs: z.number().int().min(0).optional(),
-}).passthrough());
+  syncMode: z.optional(PromptExternalLinkSyncModeV1Schema),
+  baseDigest: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  lastLibraryDigest: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  lastExternalDigest: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  lastSyncAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+}));
 export type PromptExternalLinkEntryV1 = z.infer<typeof PromptExternalLinkEntryV1Schema>;
 
-export const PromptExternalLinksV1Schema = lazyZodSchema(() => z.object({
+export const PromptExternalLinksV1Schema = lazyZodSchema(() => z.pipe(z.looseObject({
   v: z.literal(1),
-  links: z.array(PromptExternalLinkEntryV1Schema).default([]),
-}).passthrough().transform((value): typeof value => ({
+  links: z._default(z.array(PromptExternalLinkEntryV1Schema), []),
+}), z.transform((value): typeof value => ({
   ...value,
   links: value.links.map(link => ({ ...link, syncMode: link.syncMode ?? 'manual' })),
-})));
+}))));
 export type PromptExternalLinksV1 = z.infer<typeof PromptExternalLinksV1Schema>;
 
 /** Bare predecessor links belong only to their original library Home. */

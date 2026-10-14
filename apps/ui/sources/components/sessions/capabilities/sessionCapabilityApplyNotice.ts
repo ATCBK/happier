@@ -1,21 +1,26 @@
 import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { SessionCapabilitiesGetOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { t } from '@/text';
-import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1, readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1, readPendingCapabilityApplyV1, readPendingCapabilityRuleApplyV1, readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { readSessionCapabilityOverrideV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 export type SessionCapabilityChange = Readonly<{ kind: 'skill' | 'mcp_server' | 'native_skill'; title: string; state: 'on' | 'off' | 'inherit' }>;
-export type SessionCapabilityApplyNoticeKey = 'addedNow' | 'removedNow' | 'joinsNextTurn' | 'leavesNextTurn' | 'pendingNextTurn'
+export type SessionCapabilityApplyChange = (SessionCapabilityChange | Readonly<{ kind: 'skill' | 'mcp_server'; source: 'rules' }>)
+    & Readonly<Pick<PendingApply, 'reason' | 'restartBy'>>;
+export type SessionCapabilityApplyNoticeKey = 'addedNow' | 'removedNow' | 'appliedNow' | 'joinsNextTurn' | 'leavesNextTurn' | 'pendingNextTurn'
     | 'newSessionsOnly' | 'offline' | 'restart' | 'restartTerminal' | 'cannotResume' | 'nextStart' | 'saved';
 export type SessionCapabilityApplyNotice = Readonly<{ key: SessionCapabilityApplyNoticeKey; text: string; restart: 'enabled' | 'disabled' | null }>;
 type PendingApply = Extract<SessionCapabilitiesGetOutputV1, { ok: true }>['pendingApply'];
 
-/** Every writer, including Agent approvals and $ picks, leaves the same desired/applied metadata. */
+/** All writers share the metadata codec, including rule changes without Session overrides. */
 export function readSessionCapabilityApplyChange(metadata: unknown,
-    titleFor: (kind: SessionCapabilityChange['kind'], id: string) => string | null): SessionCapabilityChange | null {
+    titleFor: (kind: SessionCapabilityChange['kind'], id: string) => string | null): SessionCapabilityApplyChange | null {
+    const apply = readCapabilitySelectionApplyV1(metadata);
+    if (readPendingCapabilityRuleApplyV1(metadata, 'mcp')) return { kind: 'mcp_server', source: 'rules', ...apply.mcp };
+    if (readPendingCapabilityRuleApplyV1(metadata, 'skills')) return { kind: 'skill', source: 'rules', ...apply.skills };
     const desired = readSessionCapabilitySelectionFromMetadataV1(metadata), applied = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
     const pending = readPendingCapabilityApplyV1(metadata);
-    const candidates: SessionCapabilityChange[] = [];
+    const candidates: SessionCapabilityApplyChange[] = [];
     const kinds = [
         ['mcp_server', pending.mcp, [...desired.mcp.forceIncludeServerIds, ...desired.mcp.forceExcludeServerIds, ...applied.mcp.forceIncludeServerIds, ...applied.mcp.forceExcludeServerIds]],
         ['skill', pending.skills, [...desired.skills.forceIncludeSkillIds, ...desired.skills.forceExcludeSkillIds, ...applied.skills.forceIncludeSkillIds, ...applied.skills.forceExcludeSkillIds]],
@@ -28,7 +33,7 @@ export function readSessionCapabilityApplyChange(metadata: unknown,
             if (state === readSessionCapabilityOverrideV1(applied, kind, id)) continue;
             const title = titleFor(kind, id);
             if (!title) return null;
-            candidates.push({ kind, title, state });
+            candidates.push({ kind, title, state, ...apply[kind === 'mcp_server' ? 'mcp' : 'skills'] });
         }
     }
     return candidates.length === 1 ? candidates[0]! : null;
@@ -38,29 +43,40 @@ export function readSessionCapabilityApplyChange(metadata: unknown,
 export function sessionCapabilityApplyNotice(input: Readonly<{
     pendingApply: PendingApply;
     applyTiming: Readonly<{ mcp: CapabilityApplyTimingV1; skills: CapabilityApplyTimingV1 }> | null;
-    change: SessionCapabilityChange | null;
+    change: SessionCapabilityApplyChange | null;
     machineOnline: boolean; machineName: string; turnSettled: boolean;
     translate?: (key: `capabilities.session.apply.${SessionCapabilityApplyNoticeKey}`, params: Readonly<{ item: string; machine: string }>) => string;
 }>): SessionCapabilityApplyNotice | null {
     const pending = input.pendingApply.mcp || input.pendingApply.skills;
     const changeKind = input.change?.kind === 'mcp_server' ? 'mcp' : 'skills';
-    const change = pending && !input.pendingApply[changeKind] ? null : input.change;
-    const kind = change?.kind === 'mcp_server' ? 'mcp' : change ? 'skills' : input.pendingApply.mcp ? 'mcp' : 'skills';
-    const timing = input.applyTiming?.[kind];
-    if (!pending && !(input.change && timing?.t === 'applied_now')) return null;
+    const currentChange = pending && !input.pendingApply[changeKind] ? null : input.change;
+    const rulesChanged = currentChange !== null && 'source' in currentChange;
+    const change = currentChange && !('source' in currentChange) ? currentChange : null;
+    const kind = currentChange?.kind === 'mcp_server' ? 'mcp' : currentChange ? 'skills' : input.pendingApply.mcp ? 'mcp' : 'skills';
+    // A runner record describes this change; the Agent declaration only previews
+    // what can happen before the runner has observed/applied it. Keep each kind's
+    // record paired with its change when several kinds are pending together.
+    const record = currentChange?.reason !== undefined ? currentChange : input.pendingApply.reason !== undefined ? input.pendingApply : null;
+    const timing = record ? { t: record.reason, restartBy: record.restartBy } : input.applyTiming?.[kind];
+    if (!pending && !(change && timing?.t === 'applied_now')) return null;
     let key: SessionCapabilityApplyNoticeKey;
     let restart: SessionCapabilityApplyNotice['restart'] = null;
-    if (input.pendingApply.reason === 'missing_resume_snapshot' || input.pendingApply.reason === 'missing_resume_identity') key = 'cannotResume';
+    if (timing?.t === 'missing_resume_snapshot' || timing?.t === 'missing_resume_identity') key = 'cannotResume';
     else if (!input.machineOnline) key = 'offline';
-    else if (input.pendingApply.restartBy || timing?.t === 'restart_to_apply') {
-        const by = input.pendingApply.restartBy ?? (timing?.t === 'restart_to_apply' ? timing.restartBy : null);
+    else if (timing?.t === 'restart_to_apply') {
+        const by = timing.restartBy;
         key = by === 'terminal' ? 'restartTerminal' : 'restart';
         if (by === 'user') restart = input.turnSettled ? 'enabled' : 'disabled';
     } else if (timing?.t === 'new_sessions_only') key = 'newSessionsOnly';
     else if (timing?.t === 'session_not_running') key = 'nextStart';
-    else if (!timing || timing.t === 'applied_now' && input.pendingApply[kind] || change?.state === 'inherit') key = 'saved';
+    else if (!timing || timing.t !== 'applied_now' && timing.t !== 'next_turn' || change?.state === 'inherit') key = 'saved';
+    else if (rulesChanged) key = timing.t === 'applied_now' ? 'appliedNow' : 'pendingNextTurn';
+    else if (timing.t === 'applied_now' && !change) key = 'saved';
     else if (change) key = timing?.t === 'applied_now' ? change.state === 'off' ? 'removedNow' : 'addedNow'
         : change.state === 'off' ? 'leavesNextTurn' : 'joinsNextTurn';
     else key = 'pendingNextTurn';
-    return { key, text: (input.translate ?? t)(`capabilities.session.apply.${key}`, { item: change?.title ?? '', machine: input.machineName }), restart };
+    const item = change?.title ?? '';
+    const text = input.translate ? input.translate(`capabilities.session.apply.${key}`, { item, machine: input.machineName })
+        : t(`capabilities.session.apply.${key}`, { item, machine: input.machineName });
+    return { key, text, restart };
 }

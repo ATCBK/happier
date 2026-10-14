@@ -1,6 +1,15 @@
 import type { ScmComparison } from '@happier-dev/protocol';
 import { presentReviewFindingCitations, type ReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
+/** Targeted turns keep the captured aliases and evidence, scoped to their admitted references. */
+export function scopeScmDiffSummaryComparison(comparison: ScmComparison, changeRefs: ReadonlySet<string> | null): ScmComparison {
+  if (!changeRefs) return comparison;
+  return { ...comparison, inventory: { ...comparison.inventory, files: comparison.inventory.files.flatMap(file => {
+    const occurrences = file.occurrences.filter(change => changeRefs.has(change.id));
+    return occurrences.length ? [{ ...file, occurrences }] : [];
+  }) } };
+}
+
 /** Host identities stay in saved state; every model turn receives the captured aliases. */
 export function presentScmDiffSummaryModelContext(value: unknown, comparison: ScmComparison,
   citations: ReviewFindingCitations = []): unknown {

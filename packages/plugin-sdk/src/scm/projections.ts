@@ -534,7 +534,10 @@ export type ScmStatusSnapshotRequest = {
 export type ScmWorktreesEnrichmentRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'backendPreference' | 'outcomeVersion'> & { worktreePaths: string[] };
 export type ScmWorktreeEnrichmentEntry = { path: string; changeCount?: number; lastActivityAt?: number;
     ahead?: number; upstream?: string | null; upstreamGone?: boolean; mergedIntoDefault?: boolean;
-    isLocked?: boolean; lockReason?: string; headOid?: string; hasSubmodules?: boolean };
+    isLocked?: boolean; lockReason?: string; headOid?: string; hasSubmodules?: boolean;
+    retention?: { kind: 'main' | 'orphan'; commonDirPath: string; fingerprint: string;
+        losses?: { unpushedBranches: { name: string; ahead: number }[]; stashes: { name: string; oid: string }[];
+            changes: { path: string; untracked: boolean; worktreePath: string }[]; dependentWorktrees: string[] } } };
 export type ScmWorktreesEnrichmentResponse = {
     success: boolean;
     worktrees?: ScmWorktreeEnrichmentEntry[];

@@ -118,15 +118,15 @@ const NOOP = (): void => {};
 const stylesheet = StyleSheet.create((theme) => ({
     rail: {
         width: 300,
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s12,
         backgroundColor: theme.colors.surface.base,
         borderStartWidth: StyleSheet.hairlineWidth,
         borderStartColor: theme.colors.border.default,
     },
-    phone: { width: 390, paddingHorizontal: 16, paddingBottom: 16, backgroundColor: theme.colors.surface.base },
-    head: { paddingTop: 12, paddingBottom: 6 },
-    title: { ...Typography.default('semiBold'), fontSize: 15, color: theme.colors.text.primary },
+    phone: { width: 390, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s16, backgroundColor: theme.colors.surface.base },
+    head: { paddingTop: theme.space.s12, paddingBottom: theme.space.s6 },
+    title: {  ...Typography.variant('heading'), color: theme.colors.text.primary },
 }));
 
 function Column(props: Readonly<{ phone: boolean; links: boolean }>) {

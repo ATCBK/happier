@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -95,12 +96,11 @@ export const WorkspaceIndexingPermissionView = React.memo<ToolViewProps>(({ tool
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: 10,
-        paddingVertical: 4,
+        gap: theme.space.s10,
+        paddingVertical: theme.space.s4,
     },
     title: {
-        fontSize: 15,
-        fontWeight: '700',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     body: {
@@ -109,8 +109,8 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 18,
     },
     options: {
-        gap: 6,
-        padding: 10,
+        gap: theme.space.s6,
+        padding: theme.space.s10,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.elevated,
     },

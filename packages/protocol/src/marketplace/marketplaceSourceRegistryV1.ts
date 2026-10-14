@@ -2,21 +2,21 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const MarketplaceSourceUrlV1Schema = lazyZodSchema(() => z.string().trim().min(1).transform((value, context) => {
+const MarketplaceSourceUrlV1Schema = lazyZodSchema(() => z.pipe(z.string().check(z.trim(), z.minLength(1)), z.transform((value, context) => {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.hash || !url.hostname) {
-      context.addIssue({ code: 'custom', message: 'Expected a credential-free HTTPS marketplace source URL' });
+      context.issues.push({ code: 'custom', message: 'Expected a credential-free HTTPS marketplace source URL', input: context.value });
       return z.NEVER;
     }
     return url.toString();
   } catch {
-    context.addIssue({ code: 'custom', message: 'Expected a credential-free HTTPS marketplace source URL' });
+    context.issues.push({ code: 'custom', message: 'Expected a credential-free HTTPS marketplace source URL', input: context.value });
     return z.NEVER;
   }
-}));
+})));
 
 export const DEFAULT_CURATED_MARKETPLACE_SOURCE_TITLE = 'Happier curated marketplace';
 export const PUBLIC_NPM_REGISTRY_ORIGIN_V1 = 'https://registry.npmjs.org';

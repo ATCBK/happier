@@ -1,4 +1,4 @@
-import { projectPluginMachineMaterializationReportFactsV1 } from '@happier-dev/protocol';
+import { projectPluginMachineMaterializationReportFactsV1 } from '@happier-dev/protocol/plugins/availability/v1';
 
 import type { ServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
 import type { StoredCredentials } from '@/persistence';

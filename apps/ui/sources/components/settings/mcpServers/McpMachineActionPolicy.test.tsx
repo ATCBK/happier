@@ -150,7 +150,7 @@ describe('offered MCP Machine Actions through their selected Home', () => {
                 },
         })));
         const buttonId = operation === 'probe' ? 'settings.mcpServers.detect.refresh' : 'mcp.server.test.run';
-        await vi.waitFor(() => expect(screen.findByTestId(buttonId).props.disabled).toBe(false));
+        await vi.waitFor(() => expect(screen.findByTestId(buttonId)?.props.disabled).toBe(false));
         alert.mockClear();
         rpcRequests.length = 0;
         act(() => { screen.pressByTestId(buttonId); });

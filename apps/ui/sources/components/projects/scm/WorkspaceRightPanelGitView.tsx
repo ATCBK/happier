@@ -589,7 +589,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
                 onShowConflicts={props.onOpenReviewAllChanges}
             />
             {scmOperationStatus ? (
-                <Text style={{ paddingHorizontal: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ paddingHorizontal: theme.space.s12, color: theme.colors.text.secondary, ...Typography.variant('meta') }}>
                     {scmOperationStatus}
                 </Text>
             ) : null}

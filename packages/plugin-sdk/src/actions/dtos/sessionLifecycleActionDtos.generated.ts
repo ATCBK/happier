@@ -46,17 +46,7 @@ export type SessionLifecycleActionInputById = {
             resume?: string | undefined;
             runtimeDescriptorV1?: JsonValue | undefined;
             environmentVariables?: Record<string, string> | undefined;
-            terminal?: {
-                mode?: 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
-                tmux?: {
-                    sessionName?: string | undefined;
-                    isolated?: boolean | undefined;
-                    tmpDir?: string | null | undefined;
-                } | undefined;
-                herdr?: {
-                    sessionName?: string | undefined;
-                } | undefined;
-            } | undefined;
+            terminal?: any;
             connectedServices?: JsonValue | undefined;
             connectedServicesUpdatedAt?: number | undefined;
             transcriptStorage?: 'persisted' | 'direct' | undefined;
@@ -133,19 +123,7 @@ export type SessionLifecycleActionInputById = {
     readonly "session.fork": {
         requestId?: string | undefined;
         strategy?: 'native' | 'auto' | 'provider_native' | 'acp_fork_latest' | 'replay' | undefined;
-        replaySummaryRunner?: {
-            [x: string]: unknown;
-            v: 1;
-            backendTarget: {
-                kind: 'builtInAgent';
-                agentId: string;
-            } | {
-                kind: 'configuredAcpBackend';
-                backendId: string;
-            };
-            modelId?: string | undefined;
-            permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-        } | undefined;
+        replaySummaryRunner?: unknown;
         replayMaxSeedChars?: number | undefined;
         sessionId?: string | undefined;
         serverId?: string | undefined;
@@ -166,19 +144,7 @@ export type SessionLifecycleActionInputById = {
             recentMessagesCount?: number | undefined;
             maxSeedChars?: number | undefined;
             seedMode?: 'draft' | 'daemon_initial_prompt' | undefined;
-            summaryRunner?: {
-                [x: string]: unknown;
-                v: 1;
-                backendTarget: {
-                    kind: 'builtInAgent';
-                    agentId: string;
-                } | {
-                    kind: 'configuredAcpBackend';
-                    backendId: string;
-                };
-                modelId?: string | undefined;
-                permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-            } | undefined;
+            summaryRunner?: unknown;
         };
         approvedNewDirectoryCreation?: boolean | undefined;
         permissionMode?: string | undefined;
@@ -733,12 +699,12 @@ export type SessionLifecycleActionInputById = {
             attachments?: {
                 attachmentLocalId: string;
                 value: {
-                    key: string;
+                    key: unknown;
                     value: unknown;
                     presentation: {
-                        label: string;
-                        description?: string | undefined;
-                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        label: unknown;
+                        description?: unknown;
+                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'review' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -1067,13 +1033,13 @@ export type SessionLifecycleActionInputById = {
                         pluginId: string;
                         localId: string;
                     };
-                    key: string;
+                    key: unknown;
                     value: unknown;
                     presentation: {
-                        label: string;
-                        typeLabel: string;
-                        description?: string | undefined;
-                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        label: unknown;
+                        typeLabel: unknown;
+                        description?: unknown;
+                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'review' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                     content?: {
@@ -1104,15 +1070,6 @@ export type SessionLifecycleActionInputById = {
                     filePath: string;
                     source: 'file' | 'diff';
                     anchor: {
-                        kind: 'range';
-                        filePath: string;
-                        startLine: number;
-                        endLine: number;
-                        side?: 'before' | 'after' | undefined;
-                        startLineHash?: `lh1:${string}` | undefined;
-                        endLineHash?: `lh1:${string}` | undefined;
-                        selectedTextHash?: `lh1:${string}` | undefined;
-                    } | {
                         kind: 'fileLine';
                         startLine: number;
                         lineHash?: `lh1:${string}` | undefined;
@@ -1129,6 +1086,15 @@ export type SessionLifecycleActionInputById = {
                         line: number;
                         side?: 'before' | 'after' | undefined;
                         lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'before' | 'after' | undefined;
+                        startLineHash?: `lh1:${string}` | undefined;
+                        endLineHash?: `lh1:${string}` | undefined;
+                        selectedTextHash?: `lh1:${string}` | undefined;
                     };
                     snapshot: {
                         selectedLines: string[];
@@ -1140,15 +1106,6 @@ export type SessionLifecycleActionInputById = {
                     anchorResolution?: {
                         filePath: string;
                         originalAnchor: {
-                            kind: 'range';
-                            filePath: string;
-                            startLine: number;
-                            endLine: number;
-                            side?: 'before' | 'after' | undefined;
-                            startLineHash?: `lh1:${string}` | undefined;
-                            endLineHash?: `lh1:${string}` | undefined;
-                            selectedTextHash?: `lh1:${string}` | undefined;
-                        } | {
                             kind: 'fileLine';
                             startLine: number;
                             lineHash?: `lh1:${string}` | undefined;
@@ -1165,20 +1122,20 @@ export type SessionLifecycleActionInputById = {
                             line: number;
                             side?: 'before' | 'after' | undefined;
                             lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
                         };
                         status: 'exact' | 'missing' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'unsupported';
                         confidence: number;
                         id?: string | undefined;
                         resolvedAnchor?: {
-                            kind: 'range';
-                            filePath: string;
-                            startLine: number;
-                            endLine: number;
-                            side?: 'before' | 'after' | undefined;
-                            startLineHash?: `lh1:${string}` | undefined;
-                            endLineHash?: `lh1:${string}` | undefined;
-                            selectedTextHash?: `lh1:${string}` | undefined;
-                        } | {
                             kind: 'fileLine';
                             startLine: number;
                             lineHash?: `lh1:${string}` | undefined;
@@ -1195,6 +1152,15 @@ export type SessionLifecycleActionInputById = {
                             line: number;
                             side?: 'before' | 'after' | undefined;
                             lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
                         } | undefined;
                         reason?: string | undefined;
                         preview?: {
@@ -1330,6 +1296,18 @@ export type SessionLifecycleActionInputById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -1369,9 +1347,7 @@ export type SessionLifecycleActionInputById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -1666,7 +1642,7 @@ export type SessionLifecycleActionInputById = {
                 kind: 'detached_run';
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: string | null | undefined;
+            visibleTeamId?: unknown;
             roleOverrides?: {
                 roleId: string;
                 engine?: {
@@ -1774,18 +1750,10 @@ export type SessionLifecycleActionInputById = {
     };
 };
 export type SessionLifecycleActionResultById = {
-    readonly "session.open": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.fork": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.continue_with_replay": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.rollback": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.open": JsonValue;
+    readonly "session.fork": JsonValue;
+    readonly "session.continue_with_replay": JsonValue;
+    readonly "session.rollback": JsonValue;
     readonly "session.checkpoint_code_rollback": {
         status: 'conversation_only' | 'unavailable' | 'applied' | 'conflict' | 'aborted';
         changedPaths: readonly string[];
@@ -2284,7 +2252,7 @@ export type SessionLifecycleActionResultById = {
             progress?: {
                 [x: string]: unknown;
                 updatedAtMs: number;
-                checkpoint: 'plan' | 'scan_source' | 'transfer_blobs' | 'stage_target' | 'apply' | 'import_session' | 'finalize';
+                checkpoint: 'plan' | 'apply' | 'scan_source' | 'transfer_blobs' | 'stage_target' | 'import_session' | 'finalize';
                 planned: {
                     [x: string]: unknown;
                     totalFiles?: number | undefined;
@@ -2442,9 +2410,7 @@ export type SessionLifecycleActionResultById = {
             message: string;
         } | undefined;
     };
-    readonly "session.handoff.status.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.handoff.status.get": JsonValue;
     readonly "workspace.sync.conflict.resolve": {
         endpoints: readonly ({
             workspaceRefId: string;
@@ -2537,15 +2503,9 @@ export type SessionLifecycleActionResultById = {
             errorCode?: string | undefined;
         };
     };
-    readonly "workspace.sync.relationships.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "workspace.sync.conflicts.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "workspace.sync.conflict.inspect": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "workspace.sync.relationships.list": JsonValue;
+    readonly "workspace.sync.conflicts.list": JsonValue;
+    readonly "workspace.sync.conflict.inspect": JsonValue;
     readonly "session.spawn_new": {
         type: 'error';
         code: 'cancelled' | 'invalid_request' | 'invalid_input' | 'target_required' | 'target_unavailable' | 'machine_offline' | 'incompatible_target' | 'organization_unavailable' | 'organization_invalid' | 'creation_conflict' | 'permission_denied' | 'session_access_request_failed' | 'session_data_key_unavailable' | 'spawn_failed' | 'agent_cli_missing' | 'agent_signed_out' | 'session_access_forbidden' | 'session_access_session_not_found' | 'session_access_subject_not_found' | 'session_access_subject_ineligible' | 'session_access_owner_grant_invalid' | 'session_access_self_grant_invalid' | 'session_access_permission_delegation_forbidden' | 'session_access_permission_delegation_requires_edit' | 'session_access_team_policy_required' | 'session_initial_access_creator_mismatch' | 'session_access_authentication_required' | 'session_access_authentication_unavailable' | 'session_access_external_sharing_requires_team_admin' | 'session_access_external_sharing_disabled' | 'session_access_sharing_unavailable' | 'session_access_invalid_recipient_envelope' | 'session_responsibility_assignee_unavailable' | 'invalid_cursor' | 'data_key_not_required' | 'recipient_envelope_required' | 'recipient_key_unavailable';

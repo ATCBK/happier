@@ -14,7 +14,8 @@ import {
     probeIrohMachineTransferLifecycleAvailability,
     subscribeIrohMachineTransferLifecycleAvailability,
 } from '@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle';
-import { isBrowserIrohHost } from '@/sync/runtime/browserIroh/hostEligibility';
+import { resolveBrowserIrohHostDecision } from '@/sync/runtime/browserIroh/hostEligibility';
+import { resolveMachineCarrierHostEligibility } from '@/sync/domains/transfers/runtime/transferRuntime/routing/resolveMachineCarrierPreselection';
 
 export function useSessionFileTransferAvailabilityState(
     sessionId: string,
@@ -55,9 +56,7 @@ export function useSessionFileTransferAvailabilityState(
         machineOperationProtocolCapabilitiesRevision: machine?.operationProtocolCapabilitiesRevision ?? null,
         machineActive: machine?.active ?? null,
         machineRevokedAt: machine?.revokedAt ?? null,
-        machineCarrierHost: isBrowserIrohHost()
-            ? { kind: 'browser' }
-            : { kind: 'native', lifecycleAvailable: nativeMachineCarrierAvailable },
+        machineCarrierHost: resolveMachineCarrierHostEligibility({ browserIroh: resolveBrowserIrohHostDecision(), nativeLifecycleAvailable: nativeMachineCarrierAvailable }),
     });
 }
 

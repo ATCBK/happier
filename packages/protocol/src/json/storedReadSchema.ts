@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/mini';
 
 import { getResolvedLazyDefinitionSource, lazyDefinition } from '../lazyZodSchema.js';
 
@@ -23,9 +23,7 @@ export function createStoredReadSchema<T extends z.core.$ZodType>(schema: T): T 
   // Registration after this admission must not replace the selected read contract.
   const source = getResolvedLazyDefinitionSource(schema);
   const custom = customReads.get(schema) ?? (source && customReads.get(source));
-  // Structural clones retain their source class. A custom reader may instead
-  // be a genuine Mini/Core parser and must not gain assumed Classic methods.
-  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom), schema, !custom);
+  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom), schema);
   reads.set(schema, read);
   return read as T;
 }
@@ -57,7 +55,9 @@ function deriveStoredReadSchema<T extends z.core.$ZodType>(schema: T, custom: ((
     case 'optional': case 'nullable': case 'default': case 'prefault': case 'nonoptional': case 'readonly': case 'catch':
       overrides = { innerType: createStoredReadSchema(def.innerType) }; break;
     case 'pipe': overrides = { in: createStoredReadSchema(def.in), out: createStoredReadSchema(def.out) }; break;
-    case 'lazy': overrides = { getter: () => createStoredReadSchema(def.getter()) }; break;
+    // Native lazy parsing caches this inner definition. Calling def.getter()
+    // again would build a second source graph instead of projecting that one.
+    case 'lazy': overrides = { getter: () => createStoredReadSchema((schema as unknown as z.core.$ZodLazy)._zod.innerType) }; break;
     default: return schema;
   }
   // Spreading the definition would evaluate native default/prefault getters

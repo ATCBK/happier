@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ActionExecuteResult } from '@happier-dev/protocol';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
@@ -60,16 +61,18 @@ function createHarness(params?: Readonly<{
         confirm: vi.fn(async () => confirms.shift() ?? false),
         alert: vi.fn(),
     };
-    const execute = vi.fn<PluginAccountDataEraseRecoveryExecute>(async () => results.shift() ?? completedResult());
+    const execute = vi.fn<(...args: Parameters<PluginAccountDataEraseRecoveryExecute>) => ReturnType<PluginAccountDataEraseRecoveryExecute>>(
+        async () => results.shift() ?? completedResult(),
+    );
     const lifetime = params && Object.hasOwn(params, 'lifetime')
         ? params.lifetime ?? null
         : createLifetime();
     const captureActiveAccountScopeLifetime = vi.fn(() => lifetime);
     const dependencies = {
-        execute,
+        execute: createFrontDoorActionExecute({ execute }),
         modal,
         captureActiveAccountScopeLifetime,
-    } as unknown as PluginAccountDataEraseRecoveryDependencies;
+    } satisfies PluginAccountDataEraseRecoveryDependencies;
     return {
         controller: createPluginAccountDataEraseRecoveryController(dependencies),
         captureActiveAccountScopeLifetime,

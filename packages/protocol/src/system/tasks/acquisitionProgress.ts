@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const CLI_ACQUISITION_PROGRESS_EVENT = 'cli.acquisition.progress' as const;
 
@@ -10,9 +10,9 @@ export type CliAcquisitionPhase = z.infer<typeof CliAcquisitionPhaseSchema>;
 /** Optional download counters describe archive transfer only, never overall setup completion. */
 export const CliAcquisitionProgressSchema = z.object({
   phase: CliAcquisitionPhaseSchema,
-  receivedBytes: z.number().int().nonnegative().optional(),
-  totalBytes: z.number().int().positive().optional(),
-  failure: z.object({ cause: z.string() }).optional(),
+  receivedBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+  totalBytes: z.optional(z.number().check(z.int(), z.positive())),
+  failure: z.optional(z.object({ cause: z.string() })),
 });
 export type CliAcquisitionProgress = z.infer<typeof CliAcquisitionProgressSchema>;
 

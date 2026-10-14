@@ -1,7 +1,5 @@
-import {
-    encodeBase64,
-    PluginWebhookDeliveryContentV1Schema,
-} from "@happier-dev/protocol";
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { PluginWebhookDeliveryContentV1Schema } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 
 import { db } from "@/storage/db";
 

@@ -9,6 +9,7 @@ export const ARTIFACT_KIND_ICONS: Readonly<Record<ArtifactBrowserKind, IconName>
     prompt: 'books',
     memory: 'bookmark',
     board: 'squares-four',
+    widget: 'squares-four',
     workflow: 'tree-structure',
     role: 'users',
     launchProfile: 'person',
@@ -21,6 +22,7 @@ export function artifactKindLabel(kind: ArtifactBrowserKind): string {
         case 'prompt': return t('artifacts.browser.kindOne.prompt');
         case 'memory': return t('artifacts.browser.kindOne.memory');
         case 'board': return t('artifacts.browser.kindOne.board');
+        case 'widget': return t('artifacts.browser.kindOne.widget');
         case 'workflow': return t('artifacts.browser.kindOne.workflow');
         case 'role': return t('artifacts.browser.kindOne.role');
         case 'launchProfile': return t('artifacts.browser.kindOne.launchProfile');
@@ -45,6 +47,7 @@ export function artifactKindFilterLabel(kind: ArtifactBrowserKind | 'all'): stri
         case 'prompt': return t('artifacts.browser.kinds.prompt');
         case 'memory': return t('artifacts.browser.kinds.memory');
         case 'board': return t('artifacts.browser.kinds.board');
+        case 'widget': return t('artifacts.browser.kinds.widget');
         case 'workflow': return t('artifacts.browser.kinds.workflow');
         case 'role': return t('artifacts.browser.kinds.role');
         case 'launchProfile': return t('artifacts.browser.kinds.launchProfile');
@@ -58,6 +61,7 @@ export function artifactKindOpenLabel(kind: ArtifactBrowserKind): string {
         case 'prompt': return t('artifacts.browser.open.prompt');
         case 'memory': return t('artifacts.browser.open.memory');
         case 'board': return t('artifacts.browser.open.board');
+        case 'widget': return t('artifacts.browser.open.widget');
         case 'workflow': return t('artifacts.browser.open.workflow');
         case 'role': return t('artifacts.browser.open.role');
         case 'launchProfile': return t('artifacts.browser.open.launchProfile');

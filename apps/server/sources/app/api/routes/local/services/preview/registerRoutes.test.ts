@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { connect } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,8 +36,10 @@ const machineFindFirst = vi.hoisted(() => vi.fn(async (_query: unknown): Promise
 } | null> => ({ id: 'machine_1', revokedAt: null, replacedByMachineId: null })));
 const sessionFindUnique = vi.hoisted(() => vi.fn(async (): Promise<SessionAccessProjectionRow | null> => null));
 const machineFindUnique = vi.hoisted(() => vi.fn(async (_query: unknown): Promise<unknown> => null));
+const homeSettingsFindUnique = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 vi.mock('@/storage/db', () => {
-    const boundary = { machine: { findFirst: machineFindFirst, findUnique: machineFindUnique }, session: { findUnique: sessionFindUnique } };
+    const boundary = { machine: { findFirst: machineFindFirst, findUnique: machineFindUnique }, session: { findUnique: sessionFindUnique },
+        homeSettings: { findUnique: homeSettingsFindUnique }, homeGovernancePolicy: { findUnique: async () => null } };
     return { db: { ...boundary, $transaction: async (callback: (tx: typeof boundary) => Promise<unknown>) => callback(boundary) } };
 });
 
@@ -117,6 +121,7 @@ describe('local service preview routes', () => {
         machineFindFirst.mockReset().mockResolvedValue({ id: 'machine_1', revokedAt: null, replacedByMachineId: null });
         sessionFindUnique.mockReset().mockResolvedValue(null);
         machineFindUnique.mockReset().mockResolvedValue(null);
+        homeSettingsFindUnique.mockReset().mockResolvedValue(null);
     });
 
     it('keeps local services isolated when stored-content subpath opt-in is enabled', () => {
@@ -419,13 +424,30 @@ describe('local service preview routes', () => {
             expect(exchanged.headers.location).not.toContain('publicToken');
             const publicAttributes = String(exchanged.headers['set-cookie']).split(';').slice(1).map((part) => part.trim());
             expect(publicAttributes).toEqual(expect.arrayContaining([
-                `Path=/v1/local-services/public/${exposure.exposureId}`, 'HttpOnly', 'Secure', 'SameSite=None', 'Partitioned',
+                'Path=/', 'HttpOnly', 'Secure', 'SameSite=None', 'Partitioned',
             ]));
             expect(publicAttributes.some((part) => part.startsWith('Domain='))).toBe(false);
             const publicHeaders = { host: publicUrl.host, cookie: String(exchanged.headers['set-cookie']).split(';')[0]! };
             const publicLoaded = await app.inject({ method: 'GET', url: String(exchanged.headers.location), headers: publicHeaders });
             expect(publicLoaded.statusCode).toBe(200);
             expect(publicLoaded.body).toBe('ok');
+            const freshUrl = await acquire();
+            env.HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED = '0';
+            const disabledAdmission = await app.inject({ method: 'GET', url: freshUrl.pathname + freshUrl.search,
+                headers: { host: freshUrl.host } });
+            expect(disabledAdmission.statusCode).toBe(404);
+            expect(disabledAdmission.headers['set-cookie']).toBeUndefined();
+            for (const method of ['GET', 'HEAD', 'POST'] as const) {
+                const disabledBody = await app.inject({ method, url: '/', headers: { host: firstUrl.host, cookie: firstCookie } });
+                expect(disabledBody.statusCode).toBe(404);
+                expect(disabledBody.body).not.toBe('ok');
+            }
+            const disabledPublic = await app.inject({ method: 'GET', url: String(exchanged.headers.location), headers: publicHeaders });
+            expect(disabledPublic.statusCode).toBe(404);
+            env.HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED = 'true';
+            await open(freshUrl);
+            const recoveredPublic = await app.inject({ method: 'GET', url: String(exchanged.headers.location), headers: publicHeaders });
+            expect(recoveredPublic.statusCode).toBe(200);
             const publicRevoke = await app.inject({ method: 'DELETE', url: `/v1/local-services/public/${exposure.exposureId}`, payload: {
                 previewId: preview.previewId, machineId: preview.machineId, sessionId: preview.sessionId, exposureId: exposure.exposureId,
             } });
@@ -438,6 +460,81 @@ describe('local service preview routes', () => {
             const retired = await app.inject({ method: 'GET', url: '/', headers: { host: firstUrl.host, cookie: secondCookie } });
             expect(retired.statusCode).toBe(404);
         } finally { await app.close(); }
+    });
+
+    it.each(['private', 'public'] as const)('contains a rejected Home read at the real %s upgrade ingress and recovers', async (kind) => {
+        const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
+        const runtimes = createLocalServiceRouteRuntimes(env);
+        const registered = runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' });
+        if (!registered.ok || !registered.accessUrl) throw new Error('preview registration failed');
+        const exposure = runtimes.public.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+            actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' });
+        if (!exposure.ok) throw new Error('public exposure failed');
+        const url = new URL(kind === 'private' ? registered.accessUrl : exposure.exposure.publicUrl);
+        const network = tunnelBoundary('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n');
+        const app = fastify({ logger: false });
+        app.decorate('authenticate', async () => {});
+        const upgradeSockets = new Set<Duplex>();
+        app.server.on('upgrade', (_request, socket) => {
+            upgradeSockets.add(socket);
+            socket.on('close', () => upgradeSockets.delete(socket));
+        });
+        const rejections: unknown[] = [];
+        let rejected = (_reason: unknown) => {};
+        const onUnhandled = (reason: unknown) => { rejections.push(reason); rejected(reason); };
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+            vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+            // Exercise the real request Home overlay and transaction owner; only DB rows are replaced.
+            registerLocalServiceRoutes(app as unknown as Fastify, { runtimes, openTunnel: network.openTunnel });
+            const exchange = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
+            expect(exchange.statusCode).toBe(303);
+            const cookie = String(exchange.headers['set-cookie']).split(';')[0]!;
+            const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
+            const upgrade = async () => {
+                const socket = connect(Number(listener.port), '127.0.0.1');
+                let response = '';
+                const completed = new Promise<string>((resolve, reject) => {
+                    socket.on('error', reject);
+                    socket.on('close', () => resolve(response));
+                    socket.on('data', chunk => {
+                        response += chunk.toString();
+                        if (response.includes('\r\n\r\n')) resolve(response);
+                    });
+                    socket.on('connect', () => socket.write(`GET /socket HTTP/1.1\r\nHost: ${url.host}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+                });
+                const unhandled = new Promise<string>(resolve => { rejected = () => resolve('unhandled-rejection'); });
+                try { return await Promise.race([completed, unhandled]); }
+                finally { socket.destroy(); }
+            };
+            homeSettingsFindUnique.mockRejectedValue(new Error('home-config-read-refused'));
+            const refused = await upgrade();
+            expect(refused).not.toBe('unhandled-rejection');
+            expect(refused).not.toContain('101 Switching Protocols');
+            expect(rejections).toEqual([]);
+            homeSettingsFindUnique.mockResolvedValue(null);
+            expect(await upgrade()).toContain('101 Switching Protocols');
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(rejections).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+            for (const socket of upgradeSockets) socket.destroy();
+            await app.close();
+            vi.unstubAllEnvs();
+        }
     });
 
     it('refreshes expired server admission for a shared viewer without native endpoint availability', async () => {
@@ -798,14 +895,15 @@ describe('local service preview routes', () => {
             },
         });
         socket.on('close', closeClient);
-        const headers = { host: HOST, cookie };
+        const host = scope === 'private' ? HOST : new URL(created.exposure.publicUrl).host;
+        const headers = { host, cookie };
         const pending = kind === 'http'
             ? getRouteHandler(app, 'GET', scope === 'private' ? '/*' : '/v1/local-services/public/:exposureId/*')({
                 params: { '*': '', exposureId }, headers,
             }, { ...createReplyStub(), raw })
             : Promise.resolve(upgradeHandlers[scope === 'private' ? 0 : 1]?.({
                 url: scope === 'private' ? '/socket' : `/v1/local-services/public/${exposureId}/socket`, headers: {
-                host: HOST, cookie, upgrade: 'websocket', connection: 'Upgrade',
+                host, cookie, upgrade: 'websocket', connection: 'Upgrade',
                 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13',
             } }, socket, new Uint8Array()));
         try {

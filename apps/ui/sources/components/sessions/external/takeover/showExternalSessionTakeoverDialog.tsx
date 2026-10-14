@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -290,7 +291,7 @@ export async function showExternalSessionTakeoverDialog(params: Readonly<{
             subtitle: t('chatFooter.directTakeoverDialogBody'),
             testID: 'direct-session-takeover-dialog',
             bodyScroll: 'auto',
-            dimensions: { width: 560, maxHeightRatio: 0.85, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'md' },
         },
         closeOnBackdrop: true,
     });

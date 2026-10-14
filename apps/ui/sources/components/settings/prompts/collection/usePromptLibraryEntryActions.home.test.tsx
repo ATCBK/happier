@@ -50,7 +50,7 @@ describe('prompt editor deletion authority', () => {
     const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const { usePromptLibraryEntryActions } = await import('./usePromptLibraryEntryActions');
-    const hook = await renderHook(() => usePromptLibraryEntryActions('doc', { serverId: fixture!.home.id,
+    const hook = await renderHook(() => usePromptLibraryEntryActions({ serverId: fixture!.home.id,
       accountId: 'artifact-account' }));
     expect(await hook.getCurrent().remove('same-doc')).toBe(true);
     expect(fixture.boundary.read('same-doc')).toBeNull();

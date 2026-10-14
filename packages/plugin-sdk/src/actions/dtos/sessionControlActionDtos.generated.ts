@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { SessionUsageLimitCheckNowRequestV1Input, SessionUsageLimitConsumeResetCreditRequestV1Input, VoiceProviderSettingsJsonValueV1 } from './pluginActionDtoSupport.generated.js';
+import type { SessionUsageLimitCheckNowRequestV1Input, SessionUsageLimitConsumeResetCreditRequestV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type SessionControlActionInputById = {
     readonly "session.pending.withdraw": {
@@ -96,15 +96,10 @@ export type SessionControlActionInputById = {
         enabled: boolean;
     };
     readonly "session.voice.preference.set": {
+        [x: string]: any;
         sessionId: string;
         serverId: string;
         expectedMetadataRevision: number;
-        preference: {
-            providerContributionId: string;
-            settingFieldPath: string;
-            value: VoiceProviderSettingsJsonValueV1<true>;
-            displayName?: string | undefined;
-        } | null;
     };
     readonly "session.context.update": {
         sessionId: string;
@@ -161,18 +156,10 @@ export type SessionControlActionInputById = {
         };
     };
     readonly "session.instructions.set": {
+        [x: string]: any;
         sessionId: string;
         serverId: string;
         expectedMetadataRevision: number;
-        ref: {
-            artifactId: string;
-            kind: 'doc';
-            serverId?: string | undefined;
-        } | null;
-    };
-    readonly "session.view.toolCalls.set": {
-        sessionId: string;
-        showToolCalls: boolean | null;
     };
     readonly "session.permission_mode.set": {
         sessionId: string;
@@ -519,12 +506,8 @@ export type SessionControlActionResultById = {
     readonly "session.pending.resetStart.cancel": {
         outcome: 'removed' | 'already_delivered' | 'delivery_unknown';
     };
-    readonly "session.turn.cancel": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.stop": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.turn.cancel": JsonValue;
+    readonly "session.stop": JsonValue;
     readonly "session.terminalComposer.clear": {
         [x: string]: unknown;
         ok: true;
@@ -553,36 +536,15 @@ export type SessionControlActionResultById = {
         errorCode?: string | undefined;
         error?: string | undefined;
     };
-    readonly "session.title.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.bot.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.memory.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.voice.preference.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.context.update": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.instructions.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.view.toolCalls.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.permission_mode.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.model.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.archive": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.title.set": JsonValue;
+    readonly "session.bot.set": JsonValue;
+    readonly "session.memory.set": JsonValue;
+    readonly "session.voice.preference.set": JsonValue;
+    readonly "session.context.update": JsonValue;
+    readonly "session.instructions.set": JsonValue;
+    readonly "session.permission_mode.set": JsonValue;
+    readonly "session.model.set": JsonValue;
+    readonly "session.archive": JsonValue;
     readonly "session.delete": {
         success: true;
     };
@@ -594,24 +556,12 @@ export type SessionControlActionResultById = {
         sessionId: string;
         tagIds: string[];
     };
-    readonly "session.unarchive": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.status.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.work_state.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.goal.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.goal.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.goal.clear": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.unarchive": JsonValue;
+    readonly "session.status.get": JsonValue;
+    readonly "session.work_state.get": JsonValue;
+    readonly "session.goal.get": JsonValue;
+    readonly "session.goal.set": JsonValue;
+    readonly "session.goal.clear": JsonValue;
     readonly "session.reports_to.set": {
         ok: true;
         sessionId: string;
@@ -649,18 +599,10 @@ export type SessionControlActionResultById = {
         error: 'reports_to_forbidden';
         reason: 'input' | 'read' | 'pairwise';
     };
-    readonly "session.usageLimit.waitResume.enable": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.usageLimit.waitResume.cancel": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.usageLimit.checkNow": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.usageLimit.consumeResetCredit": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.usageLimit.waitResume.enable": JsonValue;
+    readonly "session.usageLimit.waitResume.cancel": JsonValue;
+    readonly "session.usageLimit.checkNow": JsonValue;
+    readonly "session.usageLimit.consumeResetCredit": JsonValue;
     readonly "session.vendor_plugin_catalog.list": {
         [x: string]: unknown;
         vendorPlugins: readonly {
@@ -749,9 +691,7 @@ export type SessionControlActionResultById = {
         } | undefined;
         diagnostic?: string | undefined;
     };
-    readonly "session.history.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.history.get": JsonValue;
     readonly "session.wait.idle": {
         ok: true;
         sessionId: string;
@@ -762,12 +702,8 @@ export type SessionControlActionResultById = {
         code: 'unsupported' | 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'encryption_material_unavailable' | 'timeout';
         candidates?: readonly string[] | undefined;
     };
-    readonly "session.config_option.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.connected_services_auth.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.config_option.set": JsonValue;
+    readonly "session.connected_services_auth.set": JsonValue;
     readonly "session.model.unarm": {
         ok: true;
         status: 'applied' | 'already_active';

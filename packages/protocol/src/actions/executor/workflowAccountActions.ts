@@ -7,7 +7,7 @@ import { WorkflowActionFailureV1Schema, type WorkflowActionFailureV1 } from '../
 
 export type WorkflowActionFailureDiagnosticV1 = Readonly<{
   event: 'workflow_action_failure';
-  errorCode: 'storage_unavailable';
+  errorCode: 'storage_unavailable' | 'content_unavailable';
   originalCode: string | null;
   httpStatus: number | null;
   operation: string;
@@ -27,10 +27,14 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   // not a failure to reach storage.
   const code = rawCode === 'automation_disabled' ? 'ineligible_state'
     : rawCode === 'automation_not_found' ? 'content_unavailable'
+    // This is Account-wide preparation, before any role is selected. Keep
+    // its specific read failure in content details rather than refusing a role.
+    : rawCode === 'account_role_overrides_unavailable' ? 'content_unavailable'
     : rawCode === 'session_key_required' || rawCode === 'encryption_material_unavailable'
     || rawCode === 'encryption_mode_mismatch' || rawCode === 'invalid_template'
     ? 'content_unavailable' : rawCode;
-  const details = error !== null && typeof error === 'object' && 'details' in error ? error.details : undefined;
+  const details = rawCode === 'account_role_overrides_unavailable' ? { reason: rawCode }
+    : error !== null && typeof error === 'object' && 'details' in error ? error.details : undefined;
   const failure = WorkflowActionFailureV1Schema.safeParse({
     ok: false,
     errorCode: code,
@@ -40,7 +44,8 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   });
   const result: WorkflowActionFailureV1 = failure.success ? failure.data
     : { ok: false, errorCode: 'storage_unavailable', error: 'storage_unavailable' };
-  if (result.errorCode === 'storage_unavailable' && diagnostic) {
+  if ((result.errorCode === 'storage_unavailable'
+    || (rawCode === 'account_role_overrides_unavailable' && result.errorCode === 'content_unavailable')) && diagnostic) {
     let originalCode: string | null = null;
     let httpStatus: number | null = null;
     let operation = diagnostic.operation;
@@ -64,7 +69,7 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
       }
       cause = 'cause' in cause ? cause.cause : undefined;
     }
-    diagnostic.emit({ event: 'workflow_action_failure', errorCode: 'storage_unavailable', originalCode,
+    diagnostic.emit({ event: 'workflow_action_failure', errorCode: result.errorCode, originalCode,
       httpStatus, operation, durationMs });
   }
   return result;

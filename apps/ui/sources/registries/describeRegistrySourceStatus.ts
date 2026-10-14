@@ -1,4 +1,4 @@
-import type { RegistrySourceStatusV1 } from '@happier-dev/protocol/registries';
+import { RegistrySourceStatusV1Schema, type RegistrySourceStatusV1 } from '@happier-dev/protocol/registries';
 import { t } from '@/text';
 
 /** One status line shared by registry consumers and the Add-modal source failures. */
@@ -15,4 +15,12 @@ export function describeRegistrySourceStatus(status: RegistrySourceStatusV1): st
         case 'newer_format': return t('promptLibrary.registriesStatus.newerFormat');
         case 'invalid_source': return t('promptLibrary.registriesStatus.invalidSource');
     }
+}
+
+export type RegistryFailureStatus = Exclude<RegistrySourceStatusV1, { state: 'ok' }>;
+/** The registry owner's typed failure (rate limited, token rejected, …) as it crosses an Action failure's details. */
+export function readRegistryFailureStatus(details: unknown): RegistryFailureStatus | null {
+    const status = details && typeof details === 'object'
+        ? RegistrySourceStatusV1Schema.safeParse((details as { registryStatus?: unknown }).registryStatus) : null;
+    return status?.success && status.data.state !== 'ok' ? status.data : null;
 }

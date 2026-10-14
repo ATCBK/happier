@@ -340,7 +340,7 @@ async function selectionReceipt() {
 }
 
 function binding() { return account!.persistedSettings.voiceSettingsV1.credentialBindings[0]; }
-function assertAccountSelection(target = codexTarget, consumer = contribution, purpose = credentials.slot.purpose) {
+function assertAccountSelection(target = codexTarget, consumer: Readonly<{ pluginId: string; localId: string }> = contribution, purpose = credentials.slot.purpose) {
   expect(binding()).toMatchObject({
     contribution: consumer, credentialSlotId: 'api_key', credentialSource: { kind: 'connectedAccount' },
   });

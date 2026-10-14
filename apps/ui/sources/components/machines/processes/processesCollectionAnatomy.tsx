@@ -649,7 +649,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   quiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     flexShrink: 1,
   },
@@ -661,14 +661,14 @@ const styles = StyleSheet.create((theme) => ({
     overflow: 'hidden',
   },
   moreChips: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
     flexShrink: 0,
   },
   command: {
     ...Typography.mono(),
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     fontFamily: Typography.mono().fontFamily,
     color: theme.colors.text.secondary,
     flexShrink: 1,
@@ -677,7 +677,7 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.mono(),
   },
   figure: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
     textAlign: 'right',

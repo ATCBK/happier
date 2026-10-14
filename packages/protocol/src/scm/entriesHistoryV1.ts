@@ -12,7 +12,7 @@ const literalPath = z.string().check(z.refine((path) => path === '' || (
 /** Wire epoch 1: closed request, entries and commit facts; no retained history index. */
 export const ScmHistoryEntriesInputV1Schema = z.lazy(() => z.strictObject({
     cwd: z.string().check(z.minLength(1)),
-    backendPreference: z.optional(ScmRequestBaseSchema.shape.backendPreference.unwrap().strict()),
+    backendPreference: z.optional(z.catchall(ScmRequestBaseSchema.shape.backendPreference._zod.def.innerType, z.never())),
     outcomeVersion: ScmRequestBaseSchema.shape.outcomeVersion,
     folder: literalPath,
     paths: z.array(literalPath),

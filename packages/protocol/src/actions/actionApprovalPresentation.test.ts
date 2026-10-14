@@ -9,8 +9,133 @@ import { MANAGED_MACHINE_ACTION_IDS_V1 } from '../machines/managed/actionIdsV1.j
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
+import type { ActionId } from './actionIds.js';
+import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
+import { describeApprovalRequestFields } from './actionApprovalPresentation.js';
 
 describe('approval field presentation', () => {
+  it('admits the neighboring capabilities families without disclosing live-only secret values', () => {
+    const entry = { id: 'mcp-a', name: 'mcp-a', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
+    const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview.'), 0o644);
+    const cases: readonly (readonly [ActionId, unknown])[] = [
+      ['skills.create', { name: 'review', files: [file] }],
+      ['skills.update', { skillId: 'skill-a', expectedRevision: '1:1', files: [] }],
+      ['skills.duplicate', { skillId: 'skill-a' }], ['skills.delete', { skillId: 'skill-a', expectedRevision: '1:1' }],
+      ['skills.install', { source: { kind: 'upload', files: [file] } }],
+      ['skills.found.adopt', { machineId: 'machine-a', items: [{ name: 'review', path: '/skills/review' }] }],
+      ['skills.export', { skillIds: ['skill-a'] }], ['skills.updates.apply', { skillId: 'skill-a', expectedRevision: '1:1', choices: {} }],
+      ['skills.machine.install', { machineId: 'machine-a', skillId: 'skill-a' }],
+      ['skills.machine.uninstall', { machineId: 'machine-a', skillId: 'skill-a' }],
+      ['mcp.servers.tools.set', { serverId: 'mcp-a', tools: { search: 'ask' } }],
+      ['mcp.servers.create', { entry, expectedRevision: 1 }], ['mcp.servers.create', { entries: [{ entry }], expectedRevision: 1 }],
+      ['mcp.servers.update', { entry, expectedRevision: 1 }],
+      ['mcp.servers.duplicate', { serverId: 'mcp-a', entry: { ...entry, id: 'mcp-b' }, expectedRevision: 1 }],
+      ['mcp.servers.delete', { serverId: 'mcp-a', expectedRevision: 1, removeBindings: true }],
+      ['mcp.servers.import', { source: { kind: 'paste', text: '{}' }, dryRun: true }],
+      ['mcp.found.adopt', { machineId: 'machine-a', items: [] }],
+      ['mcp.servers.signIn.start', { serverId: 'mcp-a', stepUp: true }],
+      ['registries.sources.create', { url: 'https://example.test/registry.json' }],
+      ['registries.sources.update', { sourceId: 'source-a', enabled: false }],
+      ['registries.sources.token.set', { sourceId: 'source-a', token: null }],
+      ['registries.sources.delete', { sourceId: 'source-a' }],
+      ['secrets.create', { name: 'Private', value: 'private-secret-sentinel' }],
+      ['secrets.update', { secretId: 'secret-a', value: 'private-secret-sentinel', expectedUpdatedAt: 1 }],
+      ['secrets.delete', { secretId: 'secret-a', expectedUpdatedAt: 1 }],
+      ['agents.acp.backends.get', { backendId: 'agent-a' }],
+      ['agents.acp.backends.delete', { backendId: 'agent-a' }],
+      ['agents.acp.backends.installFromRegistry', { fromRegistry: { sourceId: 'source-a', itemId: 'agent-a', version: '1.0.0' }, installOn: ['machine-a'] }],
+    ];
+    const failures: unknown[] = [];
+    for (const [actionId, raw] of cases) {
+      const spec = getActionSpec(actionId);
+      const admitted = spec.inputSchema.parse(raw);
+      const observed = spec.projectObservationInput?.(admitted) ?? admitted;
+      const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, actionId, actionArgs: spec.approvalInputCustody === 'live_only' ? observed : admitted,
+        preview: { actionId, actionArgs: spec.approvalInputCustody === 'live_only' && spec.approvalPresentation?.inputSchema
+          ? spec.approvalPresentation.projectInput?.(admitted) : observed }, summary: spec.title,
+        executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'neighbor-request',
+          surface: 'cli', serverId: 'home', actionId } });
+      const admission = resolveApprovalRequestApproveAdmission(request);
+      if (admission.status !== 'available') failures.push({ actionId, admission });
+      expect(JSON.stringify(admission.presentation), actionId).not.toContain('private-secret-sentinel');
+      expect(JSON.stringify(settleApprovalRequestActionArgs(request)), actionId).not.toContain('private-secret-sentinel');
+      if (actionId === 'registries.sources.create') expect(admission.presentation.rows).toContainEqual(
+        expect.objectContaining({ title: 'Address', value: 'https://example.test/registry.json' }));
+      if (actionId === 'registries.sources.delete') expect(admission.presentation.rows).toContainEqual(
+        expect.objectContaining({ title: 'Registry', reference: { kind: 'registrySource', id: 'source-a' } }));
+    }
+    expect(failures).toEqual([]);
+  });
+  it.each([
+    { kind: 'command', command: 'coding-agent', args: [] },
+    { kind: 'npm', package: 'coding-agent', version: '1.0.0', args: [] },
+    { kind: 'uv', package: 'coding-agent', version: '1.0.0', command: 'coding-agent', args: [] },
+    { kind: 'archive', version: '1.0.0', assetsByPlatform: { 'linux-x64': { archiveUrl: 'https://example.test/agent.tar.gz', executableSubpath: 'agent' } }, args: [] },
+  ])('admits the actual $kind Agent launch rather than requiring a command-only operand', launch => {
+    const spec = getActionSpec('agents.acp.backends.upsert');
+    const actionArgs = spec.inputSchema.parse({ backend: { id: 'review-agent', name: 'review-agent', title: 'Review agent', launch } });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: spec.id, actionArgs, summary: spec.title,
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'agent-request',
+        surface: 'cli', serverId: 'home', actionId: spec.id } });
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission).toMatchObject({ status: 'available' });
+    expect(JSON.stringify(admission.presentation.rows)).toContain(launch.kind);
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ path: 'backend.id', technical: true }));
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ title: 'Agent', value: 'Review agent' }));
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ title: 'Launch', entries: expect.arrayContaining([
+      expect.objectContaining({ label: 'Method' }),
+    ]) }));
+  });
+  it.each(['skills.rules.set', 'mcp.rules.set'] as const)('admits %s with the exact reviewed items and Machine change', actionId => {
+    const spec = getActionSpec(actionId);
+    const actionArgs = spec.inputSchema.parse({ items: [actionId === 'skills.rules.set' ? { skillId: 'skill-a' } : { serverId: 'mcp-a' }],
+      change: { kind: 'write', write: { place: { t: 'machine', machineId: 'machine-a' }, state: 'on' } } });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId, actionArgs, summary: spec.title,
+      preview: { actionId, actionArgs: spec.projectObservationInput?.(actionArgs) },
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'rules-request',
+        surface: 'cli', serverId: 'home', actionId } });
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission).toMatchObject({ status: 'available' });
+    const executing = ApprovalRequestV2Schema.parse({ ...request, status: 'executing',
+      decision: { kind: 'approve', decidedAtMs: 2 }, updatedAtMs: 2 });
+    const settled = ApprovalRequestV2Schema.parse({ ...executing, status: 'executed', updatedAtMs: 3,
+      actionArgs: settleApprovalRequestActionArgs(executing), execution: { executedAtMs: 3, ok: true } });
+    expect(decideApprovalRequestTransition(executing, settled)).toEqual({ ok: true, changed: true });
+    expect(describeApprovalRequestFields(settled)).toEqual(admission.presentation);
+    expect(settleApprovalRequestActionArgs(settled)).toEqual(actionArgs);
+    expect(admission.presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: actionId === 'skills.rules.set' ? 'Skill' : 'MCP server', reference: {
+        kind: actionId === 'skills.rules.set' ? 'skill' : 'mcpServer', id: actionId === 'skills.rules.set' ? 'skill-a' : 'mcp-a' } }),
+      expect.objectContaining({ title: 'Where', reference: { kind: 'machine', id: 'machine-a' } }),
+      expect.objectContaining({ title: 'Change', value: 'Turn on' }),
+    ]));
+    expect(resolveApprovalRequestApproveAdmission({ ...request, actionArgs: { items: actionArgs.items } }))
+      .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    expect(() => settleApprovalRequestActionArgs({ ...request, actionArgs: { items: actionArgs.items } })).not.toThrow();
+    for (const [state, label] of [['off', 'Turn off'], ['inherit', 'Use inherited rules']] as const) {
+      const input = spec.inputSchema.parse({ items: actionArgs.items, change: {
+        kind: 'write', write: { place: { t: 'allMachines' }, state },
+      } });
+      expect(describeApprovalActionFields({ actionId, actionArgs: input }).rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: 'Where', value: 'Everywhere' }), expect.objectContaining({ title: 'Change', value: label }),
+      ]));
+    }
+    const replacement = spec.inputSchema.parse({ items: actionArgs.items, change: { kind: 'replace', rules: [] } });
+    expect(describeApprovalActionFields({ actionId, actionArgs: replacement }).rows).toContainEqual(
+      expect.objectContaining({ title: 'Replacement rules', entries: [{ label: 'Change', value: 'Remove all rules', depth: 0 }] }));
+  });
+  it('keeps saved-group library ids in technical detail and names a stored rename request', () => {
+    const input = getActionSpec('widgets.fragment.update').inputSchema.parse({
+      account: { serverId: 'home', accountId: 'owner' }, artifactId: 'opaque-library-id', patch: { name: 'Capacity and PRs' },
+    });
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.fragment.update', actionArgs: input });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'artifactId')).toMatchObject({ technical: true });
+    expect(getActionSpec('widgets.fragment.update').approvalPresentation?.summary(input)).toContain('Capacity and PRs');
+  });
   it('reviews skill write operands independently of their deliberately narrow observation previews', () => {
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview exactly this.'), 0o644);
     const cases = [
@@ -179,6 +304,61 @@ describe('approval field presentation', () => {
     );
   });
 
+  it('reads adding a saved widget by what it is and the network it gets, not by its routing operands', () => {
+    const input = { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+      instance: { v: 1, id: 'qa-html-instance', definition: { kind: 'artifact', artifactId: '8807a622' }, bindings: {},
+        networkOverride: { network: 'none' } } };
+    expect(getActionSpec('widgets.item.add').approvalPresentation?.summary(input)).toBe('Add a saved widget to Home.');
+    const rows = describeApprovalActionFields({ actionId: 'widgets.item.add', actionArgs: input }).rows;
+    const at = rows.findIndex(row => row.path === 'instance');
+    expect(rows[at + 1]).toMatchObject({ kind: 'value', title: 'Network', value: 'No network access' });
+    // Said once: the override's raw members leave the readable instance entries.
+    const instance = rows[at];
+    if (instance?.kind !== 'value') throw new Error('Missing instance reading');
+    expect(instance.entries?.filter(entry => entry.value === 'none')).toEqual([expect.objectContaining({ technical: true })]);
+    // Nothing readable remains in it, so the whole row moves to Details rather than standing as a bare title.
+    expect(instance).toMatchObject({ technical: true });
+    // A group that only says what kind it is reads as one line ("Owner  Home"), not a heading over "Kind".
+    const surface = rows.find(row => row.path === 'surface');
+    if (surface?.kind !== 'value') throw new Error('Missing surface reading');
+    expect(surface.entries?.filter(entry => entry.label === 'Owner' || entry.label === 'Kind'))
+      .toEqual([{ label: 'Owner', value: 'Home', depth: 0 }]);
+  });
+
+  it('names a copied group and its widgets while keeping routing identities behind Details', () => {
+    const input = { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+      group: { kind: 'group', id: 'opaque-group', title: 'Capacity and PRs copy', width: 'full',
+        frameStyle: 'card', dividers: 'hairline', children: [
+          { kind: 'widget', instance: { v: 1, id: 'opaque-capacity', definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: {} } },
+          { kind: 'widget', instance: { v: 1, id: 'opaque-prs', displayName: 'New in PRs & Issues',
+            definition: { kind: 'installed', surface: { pluginId: 'happier.triage', localId: 'latest' } }, bindings: {} } },
+        ] } };
+    expect(getActionSpec('widgets.group.add').approvalPresentation?.summary(input))
+      .toBe('Add “Capacity and PRs copy” to Home with Capacity · New in PRs & Issues.');
+    const row = describeApprovalActionFields({ actionId: 'widgets.group.add', actionArgs: input }).rows.find(row => row.path === 'group');
+    if (row?.kind !== 'value') throw new Error('Missing group reading');
+    expect(row.entries?.filter(entry => ['opaque-group', 'opaque-capacity', 'opaque-prs', 'happier.triage', 'latest'].includes(entry.value ?? '')))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ value: 'opaque-group', technical: true }),
+        expect.objectContaining({ value: 'happier.triage', technical: true })]));
+  });
+
+  it('summarizes saving a group as its named content rather than its Artifact operands', () => {
+    const input = { account: { serverId: 'home', accountId: 'account' }, artifactId: 'opaque-fragment', fragment: {
+      name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' }, group: {
+        width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget', instance: {
+          v: 1, definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: { label: { kind: 'value', value: { id: 'my-visible-id' } } },
+        } }],
+      },
+    } };
+    expect(getActionSpec('widgets.fragment.create').approvalPresentation?.summary(input))
+      .toBe('Save “Release checks” to Your widgets with Capacity.');
+    const fields = describeApprovalActionFields({ actionId: 'widgets.fragment.create', actionArgs: input });
+    expect(fields.rows.find(row => row.path === 'artifactId')).toMatchObject({ technical: true });
+    const fragment = fields.rows.find(row => row.path === 'fragment');
+    if (fragment?.kind !== 'value') throw new Error('Missing fragment review');
+    expect(fragment.entries?.find(entry => entry.value === 'my-visible-id')).not.toHaveProperty('technical');
+  });
+
   it('gives a structured JSON value readable labelled entries beside its exact literal', () => {
     const intent = { kind: 'create', board: { title: 'Launch plan', boardId: null, tags: ['ui', 'qa'], items: [{ title: 'Ship' }] } };
     const presentation = describeApprovalActionFields({ actionId: 'boards.apply', actionArgs: { intent } });
@@ -211,18 +391,16 @@ describe('approval field presentation', () => {
       { label: 'Server id', value: 'srv_home', depth: 0, reference: { kind: 'home', id: 'srv_home' } },
       { label: 'Account id', value: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e', depth: 0,
         reference: { kind: 'account', id: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e' } },
-      { label: 'Owner', value: null, depth: 0 },
-      { label: 'Kind', value: 'Core page', depth: 1 },
-      { label: 'Page id', value: 'usage', depth: 1 },
-      { label: 'Area', value: 'main', depth: 1 },
+      // A small kind-led group of plain values reads as one line, not a heading over Kind / Page id / Area.
+      { label: 'Owner', value: 'Core page · Usage · Main', depth: 0 },
       { label: 'Layout id', value: 'qaf1-usage', depth: 0 },
     ]);
     expect(entries('instance')).toEqual([
       { label: 'V', value: '1', depth: 0, technical: true },
-      { label: 'Id', value: 'qaf1-usage-b', depth: 0 },
+      { label: 'Id', value: 'qaf1-usage-b', depth: 0, technical: true },
       { label: 'Definition', value: null, depth: 0 },
-      { label: 'Kind', value: 'Artifact', depth: 1 },
-      { label: 'Artifact id', value: 'a2881e01', depth: 1 },
+      { label: 'Kind', value: 'Artifact', depth: 1, technical: true },
+      { label: 'Artifact id', value: 'a2881e01', depth: 1, technical: true },
       { label: 'Bindings', value: '{}', depth: 0, technical: true },
       { label: 'Display name', value: 'Usage b', depth: 0 },
     ]);

@@ -103,7 +103,7 @@ describe('Usage shared outside-session candidates', () => {
         expect(Boolean(screen.findByTestId('outside.continue.outside'))).toBe(false);
         expect(rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toBe(false);
     });
-    it('keeps every discovered Work source metadata-only until its own explicit browse, within the pinned Machine scope', async () => {
+    it('keeps every discovered Work source metadata-only until one explicit browse for the whole page, within the pinned Machine scope', async () => {
         restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
         const source = { serverId, machineId: 'machine-1', agent: { pluginId: 'acme.review', localId: 'archive' },
             accountingSources: ['codex-native-accounting'], captureKind: 'from_logs',
@@ -123,18 +123,20 @@ describe('Usage shared outside-session candidates', () => {
         await flushHookEffects({ cycles: 20 });
         expect(rpc.mock.calls.map(([call]) => ({ method: call.method, machineId: call.machineId })))
             .toContainEqual({ method: RPC_METHODS.USAGE_SOURCES_DISCOVER, machineId: 'machine-1' });
-        await waitForHomeGovernance(async () => { await flushHookEffects();
-            expect(screen.findByTestId(`${found}.browse`)).toBeTruthy();
-            expect(screen.findByTestId(`${stopped}.browse`)).toBeTruthy(); });
+        await waitForHomeGovernance(async () => { await flushHookEffects(); expect(screen.findByTestId('work.outside.browse')).toBeTruthy(); });
+        // One affordance for the page, never one identical button per Source.
+        expect(screen.findByTestId(`${found}.browse`)).toBeNull();
+        expect(screen.findByTestId(`${stopped}.browse`)).toBeNull();
         expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(0);
         expect(rpc.mock.calls.every(([call]) => call.machineId !== excluded.id)).toBe(true);
-        await screen.pressByTestIdAsync(`${found}.browse`);
-        await waitForHomeGovernance(async () => { await flushHookEffects(); expect(screen.findByTestId(`${found}.continue.outside`)).toBeTruthy(); });
-        expect(screen.findByTestId(`${stopped}.browse`)).toBeTruthy();
-        expect(screen.findByTestId(`${stopped}.continue.outside`)).toBeNull();
-        expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(1);
+        await screen.pressByTestIdAsync('work.outside.browse');
+        await waitForHomeGovernance(async () => { await flushHookEffects();
+            expect(screen.findByTestId(`${found}.continue.outside`)).toBeTruthy();
+            expect(screen.findByTestId(`${stopped}.continue.outside`)).toBeTruthy(); });
+        expect(screen.findByTestId('work.outside.browse')).toBeNull();
+        expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(2);
         expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)
-            .map(([call]) => call.accountId)).toEqual(['usage-account']);
+            .map(([call]) => call.accountId)).toEqual(['usage-account', 'usage-account']);
         await screen.update(<UsageOutsideSessions serverId={serverId}
             query={normalizeUsageQuery({ ...query, sources: ['runtime'] })} testID="work.outside" />);
         expect(screen.findByTestId(`${found}.continue.outside`)).toBeNull();
@@ -150,7 +152,7 @@ describe('Usage shared outside-session candidates', () => {
         });
         await flushHookEffects();
         expect(screen.findByTestId(`${found}.continue.outside`) === null).toBe(true);
-        expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(1);
+        expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(2);
         expect(rpc.mock.calls.every(([call]) => call.method !== RPC_METHODS.USAGE_SOURCES_CONSENT_SET)).toBe(true);
     });
     it('withdraws explicit browsing immediately when the root changes, requiring a new request for the new root', async () => {

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionMetadataOwnerPatchV1Schema } from '../../sessions/metadata/sessionMetadataSchemasV1.js';
 import { SessionMetadataInactiveModelIntentExpectationV1Schema } from '../../sessions/metadata/sessionMetadataSchemasV1.js';
 import {
@@ -22,14 +22,14 @@ export type SessionTeamCredentialBindingMutationOperationV1 = z.infer<
  * witness-only operation.
  */
 export const SessionTeamCredentialBindingMetadataPatchV1Schema =
-  lazyZodSchema(() => SessionMetadataOwnerPatchV1Schema.omit({ publisherPrecondition: true, activitySummaryV1: true }).extend({
+  lazyZodSchema(() => z.extend(z.omit(SessionMetadataOwnerPatchV1Schema, { publisherPrecondition: true, activitySummaryV1: true }), {
     mode: z.literal('owner_team_credential_binding'),
     operation: SessionTeamCredentialBindingMutationOperationV1Schema,
-    teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.min(1),
+    teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.check(z.minLength(1)),
     /** Explicit UI consent to grant this Team the approved Edit/no-delegation Session access. */
-    teamVisibilityGrantConsent: z.object({ teamId: z.string().min(1) }).strict().optional(),
-    sessionExpectation: SessionMetadataInactiveModelIntentExpectationV1Schema.optional(),
-  }).superRefine((value, context) => {
+    teamVisibilityGrantConsent: z.optional(z.strictObject({ teamId: z.string().check(z.minLength(1)) })),
+    sessionExpectation: z.optional(SessionMetadataInactiveModelIntentExpectationV1Schema),
+  }).check(z.superRefine((value, context) => {
     const expectedOperation = value.teamCredentialBindings[0]?.slot.kind === 'provider_model'
       ? 'session.model.set'
       : 'session.connected_service.switch';
@@ -58,7 +58,7 @@ export const SessionTeamCredentialBindingMetadataPatchV1Schema =
         message: 'Inactive model currentness applies only to Session model selection.',
       });
     }
-  }));
+  })));
 export type SessionTeamCredentialBindingMetadataPatchV1 = z.infer<
   typeof SessionTeamCredentialBindingMetadataPatchV1Schema
 >;
@@ -86,7 +86,7 @@ export type SessionTeamCredentialBindingRejectionV1 = z.infer<
   typeof SessionTeamCredentialBindingRejectionV1Schema
 >;
 
-export const SessionTeamCredentialBindingMutationRejectionV1Schema = lazyZodSchema(() => z.object({
+export const SessionTeamCredentialBindingMutationRejectionV1Schema = lazyZodSchema(() => z.strictObject({
   code: z.literal('session_team_credential_binding_rejected'),
   reason: SessionTeamCredentialBindingRejectionV1Schema,
-}).strict());
+}));

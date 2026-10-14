@@ -1,5 +1,7 @@
 import type { ConnectedAccountServiceKey, ConnectedServiceId } from '@happier-dev/protocol';
-import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
+import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey, resolveQualifiedConnectedAccountServiceForIngressServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { resolveConnectedServiceNativeHomeTargetRoot } from './materialize/resolveConnectedServiceNativeHomeTarget';
 import type {
   AgentConnectedAccountSwitchTransitionV1,
 } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -38,10 +40,19 @@ export function resolveConnectedServiceMaterializedHomeRoot(
   agentId: CatalogAgentId,
   params: Omit<ConnectedServiceMaterializedHomeRootParams, 'agentId'>,
 ): string | null {
-  return AGENTS[agentId]?.resolveConnectedServiceMaterializedHomeRoot?.({
-    ...params,
-    agentId,
-  }) ?? null;
+  const entry = AGENTS[agentId];
+  const nativeHome = entry?.connectedAccountNativeHome;
+  const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(params.serviceId);
+  if (!nativeHome || !service
+    || !entry.connectedAccountServiceIds?.includes(buildQualifiedPluginContributionKey(service))) return null;
+  const selection = params.selection;
+  return resolveConnectedServiceNativeHomeTargetRoot({
+    agentId, activeServerDir: params.activeServerDir, nativeHome,
+    target: selection?.kind === 'group' && nativeHome.groupHome !== 'selectedAccount'
+      ? { kind: 'group', service, groupId: selection.groupId }
+      : { kind: 'account', account: { service, accountId: selection?.kind === 'group'
+          ? selection.activeProfileId : selection?.profileId ?? params.profileId } },
+  });
 }
 
 export function shouldRestartConnectedServiceOnCredentialUpdate(

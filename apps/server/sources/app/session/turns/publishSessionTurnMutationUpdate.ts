@@ -38,6 +38,7 @@ export async function publishSessionTurnMutationUpdate(params: {
                     latestTurnStatus: params.result.latestTurnStatus,
                     latestTurnStatusObservedAt: params.result.latestTurnStatusObservedAt,
                     lastRuntimeIssue: params.result.lastRuntimeIssue,
+                    ...('pendingRequestProjection' in params.result ? params.result.pendingRequestProjection : {}),
                     ...('rollbackEligibleTurnStarts' in params.result
                         && params.result.rollbackEligibleTurnStarts !== undefined
                         ? { rollbackEligibleTurnStarts: params.result.rollbackEligibleTurnStarts }

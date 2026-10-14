@@ -104,7 +104,7 @@ const styles = StyleSheet.create((theme) => ({
     message: { fontSize: 15, lineHeight: 21, color: theme.colors.text.primary, ...Typography.default() },
     scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: theme.colors.overlay.scrimSoft },
     band: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-    panelSlot: { position: 'absolute', left: 12, right: 12, bottom: '100%', marginBottom: 8 },
+    panelSlot: { position: 'absolute', left: 12, right: 12, bottom: '100%', marginBottom: theme.space.s8 },
     stay: { position: 'absolute', left: 16, right: 16, top: 4, bottom: 8 },
 }));
 

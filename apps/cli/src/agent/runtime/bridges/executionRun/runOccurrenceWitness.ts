@@ -2,7 +2,6 @@ import type { ExecutionRunInputTurnV1 } from '@happier-dev/protocol';
 
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type {
-    ExecutionRunBackendController,
     ExecutionRunController,
     ExecutionRunControllerOccurrenceV1,
 } from '@/agent/executionRuns/controllers/types';
@@ -39,7 +38,7 @@ export type ExecutionRunOccurrenceWitnessRegistry = Readonly<{
     register: (params: Readonly<{
         runId: string;
         sidechainId: string;
-        controller: ExecutionRunBackendController;
+        controller: ExecutionRunController;
         runtimeLifetimeSignal: AbortSignal;
         /**
          * The native Session runtime's own liveness. Once disposal starts, the
@@ -50,6 +49,12 @@ export type ExecutionRunOccurrenceWitnessRegistry = Readonly<{
         readActiveTurnAdmissionWitness: () => AgentInvocationTurnAdmissionWitness | null;
     }>) => ExecutionRunOccurrenceRegistration;
 }>;
+
+export type RegisterExecutionRunOccurrence = (params: Readonly<{
+    runId: string;
+    sidechainId: string;
+    controller: ExecutionRunController;
+}>) => () => void;
 
 export type ExecutionRunInputTurnsProjectionV1 = Readonly<{
     occurrenceId: string;
@@ -98,9 +103,7 @@ export function createExecutionRunOccurrenceWitnessRegistry(
     const reader: ExecutionRunOccurrenceWitnessReaderV1 = Object.freeze({
         readCurrentRunOccurrence: (runId) => {
             const controller = controllers.get(runId);
-            const occurrence = controller?.kind === 'backend'
-                ? controller.executionRunOccurrence
-                : undefined;
+            const occurrence = controller?.executionRunOccurrence;
             return occurrence && occurrence.isCurrent() ? occurrence : null;
         },
     });

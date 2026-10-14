@@ -15,65 +15,33 @@ import type { SessionAccessAuthentication } from "@/app/session/access/sessionAc
 import { buildSessionAccessWhere } from '@/app/session/access/sessionAccessWhere';
 import { PendingResetStartsReadInputV1Schema, type PendingResetStartsReadInputV1, type PendingResetStartsReadResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
-import type { PendingMessageWithdrawOutcomeV1 } from '@happier-dev/protocol';
+import type { PendingMessageWithdrawOutcomeV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { PendingMessageRow, PendingMessageRowRaw } from "@/app/session/pending/mapPendingMessageRow";
 import { projectSessionMessageAccountActors } from "@/app/session/messages/projectSessionMessageAccountActors";
 import { db, getActivePrismaRuntime } from "@/storage/db";
 import { afterTx, inTx, isTransactionConflictExhaustedError, isTransactionAcquisitionUnavailableError, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
-import {
-    PENDING_DELIVERY_HIDDEN_DISCARDED_REASONS_V1,
-    isStoredContentKindAllowedForSessionByStoragePolicy,
-    isPendingDeliveryArchivedUncertaintyReasonV1,
-    isPendingDeliveryProviderEffectPossibleV1,
-    isConditionalPendingSteerClaim,
-    isPendingDeliveryStatusTransitionAllowedV1,
-    isSessionAgentTransitionDividerLocalId,
-    normalizePendingDeliveryBlockedReason,
-    normalizePendingDeliveryStatusV1,
-    normalizePendingRequestedActionV1,
-    isPendingLocalId,
-    readPendingLocalId,
-    PendingMessageMutationFingerprintV1Schema,
-    PendingRequestedActionV1Schema,
-    SessionInputAdmissionReceiptV1Schema,
-    createStoredReadSchema,
-    deriveSessionMessageAuthorAccountIdV1,
-    SessionInputAdmissionRejectionCodeV1Schema,
-    SessionInputRequestEqualityEvidenceV1Schema,
-    SESSION_MESSAGE_PROVENANCE_META_KEY,
-    supportsMachineOperationProtocolCapabilityV1,
-    supportsMachineSessionInputAdmissionProtocolVersion,
-    ExecutionRunIdSchema,
-    SessionIdSchema,
-    SidechainIdSchema,
-    readParticipantRecipientRoutingIdentityV1,
-    readSessionInputAuthority,
-    readSessionInputRequest,
-    readSessionMessageProvenance,
-    settleSessionInputRequestV1,
-    settleSessionInputRequestV2,
-    settleSessionMessageProvenanceV1,
-    settleSessionMessageProvenanceV2,
-    withSessionInputAuthority,
-    pendingDeliveryStatusV1ToPersistedFields,
-    type PendingDeliveryBlockedReason,
-    type PendingActivationFailureCodeV1,
-    type ManagedWakeTargetV1,
-    type PendingDeliveryStatusTransitionTargetV1,
-    type PendingDeliveryStatusV1,
-    type PendingRequestedActionV1,
-    type SessionInputAdmissionReceiptV1,
-    type SessionInputAdmissionRejectionCodeV1,
-    type SessionInputAdmissionResultV1,
-    type SessionInputSettlementValidationV1,
-    type SessionStoredMessageContent,
-    type SessionInputRequestEqualityEvidenceV1,
-    type SessionMessageRole,
-    type SessionStoredContentKind,
-    type SessionAccessErrorCodeV1,
-} from "@happier-dev/protocol";
+import { PENDING_DELIVERY_HIDDEN_DISCARDED_REASONS_V1, isPendingDeliveryArchivedUncertaintyReasonV1, isPendingDeliveryProviderEffectPossibleV1, isPendingDeliveryStatusTransitionAllowedV1, normalizePendingDeliveryStatusV1, pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusTransitionTargetV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStoredContentKind } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { isConditionalPendingSteerClaim, normalizePendingDeliveryBlockedReason, type PendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
+import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { isPendingLocalId, readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
+import { SessionInputAdmissionReceiptV1Schema, SessionInputRequestEqualityEvidenceV1Schema, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputAuthority, readSessionInputRequest, readSessionMessageProvenance, settleSessionInputRequestV1, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority, type SessionInputAdmissionReceiptV1, type SessionInputAdmissionResultV1, type SessionInputRequestEqualityEvidenceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { SessionInputAdmissionRejectionCodeV1Schema, type SessionInputAdmissionRejectionCodeV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
+import { supportsMachineOperationProtocolCapabilityV1, supportsMachineSessionInputAdmissionProtocolVersion } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { ExecutionRunIdSchema, SessionIdSchema, SidechainIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { readParticipantRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
+import { type PendingActivationFailureCodeV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { type ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { type SessionInputSettlementValidationV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { type SessionStoredMessageContent } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { type SessionAccessErrorCodeV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import {
     readStoredSessionMessageDeliveryResolutionV1,
     SessionMessageAcceptedDeliveryContentV1Schema,
@@ -146,7 +114,7 @@ export async function listPendingResetStartsForSource(params: Readonly<{
         const entries: PendingResetStartsReadResultV1['entries'] = [];
         const unboundEntries: NonNullable<PendingResetStartsReadResultV1['unboundEntries']> = [];
         for (const row of rows) {
-            const action = PendingRequestedActionV1Schema.safeParse(row.requestedAction);
+            const action = PendingRequestedActionV1StoredSchema.safeParse(row.requestedAction);
             if (!action.success) continue;
             if (action.data.kind === 'reset_start' && !isDeepStrictEqual(action.data.reset.source, source)) continue;
             const authority = await assertSessionCapabilityInTx({ tx, accountId: params.actorUserId,
@@ -906,7 +874,7 @@ async function enqueuePendingMessageWithAdmission(
                 ) {
                     return { ok: false, error: "invalid-params" } as const;
                 }
-                if (!isDeepStrictEqual(normalizePendingRequestedActionV1(existing.requestedAction), requestedAction)) {
+                if (!isDeepStrictEqual(normalizePendingRequestedActionV1(existing.requestedAction, 'stored'), requestedAction)) {
                     return identityConflict;
                 }
                 const existingReceipt = existing.inputAdmissionReceipt == null
@@ -1500,7 +1468,7 @@ async function rejectQueuedPendingInputInTx(params: Readonly<{
 }>) {
     if (params.existing.status !== "queued") return null;
     const requestContent = params.existing.content as PrismaJson.SessionPendingMessageContent;
-    const requestedAction = PendingRequestedActionV1Schema.safeParse(params.existing.requestedAction);
+    const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(params.existing.requestedAction);
     if (!requestedAction.success) return null;
 
     let requestEqualityEvidenceV1: SessionInputRequestEqualityEvidenceV1;
@@ -1735,7 +1703,7 @@ export async function settlePendingInputAdmission(params: Readonly<{
             });
             if (!session || session.accountId !== actorUserId) return { ok: false, error: "not-found" } as const;
             const requestContent = existing.content as PrismaJson.SessionPendingMessageContent;
-            const requestedAction = PendingRequestedActionV1Schema.safeParse(existing.requestedAction);
+            const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
             if (!requestedAction.success) return { ok: false, error: "conflict" } as const;
 
             if (decision.kind === "reject") {
@@ -1975,7 +1943,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
             },
         });
         if (!existing) return { ok: false, error: "not-found" } as const;
-        const currentActionResult = PendingRequestedActionV1Schema.safeParse(
+        const currentActionResult = PendingRequestedActionV1StoredSchema.safeParse(
             existing.requestedAction ?? { v: 1, kind: "enqueue" },
         );
         if (!currentActionResult.success) return { ok: false, error: "invalid-params" } as const;
@@ -2412,13 +2380,18 @@ export async function deletePendingMessage(params: {
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             const alreadyDelivered = params.withdraw === true
-                ? await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true } })
+                ? await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true, deliveryResolution: true } })
                 : null;
-            if (alreadyDelivered) return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), outcome: 'already_delivered' } as const;
             const existing = await tx.sessionPendingMessage.findUnique({
                 where: { sessionId_localId: { sessionId, localId }, targetExecutionRunId },
                 select: { status: true, deliveryState: true, deliveryBlockedReason: true, discardedReason: true, providerAction: true },
             });
+            // Host admission writes the user transcript before provider acceptance.
+            // Pending custody, or its terminal delivery resolution, decides withdrawal.
+            if (alreadyDelivered && (!existing || existing.status !== 'queued'
+                || readStoredSessionMessageDeliveryResolutionV1(alreadyDelivered.deliveryResolution) !== null)) {
+                return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), outcome: 'already_delivered' } as const;
+            }
 
             if (!existing) {
                 const committed = params.withdraw === true
@@ -3030,7 +3003,7 @@ export async function resolveAcceptedPendingDelivery(params: {
                     return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), didResolve: false };
                 }
 
-                const requestedAction = PendingRequestedActionV1Schema.safeParse(existing.requestedAction);
+                const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                 const isExactAction = requestedAction.success && requestedAction.data.kind !== "enqueue";
                 const earlierUnresolved = isExactAction ? null : await tx.sessionPendingMessage.findFirst({
                     where: {
@@ -3156,7 +3129,7 @@ export async function blockPendingDelivery(params: {
                 });
                 if (!existing) return { ok: false, error: "not-found" } as const;
                 if (reason === "conditional_steer_unavailable") {
-                    const requestedAction = PendingRequestedActionV1Schema.safeParse(existing.requestedAction);
+                    const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                     if (
                         existing.status === "queued"
                         && existing.deliveryState === null
@@ -3322,7 +3295,7 @@ export async function sendPendingDeliveryAsNew(params: {
                     && replacement.deliveryState === null
                     && replacement.messageRole === existing.messageRole
                     && isDeepStrictEqual(replacement.content, existing.content)
-                    && isDeepStrictEqual(normalizePendingRequestedActionV1(replacement.requestedAction), replacementAction)
+                    && isDeepStrictEqual(normalizePendingRequestedActionV1(replacement.requestedAction, 'stored'), replacementAction)
                 ) {
                     return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), didWrite: false, newLocalId };
                 }

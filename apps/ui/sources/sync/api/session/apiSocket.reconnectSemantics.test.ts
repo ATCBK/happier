@@ -115,6 +115,63 @@ describe('apiSocket reconnect semantics', () => {
         expect(reachability.listeners.size).toBe(0);
     });
 
+    it('keeps a replacement frame connected when the retired concrete socket reports revocation or restart', async () => {
+        const first = createSocketIoBoundaryStub();
+        ioSpy.mockReturnValue(first.socket);
+        const { apiSocket } = await import('./apiSocket');
+        activeSocket = apiSocket;
+        const onCredentialRejected = vi.fn();
+        const connectionState = vi.fn();
+        const detachState = apiSocket.onConnectionStateChange(connectionState);
+        const config = { endpoint, token: 'hap_v1_child',
+            socketRole: { clientType: 'session-scoped', sessionId: 'frame-session' } as const,
+            request: async () => new Response(JSON.stringify({ cursor: 0 })),
+            isCurrent: () => true, onCredentialRejected,
+        };
+        apiSocket.initialize(config, null);
+        await vi.waitFor(() => expect(first.socket.connected).toBe(true));
+        const staleRestart = [...first.listeners.get('server:restarting') ?? []];
+        const next = createSocketIoBoundaryStub();
+        ioSpy.mockReturnValue(next.socket);
+        // Reapplying the very same configuration must still retire its concrete transport.
+        apiSocket.initialize(config, null);
+        await vi.waitFor(() => expect(next.socket.connected).toBe(true));
+        first.trigger('disconnect', 'io server disconnect');
+        for (const restart of staleRestart) restart({ retryAfterMs: 7_000 });
+        await Promise.resolve();
+        expect(next.socket.connected).toBe(true);
+        expect(onCredentialRejected).not.toHaveBeenCalled();
+        expect(connectionState.mock.lastCall?.[0]).toMatchObject({ phase: 'online' });
+        next.trigger('disconnect', 'io server disconnect');
+        await vi.waitFor(() => expect(onCredentialRejected).toHaveBeenCalledOnce());
+        expect(connectionState.mock.lastCall?.[0]).toMatchObject({ phase: 'auth_failed' });
+        detachState();
+    });
+
+    it('reports a frame restart through its scoped supervisor without Account supervision', async () => {
+        const boundary = createSocketIoBoundaryStub();
+        ioSpy.mockReturnValue(boundary.socket);
+        const { apiSocket } = await import('./apiSocket');
+        activeSocket = apiSocket;
+        const onCredentialRejected = vi.fn();
+        const connectionState = vi.fn();
+        const detachState = apiSocket.onConnectionStateChange(connectionState);
+        apiSocket.initialize({ endpoint, token: 'hap_v1_child',
+            socketRole: { clientType: 'session-scoped', sessionId: 'frame-session' },
+            request: async () => new Response(JSON.stringify({ cursor: 0 })),
+            isCurrent: () => true, onCredentialRejected,
+        }, null);
+        await vi.waitFor(() => expect(boundary.socket.connected).toBe(true));
+        boundary.trigger('server:restarting', { retryAfterMs: 7_000 });
+        await vi.waitFor(() => expect(connectionState.mock.lastCall?.[0]).toMatchObject({
+            phase: 'offline', reason: 'server_restarting',
+        }));
+        expect(boundary.socket.connected).toBe(false);
+        expect(onCredentialRejected).not.toHaveBeenCalled();
+        expect(reachability.restart).not.toHaveBeenCalled();
+        detachState();
+    });
+
     it('publishes rendered Session presence on the existing focused Home socket', async () => {
         const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
         const { apiSocket, socket } = await boot({ token });

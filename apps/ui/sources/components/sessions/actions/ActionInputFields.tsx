@@ -23,6 +23,7 @@ import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThem
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { t } from '@/text';
 import type { ResolveSessionActionFieldOptions } from './sessionActionFieldOptions';
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { InputTypePickerHostProvider } from './InputTypePickerHostProvider';
 
 export type ActionFieldOption = Readonly<{
@@ -102,6 +103,7 @@ export function ActionInputFields(props: Readonly<{
     return (
         <InputTypePickerHostProvider enabled={props.fields.some((field) => field.inputType !== undefined)}
             {...props.resolveFieldOptions.pickerContext}>
+        <CoreCollectionScope>
         <HappierForm busy={props.busy}>
             {props.fields.map((field) => {
                 const path = typeof field?.path === 'string' ? field.path : '';
@@ -155,6 +157,7 @@ export function ActionInputFields(props: Readonly<{
                 );
             })}
         </HappierForm>
+        </CoreCollectionScope>
         </InputTypePickerHostProvider>
     );
 }

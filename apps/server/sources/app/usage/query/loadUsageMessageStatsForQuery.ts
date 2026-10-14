@@ -1,4 +1,4 @@
-import type { UsageAnalyticsQueryRequest } from "@happier-dev/protocol";
+import type { UsageAnalyticsQueryRequest } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import {
     buildSessionMessagesPublicationWhere,
     SESSION_TRANSCRIPT_PUBLICATION_SELECT,

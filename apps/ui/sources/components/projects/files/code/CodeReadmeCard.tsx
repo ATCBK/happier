@@ -95,7 +95,7 @@ const styles = StyleSheet.create((theme) => ({
         borderBottomColor: theme.colors.border.subtle,
     },
     name: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },

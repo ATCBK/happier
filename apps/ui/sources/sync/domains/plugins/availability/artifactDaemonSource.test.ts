@@ -93,7 +93,7 @@ describe('daemon Artifact byte source', () => {
         },
     );
 
-    it('misses on another digest, another family, an unavailable daemon, or a daemon without the route', async () => {
+    it('distinguishes byte misses from a missing daemon route or a failed transport', async () => {
         const source = createPluginArtifactDaemonSource({ transport, family: 'hostedWeb' });
         guardedMachineRpc.mockResolvedValueOnce(okResponse('hostedWeb', `sha256:${'c'.repeat(64)}`));
         await expect(source.fetch({ artifact })).resolves.toBeNull();
@@ -102,8 +102,8 @@ describe('daemon Artifact byte source', () => {
         guardedMachineRpc.mockResolvedValueOnce({ ok: false, code: 'artifact_unavailable', diagnostics: [] });
         await expect(source.fetch({ artifact })).resolves.toBeNull();
         guardedMachineRpc.mockResolvedValueOnce({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'unsupported' });
-        await expect(source.fetch({ artifact })).resolves.toBeNull();
+        await expect(source.fetch({ artifact })).rejects.toMatchObject({ code: 'artifact_bytes_rpc_unavailable' });
         guardedMachineRpc.mockRejectedValueOnce(new Error('offline'));
-        await expect(source.fetch({ artifact })).resolves.toBeNull();
+        await expect(source.fetch({ artifact })).rejects.toMatchObject({ code: 'artifact_bytes_fetch_failed' });
     });
 });

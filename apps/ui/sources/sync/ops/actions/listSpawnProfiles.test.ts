@@ -12,7 +12,7 @@ function publish(status: 'ready' | 'partial', authority: 'active' | 'inactive' =
     storage.setState({ settingsScope: scope });
     applyProfileCatalogSnapshot(scope, { status, authority, source: authority === 'active' ? 'destination' : 'legacy', control: null, controlRevision: 1,
         referenceGuardRevision: 1, diagnostics: status === 'partial' ? [{ id: 'future', revision: 1, reason: 'unreadable-content' }] : [],
-        records: [{ revision: 7, record: { v: 1, id: profile.id, enabled: true, promptStack: [], secretBindings: {},
+        records: [{ revision: 7, record: { v: 1, id: profile.id, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
             definition: { kind: 'inline', profile } } }] }, true);
 }
 afterEach(() => { resetProfileCatalogSnapshotsForTests(); storage.setState({ settingsScope: original }); });
@@ -28,8 +28,8 @@ describe('listSpawnProfilesForActions', () => {
         expect(listSpawnProfilesForActions({ agentId: 'claude' })).toMatchObject({ coverage: 'complete',
             items: [expect.objectContaining({ id: 'entity', supportedAgentIds: expect.arrayContaining(['claude']) })] });
     });
-    it('does not authorize listing from an incomplete entity inventory', () => {
+    it('keeps readable rows while marking an incomplete entity inventory unavailable', () => {
         publish('partial');
-        expect(listSpawnProfilesForActions({})).toMatchObject({ coverage: 'unavailable', items: [] });
+        expect(listSpawnProfilesForActions({})).toMatchObject({ coverage: 'unavailable', items: [{ id: 'entity' }] });
     });
 });

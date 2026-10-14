@@ -200,6 +200,8 @@ function VitalsContent(
   const rings = (
     <HappierPressable
       testID={`${testID}.rings`}
+      // Small is the rings alone: they spread over the card's whole width (a card on a phone is one full row).
+      {...(size === 'small' ? { style: styles.spread } : {})}
       onPress={() => open({ id: 'overview' })}
       accessibilityRole="button"
       accessibilityLabel={t('machines.widgets.body.vitals.openOverview', {
@@ -326,10 +328,12 @@ function VitalsPhrase(
 ) {
   const { theme } = useUnistyles();
   const working = useMachineWorkingCount(props.target);
-  const work =
+  // The attention sentences end in a full stop; the widget's headline and its sub-line are phrases (lab rw V).
+  const work = (
     working > 0
       ? t('machineAttention.machine.working', { count: working })
-      : t('machineAttention.machine.idle');
+      : t('machineAttention.machine.idle')
+  ).replace(/[.。]$/u, '');
   // Where the page above already names this machine's attention (and offers its one action), the widget keeps
   // the state on its Memory/CPU rows and says what the machine is doing instead of repeating the sentence.
   const statedAbove = useMachineAttentionStatedAbove(props.target);
@@ -654,6 +658,9 @@ const styles = StyleSheet.create((theme) => ({
     flexGrow: 1,
     justifyContent: 'center',
   },
+  spread: {
+    alignSelf: 'stretch',
+  },
   phrase: {
     gap: theme.space.s2,
     minWidth: 0,
@@ -681,7 +688,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   ringLabel: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     color: theme.colors.text.primary,
   },
   ringValue: {

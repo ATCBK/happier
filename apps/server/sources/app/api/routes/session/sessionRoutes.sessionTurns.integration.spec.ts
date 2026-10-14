@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UpdateBodySchema } from "@happier-dev/protocol";
+import { eventRouter } from "@/app/events/eventRouter";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { db } from "@/storage/db";
@@ -151,6 +153,60 @@ describe("sessionRoutes session turns (integration)", () => {
             decision: "applied",
             observedAt: BigInt(100),
         });
+    });
+
+    it("publishes committed pending request clears through the terminal HTTP mutation", async () => {
+        const account = await db.account.create({
+            data: { publicKey: "pk-session-turn-pending-clear", encryptionMode: "plain" },
+        });
+        const session = await db.session.create({
+            data: {
+                tag: "session-turn-pending-clear", accountId: account.id, encryptionMode: "plain",
+                metadata: JSON.stringify({ t: "plain", v: {} }), active: true,
+                pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: new Date(150),
+            },
+        });
+        await expect(applySessionTurnMutation({
+            actorUserId: account.id, authentication,
+            mutation: {
+                v: 1, sessionId: session.id, mutationId: "pending-begin", turnId: "turn-pending",
+                action: "begin", provider: "codex", observedAt: 100,
+            },
+        })).resolves.toMatchObject({ ok: true, didApply: true });
+        // Keep the real HTTP owner, database, and payload builder beneath the transport boundary.
+        const updates = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
+        try {
+            await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+                const response = await app.inject({
+                    method: "POST", url: `/v1/sessions/${session.id}/turns/mutations`,
+                    headers: { "content-type": "application/json", "x-test-user-id": account.id },
+                    payload: {
+                        v: 1, sessionId: session.id, mutationId: "pending-cancel", turnId: "turn-pending",
+                        action: "cancel", provider: "codex", observedAt: 200,
+                    },
+                });
+                expect(response.statusCode).toBe(200);
+                expect(response.json()).toMatchObject({ success: true, applied: true });
+                const terminalUpdates = updates.mock.calls.filter(([update]) =>
+                    update.payload.body.t === "update-session" && update.payload.body.latestTurnStatus === "cancelled",
+                );
+                expect(terminalUpdates).toHaveLength(1);
+                expect(UpdateBodySchema.parse(terminalUpdates[0]![0].payload.body)).toMatchObject({
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: null,
+                });
+            });
+            await expect(db.session.findUniqueOrThrow({
+                where: { id: session.id },
+                select: { pendingPermissionRequestCount: true, pendingUserActionRequestCount: true, pendingRequestObservedAt: true },
+            })).resolves.toEqual({
+                pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+            });
+        } finally {
+            updates.mockRestore();
+        }
     });
 
     it("refuses a direct host turn mutation for a finite external snapshot before writing a receipt or projection", async () => {

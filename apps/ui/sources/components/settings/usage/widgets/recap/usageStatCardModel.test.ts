@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  UsageRecapComposeResultSchema,
-  usageRecapImageFileName,
-  type UsageRecapComposeResult,
-} from '@happier-dev/protocol';
+import type { UsageRecapComposeResult } from '@happier-dev/protocol/usage/usageRecap';
 
 vi.mock('@/text', async () =>
   (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
@@ -20,12 +16,12 @@ const tokens = {
 const periodStart = Date.UTC(2026, 6, 1);
 const periodEnd = Date.UTC(2026, 8, 30);
 
-/** Composed exactly as the canonical composer would for the given selection (the schema enforces its manifest). */
+/** Typed selected-fact boundary fixture; composed/schema/visible checks live in UsageStatCard.test.tsx. */
 function composed(
   selectedFields: Extract<UsageRecapComposeResult, { kind: 'composed' }>['selectedFields'],
   facts: Extract<UsageRecapComposeResult, { kind: 'composed' }>['facts'],
 ) {
-  const result = UsageRecapComposeResultSchema.parse({
+  const result: Extract<UsageRecapComposeResult, { kind: 'composed' }> = {
     kind: 'composed',
     v: 1,
     style: 'daybreak',
@@ -45,12 +41,40 @@ function composed(
       pending: false,
     },
     facts,
-  });
-  if (result.kind !== 'composed') throw new Error('fixture');
+  };
   return result;
 }
 
 describe('private stat card model', () => {
+  it('keeps cache-only and highlight-only selections in the card facts', async () => {
+    const { buildUsageStatCardModel } = await import('./usageStatCardModel');
+    const cache = buildUsageStatCardModel(composed(['cache'], { cache: { readTokens: 12345, writeTokens: 6789 } }));
+    expect(cache.headline).toBeNull();
+    expect(cache.stats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'cacheReadTokens', value: '12.3k' }),
+      expect.objectContaining({ id: 'cacheWriteTokens', value: '6.8k' }),
+    ]));
+    const highlights = buildUsageStatCardModel(composed(['highlights'], { highlights: [
+      { kind: 'observed_peak', bucketStartMs: periodStart, bucketEndMs: periodStart + 86400000, tokens: 12345 },
+      { kind: 'linked_outcomes', count: 7 },
+    ] }));
+    expect(highlights.stats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'observedPeak', value: '12.3k' }),
+      expect.objectContaining({ id: 'highlightOutcomes', value: '7' }),
+    ]));
+  });
+
+  it('preserves both selected mixes as separate populations without exposing unselected names', async () => {
+    const { buildUsageStatCardModel } = await import('./usageStatCardModel');
+    const model = buildUsageStatCardModel(composed(['agentMix', 'modelMix'], {
+      agentMix: [{ tokens: 3, events: 1 }, { tokens: 1, events: 1 }],
+      modelMix: [{ tokens: 2, events: 1 }, { tokens: 2, events: 1 }],
+    }));
+    expect(model).toMatchObject({ mixGroups: [
+      { kind: 'agentMix', rows: [{ share: 0.75, label: null }, { share: 0.25, label: null }] },
+      { kind: 'modelMix', rows: [{ share: 0.5, label: null }, { share: 0.5, label: null }] },
+    ] });
+  });
   it('shows only the selected facts, never names or dollars that were left off', async () => {
     const { buildUsageStatCardModel } =
       await import('./usageStatCardModel');
@@ -88,6 +112,7 @@ describe('private stat card model', () => {
       'maximumConcurrency',
     ]);
     expect(model.stats.map((stat) => stat.value)).toEqual(['61', '967 h', '6']);
+    const { usageRecapImageFileName } = await import('@happier-dev/protocol/usage/usageRecap');
     const everything = JSON.stringify(model) + usageRecapImageFileName(result);
     expect(everything).not.toMatch(/\$|USD|Claude|Codex/);
     expect(usageRecapImageFileName(result)).toBe(

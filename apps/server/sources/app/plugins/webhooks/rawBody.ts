@@ -1,4 +1,4 @@
-import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from "@happier-dev/protocol";
+import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 
 export class WebhookRawBodyReadError extends Error {
     constructor(readonly code: "tooLarge" | "lengthMismatch" | "streamFailed" | "aborted") {

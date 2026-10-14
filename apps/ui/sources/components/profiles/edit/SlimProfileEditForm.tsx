@@ -15,6 +15,8 @@ import { SlimProfilePlacementFields } from './SlimProfilePlacementFields';
 import { SlimProfilePromptBehaviorFields } from './SlimProfilePromptBehaviorFields';
 import { SlimProfileRoutingFields } from './SlimProfileRoutingFields';
 import { useSlimProfileAgentEntries } from './useSlimProfileAgentEntries';
+import { ProfileSkillSeedsSection } from './ProfileSkillSeedsSection';
+import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { ProfileEditActions } from './ProfileEditActions';
 import { ProfileNameSection } from './ProfileNameSection';
 import { useLegacyProfileSecretRequirements } from './legacy/useLegacyProfileSecretRequirements';
@@ -70,6 +72,8 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
     const [codingPromptBehaviorOverrides, setCodingPromptBehaviorOverrides] = React.useState(
         props.profile.codingPromptBehaviorOverrides,
     );
+    const [skillSeeds, setSkillSeeds] = React.useState<readonly string[]>(props.profile.skillSeeds ?? []);
+    const skillsLibrary = useSkillsLibrary();
     const initialSnapshot = React.useRef(JSON.stringify({
         name: props.profile.name,
         description: props.profile.description ?? '',
@@ -81,6 +85,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
         placement: props.profile.placement,
         checkout: props.profile.checkout,
         codingPromptBehaviorOverrides: props.profile.codingPromptBehaviorOverrides,
+        skillSeeds: props.profile.skillSeeds ?? [],
     }));
     const { entries, projection: daemonProjection, serverId } = useSlimProfileAgentEntries(
         props.machineId,
@@ -109,6 +114,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
             placement,
             checkout,
             codingPromptBehaviorOverrides,
+            skillSeeds,
         }) !== initialSnapshot.current || JSON.stringify({
             envVarRequirements: requirements.derivedEnvVarRequirements,
             secretBindings: requirements.profileSecretBindings,
@@ -127,6 +133,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
         props.onDirtyChange,
         requirements.derivedEnvVarRequirements,
         requirements.profileSecretBindings,
+        skillSeeds,
     ]);
 
     const handleSave = React.useCallback(() => {
@@ -149,6 +156,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
                 placement,
                 checkout,
                 codingPromptBehaviorOverrides,
+                skillSeeds,
             },
             Date.now,
             reservedEnvironmentVariableNames,
@@ -180,6 +188,7 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
         props,
         reservedEnvironmentAuthorityReady,
         reservedEnvironmentVariableNames,
+        skillSeeds,
         requirements.derivedEnvVarRequirements,
         requirements.readPrivateSecretBindingsForSave,
         requirements.notifySaveUnavailable,
@@ -241,6 +250,8 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
                 value={codingPromptBehaviorOverrides}
                 onChange={setCodingPromptBehaviorOverrides}
             />
+
+            <ProfileSkillSeedsSection seeds={skillSeeds} library={skillsLibrary} onChange={setSkillSeeds} />
 
             {props.header ? null : (
                 <ProfileEditActions saveAs={false} onSave={handleSave} onCancel={props.onCancel} />

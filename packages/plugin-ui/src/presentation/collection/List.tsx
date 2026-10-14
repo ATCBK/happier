@@ -28,6 +28,7 @@ import { HappierDivider } from '../content/Foundation.js';
 import { HAPPIER_PAGE_METRICS, isHappierPageRowAccessoryStacked, isHappierPageRowNarrow } from '../layout/pageMetrics.js';
 import type { HappierPageRowMetrics } from '../layout/pageRowMetrics.js';
 import { HappierPageRowFieldLayoutContext } from '../layout/pageRowField.js';
+import { resolveHappierPageRowDetailLayout } from '../layout/pageRowDetail.js';
 import { resolveHappierViewportClass } from '../layout/viewportClass.js';
 import { HAPPIER_FIELD_BOX_METRICS } from '../form/FieldBox.js';
 import { happierPageRowDividerWidth, useHappierPageSection } from '../layout/PageSection.js';
@@ -562,6 +563,22 @@ export function HappierListItem({
   const [pageRowWidthPx, setPageRowWidthPx] = useState<number | null>(null);
   const [fieldMaxWidthPx, setFieldMaxWidthPx] = useState<number | null>(null);
   const pageRowInsetPx = pageSection?.rowInsetPx;
+  const [detailWidthPx, setDetailWidthPx] = useState<number | null>(null);
+  const [titleNaturalWidthPx, setTitleNaturalWidthPx] = useState<number | null>(null);
+  const [leadingWidthPx, setLeadingWidthPx] = useState<number | null>(null);
+  const measuresDetail = pageSection !== null && Boolean(detail) && isHappierPageRowNarrow(pageRowWidthPx);
+  const handleDetailLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const width = event.nativeEvent.layout.width;
+    if (Number.isFinite(width) && width > 0) setDetailWidthPx(current => current === width ? current : width);
+  }, []);
+  const handleTitleLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const width = event.nativeEvent.layout.width;
+    if (Number.isFinite(width) && width > 0) setTitleNaturalWidthPx(current => current === width ? current : width);
+  }, []);
+  const handleLeadingLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const width = event.nativeEvent.layout.width;
+    if (Number.isFinite(width) && width > 0) setLeadingWidthPx(current => current === width ? current : width);
+  }, []);
   const handlePageRowLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
     const next = event.nativeEvent.layout.width;
     if (!Number.isFinite(next) || next <= 0) return;
@@ -580,6 +597,15 @@ export function HappierListItem({
     setPageAccessoryWidthPx((current) => (current === next ? current : next));
   }, []);
   const hasAccessory = accessory !== undefined && accessory !== null;
+  const { beneath: detailBeneath, inlineMaxWidthPx: detailInlineMaxWidthPx } = resolveHappierPageRowDetailLayout({
+    rowWidthPx: measuresDetail ? pageRowWidthPx : null,
+    detailWidthPx,
+    titleNaturalWidthPx,
+    rowInsetPx: pageRowInsetPx ?? HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
+    leadingColumnWidthPx: icon ? leadingWidthPx ?? HAPPIER_PAGE_METRICS.rowLeadingColumnPx : 0,
+    trailingWidthPx: resolvedTheme ? resolvedTheme.spacing.small + (hasAccessory ? pageAccessoryWidthPx ?? 0 : 0) : 0,
+    detailGapPx: resolvedTheme?.spacing.small ?? 0,
+  });
   const stackPageAccessory = (accessoryBelow === true && hasAccessory)
     || (pageSection !== null && hasAccessory && fieldMaxWidthPx === null && isHappierPageRowAccessoryStacked({
       kind: accessoryWraps === true ? 'adaptive' : 'operation',
@@ -720,6 +746,7 @@ export function HappierListItem({
       >
         {icon ? (
           <View
+            onLayout={pageSection !== null && detail ? handleLeadingLayout : undefined}
             accessible={false}
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
@@ -767,6 +794,11 @@ export function HappierListItem({
               {titleContent ?? title}
             </HappierText>
           ) : null}
+          {detailBeneath && detail ? <HappierText
+            textScale={textScale}
+            style={{ ...resolveHappierPageTextStyle('rowDescription', hostTypography), ...pageRowMetrics?.subtitle,
+              color: detailTone === undefined ? resolvedTheme.colors.secondaryText : resolvedTheme.colors[HAPPIER_TONE_COLOR_TOKEN[detailTone]] }}
+          >{detailContent ?? detail}</HappierText> : null}
           {subtitle ? (
             <HappierText
               numberOfLines={subtitleNumberOfLines}
@@ -780,7 +812,7 @@ export function HappierListItem({
           ) : null}
           {customContent}
         </View>
-        {detail ? (
+        {detail && !detailBeneath ? (
           <HappierText
             numberOfLines={detailNumberOfLines}
             textScale={textScale}
@@ -797,6 +829,7 @@ export function HappierListItem({
               // The trailing column is quiet metadata: it may never take the
               // title's width, and changing counts or ages must not jitter.
               DETAIL_TEXT_STYLE,
+              detailInlineMaxWidthPx === null ? null : { maxWidth: detailInlineMaxWidthPx },
             ]}
           >
             {detailContent ?? detail}
@@ -808,6 +841,16 @@ export function HappierListItem({
             : accessory)
           : null}
         {busyIndicator}
+        {measuresDetail ? <>
+          <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleDetailLayout}
+            style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
+            <HappierText numberOfLines={1} textScale={textScale} style={textStyle(resolvedTheme, hostTypography, 'micro', resolvedTheme.colors.secondaryText)}>{detailContent ?? detail}</HappierText>
+          </View>
+          {title ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleTitleLayout}
+            style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
+            <HappierText numberOfLines={1} textScale={textScale} style={{ ...resolveHappierPageTextStyle('rowTitle', hostTypography), ...pageRowMetrics?.title }}>{titleContent ?? title}</HappierText>
+          </View> : null}
+        </> : null}
       </View>
     );
   };

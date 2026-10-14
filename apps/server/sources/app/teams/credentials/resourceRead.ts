@@ -1,23 +1,8 @@
-import {
-    computeTeamCredentialSourceMemberKeyV1,
-    matchesTeamCredentialSourceVersionBasisV1,
-    TeamCredentialDeliveryModeV1Schema,
-    TeamCredentialDisclosureCeilingV1Schema,
-    TeamCredentialResourceCatalogEntryV1Schema,
-    TeamCredentialResourceAudienceGrantV1Schema,
-    TeamCredentialResourceMemberGrantV1Schema,
-    TeamCredentialResourceSummaryV1Schema,
-    TeamCredentialSessionUsePolicyV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    TeamCredentialSourceResourceAdministrationV1Schema,
-    decodeTeamCredentialResourcesCursorV1,
-    encodeTeamCredentialResourcesCursorV1,
-    teamCredentialResourcesQueryKeyV1,
-    teamCredentialSourceLocatorKeyV1,
-    teamCredentialSourceLocatorV1,
-    type TeamCredentialSourceLocatorV1,
-} from "@happier-dev/protocol/teams";
-import type { ProviderBrokerApplicationBindingV1 } from "@happier-dev/protocol";
+import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
+import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceAudienceGrantV1Schema, TeamCredentialResourceMemberGrantV1Schema, TeamCredentialResourceSummaryV1Schema, TeamCredentialSessionUsePolicyV1Schema, decodeTeamCredentialResourcesCursorV1, encodeTeamCredentialResourcesCursorV1, teamCredentialResourcesQueryKeyV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { TeamCredentialSourceResourceAdministrationV1Schema, teamCredentialSourceLocatorKeyV1, teamCredentialSourceLocatorV1, type TeamCredentialSourceLocatorV1 } from '@happier-dev/protocol/teams';
+import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type { Tx } from "@/storage/inTx";
 import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";

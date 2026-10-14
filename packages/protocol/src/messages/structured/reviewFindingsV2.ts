@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ReviewAssumptionSchema } from '../../reviews/ReviewAssumption.js';
 import { ReviewFindingSchema } from '../../reviews/ReviewFinding.js';
@@ -8,36 +8,36 @@ import { ReviewTriageOverlaySchema } from './reviewFindingsV1.js';
 import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunRef.js';
 import { ReviewCommentProposalsV1Schema } from '../../reviews/comments/proposals.js';
 
-export const ReviewPublicationOverlaySchema = lazyZodSchema(() => z.object({
-  findings: z.array(z.object({
-    id: z.string().min(1),
+export const ReviewPublicationOverlaySchema = lazyZodSchema(() => z.looseObject({
+  findings: z.array(z.looseObject({
+    id: z.string().check(z.minLength(1)),
     published: z.boolean(),
-    publishedAtMs: z.number().int().nonnegative().optional(),
-    publishedMessageRef: z.string().min(1).optional(),
-  }).passthrough()),
-}).passthrough());
+    publishedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    publishedMessageRef: z.optional(z.string().check(z.minLength(1))),
+  })),
+}));
 export type ReviewPublicationOverlay = z.infer<typeof ReviewPublicationOverlaySchema>;
 
-export const ReviewFindingsV2Schema = lazyZodSchema(() => z.object({
+export const ReviewFindingsV2Schema = lazyZodSchema(() => z.looseObject({
   runRef: ExecutionRunStructuredRunRefSchema,
-  comparisonId: z.string().min(1).optional(),
+  comparisonId: z.optional(z.string().check(z.minLength(1))),
   /** Number of files in the host's verified captured comparison inventory, when known. */
-  fileCount: z.number().int().nonnegative().optional(),
-  reviewOutcome: z.enum(['complete', 'partial', 'failed']).optional(),
-  summary: z.string().min(1),
-  overviewMarkdown: z.string().min(1),
+  fileCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  reviewOutcome: z.optional(z.enum(['complete', 'partial', 'failed'])),
+  summary: z.string().check(z.minLength(1)),
+  overviewMarkdown: z.string().check(z.minLength(1)),
   findings: z.array(ReviewFindingSchema),
-  questions: z.array(ReviewQuestionSchema).default([]),
-  assumptions: z.array(ReviewAssumptionSchema).default([]),
-  proposedComments: ReviewCommentProposalsV1Schema.optional(),
-  triage: ReviewTriageOverlaySchema.optional(),
-  publication: ReviewPublicationOverlaySchema.optional(),
-  limits: z.object({
-    findingsTruncated: z.boolean().optional(),
-    patchesTruncated: z.boolean().optional(),
-  }).passthrough().optional(),
-  generatedAtMs: z.number().int().nonnegative(),
-}).passthrough());
+  questions: z._default(z.array(ReviewQuestionSchema), []),
+  assumptions: z._default(z.array(ReviewAssumptionSchema), []),
+  proposedComments: z.optional(ReviewCommentProposalsV1Schema),
+  triage: z.optional(ReviewTriageOverlaySchema),
+  publication: z.optional(ReviewPublicationOverlaySchema),
+  limits: z.optional(z.looseObject({
+    findingsTruncated: z.optional(z.boolean()),
+    patchesTruncated: z.optional(z.boolean()),
+  })),
+  generatedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 
 export type ReviewFindingsV2 = z.infer<typeof ReviewFindingsV2Schema>;
 

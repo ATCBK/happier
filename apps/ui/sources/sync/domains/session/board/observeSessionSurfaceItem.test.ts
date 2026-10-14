@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createSessionSystemRecordRepository } from '@/sync/domains/sessionSystemRecords/repository';
-import { observeSessionSurfaceItem, type SessionSurfaceItemBinding } from './observeSessionSurfaceItem';
+import { observeSessionSurfaceItem, readRetainedSessionSurfaceItem, type SessionSurfaceItemBinding } from './observeSessionSurfaceItem';
 import type { SessionStoredContentContext } from '@happier-dev/sync-client';
 
 const scope = { serverId: 'home-a', accountId: 'alice' };
@@ -16,7 +16,7 @@ function record(itemId: string, content: unknown = { t: 'plain', v: item }) {
 const capabilities = { readTranscript: true, editSessionRecords: false };
 
 describe('addressed Session surface item observation', () => {
-    it('reads only demanded addresses, shares in-flight reads, and releases hidden items', async () => {
+    it('reads only demanded addresses, shares in-flight reads, and stops work while retaining hidden items', async () => {
         const reads: string[] = [];
         let decryptions = 0;
         let settle: (() => void) | undefined;
@@ -54,7 +54,11 @@ describe('addressed Session surface item observation', () => {
         repository.invalidate(session);
         await flushHookEffects({ cycles: 20 });
         expect(reads).toEqual(['visible', 'near']);
-        expect(repository.getSnapshot(session, { type: 'read', address: record('visible').address }).data).toBeNull();
+        expect(repository.getSnapshot(session, { type: 'read', address: {
+            owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visible',
+        } })).toMatchObject({
+            data: { id: 'visible' }, freshness: 'stale', loading: 'idle',
+        });
     });
 
     it('keeps locked and mode mismatch states explicit and makes revoked content unavailable synchronously', async () => {
@@ -70,14 +74,21 @@ describe('addressed Session surface item observation', () => {
         });
         await flushHookEffects({ cycles: 20 });
         expect(latest).toMatchObject({ status: 'ready', item: { state: { kind: 'locked' } } });
+        const readRetained = () => readRetainedSessionSurfaceItem({ session, repository, itemId: 'locked',
+            readCapabilities: () => ({ ...capabilities, readTranscript: readable }), readContentContext: () => context, isCurrent: () => true });
+        expect(readRetained()).toMatchObject({ status: 'ready', item: { state: { kind: 'locked' } } });
         context = { mode: 'plain' };
+        expect(readRetained()).toBeNull();
         repository.notifyContentContextChanged(session);
         await flushHookEffects({ cycles: 20 });
         expect(latest).toMatchObject({ status: 'ready', item: { state: { kind: 'unopenable', reason: 'mode_mismatch' } } });
         readable = false;
+        expect(readRetained()).toEqual({ status: 'unavailable', reason: 'forbidden' });
         repository.notifyContentContextChanged(session);
         expect(latest).toEqual({ status: 'unavailable', reason: 'forbidden' });
         stop();
+        repository.retire();
+        expect(readRetained()).toEqual({ status: 'unavailable', reason: 'forbidden' });
     });
 
     it('retains content with stale offline authority, then recovers and reports removal', async () => {

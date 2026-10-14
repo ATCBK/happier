@@ -8,6 +8,8 @@ import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -48,6 +50,11 @@ beforeEach(async () => {
   // Connected Account inventory reads the captured Account's public profile,
   // not the focused UI store. Publish that same fact at its actual HTTP port.
   homes.answer(serverId, '/v1/account/profile', { body: AccountProfileSchema.parse({ id: 'account-a', connectedAccountsV4 }) });
+  homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+  homes.answer(serverId, CONNECTED_PRESENTATION_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, entries: [{ v: 1, subject: { kind: 'account', account: connectedAccountsV4[0]!.ref }, label: 'Work account' }] } } } });
+  homes.answer(serverId, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, entries: [] } } } });
   // Home HTTP and Socket.IO are the genuine boundaries; all inventory,
   // projection parsing, capability probing and Action admission owners run.
   network.setHttpResponder(async (input, init) => {

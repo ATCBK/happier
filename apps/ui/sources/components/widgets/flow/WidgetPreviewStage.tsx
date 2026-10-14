@@ -70,17 +70,21 @@ export function WidgetPreviewStage(props: Readonly<{
     const surfaceWidth = footprint ? referenceSurfaceWidthPx() : Math.max(room, 1);
     // The whole surface fits the room both ways: a tall one (a group of several widgets) is shown
     // smaller, never cut at the stage's foot.
-    const laidWidth = props.alone && footprint ? cardWidthOf(footprint, referenceSurfaceWidthPx()) : surfaceWidth;
+    // A group staged alone is real widgets, not a footprint comparison: it lays out at its width on the
+    // surface or the stage's room, whichever is narrower, at full size, and the stage grows to hold it
+    // (the pane scrolls), so its titles and rows read as they will on the surface.
+    const real = props.alone === true && footprint !== undefined;
+    const laidWidth = real ? Math.min(cardWidthOf(footprint, referenceSurfaceWidthPx()), Math.max(room, 1)) : surfaceWidth;
     // The scale the card would have if only the width limited it, and the room that scale asks for (up to
     // a readable glance): the stage claims it, so a pane that scrolls its inputs above never squeezes the
-    // card to a thumbnail, while a tall group still shrinks to the cap instead of overflowing.
-    const widthScale = room > 0 ? Math.min(1, room / laidWidth) : 1;
-    const wantedRoomHeight = Math.min(height * widthScale, STAGE_MAX_ROOM_HEIGHT_PX);
+    // card to a thumbnail.
+    const widthScale = real ? 1 : room > 0 ? Math.min(1, room / laidWidth) : 1;
+    const wantedRoomHeight = real ? height : Math.min(height * widthScale, STAGE_MAX_ROOM_HEIGHT_PX);
     const roomHeightLimit = Math.max(roomHeight, wantedRoomHeight);
-    const scale = room > 0 ? Math.min(widthScale, height > 0 && roomHeightLimit > 0 ? roomHeightLimit / height : 1) : 1;
+    const scale = real ? 1 : room > 0 ? Math.min(widthScale, height > 0 && roomHeightLimit > 0 ? roomHeightLimit / height : 1) : 1;
     const gap = CARD_GRID.gapPx;
     const column = footprint ? (surfaceWidth - gap * (footprint.columns - 1)) / footprint.columns : surfaceWidth;
-    const cardWidth = footprint ? column * footprint.columnSpan + gap * (footprint.columnSpan - 1) : surfaceWidth;
+    const cardWidth = real ? laidWidth : footprint ? column * footprint.columnSpan + gap * (footprint.columnSpan - 1) : surfaceWidth;
     const rest = footprint && !props.alone ? surfaceWidth - cardWidth - gap : 0;
     // Choosing another size morphs the one card to its new footprint and fades the body in inside it
     // (lab `widget-add` KM): no second card, and only the chosen body is mounted. The first layout and

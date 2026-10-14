@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { defineProtocolJsonValue } from '../../plugins/actions/protocolComposableSchema.js';
 
 /**
@@ -84,43 +84,43 @@ export const SystemTaskJsonValueSchema = lazyZodSchema(() => {
   return schema;
 });
 
-export const SystemTaskSpecSchema = lazyZodSchema(() => z.object({
+export const SystemTaskSpecSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(SYSTEM_TASK_PROTOCOL_VERSION),
-  kind: z.string().min(1),
+  kind: z.string().check(z.minLength(1)),
   params: SystemTaskJsonValueSchema,
-}).strict());
+}));
 export type SystemTaskSpec = z.infer<typeof SystemTaskSpecSchema>;
 
-export const SystemTaskEventSchema = lazyZodSchema(() => z.object({
+export const SystemTaskEventSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(SYSTEM_TASK_PROTOCOL_VERSION),
-  taskId: z.string().min(1),
-  tsMs: z.number().int().nonnegative(),
-  type: z.string().min(1),
-  stepId: z.string().min(1).optional(),
-  message: z.string().min(1).optional(),
-  data: SystemTaskJsonValueSchema.optional(),
-}).strict());
+  taskId: z.string().check(z.minLength(1)),
+  tsMs: z.number().check(z.int(), z.nonnegative()),
+  type: z.string().check(z.minLength(1)),
+  stepId: z.optional(z.string().check(z.minLength(1))),
+  message: z.optional(z.string().check(z.minLength(1))),
+  data: z.optional(SystemTaskJsonValueSchema),
+}));
 export type SystemTaskEvent = z.infer<typeof SystemTaskEventSchema>;
 
-export const SystemTaskResultErrorSchema = lazyZodSchema(() => z.object({
-  code: z.string().min(1),
-  message: z.string().min(1),
-}).strict());
+export const SystemTaskResultErrorSchema = lazyZodSchema(() => z.strictObject({
+  code: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+}));
 export type SystemTaskResultError = z.infer<typeof SystemTaskResultErrorSchema>;
 
-const SystemTaskSuccessResultSchema = lazyZodSchema(() => z.object({
+const SystemTaskSuccessResultSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(SYSTEM_TASK_PROTOCOL_VERSION),
-  taskId: z.string().min(1),
+  taskId: z.string().check(z.minLength(1)),
   ok: z.literal(true),
-  data: SystemTaskJsonValueSchema.optional(),
-}).strict());
+  data: z.optional(SystemTaskJsonValueSchema),
+}));
 
-const SystemTaskFailureResultSchema = lazyZodSchema(() => z.object({
+const SystemTaskFailureResultSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(SYSTEM_TASK_PROTOCOL_VERSION),
-  taskId: z.string().min(1),
+  taskId: z.string().check(z.minLength(1)),
   ok: z.literal(false),
   error: SystemTaskResultErrorSchema,
-}).strict());
+}));
 
 export const SystemTaskResultSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
   SystemTaskSuccessResultSchema,

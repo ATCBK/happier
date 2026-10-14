@@ -3,9 +3,11 @@ import type { RuntimeActionExecute } from '@happier-dev/protocol/actions/executo
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ProjectPrepareNoLaunchResultV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
 
-import { ProjectSetupConsentReviewCard } from '@/components/projects/projectSetup/ProjectSetupSessionReview';
+import type { ProjectSetupScope } from '@/components/projects/projectSetup/ProjectSetupReview';
+import { useProjectSetupMachine } from '@/components/projects/projectSetup/useProjectSetupMachine';
 import { useProjectScriptsController } from '@/components/projects/projectSetup/useProjectScriptsController';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
+import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { openActionOperationDetail } from '@/components/inbox/actionOperations/openActionOperationDetail';
 import { Item } from '@/components/ui/lists/Item';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
@@ -15,12 +17,15 @@ import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/
 import { t } from '@/text';
 
 import type { LocalServiceSetupConsentReview } from './localServiceActionAdmission';
+import { LocalServiceSetupConsentCard } from './LocalServiceSetupConsentCard';
 
 const NO_CHANGE = () => {};
 
 /**
- * A Service intent joins the existing Scripts preparation owner and its retained review. Remember
- * resumes that preparation, not the Service; only its actual completion releases the original intent.
+ * A Service intent joins the existing Scripts preparation owner and its retained review, and decides
+ * it the way the Scripts setup review does (`prepare(digest, scope)`): This time runs setup once and
+ * remembers nothing, Until it changes remembers the reviewed effect and resumes the held setup. Only
+ * the setup's actual completion releases the original intent.
  * This component is mounted only after an explicit Start/Restart asks for Setup consent.
  */
 export function LocalServiceSetupConsentContinuation(props: Readonly<{
@@ -85,6 +90,28 @@ function RetainedSetupContinuation(props: Parameters<typeof LocalServiceSetupCon
             if (result.success) props.onComplete(result.data.kind !== 'skippedForInvocation');
         }
     }, [decline, operation, props.binding, props.onComplete, props.review.signal]);
+    const stop = useActionOperationStopControl(operation);
+    React.useEffect(() => {
+        if (!stop.pending && stop.feedback !== null) decline();
+    }, [decline, stop.feedback, stop.pending]);
+    const attachment = operation?.snapshot.domainRef?.kind === 'projectCommand' ? operation.snapshot.domainRef : null;
+    const { machineName, sharedRunAs } = useProjectSetupMachine(
+        attachment?.serverId ?? props.workspace.serverId,
+        attachment?.machineId ?? props.workspace.machineId,
+    );
+    const decide = React.useCallback(async (digest: string, scope: ProjectSetupScope) => {
+        const result = await controller.prepare(digest, scope);
+        if (!props.binding.isCurrent() || props.review.signal?.aborted) return;
+        if (result && 'operation' in result) {
+            setOperationId(result.operation.operationId);
+            return;
+        }
+        // Remembering resumes the held setup; its own completion releases the intent.
+        if (result && 'kind' in result && result.kind === 'remembered') return;
+        const settled = ProjectPrepareNoLaunchResultV1Schema.safeParse(result);
+        if (settled.success) props.onComplete(settled.data.kind !== 'skippedForInvocation');
+        else Modal.alert(t('common.error'), t('approvals.decisionError'));
+    }, [controller.prepare, props.binding, props.onComplete, props.review.signal]);
     if (controller.approvalId) return <AttentionBanner
         testID={`${props.testID}-setup-approval`}
         tone="neutral"
@@ -92,15 +119,18 @@ function RetainedSetupContinuation(props: Parameters<typeof LocalServiceSetupCon
         description={t('approvals.status.open')}
     />;
     if (!operation) return null;
-    if (operation.snapshot.setupReview) return <ProjectSetupConsentReviewCard
-        operation={operation}
-        scope={{ serverId: props.binding.serverId, accountId: props.binding.accountId }}
-        decided={null}
-        canApprovePermissions={props.binding.isCurrent()}
-        signal={props.review.signal}
-        onDecided={NO_CHANGE}
-        onDeclined={decline}
+    const review = operation.snapshot.setupReview;
+    if (review) return <LocalServiceSetupConsentCard
         testID={`${props.testID}-setup-review`}
+        machineName={machineName}
+        sharedRunAs={sharedRunAs}
+        reviewedEffect={review.reviewedEffect}
+        initialScope={review.consentScope}
+        effectChanged={review.code === 'project_setup_effect_changed'}
+        deciding={Boolean(controller.pendingKeys.setup) || stop.pending}
+        stopping={stop.stopRequested}
+        onDecide={scope => { void decide(review.reviewedEffectDigest, scope); }}
+        onNotNow={stop.requestStop}
     />;
     return <Item
         testID={`${props.testID}-setup-operation`}

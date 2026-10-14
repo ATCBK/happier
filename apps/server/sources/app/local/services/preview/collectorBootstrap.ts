@@ -2,7 +2,8 @@ import { Readable } from 'node:stream';
 import { STATUS_CODES } from 'node:http';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
-import { INJECTED_CONSOLE_TEXT_MAX_LENGTH, INJECTED_OWNER_VALUE_MAX_LENGTH, SAFE_TELEMETRY_HEADER_NAMES } from '@happier-dev/protocol';
+import { INJECTED_CONSOLE_TEXT_MAX_LENGTH, INJECTED_OWNER_VALUE_MAX_LENGTH } from '@happier-dev/protocol/browser/diagnostics/egress/classifier';
+import { SAFE_TELEMETRY_HEADER_NAMES } from '@happier-dev/protocol/browser/diagnostics/egress/headers';
 import { buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
 import {
     COOPERATIVE_COLLECTOR_QUERY, COOPERATIVE_COLLECTOR_STATE_QUERY, COOPERATIVE_COLLECTOR_LOADER_PATH,
@@ -80,18 +81,20 @@ async function decodeBody(chunks: Uint8Array[], encoding: string, maxBytes: numb
 /** Called only after the existing preview route has admitted access; configuration is not a grant. */
 export async function prepareCooperativePreview(input: ProxyLocalServicePreviewHttpRequestInput): Promise<ProxyLocalServicePreviewHttpRequestInput | null> {
     const query = new URLSearchParams(input.request.search);
-    if (!query.has(COOPERATIVE_COLLECTOR_QUERY)) return input;
+    const probe = query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) === '1';
+    const hasCollectorConfig = query.has(COOPERATIVE_COLLECTOR_QUERY);
+    if (!hasCollectorConfig && !probe) return input;
     const config = parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
     const respond = async (status: number, body: string, headers: LocalServicePreviewHttpResponseHeaders) => {
         input.response.writeHead(status, STATUS_CODES[status] ?? '', { 'cache-control': 'no-store', ...headers });
         await input.response.write(Buffer.from(body));
         await input.response.end();
     };
-    if (!config || input.preview.originMode !== 'host') {
+    if (hasCollectorConfig && (!config || input.preview.originMode !== 'host')) {
         await respond(400, JSON.stringify({ state: 'runtime_unavailable' }), { 'content-type': 'application/json' });
         return null;
     }
-    if (input.request.path === COOPERATIVE_COLLECTOR_LOADER_PATH) {
+    if (config && input.request.path === COOPERATIVE_COLLECTOR_LOADER_PATH) {
         if (input.request.method !== 'GET' || query.get('n') !== config.collector.nonce) {
             await respond(400, JSON.stringify({ state: 'collector_mismatch' }), { 'content-type': 'application/json' });
             return null;
@@ -104,8 +107,10 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
         await respond(200, script, { 'content-type': 'application/javascript; charset=utf-8', 'x-content-type-options': 'nosniff' });
         return null;
     }
-    const probe = query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) === '1';
-    if (probe && input.request.headers.origin !== config.webPostMessageTargetOrigin) {
+    const requestOrigin = input.request.headers.origin;
+    const parentOrigin = config?.webPostMessageTargetOrigin ?? (typeof requestOrigin === 'string' ? requestOrigin : undefined);
+    if (probe && (requestOrigin !== parentOrigin || (parentOrigin !== undefined
+        && (!/^https?:\/\//.test(parentOrigin) || URL.canParse(parentOrigin) === false || new URL(parentOrigin).origin !== parentOrigin)))) {
         await respond(403, JSON.stringify({ state: 'runtime_unavailable' }), { 'content-type': 'application/json' });
         return null;
     }
@@ -122,18 +127,25 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
     }
     const origin = new URL(`${input.request.externalProtocol ?? 'http'}://${host}`).origin;
     const loader = new URL(COOPERATIVE_COLLECTOR_LOADER_PATH, origin);
-    loader.searchParams.set('n', config.collector.nonce);
-    loader.searchParams.set(COOPERATIVE_COLLECTOR_QUERY, JSON.stringify(config));
+    if (config) {
+        loader.searchParams.set('n', config.collector.nonce);
+        loader.searchParams.set(COOPERATIVE_COLLECTOR_QUERY, JSON.stringify(config));
+    }
     let status = 0;
     let message = '';
     let headers: LocalServicePreviewHttpResponseHeaders = {};
     let collectHtml = false;
+    let transportUnavailable = false;
     let probeRedirect: string | undefined;
     const chunks: Uint8Array[] = [];
-    return { ...input, request: { ...input.request, search: upstreamSearch }, response: {
+    return { ...input, request: { ...input.request, search: upstreamSearch },
+        onTransportUnavailable(event) {
+            transportUnavailable = true;
+            input.onTransportUnavailable?.(event);
+        }, response: {
         writeHead(code, statusMessage, value) {
             status = code; message = statusMessage; headers = value;
-            collectHtml = code === 200 && /^text\/html(?:;|$)/i.test(header(value, 'content-type'));
+            collectHtml = config !== null && code === 200 && /^text\/html(?:;|$)/i.test(header(value, 'content-type'));
             if (!collectHtml) {
                 const location = header(value, 'location');
                 if (code >= 300 && code < 400 && location) {
@@ -142,9 +154,9 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                         if (next.origin === origin) {
                             // Redirects within the admitted preview retain this navigation's identity;
                             // an external destination must never receive it.
-                            const admitted = new URL(buildCooperativeCollectorNavigationUrl(next.href, config));
+                            const admitted = new URL(config ? buildCooperativeCollectorNavigationUrl(next.href, config) : next.href);
                             if (probe) {
-                                admitted.search += `&${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
+                                admitted.search += `${admitted.search ? '&' : '?'}${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
                                 probeRedirect = admitted.pathname + admitted.search + admitted.hash;
                             }
                             headers = { ...value, location: admitted.pathname + admitted.search + admitted.hash };
@@ -155,7 +167,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
             }
         },
         async write(chunk) {
-            if (collectHtml) chunks.push(chunk);
+            if (collectHtml || (probe && transportUnavailable)) chunks.push(chunk);
             else if (!probe) await input.response.write(chunk);
         },
         async end() {
@@ -179,9 +191,12 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                 }
             }
             if (probe) {
-                await respond(probeRedirect ? status : 200, probeRedirect ? '' : JSON.stringify({ state }), { 'content-type': 'application/json',
+                // Preserve the proxy's typed refusal, not an application's error body. The existing
+                // transport callback is authoritative; status or JSON supplied by the app is not.
+                await respond(transportUnavailable || probeRedirect ? status : 200,
+                    transportUnavailable ? Buffer.concat(chunks).toString('utf8') : probeRedirect ? '' : JSON.stringify({ state }), { 'content-type': 'application/json',
                     ...(probeRedirect ? { location: probeRedirect } : {}),
-                    'access-control-allow-origin': config.webPostMessageTargetOrigin, 'access-control-allow-credentials': 'true', 'vary': 'Origin' });
+                    ...(parentOrigin ? { 'access-control-allow-origin': parentOrigin, 'access-control-allow-credentials': 'true' } : {}), 'vary': 'Origin' });
                 return;
             }
             if (collectHtml) {

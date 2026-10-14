@@ -1,5 +1,5 @@
 import { resolveServerFeaturesForGating } from "@/app/features/catalog/serverFeatureGate";
-import { readServerEnabledBit } from "@happier-dev/protocol";
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 
 import type { FriendsPolicy } from "./friendsPolicy";
 

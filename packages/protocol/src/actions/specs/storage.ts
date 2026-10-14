@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import {
   HappierStorageSummaryV1Schema, MachineStorageCategoryListInputV1Schema, MachineStorageCategoryListResultV1Schema,

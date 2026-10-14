@@ -890,5 +890,5 @@ const styles = StyleSheet.create(() => ({
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  count: { ...Typography.default(), fontVariant: ['tabular-nums'] },
+  count: { ...Typography.variant('meta'), fontVariant: ['tabular-nums'] },
 }));

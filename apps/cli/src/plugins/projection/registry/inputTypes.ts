@@ -12,8 +12,7 @@ export const inputTypesProjectionFamily = definePluginProjectionFamilyV2({
             const origin = pluginExecutionOriginsByPluginId?.[entry.pluginId];
             return [[key, Object.freeze({ id: key, pluginId: entry.pluginId,
                 pluginVersion: entry.pluginVersion, definition: entry.definition,
-                ...(origin ? { serverIdentityId: origin.serverIdentityId,
-                    materializationRef: origin.materializationRef } : {}) })]];
+                ...(origin ? { executionOrigin: origin } : {}) })]];
         }))),
     }),
 });

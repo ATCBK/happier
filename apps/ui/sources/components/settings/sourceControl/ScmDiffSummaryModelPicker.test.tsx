@@ -2,7 +2,6 @@ import * as React from 'react';
 import '@/dev/testkit/harness/syncSingletonLoader';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -21,7 +20,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
                 projection: { v: 2, generation: 1, familiesById: {} } });
         if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) return { ok: true, result: AgentModelsProbeObservationSchema.parse({
             availableModels: [
-                { id: 'real-model', name: 'Real model', capabilities: { structuredOutput: 'supported' } },
+                { id: 'real-model', name: 'Real model', costTier: 'low', capabilities: { structuredOutput: 'supported' } },
                 { id: 'rejected-model', name: 'Rejected model', capabilities: { structuredOutput: 'unsupported' } },
                 { id: 'unknown-model', name: 'Unknown model', capabilities: { structuredOutput: 'unknown' } },
             ], supportsFreeform: false, source: 'dynamic',
@@ -99,7 +98,7 @@ describe('Summary model discovery', () => {
         const change = vi.fn();
         const selection = vi.fn();
         const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={change}
-            onSelection={selection} machineId={machine.id} serverId={homeId} />);
+            onSelection={selection} machineId={machine.id} serverId={homeId} defaultBackendTarget={target} />);
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
         const diagnostic = () => JSON.stringify({ paths: homes.requests.map(request => request.path), rpc: rpc.requests,
             catalog: getAcpCatalogSnapshot(scope), projection: readCachedDaemonMergedProjectionCacheEntry({ machineId: machine.id, serverId: homeId }),
@@ -118,19 +117,41 @@ describe('Summary model discovery', () => {
                 method: 'probeModels', params: { backendTarget: expect.objectContaining(target) },
             },
         });
-        const offered = menu().props.items.find((item: { title: string }) => item.title === 'Real model');
-        const rejected = menu().props.items.find((item: { title: string }) => item.title === 'Rejected model');
-        const unknown = menu().props.items.find((item: { title: string }) => item.title === 'Unknown model');
-        expect(offered?.disabled).toBe(false);
-        expect(rejected?.disabled).toBe(true);
-        expect(unknown?.disabled).toBe(true);
-        await act(async () => { menu().props.onSelect(rejected.id); menu().props.onSelect(unknown.id); });
+        const rows = menu().props.items.filter((item: { title: string }) => item.title === 'Real model');
+        // One row per model: the default is that row, marked, with the catalog's cost tier and no price.
+        expect(rows).toHaveLength(1);
+        const offered = rows[0];
+        expect(offered).toMatchObject({ subtitle: 'Default · Low cost' });
+        expect(offered.disabled).not.toBe(true);
+        // Models that cannot write a walkthrough are not dead rows: the agent's section says once how many it leaves out.
+        expect(menu().props.items.some((item: { title: string }) => item.title === 'Rejected model' || item.title === 'Unknown model')).toBe(false);
+        expect(menu().props.showCategoryTitles).toBe(true);
+        expect(menu().props.categoryDecorations[offered.category]).toMatchObject({ note: '2 models can’t write walkthroughs' });
+        expect(menu().props.categoryDecorations[offered.category].icon).toBeTruthy();
+        // Discovery is one operation inside that agent's section and does not repeat the agent's name.
+        const sectionOperation = menu().props.items.find((item: { id: string }) => item.id === id);
+        expect(sectionOperation).toMatchObject({ category: offered.category });
+        expect(sectionOperation.subtitle).toBeUndefined();
+        expect(menu().props.items.some((item: { id: string }) => item.id === '')).toBe(false);
+        expect(menu().props.selectedId).toBe(offered.id);
         expect(change).not.toHaveBeenCalled();
+        expect(getStorage().getState().settings['scm.diffSummary.modelProfileOverride']).toBe('');
+        // Choosing the default returns to following it; the catalog's default is never written as a preference.
         await act(async () => { menu().props.onSelect(offered.id); });
-        expect(decodeScmDiffSummaryModelOverride(change.mock.calls[0]?.[0])).toMatchObject({ modelId: 'real-model' });
+        expect(change).toHaveBeenCalledWith('');
         expect(selection).toHaveBeenCalledWith(expect.objectContaining({
             backendTarget: expect.objectContaining(target), modelSelector: expect.objectContaining({ modelId: 'real-model' }),
         }));
+        change.mockClear(); selection.mockClear();
+        await act(async () => { menu().props.onSelect(id); });
+        await vi.waitFor(() => expect(menu().props.items.find((item: { title: string }) => item.title === 'Real model')).toBeDefined());
+        await screen.unmount();
+    });
+    it('offers no Load models operation, and no placeholder model row, when no machine can answer it', async () => {
+        const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={vi.fn()} />);
+        const items: ReadonlyArray<{ id: string; title: string }> = screen.findAll(node => node.type === DropdownMenu)[0]!.props.items;
+        expect(items.some(item => item.id.startsWith('backend-discovery:'))).toBe(false);
+        expect(items.some(item => item.id === '')).toBe(false);
         await screen.unmount();
     });
 });

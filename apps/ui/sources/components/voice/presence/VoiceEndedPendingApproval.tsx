@@ -73,13 +73,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     line: {
-        ...Typography.default(),
         flexShrink: 1,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

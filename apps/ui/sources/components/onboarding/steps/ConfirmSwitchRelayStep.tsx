@@ -12,7 +12,7 @@ export type RelaySwitchDecision = 'keep' | 'switch';
 const stylesheet = StyleSheet.create((theme) => ({
     confirmChoices: {
         width: '100%',
-        gap: 6,
+        gap: theme.space.s6,
     },
     selectedRelayCard: {
         width: '100%',
@@ -21,8 +21,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
         paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 6,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s6,
     },
     selectedRelayLabel: {
         color: theme.colors.text.secondary,

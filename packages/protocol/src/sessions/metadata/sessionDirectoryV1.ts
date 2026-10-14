@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 /** Presentation/routing only; never proves filesystem allocation ownership. */
-export const SessionDirectoryV1Schema = lazyZodSchema(() => z.object({
+export const SessionDirectoryV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('managed'),
-}).strict());
+}));
 export type SessionDirectoryV1 = z.infer<typeof SessionDirectoryV1Schema>;
 export const SessionDirectoryV1ReadSchema = createStoredReadSchema(SessionDirectoryV1Schema);
 

@@ -1,12 +1,8 @@
 import { resolveTeamMembershipContextInTx, type TeamMembershipLifetimeContext } from "../memberships/effectiveMembership";
 import { resolveTeamGroupMembershipContextInTx, type TeamGroupMembershipLifetimeContext } from "../groups/effectiveGroupMembership";
 import type { Tx } from "@/storage/inTx";
-import {
-    TeamCredentialDeliveryModeV1Schema,
-    TeamCredentialDisclosureCeilingV1Schema,
-    isTeamPrincipalRoleV1,
-    type TeamCredentialDeliveryModeV1,
-} from "@happier-dev/protocol/teams";
+import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialDeliveryModeV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { isTeamPrincipalRoleV1 } from '@happier-dev/protocol/teams';
 
 export type TeamCredentialMatchedGrant =
     | Readonly<{ kind: "team" }>

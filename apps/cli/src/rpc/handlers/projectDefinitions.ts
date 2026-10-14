@@ -1,5 +1,5 @@
 import type { ActionExecutorDeps, ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
-import { PROJECT_DEFINITION_ACTION_IDS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, type ProjectDefinitionActionId, type ProjectDefinitionWorkspace, type ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import { PROJECT_DEFINITION_ACTION_IDS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, type ProjectDefinitionActionId, type ProjectDefinitionWorkspace } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import type { ProjectDefinitionDetectionV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { inspectProjectDefinitions, inspectProjectDefinitionExecutionFacts } from '@/workspaces/projectSetup/projectDefinitionInspection';
@@ -13,6 +13,7 @@ import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesyste
 import { registerActionSpecRpcHandlers, type ActionSpecRpcRegistrar } from './registerActionSpecRpcHandlers';
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import type { ProjectSetupInspection } from '@/workspaces/projectSetup/projectSetupPreparation';
 
 type NativeInspectionRuntimeLease = Readonly<{
   registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'resolveProjectNativeAdapter'>;
@@ -76,7 +77,7 @@ export function createProjectDefinitionAction(params: Readonly<{
   acquirePluginRuntime?: () => Promise<NativeInspectionRuntimeLease>;
   nativeIo?: ProjectNativeCommandIo;
   /** Captured requester/private-review boundary; the host owns its native lifetime and uses inspectProjectSetupReadiness. */
-  inspectSetupReadiness?: (input: Readonly<{ workspace: ProjectDefinitionWorkspace; root: string; context: ActionExecutorContext }>) => Promise<ProjectSetupReadinessV1>;
+  inspectSetup?: (input: Readonly<{ workspace: ProjectDefinitionWorkspace; root: string; context: ActionExecutorContext }>) => Promise<ProjectSetupInspection>;
 }>): NonNullable<ActionExecutorDeps['projectDefinitionAction']> {
   return async ({ actionId, input, context }) => {
     const parsed = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
@@ -104,13 +105,13 @@ export function createProjectDefinitionAction(params: Readonly<{
       ...(definition.document?.status === 'valid' ? { manifest: definition.document.manifest } : {}),
       ...(context.signal ? { signal: context.signal } : {}) });
     context.signal?.throwIfAborted();
-    let setupReadiness: ProjectSetupReadinessV1 = { kind: 'unknown', code: 'project_setup_requester_review_unavailable' };
-    if (params.inspectSetupReadiness) {
-      try { setupReadiness = await params.inspectSetupReadiness({ workspace, root, context }); }
+    let setup: ProjectSetupInspection = { setupReadiness: { kind: 'unknown', code: 'project_setup_requester_review_unavailable' } };
+    if (params.inspectSetup) {
+      try { setup = await params.inspectSetup({ workspace, root, context }); }
       catch { context.signal?.throwIfAborted(); }
     }
     context.signal?.throwIfAborted();
-    return { definition, detection, ...facts, setupReadiness };
+    return { definition, detection, ...facts, ...setup };
   };
 }
 

@@ -52,6 +52,14 @@ function selectUnique<T>(matches: readonly T[], label: string): T {
   return matches[0]!;
 }
 
+/** An exact private-resource identity always wins over a display-name match. */
+export function matchPersonalSavedSecretMetadata<T extends Readonly<{ secretId: string; name: string }>>(
+  entries: readonly T[], identifier: unknown,
+): readonly T[] {
+  const ids = entries.filter(secret => secret.secretId === identifier);
+  return ids.length ? ids : entries.filter(secret => secret.name === identifier);
+}
+
 /** Read bytes once, keep whitespace, and remove only the shell's final line ending. */
 async function readSecretValue(signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw new SavedSecretsInputFailure({ errorCode: 'cancelled' });
@@ -115,8 +123,7 @@ export async function prepareSavedSecretsCliInput(params: Readonly<{
   if (actionId === 'secrets.update' || actionId === 'secrets.delete') {
     const parsed = PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.list'].safeParse(await readMetadata(execute, 'secrets.list'));
     if (!parsed.success) invalid('Saved Secret metadata is unavailable.');
-    const ids = parsed.data.secrets.filter(secret => secret.secretId === input.secretId);
-    const secret = selectUnique(ids.length ? ids : parsed.data.secrets.filter(secret => secret.name === input.secretId), 'Saved Secret');
+    const secret = selectUnique(matchPersonalSavedSecretMetadata(parsed.data.secrets, input.secretId), 'Saved Secret');
     const resolved = { secretId: secret.secretId, expectedUpdatedAt: secret.updatedAt };
     if (actionId === 'secrets.delete') return resolved;
     return typeof input.rename === 'string'

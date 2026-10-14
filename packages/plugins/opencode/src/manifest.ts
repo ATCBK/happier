@@ -4,9 +4,6 @@ import type {
   AgentProviderCliAttachDeclarationV1,
   AgentProviderCliAttachTargetV1,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import type {
-  McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint,
-} from '@happier-dev/plugin-sdk/mcp';
 
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { detectOpenCodeCliAuthStatus } from './agent/cli/auth.js';
@@ -43,32 +40,6 @@ import {
   resolveOpenCodeSystemToolId,
 } from './agent/systemTool.js';
 import { OPENCODE_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
-
-function normalizeOpenCodeMcpServerIdSegment(name: string): string | null {
-  const normalized = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/gu, '-')
-    .replace(/-+/gu, '-')
-    .replace(/^-|-$/gu, '');
-  return normalized.length > 0 ? normalized : null;
-}
-
-function toOpenCodeMcpEndpoint(server: Awaited<ReturnType<typeof readOpenCodeMcpConfigServers>>['servers'][number]): PluginMcpDiscoveredEndpoint | null {
-  if (server.enabled === false) return null;
-  const idSegment = normalizeOpenCodeMcpServerIdSegment(server.name);
-  if (!idSegment) return null;
-  const id = `opencode.config.${idSegment}`;
-  if ((server.transport === 'http' || server.transport === 'sse') && server.remote?.url) {
-    return {
-      id,
-      name: server.name,
-      kind: server.transport,
-      url: server.remote.url,
-    };
-  }
-  return null;
-}
 
 const {
   id: OPENCODE_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -356,16 +327,9 @@ export const OPENCODE_PLUGIN = definePlugin({
           const detected = await readOpenCodeMcpConfigServers({
             directory: input?.directory ?? null,
           });
-          const endpoints = detected.servers
-            .map(toOpenCodeMcpEndpoint)
-            .filter((endpoint): endpoint is PluginMcpDiscoveredEndpoint => endpoint !== null);
-          const countsById = new Map<string, number>();
-          for (const endpoint of endpoints) {
-            countsById.set(endpoint.id, (countsById.get(endpoint.id) ?? 0) + 1);
-          }
           return {
             items: [],
-            endpoints: endpoints.filter((endpoint) => countsById.get(endpoint.id) === 1),
+            detectedServers: detected.servers,
             warnings: detected.warnings,
           };
         },

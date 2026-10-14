@@ -208,9 +208,10 @@ export function usageSourceTimelineSeries(input: Readonly<{
 }
 
 /** Host Popover and scrolling stay at their incumbent owner; only inert chart facts cross this adapter. */
-export function usageSeriesTooltip(accentColor: string, triggerTestID: string, format: (value: number) => string = formatTokenCountLong) {
+export function usageSeriesTooltip(accentColor: string, triggerTestID: string, format: (value: number) => string = formatTokenCountLong,
+    formatCoordinate?: (x: number) => string) {
     return (bucket: HappierSeriesBucket, visual: ReactNode, select: () => void) => <ChartTooltip triggerTestID={triggerTestID} title={bucket.label}
-        accessibilityLabel={describeHappierSeriesBucket(bucket, t('common.unavailable'))} onSelect={select}
+        accessibilityLabel={describeHappierSeriesBucket(bucket, t('common.unavailable'), formatCoordinate ? { formatCoordinate } : {})} onSelect={select}
         value={bucket.values.map((entry) => `${entry.label} · ${entry.value === null ? t('common.unavailable') : format(entry.value)}`).join('\n')}
         accentColor={accentColor} triggerStyle={{ flex: 1 }}>
         {visual}

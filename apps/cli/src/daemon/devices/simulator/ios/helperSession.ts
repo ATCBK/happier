@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
+import { observeProcessLaunch, invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
@@ -133,12 +134,16 @@ export function createIosSimulatorHelperSessionProcessStarter(
     input: Readonly<{ spawn?: IosSimulatorHelperSessionSpawn }> = {},
 ): IosSimulatorHelperSessionStarter {
     const spawn = input.spawn
-        ?? ((command, args, options) => nodeSpawn(command, [...args], {
-            ...options,
-            stdio: ['pipe', 'pipe', 'ignore'],
-            windowsHide: true,
-            shell: false,
-        }));
+        ?? ((command, args, options) => {
+            const child = nodeSpawn(command, [...args], {
+                ...options,
+                stdio: ['pipe', 'pipe', 'ignore'],
+                windowsHide: true,
+                shell: false,
+            });
+            observeProcessLaunch(child);
+            return child;
+        });
     return (startInput) => {
         if (isForbiddenHelperProcessPath(startInput.helperPath)) {
             throw Object.assign(
@@ -326,6 +331,7 @@ export function createIosSimulatorHelperSession(
             attachStdoutReader(handle);
             handle.onExit(() => onExit(handle));
             processHandle = handle;
+            invalidateProcessLaunchDiscovery();
             return handle;
         })().finally(() => {
             startPromise = null;

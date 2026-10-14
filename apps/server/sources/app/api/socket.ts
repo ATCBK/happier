@@ -3,10 +3,7 @@ import { registerUiFocusSocketEvent } from '@/app/api/socket/registerUiFocusSock
 import { Fastify } from "./types";
 import { buildMachineActivityEphemeral, buildSessionActivityEphemeral, buildUpdateSessionUpdate, ClientConnection, eventRouter } from "@/app/events/eventRouter";
 import { CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT } from "@/app/events/socketRoomEmitter";
-import {
-    buildMachineOwnerConflictSocketPayload,
-    readMachineDaemonOwnershipMetadataFromSocketAuth,
-} from "@happier-dev/protocol";
+import { buildMachineOwnerConflictSocketPayload, readMachineDaemonOwnershipMetadataFromSocketAuth } from '@happier-dev/protocol/machines/ownership/daemonOwnership';
 import { Server, Socket } from "socket.io";
 import { log } from "@/utils/logging/log";
 import { auth } from "@/app/auth/auth";
@@ -94,14 +91,9 @@ import {
 import { createMachineSocketOwnershipRegistry } from "./socket/machineSocketOwnershipRegistry";
 import { createPeerMediationViewerSocketOwnershipVerifier } from "./socket/viewerSocketOwnership";
 import { activityCache } from "@/app/presence/sessionCache";
-import {
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1,
-    resolvePeerRouteFeatureId,
-    resolveExternalSessionOperationSocketBatchLimitsV1,
-    type ExternalSessionOperationSocketBatchLimitResolutionV1,
-    type PeerTcpTunnelRelayEnvelope,
-} from "@happier-dev/protocol";
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
+import { EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1, resolveExternalSessionOperationSocketBatchLimitsV1, type ExternalSessionOperationSocketBatchLimitResolutionV1 } from '@happier-dev/protocol/sessions/external/operationActionsV1';
+import { resolvePeerRouteFeatureId } from '@happier-dev/protocol/machines/peer/mediation/routeFeature';
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
 import { createExecutionRunBrokerCurrentnessResolver } from "@/app/teams/credentials/executionRunBrokerAuthorityResolver";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";

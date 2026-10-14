@@ -5,6 +5,8 @@ import {
   type AgentSessionRuntimeEventV1,
 } from '@happier-dev/protocol';
 import type { RuntimeTranscriptProjectionSession } from './projectRuntimeTranscriptEvent';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { projectSessionUsageWorkEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
 
 type EnqueueAgentMessageCommitted = NonNullable<
   RuntimeTranscriptProjectionSession['enqueueAgentMessageCommitted']
@@ -95,6 +97,14 @@ describe('projectRuntimeTranscriptEvent', () => {
         toolCallCount: 0, schemaBytes: null }],
     } } }]);
     expect(JSON.stringify(capture.bodies)).not.toContain('private-server-name');
+    const retained = capture.bodies.map((body, index) => ({ id: `retained-${index}`, createdAt: 200,
+      content: buildAcpAgentMessageEnvelope({ provider: 'claude', body }) }));
+    const detail = projectSessionUsageWorkEvidence({ id: 'session-1', metadata: null, agentState: null }, retained);
+    expect(detail.coach?.detail?.mcpUsage).toEqual([expect.objectContaining({ sessionId: 'session-1',
+      turnId: 'turn', coverage: 'complete', bindings: [expect.objectContaining({ serverId: 'server', bindingId: 'binding',
+        catalogRevision: 40, toolCallCount: 0 })] })]);
+    const foreign = projectSessionUsageWorkEvidence({ id: 'other-session', metadata: null, agentState: null }, retained);
+    expect(foreign.coach?.detail?.mcpUsage).toEqual([]);
     const absent = createCommittedAgentMessageCapture();
     await projectRuntimeTranscriptEvent({ session: { ...session, enqueueAgentMessageCommitted: absent.enqueueAgentMessageCommitted },
       provider: 'claude', event });

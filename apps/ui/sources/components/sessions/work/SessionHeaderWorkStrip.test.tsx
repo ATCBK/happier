@@ -44,6 +44,6 @@ describe('SessionHeaderWorkStrip (lab session-C)', () => {
             serverId={runtime.serverId} scopeId="session:s1" summary={{ outstanding: 1, ...buckets, sessions: 1, runs: 0 }} /></runtime.Wrapper>);
         expect(screen.getTextContent()).not.toContain(t('sessionWork.strip.stillWorking', { count: 1 }));
         if (buckets.needsYou) expect(screen.getTextContent()).toContain(t('sessionWork.strip.needsYou', { count: 1 }));
-        if (buckets.stalled) expect(screen.getTextContent()).toContain(t('sessionWork.workerUpdate.state.stalled'));
+        if (buckets.stalled) expect(screen.getTextContent()).toContain(t('status.offline'));
     });
 });

@@ -77,7 +77,7 @@ export function useNewSessionScreenSimplePanelProps(params: Readonly<{
     }>;
     model: Pick<
         NewSessionSimplePanelProps,
-        'permissionMode' | 'handlePermissionModeChange' | 'modelMode' | 'setModelMode' | 'modelOptions' | 'modelPickerProps'
+        'permissionMode' | 'handlePermissionModeChange' | 'modelMode' | 'setModelMode' | 'modelOptions' | 'modelPickerProps' | 'modelPickerPresentation'
     > & Readonly<{
         modelOptionsProbeState: ModelOptionsProbeState;
     }>;

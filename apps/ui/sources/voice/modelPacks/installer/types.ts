@@ -16,10 +16,10 @@ export type ExpoFsFile = {
   /** Byte size of the file (0 when absent), used for resume offsets without reading bytes. */
   readonly size?: number;
   bytes: () => Promise<Uint8Array>;
-  open: () => Pick<ReturnType<ExpoFile['open']>, 'readBytes' | 'close'>;
+  open(): Pick<ReturnType<ExpoFile['open']>, 'readBytes' | 'close'>;
   text: () => Promise<string>;
   /** Write content; `{ append: true }` appends without rewriting the whole file. */
-  write: (content: string | Uint8Array, options?: { append?: boolean }) => void;
+  write(content: string | Uint8Array, options?: { append?: boolean }): void;
   create?: (options?: { intermediates?: boolean; idempotent?: boolean }) => void;
   delete?: (options?: { idempotent?: boolean }) => void;
 };

@@ -11,11 +11,30 @@ import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceS
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+
+export type VoiceSettingsAccountTestHarness = Omit<
+    Awaited<ReturnType<typeof createSecretSettingsTestHarness>>, 'purposes'
+> & {
+    purposes: NonNullable<Awaited<ReturnType<typeof createSecretSettingsTestHarness>>['purposes']>;
+    writes: unknown[];
+    readonly settings: Settings;
+    readonly persistedSettings: Settings;
+    replaceConnectedPurposes(next: ConnectedPurposeCatalogV1): Promise<void>;
+    replaceVoice(next: VoiceSettings): void;
+};
 
 /** Real Account Settings owner; only the Home HTTP transport is synthetic. */
 export async function createVoiceSettingsAccountTestHarness(settings: Settings,
-    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features'> = {}) {
+    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features'> = {}): Promise<VoiceSettingsAccountTestHarness> {
     const account = await createSecretSettingsTestHarness({ ...options, settings, voiceEnabled: true, connectedPurposes: { v: 1, bindings: [] } });
+    const request = account.request.getMockImplementation();
+    if (!request) throw new Error('Voice Settings Account HTTP boundary missing');
+    // Saved Secret maintenance reads every current reference-owning catalog.
+    // These Voice fixtures have no external Prompt Registry credentials.
+    account.request.mockImplementation((input, init) => new URL(String(input)).pathname
+        === '/v1/account/entity-rows/prompt-library/registry-sources'
+        ? Promise.resolve(Response.json({ status: 'absent' })) : request(input, init));
     const { replaceSettings } = account;
     await account.purposes!.hydrate(account.scope);
     return {
@@ -51,7 +70,7 @@ export function createElevenLabsSettingsRuntimeTestHarness() {
     const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
     });
-    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const fetch = vi.fn<RuntimeFetch>(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         if (url.origin !== 'https://api.elevenlabs.io' || init?.redirect !== 'error'
             || !new Headers(init.headers).get('xi-api-key')) throw new Error('Unexpected vendor HTTP authority');

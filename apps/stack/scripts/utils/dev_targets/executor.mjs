@@ -60,10 +60,10 @@ function isMissingNamedMutagenSession(result) {
 }
 
 export async function inspectDevTargetSync(
-  { target, stackBaseDir, sourceDir, env = process.env, timeoutMs = null },
+  { target, stackBaseDir, sourceDir, ownerId, env = process.env, timeoutMs = null },
   { runCaptureResult: runCaptureResultImpl = defaultRunCaptureResult } = {},
 ) {
-  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, env });
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, ownerId, env });
   const sessionName = resolveMutagenSessionName(target.name, runtime.sourceDir);
   const launch = buildDevTargetControlLaunch({
     command: 'mutagen',
@@ -206,8 +206,6 @@ export async function runDevTargetDependencyBootstrap(
     ],
     environment: {
       HAPPIER_STACK_PM_CACHE_BASE_DIR: `${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache`,
-      ...(env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES === '1'
-        ? { HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1' } : {}),
     },
     dependencyAdmission: 'skip',
     provenance: 'skip',

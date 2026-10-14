@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from '../connections/v1.js';
 import { ProviderConnectionTombstoneV1Schema } from '../connections/tombstoneV1.js';
@@ -11,40 +11,40 @@ import { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 import { ProfileRecordIdV1Schema } from '../../profiles/v2/profileId.js';
 export { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 
-export const ProviderManualModelV1Schema = lazyZodSchema(() => z.object({
+export const ProviderManualModelV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProviderModelIdSchema,
-  name: z.string().trim().min(1).max(256).optional(),
-  addedAt: z.number().finite().nonnegative(),
-}).strict());
+  name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  addedAt: z.number().check(z.nonnegative()),
+}));
 export type ProviderManualModelV1 = z.infer<typeof ProviderManualModelV1Schema>;
 
 /** Migration addresses an existing retained identity, never a newly authored Profile. */
 export const ProviderMigrationSourceProfileIdSchema = ProfileRecordIdV1Schema;
 
 export const ProviderSettingsMigrationSourceOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     sourceProfileId: ProviderMigrationSourceProfileIdSchema,
     kind: z.literal('default_environment'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     sourceProfileId: ProviderMigrationSourceProfileIdSchema,
     kind: z.literal('connection'),
     connectionId: ProviderConnectionIdSchema,
-    sourceRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
-    modelSelectionOrigin: z.enum(['implicit_default', 'explicit_process_environment']).optional(),
-    modelSelection: ProviderBoundModelRefSchema.optional(),
-  }).strict().superRefine((value, ctx) => {
+    sourceRevision: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(Number.MAX_SAFE_INTEGER))),
+    modelSelectionOrigin: z.optional(z.enum(['implicit_default', 'explicit_process_environment'])),
+    modelSelection: z.optional(ProviderBoundModelRefSchema),
+  }).check(z.superRefine((value, ctx) => {
     if (value.modelSelection && value.modelSelection.providerConnectionId !== value.connectionId) {
       ctx.addIssue({ code: 'custom', path: ['modelSelection', 'providerConnectionId'], message: 'Migrated model selection must reference the winning connection' });
     }
     if (value.modelSelectionOrigin && !value.modelSelection) {
       ctx.addIssue({ code: 'custom', path: ['modelSelectionOrigin'], message: 'Model selection provenance requires a migrated model selection' });
     }
-  }),
-  z.object({
+  })),
+  z.strictObject({
     sourceProfileId: ProviderMigrationSourceProfileIdSchema,
     kind: z.literal('skipped_disabled'),
-  }).strict(),
+  }),
 ]));
 export type ProviderSettingsMigrationSourceOutcomeV1 = z.infer<typeof ProviderSettingsMigrationSourceOutcomeV1Schema>;
 
@@ -55,28 +55,28 @@ export const ProviderSettingsMigrationConflictKindV1Schema = lazyZodSchema(() =>
 ]));
 export type ProviderSettingsMigrationConflictKindV1 = z.infer<typeof ProviderSettingsMigrationConflictKindV1Schema>;
 
-export const ProviderSettingsMigrationModelChoiceV1Schema = lazyZodSchema(() => z.object({
+export const ProviderSettingsMigrationModelChoiceV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['legacy', 'existing']),
-  selection: z.object({
+  selection: z.strictObject({
     agentTargetKey: ProviderAgentTargetKeySchema,
     modelId: ProviderModelIdSchema,
-  }).strict(),
-  label: z.string().trim().min(1).max(256).optional(),
-}).strict());
+  }),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+}));
 export type ProviderSettingsMigrationModelChoiceV1 = z.infer<
   typeof ProviderSettingsMigrationModelChoiceV1Schema
 >;
 
-export const ProviderSettingsMigrationPendingConflictV1Schema = lazyZodSchema(() => z.object({
+export const ProviderSettingsMigrationPendingConflictV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sourceProfileId: ProviderMigrationSourceProfileIdSchema,
   contributionKey: ProviderContributionKeySchema,
-  existingConnectionId: ProviderConnectionIdSchema.nullable(),
-  kinds: z.array(ProviderSettingsMigrationConflictKindV1Schema).min(1).max(3),
-  modelChoices: z.array(ProviderSettingsMigrationModelChoiceV1Schema).max(2).default([]),
-  candidateFingerprint: z.string().startsWith('legacy-profile-migration-conflict:v1:').max(256),
-  detectedAt: z.number().finite().nonnegative(),
-}).strict().superRefine((value, ctx) => {
+  existingConnectionId: z.nullable(ProviderConnectionIdSchema),
+  kinds: z.array(ProviderSettingsMigrationConflictKindV1Schema).check(z.minLength(1), z.maxLength(3)),
+  modelChoices: z._default(z.array(ProviderSettingsMigrationModelChoiceV1Schema).check(z.maxLength(2)), []),
+  candidateFingerprint: z.string().check(z.startsWith('legacy-profile-migration-conflict:v1:'), z.maxLength(256)),
+  detectedAt: z.number().check(z.nonnegative()),
+}).check(z.superRefine((value, ctx) => {
   if (new Set(value.kinds).size !== value.kinds.length) {
     ctx.addIssue({ code: 'custom', path: ['kinds'], message: 'Migration conflict kinds must be unique' });
   }
@@ -88,19 +88,16 @@ export const ProviderSettingsMigrationPendingConflictV1Schema = lazyZodSchema(()
   if (!value.kinds.includes('manual_model') && value.modelChoices.length > 0) {
     ctx.addIssue({ code: 'custom', path: ['modelChoices'], message: 'Only model conflicts may expose model choices' });
   }
-}));
+})));
 export type ProviderSettingsMigrationPendingConflictV1 = z.infer<typeof ProviderSettingsMigrationPendingConflictV1Schema>;
 
-export const ProviderSettingsMigrationStateV1Schema = lazyZodSchema(() => z.object({
+export const ProviderSettingsMigrationStateV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  completedSources: z.array(ProviderSettingsMigrationSourceOutcomeV1Schema)
-    .max(PROVIDER_SETTINGS_LIMITS_V1.migrationCompletedSources),
-  pendingCustomProfileIds: z.array(ProviderMigrationSourceProfileIdSchema)
-    .max(PROVIDER_SETTINGS_LIMITS_V1.migrationPendingCustomProfiles),
-  pendingConflicts: z.array(ProviderSettingsMigrationPendingConflictV1Schema)
-    .max(PROVIDER_SETTINGS_LIMITS_V1.migrationPendingConflicts).default([]),
-  migratedAt: z.number().finite().nonnegative().optional(),
-}).strict().superRefine((value, ctx) => {
+  completedSources: z.array(ProviderSettingsMigrationSourceOutcomeV1Schema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.migrationCompletedSources)),
+  pendingCustomProfileIds: z.array(ProviderMigrationSourceProfileIdSchema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.migrationPendingCustomProfiles)),
+  pendingConflicts: z._default(z.array(ProviderSettingsMigrationPendingConflictV1Schema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.migrationPendingConflicts)), []),
+  migratedAt: z.optional(z.number().check(z.nonnegative())),
+}).check(z.superRefine((value, ctx) => {
   if (new Set(value.completedSources.map((entry) => entry.sourceProfileId)).size !== value.completedSources.length) {
     ctx.addIssue({ code: 'custom', path: ['completedSources'], message: 'Completed source-profile outcomes must be unique' });
   }
@@ -117,17 +114,17 @@ export const ProviderSettingsMigrationStateV1Schema = lazyZodSchema(() => z.obje
   if (value.pendingConflicts.some((entry) => completedIds.has(entry.sourceProfileId))) {
     ctx.addIssue({ code: 'custom', path: ['pendingConflicts'], message: 'A source profile cannot be both completed and conflicted' });
   }
-}));
+})));
 export type ProviderSettingsMigrationStateV1 = z.infer<typeof ProviderSettingsMigrationStateV1Schema>;
 
-export const ProviderExperimentalBindingConfirmationV1Schema = lazyZodSchema(() => z.object({
+export const ProviderExperimentalBindingConfirmationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connectionId: ProviderConnectionIdSchema,
   agentTargetKey: ProviderAgentTargetKeySchema,
-  modelId: ProviderModelIdSchema.nullable(),
-  compatibilityFingerprint: z.string().trim().min(1).max(256),
-  confirmedAt: z.number().finite().nonnegative(),
-}).strict());
+  modelId: z.nullable(ProviderModelIdSchema),
+  compatibilityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  confirmedAt: z.number().check(z.nonnegative()),
+}));
 
 export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is string {
   return typeof value === 'string'
@@ -139,39 +136,38 @@ export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is str
 
 const SavedSecretSlotRecordV1Schema = lazyZodSchema(() => z.record(
   ProviderLocalIdSchema,
-  z.string().refine(isCanonicalProviderSavedSecretIdV1, 'Saved-secret id must be canonical'),
-).superRefine((value, ctx) => {
+  z.string().check(z.refine(isCanonicalProviderSavedSecretIdV1, 'Saved-secret id must be canonical')),
+).check(z.superRefine((value, ctx) => {
   if (Object.keys(value).length > PROVIDER_SETTINGS_LIMITS_V1.credentialSlotsPerScope) {
     ctx.addIssue({ code: 'custom', message: 'Too many credential-slot bindings' });
   }
-}));
+})));
 
-export const SavedSecretSlotBindingsV1Schema = lazyZodSchema(() => z.object({
-  account: SavedSecretSlotRecordV1Schema.optional(),
-  byMachineId: z.record(ProviderMachineIdSchema, SavedSecretSlotRecordV1Schema).optional(),
-}).strict());
+export const SavedSecretSlotBindingsV1Schema = lazyZodSchema(() => z.strictObject({
+  account: z.optional(SavedSecretSlotRecordV1Schema),
+  byMachineId: z.optional(z.record(ProviderMachineIdSchema, SavedSecretSlotRecordV1Schema)),
+}));
 export type SavedSecretSlotBindingsV1 = Readonly<z.infer<typeof SavedSecretSlotBindingsV1Schema>>;
 
-export const ProviderSettingsV1BaseSchema = lazyZodSchema(() => z.object({
+export const ProviderSettingsV1BaseSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connections: z.array(ProviderConnectionV1Schema),
-  connectionTombstones: z.array(ProviderConnectionTombstoneV1Schema).max(PROVIDER_SETTINGS_LIMITS_V1.connectionTombstones),
+  connectionTombstones: z.array(ProviderConnectionTombstoneV1Schema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.connectionTombstones)),
   accountGrants: z.array(ProviderAccountGrantV1Schema),
   machineGrants: z.array(ProviderMachineGrantV1Schema),
   secretBindingsByConnectionId: z.record(ProviderConnectionIdSchema, SavedSecretSlotBindingsV1Schema),
   manualModelsByConnectionId: z.record(
     ProviderConnectionIdSchema,
-    z.array(ProviderManualModelV1Schema).max(PROVIDER_SETTINGS_LIMITS_V1.manualModelsPerConnection),
+    z.array(ProviderManualModelV1Schema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.manualModelsPerConnection)),
   ),
-  modelVisibilityByRef: z.record(z.string().startsWith('mvr1:'), z.literal('hidden')),
-  modelPickerVisibilityByConnectionId: z.record(ProviderConnectionIdSchema, z.boolean()).optional(),
-  experimentalBindingConfirmations: z.array(ProviderExperimentalBindingConfirmationV1Schema)
-    .max(PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations),
+  modelVisibilityByRef: z.record(z.string().check(z.startsWith('mvr1:')), z.literal('hidden')),
+  modelPickerVisibilityByConnectionId: z.optional(z.record(ProviderConnectionIdSchema, z.boolean())),
+  experimentalBindingConfirmations: z.array(ProviderExperimentalBindingConfirmationV1Schema).check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations)),
   defaultsByAgentTargetKey: z.record(ProviderAgentTargetKeySchema, SessionModelSelectionV1Schema),
-  migration: ProviderSettingsMigrationStateV1Schema.optional(),
-}).strict());
+  migration: z.optional(ProviderSettingsMigrationStateV1Schema),
+}));
 
-export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV1BaseSchema>, ctx: z.RefinementCtx): void {
+export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV1BaseSchema>, ctx: z.core.$RefinementCtx): void {
   const connectionIds = new Set<string>();
   const defaultContributionKeys = new Set<string>();
   value.connections.forEach((connection, index) => {
@@ -254,7 +250,7 @@ export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV
     ctx.addIssue({ code: 'custom', path: ['defaultsByAgentTargetKey'], message: 'Too many per-agent defaults' });
   }
 }
-export const ProviderSettingsV1Schema = lazyZodSchema(() => ProviderSettingsV1BaseSchema.superRefine(refineProviderSettingsV1));
+export const ProviderSettingsV1Schema = lazyZodSchema(() => ProviderSettingsV1BaseSchema.check(z.superRefine(refineProviderSettingsV1)));
 export type ProviderSettingsV1 = z.infer<typeof ProviderSettingsV1Schema>;
 
 export const DEFAULT_PROVIDER_SETTINGS_V1: ProviderSettingsV1 = Object.freeze({
@@ -343,7 +339,7 @@ function rawRecord(value: unknown): Record<string, unknown> {
 export function parseProviderSettingsV1Narrow(value: unknown): ProviderSettingsReadResultV1 {
   const diagnostics: ProviderSettingsParseDiagnosticV1[] = [];
   const raw = rawRecord(value);
-  const parseArray = <T>(key: string, schema: z.ZodType<T>, max?: number): T[] => {
+  const parseArray = <T>(key: string, schema: z.ZodMiniType<T>, max?: number): T[] => {
     const rawEntries = Array.isArray(raw[key]) ? raw[key] : [];
     if (max !== undefined && rawEntries.length > max) diagnostics.push({ path: key, reason: 'limit_exceeded' });
     const entries = max === undefined ? rawEntries : rawEntries.slice(0, max);
@@ -575,7 +571,7 @@ export function parseProviderSettingsV1Narrow(value: unknown): ProviderSettingsR
         });
       }
 
-      const migratedAt = z.number().finite().nonnegative().safeParse(rawMigration.migratedAt);
+      const migratedAt = z.number().check(z.nonnegative()).safeParse(rawMigration.migratedAt);
       if (rawMigration.migratedAt !== undefined && !migratedAt.success) {
         diagnostics.push({ path: 'migration.migratedAt', reason: 'invalid_record' });
       }

@@ -59,7 +59,7 @@ const HEADERS: Record<Frame, { title: string; subtitle: string }> = {
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.base },
-    body: { paddingHorizontal: 20, paddingTop: 12, gap: 14 },
+    body: { paddingHorizontal: theme.space.s20, paddingTop: theme.space.s12, gap: 14 },
     copy: { fontSize: 16, lineHeight: 23, color: theme.colors.text.primary, ...Typography.default() },
 }));
 

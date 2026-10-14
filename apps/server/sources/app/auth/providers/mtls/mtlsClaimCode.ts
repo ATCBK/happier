@@ -1,10 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { z } from "zod";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    PasswordCredentialMutationDigestV1Schema,
-    type AccountEncryptionMigrateExternalAuthBindingDigestV1,
-} from "@happier-dev/protocol";
+import { z } from "zod/mini";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, type AccountEncryptionMigrateExternalAuthBindingDigestV1 } from '@happier-dev/protocol/account/encryptionMigrate';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
@@ -12,45 +9,45 @@ import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { readAuthMtlsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 
 const MTLS_CLAIM_CODE_PREFIX = "mtls_claim_";
-const MtlsSecurityBindingSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const MtlsSecurityBindingSchema = z.string().check(z.regex(/^[0-9a-f]{64}$/));
 
-const MtlsTeamInvitationReferenceSchema = z.object({
-    invitationId: z.string().min(1),
-    tokenHash: z.string().regex(/^[0-9a-f]{64}$/),
-    teamId: z.string().min(1),
-}).strict();
+const MtlsTeamInvitationReferenceSchema = z.strictObject({
+    invitationId: z.string().check(z.minLength(1)),
+    tokenHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
+    teamId: z.string().check(z.minLength(1)),
+});
 
-const MtlsTeamHandoffSchema = z.object({
+const MtlsTeamHandoffSchema = z.strictObject({
     purpose: z.literal("native_team_handoff"),
     stage: z.enum(["prepared", "browser_started"]),
-    returnTo: z.string().min(1),
-    teamId: z.string().min(1),
+    returnTo: z.string().check(z.minLength(1)),
+    teamId: z.string().check(z.minLength(1)),
     securityBinding: MtlsSecurityBindingSchema,
-    invitation: MtlsTeamInvitationReferenceSchema.optional(),
-}).strict();
+    invitation: z.optional(MtlsTeamInvitationReferenceSchema),
+});
 
-const MtlsIdentityClaimSchema = z.object({
-    providerUserId: z.string().min(1),
-    providerLogin: z.string().min(1).nullable(),
-    profile: z.object({
-        email: z.string().nullable(),
-        upn: z.string().nullable(),
-        subject: z.string().nullable(),
-        fingerprint: z.string().nullable(),
-        issuer: z.string().nullable(),
-    }).strict(),
-}).strict();
+const MtlsIdentityClaimSchema = z.strictObject({
+    providerUserId: z.string().check(z.minLength(1)),
+    providerLogin: z.nullable(z.string().check(z.minLength(1))),
+    profile: z.strictObject({
+        email: z.nullable(z.string()),
+        upn: z.nullable(z.string()),
+        subject: z.nullable(z.string()),
+        fingerprint: z.nullable(z.string()),
+        issuer: z.nullable(z.string()),
+    }),
+});
 
-const MtlsAuthenticationClaimSchema = z.object({
+const MtlsAuthenticationClaimSchema = z.strictObject({
     purpose: z.literal("native_authentication_claim"),
     identity: MtlsIdentityClaimSchema,
     securityBinding: MtlsSecurityBindingSchema,
-    team: z.object({
-        teamId: z.string().min(1),
-        admissionReference: z.string().min(1),
-        invitation: MtlsTeamInvitationReferenceSchema.optional(),
-    }).strict().optional(),
-}).strict();
+    team: z.optional(z.strictObject({
+        teamId: z.string().check(z.minLength(1)),
+        admissionReference: z.string().check(z.minLength(1)),
+        invitation: z.optional(MtlsTeamInvitationReferenceSchema),
+    })),
+});
 
 export type MtlsTeamInvitationReference = z.infer<typeof MtlsTeamInvitationReferenceSchema>;
 export type MtlsTeamHandoff = Readonly<{
@@ -86,27 +83,25 @@ function resolveMtlsSecurityBinding(env: NodeJS.ProcessEnv): string {
         .digest("hex");
 }
 
-const MtlsFirstKeyStepUpClaimSchema = z
-    .object({
-        userId: z.string().min(1),
+const MtlsFirstKeyStepUpClaimSchema = z.strictObject({
+        userId: z.string().check(z.minLength(1)),
         purpose:
             z.literal("account_encryption_first_key"),
-        providerUserId: z.string().min(1),
-        proofHash: z.string().regex(/^[0-9a-f]{64}$/),
+        providerUserId: z.string().check(z.minLength(1)),
+        proofHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
         securityBinding: MtlsSecurityBindingSchema,
         requestDigest:
             AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    })
-    .strict();
+    });
 
-const MtlsPasswordEnrollmentStepUpClaimSchema = z.object({
-    userId: z.string().min(1),
+const MtlsPasswordEnrollmentStepUpClaimSchema = z.strictObject({
+    userId: z.string().check(z.minLength(1)),
     purpose: z.literal("account_password_enrollment"),
-    providerUserId: z.string().min(1),
-    proofHash: z.string().regex(/^[0-9a-f]{64}$/),
+    providerUserId: z.string().check(z.minLength(1)),
+    proofHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
     securityBinding: MtlsSecurityBindingSchema,
     requestDigest: PasswordCredentialMutationDigestV1Schema,
-}).strict();
+});
 
 async function createMtlsClaimCodeWithStore(store: Pick<Tx, "repeatKey">, params: {
     userId: string;

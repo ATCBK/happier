@@ -1,6 +1,7 @@
 import type { BrowserSurfaceUnavailableReason } from '@/components/browser/surfaces/BrowserSurfaceFallback';
 import type { BrowserAdapterUnavailableReasonCode } from '@/sync/domains/browser/adapters/availability';
 import { t } from '@/text';
+import type { LocalServiceNativePrerequisiteV1, LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 /**
  * The surface family a reason code is rendered into. Each kind selects the
@@ -79,6 +80,7 @@ function resolvePluginSurfacePresentationCopy(input: Readonly<{
     state: PluginSurfacePresentationState;
     title?: string;
     reason: ResolvedReasonCopy;
+    hasSpecificReason: boolean;
 }>): Readonly<{
     title?: string;
     reason: string;
@@ -97,12 +99,12 @@ function resolvePluginSurfacePresentationCopy(input: Readonly<{
         case 'stale':
             return Object.freeze({
                 title: t('pluginSurfaces.state.stale.title'),
-                reason: t('pluginSurfaces.state.stale.reason'),
+                reason: input.hasSpecificReason ? input.reason.body : t('pluginSurfaces.state.stale.reason'),
             });
         case 'offline':
             return Object.freeze({
                 title: t('pluginSurfaces.state.offline.title'),
-                reason: t('pluginSurfaces.state.offline.reason'),
+                reason: input.hasSpecificReason ? input.reason.body : t('pluginSurfaces.state.offline.reason'),
             });
         case 'available':
         case 'unavailable':
@@ -294,6 +296,24 @@ const STREAM_PLAYER_KEYS = {
  * `diagnosticCode` for QA channels.
  */
 const PLUGIN_RUNTIME_KEYS = {
+    plugin_collection_contract_conflict: 'pluginRuntime.collectionConflict',
+    plugin_resource_admission_unavailable: 'pluginRuntime.resourceAdmissionUnavailable',
+    plugin_host_access_disclosure_mismatch: 'pluginRuntime.hostAccessMismatch',
+    artifact_bytes_rpc_unavailable: 'pluginRuntime.routeUnavailable',
+    artifact_bytes_response_invalid: 'pluginRuntime.responseInvalid',
+    artifact_bytes_fetch_failed: 'pluginRuntime.transportUnavailable',
+    transport_unavailable: 'pluginRuntime.transportUnavailable',
+    plugin_resource_transport_unavailable: 'pluginRuntime.transportUnavailable',
+    plugin_resource_transport_not_supported: 'pluginRuntime.routeUnavailable',
+    plugin_resource_transport_error: 'pluginRuntime.transportUnavailable',
+    plugin_resource_transport_timeout: 'pluginRuntime.transportUnavailable',
+    targeted_contributions_unsupported: 'pluginRuntime.routeUnavailable',
+    targeted_contributions_invalid_response: 'pluginRuntime.responseInvalid',
+    targeted_contributions_timeout: 'pluginRuntime.transportUnavailable',
+    targeted_contributions_error: 'pluginRuntime.transportUnavailable',
+    artifact_source_unavailable: 'pluginRuntime.sourceUnavailable',
+    source_unavailable: 'pluginRuntime.sourceUnavailable',
+    response_invalid: 'pluginRuntime.responseInvalid',
     details_destination_policy_unavailable: 'pluginRuntime.disabledByPolicy',
     details_destination_platform_unavailable: 'pluginRuntime.disabledByPolicy',
     crash_threshold_reached: 'pluginRuntime.crashLoop',
@@ -366,6 +386,13 @@ type StreamPlayerMessageKey =
     | 'streamPlayer.status.decoderUnavailable';
 
 type PluginRuntimeMessageKey =
+    | 'pluginRuntime.collectionConflict'
+    | 'pluginRuntime.resourceAdmissionUnavailable'
+    | 'pluginRuntime.hostAccessMismatch'
+    | 'pluginRuntime.routeUnavailable'
+    | 'pluginRuntime.responseInvalid'
+    | 'pluginRuntime.transportUnavailable'
+    | 'pluginRuntime.sourceUnavailable'
     | 'pluginSurfaces.state.offline.reason'
     | 'pluginRuntime.crashLoop'
     | 'pluginRuntime.installationConflict'
@@ -407,6 +434,15 @@ function resolvePluginSurfaceRecoveryAction(
         case 'source_unavailable':
         case 'artifact_unavailable':
         case 'transport_unavailable':
+        case 'plugin_resource_transport_unavailable':
+        case 'artifact_bytes_fetch_failed':
+        case 'artifact_bytes_response_invalid':
+        case 'response_invalid':
+        case 'plugin_resource_transport_error':
+        case 'plugin_resource_transport_timeout':
+        case 'targeted_contributions_invalid_response':
+        case 'artifact_bytes_rpc_unavailable':
+        case 'plugin_resource_transport_not_supported':
         case 'load_timeout':
         case 'load_error':
         case 'local_artifact_failure':
@@ -425,6 +461,9 @@ function resolvePluginSurfaceRecoveryAction(
         case 'host_ui_api_incompatible':
             return Object.freeze({ kind: 'updateCompatible', label: t('common.update') });
         case 'required_permission_missing':
+        case 'plugin_collection_contract_conflict':
+        case 'plugin_resource_admission_unavailable':
+        case 'plugin_host_access_disclosure_mismatch':
         case 'plugin_app_page_unavailable':
         case 'module_instantiation_failed':
         case 'unknown_host_module':
@@ -570,6 +609,8 @@ function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string |
 export function resolveReasonCopy(input: Readonly<{
     reasonCode: string | null | undefined;
     kind: ReasonCopyKind;
+    prerequisite?: LocalServiceNativePrerequisiteV1;
+    establishmentFailure?: LocalServiceEstablishmentFailureV1;
 }>): ResolvedReasonCopy {
     const rawCode = input.reasonCode ?? null;
     const title = resolveTitle(input.kind);
@@ -583,7 +624,14 @@ export function resolveReasonCopy(input: Readonly<{
         };
     }
     const known = resolveKnownMessage(input.kind, rawCode);
-    const body = known ?? resolveGenericMessage(input.kind);
+    const prerequisite = input.kind === 'localServiceAction' && rawCode === 'native_tool_unavailable' ? input.prerequisite : undefined;
+    const failure = input.kind === 'localServiceAction' && rawCode === 'plugin_managed_service_establishment_failed'
+        ? input.establishmentFailure : undefined;
+    const body = prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
+        : failure?.cause === 'port_in_use' && failure.port !== undefined ? t(failure.sameProject
+            ? 'localServices.actions.failure.portInUseSameProject' : 'localServices.actions.failure.portInUse', { port: failure.port })
+        : failure?.exitCode !== undefined ? t('localServices.actions.failure.processExit', { code: String(failure.exitCode) })
+        : known ?? resolveGenericMessage(input.kind);
     return {
         title,
         body,
@@ -602,19 +650,26 @@ export function resolvePluginSurfaceStatePresentation(input: Readonly<{
     /** Native host admissions must not borrow plugin-runtime terminal vocabulary. */
     reasonKind?: 'pluginRuntime' | 'widget';
     reasonCode?: string | null;
+    /** Typed Resource replies may carry their cause under a generic envelope code. */
+    diagnostics?: readonly string[];
     /** A renderer may retain its established localized title without owning copy selection. */
     title?: string;
     /** Only the factual content owner may assert that its last-known-good content is retained. */
     hasRetainedContent?: boolean;
 }>): PluginSurfaceStatePresentation {
+    const reasonCode = input.reasonKind !== 'widget'
+        && (!input.reasonCode || input.reasonCode === 'unavailable' || input.reasonCode === 'plugin_resource_unavailable')
+        ? input.diagnostics?.find((code) => Object.hasOwn(PLUGIN_RUNTIME_KEYS, code)) ?? input.reasonCode
+        : input.reasonCode;
     const reason = resolveReasonCopy({
-        reasonCode: input.reasonCode,
+        reasonCode,
         kind: input.reasonKind ?? 'pluginRuntime',
     });
     const copy = resolvePluginSurfacePresentationCopy({
         state: input.state,
         title: input.title,
         reason,
+        hasSpecificReason: !!reasonCode && resolveKnownMessage(input.reasonKind ?? 'pluginRuntime', reasonCode) !== null,
     });
     const unavailableCard = (): PluginSurfaceStatePresentation['card'] => Object.freeze({
         kind: 'unavailable',
@@ -647,7 +702,7 @@ export function resolvePluginSurfaceStatePresentation(input: Readonly<{
     // Loading is not a failure: nothing needs recovering while content is on its way.
     const recoveryAction = input.state === 'loading' || input.state === 'refreshing'
         ? null
-        : resolvePluginSurfaceRecoveryAction(input.reasonCode);
+        : resolvePluginSurfaceRecoveryAction(reasonCode);
 
     if (input.state !== 'available' && input.hasRetainedContent) {
         return Object.freeze({

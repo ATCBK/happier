@@ -6,7 +6,6 @@ import { getComponentDir, getDefaultAutostartPaths, getRepoDir, getRootDir } fro
 import { killPortListeners, observeTcpPortAvailability } from './utils/net/ports.mjs';
 import { fetchHappierHealth, getServerComponentName } from './utils/server/server.mjs';
 import { resolveServerShutdownGraceMs } from './utils/server/shutdown_grace.mjs';
-import { ensureSourceServerWorkspacePackagesBuilt } from './utils/server/source_server_workspace_deps.mjs';
 import { ensureDepsInstalled, requireDir } from './utils/proc/pm.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -665,8 +664,10 @@ async function main() {
   let serverEnv = baseEnv;
   let serverScript = null;
   let serverProc = null;
+  let serverSourceRuntimeLaunchSpec = null;
+  const serverSourceRuntimeOptions = { repoDir, stackBaseDir: autostart.baseDir, signal: startupAbort.signal };
   if (startServer && startupDecision.startServer) {
-    ({ serverEnv, serverScript, serverProc } = await (async () => {
+    ({ serverEnv, serverScript, serverProc, sourceRuntimeLaunchSpec: serverSourceRuntimeLaunchSpec } = await (async () => {
       if (!priorRuntimeServer.admitted) {
         assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
         assertServerPrismaProviderMatches({ serverComponentName, serverDir });
@@ -690,6 +691,7 @@ async function main() {
       serverAlreadyRunning,
       restart,
       admitPriorBuildsImmediately: true,
+      sourceRuntimeOptions: serverSourceRuntimeOptions,
       priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
         ? priorRuntimeServer.launchSpec
         : null,
@@ -708,15 +710,6 @@ async function main() {
               fallbackReason: proxyPlan.fallbackReason,
             }
           : null,
-    }, {
-      ensureSourceServerWorkspacePackagesBuiltImpl: async (options) => prepareDevComponent({
-        enabled: watchEnabled,
-        target: 'server',
-        descriptors: watchEnabled ? await createDevServerReloadDescriptors({ serverDir }) : [],
-        signal: startupAbort.signal,
-        pollIntervalMs: resolveDevReloadPollIntervalMs(baseEnv),
-        prepare: () => ensureSourceServerWorkspacePackagesBuilt({ ...options, signal: startupAbort.signal }),
-      }),
     });
     })().catch(error => {
       reportStartupFailure('server', error);
@@ -969,6 +962,8 @@ async function main() {
       serverProcRef,
       isShuttingDown: () => shuttingDown,
       proxyController: proxyPlan.mode === 'proxy' ? proxyPlan.proxyController : null,
+      sourceRuntimeOptions: serverSourceRuntimeOptions,
+      sourceRuntimeLaunchSpec: serverSourceRuntimeLaunchSpec,
       priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
         ? priorRuntimeServer.launchSpec
         : null,

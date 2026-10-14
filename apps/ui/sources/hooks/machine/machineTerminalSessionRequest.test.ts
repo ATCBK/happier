@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildMachineTerminalSessionRequest } from './machineTerminalSessionRequest';
+import { ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 
 describe('terminal hook request', () => {
     it('retains the admitted Project workspace on ensure and restart without inventing Session attribution', () => {
@@ -8,6 +9,8 @@ describe('terminal hook request', () => {
         expect(request).toMatchObject({ workspace, cwd: '/accepted' });
         expect(request).not.toHaveProperty('sessionId');
         expect(request).not.toHaveProperty('requesterAccountId');
+        expect(() => ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: 'terminal-open',
+            target: { kind: 'machine', machineId: workspace.machineId }, input: request })).not.toThrow();
     });
     it('preserves the selected package cwd with the canonical script launch on ensure and restart', () => {
         const request = buildMachineTerminalSessionRequest({

@@ -1,28 +1,14 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { Fastify } from "@/app/api/types";
 import { resolveMachineAdmissionInTx, resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import {
-    ManagedAdmissionInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControllerCurrentInputV1Schema,
-    ManagedControllerReportV1Schema, ManagedEnrollmentCorrelationV1Schema,
-    ManagedControllerContextInputV1Schema, ManagedBootstrapCredentialCreateV1Schema,
-    ManagedControllerSubmitInputV1Schema,
-    ManagedControllerMachineOutputV1Schema,
-    resolveManagedAcquireReviewV1,
-    ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1,
-    managedMachineActionEndpointPathV1,
-    ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, MANAGED_CONTROL_ACTION_IDS_V1,
-    MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD,
-    verifyMachineInstallationProof, encodeBase64,
-    ManagedGuestCurrentInputV1Schema, ManagedGuestCurrentOutputV1Schema,
-    ManagedWakeTargetsReadRequestV1Schema, ManagedWakeTargetsReadResultV1Schema,
-    ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, MANAGED_POLICY_PROOF_HEADER,
-    decodeManagedPolicyProofV1, managedPolicyDigestV1, managedPolicyPurposeDigestV1,
-    ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema,
-    ManagedPendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema,
-    MachineEnvironmentApplyInputV1Schema, MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema,
-} from "@happier-dev/protocol";
+import { ManagedAdmissionInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControllerCurrentInputV1Schema, ManagedControllerReportV1Schema, ManagedEnrollmentCorrelationV1Schema, ManagedControllerContextInputV1Schema, ManagedBootstrapCredentialCreateV1Schema, ManagedControllerSubmitInputV1Schema, ManagedControllerMachineOutputV1Schema, resolveManagedAcquireReviewV1, ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, managedMachineActionEndpointPathV1, ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, MANAGED_CONTROL_ACTION_IDS_V1, ManagedGuestCurrentInputV1Schema, ManagedGuestCurrentOutputV1Schema, MachineEnvironmentApplyInputV1Schema, MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, ManagedWakeTargetsReadRequestV1Schema, ManagedWakeTargetsReadResultV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, MANAGED_POLICY_PROOF_HEADER, decodeManagedPolicyProofV1, managedPolicyDigestV1, managedPolicyPurposeDigestV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { ManagedPendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { inTx } from "@/storage/inTx";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
 import { admitManagedAcquire } from "./managedAcquire";
@@ -155,11 +141,11 @@ export function registerManagedMachineRoutes(app: Fastify): void {
     app.post('/v1/machines/managed/controller/activation-failed', { preHandler: app.authenticate,
         schema: { body: ManagedPendingActivationFailureRequestV1Schema, response: {
             200: PendingActivationFailureResponseV1Schema,
-            400: z.object({ error: z.string() }).passthrough(),
-            403: z.union([z.object({ error: z.string() }).passthrough(), z.object({ code: z.string() }).strict()]),
-            404: z.union([z.object({ error: z.string() }).passthrough(), z.object({ code: z.string() }).strict()]),
-            409: z.object({ code: z.string() }).strict(),
-            500: z.object({ error: z.string() }).passthrough(),
+            400: z.looseObject({ error: z.string() }),
+            403: z.union([z.looseObject({ error: z.string() }), z.strictObject({ code: z.string() })]),
+            404: z.union([z.looseObject({ error: z.string() }), z.strictObject({ code: z.string() })]),
+            409: z.strictObject({ code: z.string() }),
+            500: z.looseObject({ error: z.string() }),
         } } },
         async (request, reply) => respond(reply, async () => {
             const verified = await requireManagedPolicyRequest(request, '/v1/machines/managed/controller/activation-failed', request.body.target, 'activation-failure');

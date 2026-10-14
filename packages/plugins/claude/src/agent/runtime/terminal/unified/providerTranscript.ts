@@ -546,13 +546,13 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     const row = parseRawJsonLinesObject(input.row);
     if (!row) return;
     const fact = readClaudeTaskLifecycleEnvelope(row);
+    const projectedTaskResult = fact ? activeBinding.taskNotificationProjector.project(row) : null;
+    await params.onObserveRow?.(row, {
+      providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
+      historicalReplay: false,
+      ...(projectedTaskResult ? { projectedTaskResult } : {}),
+    });
     if (fact) {
-      const projectedTaskResult = activeBinding.taskNotificationProjector.project(row);
-      await params.onObserveRow?.(row, {
-        providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
-        historicalReplay: false,
-        ...(projectedTaskResult ? { projectedTaskResult } : {}),
-      });
       if (fact.subtype === 'task_notification' || projectedTaskResult) {
         activeBinding.observedSourceIds.add(input.sourceId);
         return;
@@ -563,7 +563,10 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       row,
       suppressPriorEraTurnClosure: false,
     });
-    if (!payload || !isOrderedLifecyclePayload(payload)) return;
+    if (!payload || !isOrderedLifecyclePayload(payload)) {
+      activeBinding.observedSourceIds.add(input.sourceId);
+      return;
+    }
     await emitPayload(payload);
     activeBinding.observedSourceIds.add(input.sourceId);
   }

@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import { isUnsafeTelemetryDataKey } from '../../../../common/sensitiveKeys.js';
 
@@ -8,7 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function rejectUnsafePeerMediationObservabilityDataKeys(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   path: readonly (string | number)[] = [],
 ): void {
   if (Array.isArray(value)) {

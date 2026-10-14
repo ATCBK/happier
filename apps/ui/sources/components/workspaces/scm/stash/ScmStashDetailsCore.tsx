@@ -513,9 +513,9 @@ export const ScmStashDetailsCore = React.memo((props: ScmStashDetailsCoreProps) 
                                 onPress={toggle}
                                 accessibilityLabel={t('detailsSurface.history.stashSwitcherA11y')}
                                 accessibilityRole="button"
-                                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}
+                                style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, flexShrink: 1 }}
                             >
-                                <Text style={{ color: theme.colors.text.primary, fontSize: 15, ...Typography.default('semiBold'), flexShrink: 1 }}>{selectedTitle}</Text>
+                                <Text style={{ color: theme.colors.text.primary, ...Typography.variant('heading'),  flexShrink: 1 }}>{selectedTitle}</Text>
                                 <Icon name="caret-down" size={12} color={theme.colors.text.tertiary} />
                             </Pressable>
                         )}
@@ -600,8 +600,8 @@ export const ScmStashDetailsCore = React.memo((props: ScmStashDetailsCoreProps) 
                         ListHeaderComponent={
                             diffState.truncated
                                 ? () => (
-                                    <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 }}>
-                                        <Text style={{ fontSize: 12, color: theme.colors.state.neutral.foreground, ...Typography.default('semiBold') }}>
+                                    <View style={{ paddingHorizontal: theme.space.s16, paddingTop: theme.space.s10, paddingBottom: theme.space.s4 }}>
+                                        <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.state.neutral.foreground,  }}>
                                             {t('files.stash.diffTruncated')}
                                         </Text>
                                     </View>

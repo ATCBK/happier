@@ -149,7 +149,7 @@ export type ReviewCommentsActionInputById = {
             engineId?: string | undefined;
         } | undefined;
         linkedRefs?: ({
-            kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+            kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
             id?: string | undefined;
             url?: string | undefined;
         } | {
@@ -188,7 +188,7 @@ export type ReviewCommentsActionInputById = {
         clientLamport?: number | undefined;
         metadata?: {
             reviewGroupIds?: string[] | undefined;
-            severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+            severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
             taxonomyIds?: string[] | undefined;
             tags?: string[] | undefined;
         } | undefined;
@@ -213,7 +213,7 @@ export type ReviewCommentsActionInputById = {
         engineId?: string | undefined;
         filePath?: string | undefined;
         folderPath?: string | undefined;
-        severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+        severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
         taxonomyIds?: unknown;
         includeHistory?: boolean | undefined;
         cursor?: string | undefined;
@@ -954,7 +954,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -970,7 +970,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -1278,7 +1278,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1294,7 +1294,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -1602,7 +1602,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1618,7 +1618,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -1925,7 +1925,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1941,7 +1941,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -2248,7 +2248,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2264,7 +2264,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -2571,7 +2571,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2587,7 +2587,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -2892,7 +2892,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2908,7 +2908,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -3215,7 +3215,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3231,7 +3231,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -3538,7 +3538,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3554,7 +3554,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -3861,7 +3861,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3877,7 +3877,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;
@@ -4185,7 +4185,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -4201,7 +4201,7 @@ export type ReviewCommentsActionResultById = {
             } | undefined;
             metadata?: {
                 reviewGroupIds?: string[] | undefined;
-                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                severity?: 'info' | 'warning' | 'error' | 'critical' | undefined;
                 taxonomyIds?: string[] | undefined;
                 tags?: string[] | undefined;
             } | undefined;

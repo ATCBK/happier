@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -9,12 +9,12 @@ import { AcpCatalogRecordV1Schema, listAcpCatalogSavedSecretRefsV1, type AcpCata
 
 // Observed predecessor 37a6541578749067b49d4579be8c752c9591b8c8. These selectors
 // are read only at this ingress; current runtime authority is declarative rules.
-const predecessorDefinition = z.preprocess(foldStoredAcpBackendLaunchV1, createStoredReadSchema(lazyZodSchema(() => AcpBackendDefinitionV1Schema.extend({
-  auth: AcpBackendAuthConfigV1Schema.extend({
-    statusCommand: z.array(z.string()).optional(),
-    parser: z.enum(['unknown', 'exitCodeOnly', 'stdoutNonEmpty', 'kiroWhoamiJson']).optional(),
-  }).optional(),
-  transportProfile: z.enum(['generic', 'kiro']).default('generic'),
+const predecessorDefinition = z.pipe(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpBackendDefinitionV1Schema, {
+  auth: z.optional(z.extend(AcpBackendAuthConfigV1Schema, {
+    statusCommand: z.optional(z.array(z.string())),
+    parser: z.optional(z.enum(['unknown', 'exitCodeOnly', 'stdoutNonEmpty', 'kiroWhoamiJson'])),
+  })),
+  transportProfile: z._default(z.enum(['generic', 'kiro']), 'generic'),
 }))));
 const predecessorInventory = createStoredReadSchema(lazyZodSchema(() => z.object({
   v: z.literal(2), backends: z.array(z.unknown()),

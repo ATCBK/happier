@@ -8,7 +8,7 @@ import { readAccountStoredContentCompatibilityForHttpRequest } from "@/app/clien
 import { resolveSessionHostReferenceForAuthenticationInTx } from "@/app/session/pluginCollectionHostReferenceAdapter";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { asServerProtocolZod } from "@/app/api/utils/protocolComposableZodAdapter";
-import { SessionIdSchema } from "@happier-dev/protocol/sessions";
+import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { listQueuedExecutionRunPendingTargetsForSessions } from "@/app/session/pending/pendingMessageService";
 
 function redactIdForLogs(id: string): string {

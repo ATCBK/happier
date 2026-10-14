@@ -32,12 +32,12 @@ import { createInboxItemRoute, readInboxApprovalServerId } from '@/components/in
  */
 
 /** The browser's kinds. Documents are untyped and published text; the rest open in their own owner. */
-export type ArtifactBrowserKind = 'document' | 'prompt' | 'memory' | 'board' | 'workflow' | 'role' | 'launchProfile';
+export type ArtifactBrowserKind = 'document' | 'prompt' | 'memory' | 'board' | 'widget' | 'workflow' | 'role' | 'launchProfile';
 
-export const ARTIFACT_BROWSER_KINDS: readonly ArtifactBrowserKind[] = ['document', 'prompt', 'memory', 'board', 'workflow', 'role', 'launchProfile'];
+export const ARTIFACT_BROWSER_KINDS: readonly ArtifactBrowserKind[] = ['document', 'prompt', 'memory', 'board', 'widget', 'workflow', 'role', 'launchProfile'];
 
 const USE_TARGET_TO_BROWSER_KIND = {
-    open: 'document', prompt_doc: 'prompt', prompt_bundle: 'prompt', memory: 'memory', board: 'board',
+    open: 'document', prompt_doc: 'prompt', prompt_bundle: 'prompt', memory: 'memory', board: 'board', widget: 'widget',
     workflow: 'workflow', role: 'role', launch_profile: 'launchProfile', approval: 'document',
 } as const satisfies Readonly<Record<ReturnType<typeof getArtifactUseTargetV1>['kind'], ArtifactBrowserKind>>;
 

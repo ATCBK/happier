@@ -11,6 +11,7 @@ import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback'
 import { isPierreDiffKillSwitchEnabled, supportsPierreRuntime } from './pierre/pierreRuntimeSupport.web';
 import { useInitialPresentationReadiness } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { useEffectiveDiffWrapLines } from './diffPresentationStyle';
+import { ProseDiffViewer } from './prose/ProseDiffViewer';
 
 const PierreDiffViewer = retryableLazy(async () => {
     const renderer = await import('./pierre/PierreDiffViewer.web');
@@ -21,6 +22,9 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     const rendererMode = useSetting('filesDiffRendererMode');
     const initialPresentationReadiness = useInitialPresentationReadiness();
     const wrapLines = useEffectiveDiffWrapLines(props.wrapLines);
+
+    // Prose is its own face on every renderer: a reading layout, not a code diff.
+    if (props.mode === 'text' && props.face === 'prose') return <ProseDiffViewer {...props} />;
 
     const wantsPierre = rendererMode === 'pierre';
     const rangeInteractionRequired = typeof props.onPressLineRange === 'function'
@@ -36,8 +40,16 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         && supportsPierreRuntime();
 
     if (pierreAllowed) {
+        // An inline diff (a hunk card, a tool result) shows its code at once with the canonical line
+        // renderer while the Pierre chunk and its worker load, so the reserved body is never an empty
+        // card. A virtualized list diff can be very large, so it keeps the pane's loading state.
+        const loading = props.virtualized === true
+            ? <PaneLoadingFallback testID="pierre-diff-loading" />
+            : props.mode === 'unified'
+                ? <HappierUnifiedDiffViewer {...props} wrapLines={wrapLines} />
+                : <HappierTextDiffViewer {...props} wrapLines={wrapLines} />;
         const viewer = (
-            <React.Suspense fallback={<PaneLoadingFallback testID="pierre-diff-loading" />}>
+            <React.Suspense fallback={loading}>
                 <PierreDiffViewer {...props} wrapLines={wrapLines} />
             </React.Suspense>
         );

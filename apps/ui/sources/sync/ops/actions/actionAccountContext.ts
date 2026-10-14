@@ -1,3 +1,4 @@
+import { pick } from 'zod/mini';
 import { TokenStorage, subscribeHomeCredentialMutations, areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
@@ -49,7 +50,7 @@ function readableRawArtifactHeader(artifact: DecryptedArtifact | null): Readonly
     return artifact.rawHeader;
 }
 
-const artifactAccessProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({ ownerAccountId: true, access: true });
+const artifactAccessProjectionSchema = pick(ArtifactAccessRecipientCensusResponseV1Schema, { ownerAccountId: true, access: true });
 type ArtifactCreateOperation = Readonly<{ artifactId?: string; header: Readonly<Record<string, unknown>>; body: ArtifactBodyInput; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; signal?: AbortSignal }>;
 type ArtifactUpdateOperation = Omit<Parameters<WorkflowDefinitionArtifactOperations['update']>[0], 'body'> & Readonly<{ body: ArtifactBodyInput; savedBy?: ArtifactSavedByV1 }>;
 type ArtifactHtmlBundleRead = Readonly<{ bundle: ArtifactHtmlBundleV1; revision: Readonly<{ headerVersion: number; bodyVersion: number }> }>;

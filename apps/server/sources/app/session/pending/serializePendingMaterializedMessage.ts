@@ -1,9 +1,7 @@
-import type {
-    PendingProviderAction,
-    PendingRequestedActionV1,
-    SessionInputAdmissionReceiptV1,
-    SessionMessageDeliveryResolutionV1,
-} from "@happier-dev/protocol";
+import type { PendingProviderAction } from '@happier-dev/protocol/sessions/pending/pendingProviderAction';
+import type { PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import type { SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import type { SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 
 type MaterializedPendingMessage = Readonly<{
     id: string | null;

@@ -24,6 +24,8 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
     let body = ''; for await (const chunk of incoming) body += String(chunk);
     const payload = JSON.parse(body) as { input: Record<string, unknown>[]; tools?: Record<string, unknown>[] };
     const last = [...payload.input].reverse().find(item => item.role === 'user');
+    const afterUser = last ? payload.input.slice(payload.input.lastIndexOf(last) + 1) : [];
+    const hasToolResult = afterUser.some(item => item.type === 'function_call_output');
     let call: { server: string; tool: string; arguments: Record<string, unknown> } | undefined;
     if (last?.role === 'user' && Array.isArray(last.content)) {
       for (const part of last.content) {
@@ -38,9 +40,9 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
       offered: flat.map(tool => ({ name: tool.name, namespace: tool.namespace })), deferred: flat.filter(tool => !tool.name) }));
     const shell = call?.server === '__tool_shell';
     const tool = shell ? flat.find(tool => tool.name === 'shell_command' || tool.name === 'exec_command') : call ? flat.find(tool => typeof tool.name === 'string' && (tool.name.includes(`${key}__${call!.tool}`)
-      || (tool.name === call!.tool && typeof tool.namespace === 'string' && tool.namespace.includes(key!)))) : undefined;
+      || (tool.name === call!.tool && tool.namespace === `mcp__${key!.replace(/[^a-zA-Z0-9_]/g, '_')}`))) : undefined;
     const id = `resp_${randomUUID()}`;
-    const item = call && tool ? { type: 'function_call', id: `fc_${randomUUID()}`, call_id: randomUUID(),
+    const item = call && tool && !hasToolResult ? { type: 'function_call', id: `fc_${randomUUID()}`, call_id: randomUUID(),
       name: tool.name, ...(tool.namespace ? { namespace: tool.namespace } : {}), arguments: JSON.stringify(shell
         ? tool.name === 'exec_command' ? { cmd: 'env' } : { command: 'env' } : call.arguments), status: 'completed' }
       : { type: 'message', id: `msg_${randomUUID()}`, role: 'assistant', status: 'completed',
@@ -76,6 +78,9 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
         const message = JSON.parse(line);
         if (typeof message.method === 'string') {
           if (message.method.toLowerCase().includes('mcp')) console.info('Real Codex MCP status', JSON.stringify(message));
+          if (message.method.startsWith('item/') && message.params?.item?.type === 'mcpToolCall') {
+            console.info('Real Codex MCP correlation', JSON.stringify(message));
+          }
           if (message.id !== undefined) {
             const handler = requests.get(message.method);
             void Promise.resolve(handler ? handler(message) : null).then(result => write({ id: message.id, result }));

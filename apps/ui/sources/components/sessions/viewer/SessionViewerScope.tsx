@@ -12,11 +12,14 @@ import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
 import type { SessionViewerSource } from './sessionViewerPresentation';
+import { useSessionViewerMachineId } from './useSessionViewerMachine';
 
 /**
  * Mounts the Session's one viewer presentation owner around its panes and main column. Both
  * sources live on the Session's own machine (the Watch opener's rule); desktop dock presents the
- * same retained body in its pane (Computer in Details, Browser in the right pane).
+ * same retained body in its pane (Computer in Details, Browser in the right pane). The Computer
+ * is presentable whenever the Session has a Machine, reachable or not, so its viewer can say the
+ * Machine isn't answering; the Browser needs a reachable one.
  */
 export function SessionViewerScope(
   props: React.PropsWithChildren<
@@ -36,27 +39,30 @@ export function SessionViewerScope(
   const pane = useAppPaneScope(scopeId);
   const paneRef = React.useRef(pane);
   paneRef.current = pane;
+  const computerMachineId = useSessionViewerMachineId(props.sessionId, serverId);
   const canPresentSource = React.useCallback(
-    (_source: SessionViewerSource) => machineId !== null,
-    [machineId],
+    (source: SessionViewerSource) =>
+      (source === 'computer' ? computerMachineId : machineId) !== null,
+    [computerMachineId, machineId],
   );
   const openDocked = React.useCallback(
     (source: SessionViewerSource) => {
-      if (!machineId) return;
       if (source === 'computer') {
+        if (!computerMachineId) return;
         paneRef.current.openDetailsTab(
           createComputerScreenDetailsTab({
-            machineId,
-            title: t('computerUse.viewer.tabFallback'),
+            machineId: computerMachineId,
+            title: t('computerUse.presentation.tabFallback'),
           }),
           { intent: 'default' },
         );
         return;
       }
+      if (!machineId) return;
       paneRef.current.openRight({ tabId: 'browser' });
       paneRef.current.setRightTab('browser');
     },
-    [machineId],
+    [computerMachineId, machineId],
   );
   return (
     <SessionViewerControllerProvider

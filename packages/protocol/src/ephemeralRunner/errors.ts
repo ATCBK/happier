@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The one Runner server error vocabulary.
@@ -40,5 +40,5 @@ export const RunnerServerErrorCodeV1Schema = z.enum([
 ]);
 export type RunnerServerErrorCodeV1 = z.infer<typeof RunnerServerErrorCodeV1Schema>;
 
-export const RunnerServerErrorV1Schema = z.object({ error: RunnerServerErrorCodeV1Schema }).strict();
+export const RunnerServerErrorV1Schema = z.strictObject({ error: RunnerServerErrorCodeV1Schema });
 export type RunnerServerErrorV1 = z.infer<typeof RunnerServerErrorV1Schema>;

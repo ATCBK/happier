@@ -30,5 +30,8 @@ export function resolveUsageCostModeLabel(input: Readonly<{
     if (input.mode === 'estimated') {
         return t('usage.estimated');
     }
+    if (input.mode === 'api_equivalent') {
+        return t('usage.board.page.factApiEquivalent');
+    }
     return t('usage.auto');
 }

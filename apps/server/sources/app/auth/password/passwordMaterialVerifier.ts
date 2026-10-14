@@ -1,14 +1,5 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
-import {
-    decodePasswordCredentialFieldV1,
-    encodePasswordCredentialFieldV1,
-    passwordScryptFootprintBytesV1,
-    PasswordMaterialHashV1Schema,
-    PASSWORD_SCRYPT_KEY_BYTES_V1,
-    PASSWORD_SCRYPT_SALT_BYTES_V1,
-    type PasswordMaterialHashV1,
-    type PasswordScryptParametersV1,
-} from '@happier-dev/protocol';
+import { decodePasswordCredentialFieldV1, encodePasswordCredentialFieldV1, passwordScryptFootprintBytesV1, PasswordMaterialHashV1Schema, PASSWORD_SCRYPT_KEY_BYTES_V1, PASSWORD_SCRYPT_SALT_BYTES_V1, type PasswordMaterialHashV1, type PasswordScryptParametersV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import { createPasswordHashAdmission, type PasswordHashAdmission } from './passwordHashAdmission';
 
 /**

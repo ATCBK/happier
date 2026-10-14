@@ -1,0 +1,73 @@
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+
+// The hook does not render Markdown; this patched native package is an external rendering boundary.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => [],
+}));
+installNewSessionScreenModelCommonModuleMocks({ routerConfig: { pathname: '/', params: { machineId: 'studio' } } });
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { applyAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { useDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/useDaemonMergedProjectionInputs');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { NewSessionEmbeddedHostProvider } = await import('../navigation/newSessionHost');
+const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
+const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+
+beforeEach(async () => { network.resetRequests(); storage.setState(storage.getInitialState(), true); await prepareSessionDraftPersistenceStorage(); });
+afterEach(async () => { standardCleanup(); clearDaemonMergedProjectionCacheForTests(); await disconnectActiveServerConnection(); });
+afterAll(() => network.dispose());
+
+describe('remembered launch profile through real New Session state', () => {
+    it.each(['route', 'cold-home'] as const)('settles a deleted remembered profile on %s', async surface => {
+        const savedHome = await network.addHome(`https://profile-stability-${surface}.test`, 'owner');
+        network.setHttpResponder(async input => new URL(String(input)).pathname === '/v1/account/encryption'
+            ? Response.json({ mode: 'plain', updatedAt: 1 }) : null);
+        network.setRpcResponder(async request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+            ? { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {} } } : {});
+        await upsertAndActivateServer({ serverUrl: savedHome.serverUrl });
+        await restoreConnectionToActiveServer({ token: savedHome.token });
+        const scope = { serverId: savedHome.id, accountId: 'owner' };
+        const machine = createMachineFixture({ id: 'studio', active: true, activeAt: Date.now() });
+        storage.setState({ profileScope: scope, settingsScope: scope,
+            settings: { ...settingsDefaults, useProfiles: true, useEnhancedSessionWizard: false },
+            machines: { studio: machine }, machineListByServerId: { [savedHome.id]: [machine] },
+            machineListStatusByServerId: { [savedHome.id]: 'idle' } });
+        storage.getState().applyAuthoringMemory({ lastUsedProfile: 'deleted-profile' });
+        // A cold Home can reuse this current projection without demanding any new Machine work.
+        const projection = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'studio', serverId: savedHome.id }));
+        await act(async () => { await vi.waitFor(() => expect(projection.getCurrent().phase).toBe('ready')); });
+        const host = { params: { machineId: 'studio' }, targetServerId: savedHome.id,
+            setParams: () => {}, openDraft: () => {}, onHandedOff: () => {}, demanded: false };
+        const wrapper = surface === 'cold-home' ? ({ children }: React.PropsWithChildren) =>
+            <NewSessionEmbeddedHostProvider host={host}>{children}</NewSessionEmbeddedHostProvider> : undefined;
+        let renders = 0;
+        const model = await renderHook(() => {
+            if (++renders > 64) throw new Error('Remembered profile restoration does not settle');
+            return useNewSessionScreenModel({ draftId: `profile-stability-${surface}` });
+        }, { wrapper });
+        // Pending catalogs cannot establish that the remembered profile has disappeared.
+        expect(model.getCurrent().simpleProps?.selectedProfileId).toBe('deleted-profile');
+        await model.rerender();
+        expect(model.getCurrent().simpleProps?.selectedProfileId).toBe('deleted-profile');
+        // The canonical catalog becoming current is the point where the model can reject a missing profile.
+        await act(async () => applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1,
+            record: { v: 1, definitions: [] } }, true));
+        await model.rerender();
+        expect(model.getCurrent().simpleProps?.selectedProfileId).toBeNull();
+        expect(storage.getState().authoringMemory.lastUsedProfile).toBe('deleted-profile');
+        await model.unmount();
+        await projection.unmount();
+    });
+});

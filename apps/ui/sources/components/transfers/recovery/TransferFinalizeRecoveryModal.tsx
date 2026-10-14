@@ -9,6 +9,7 @@ import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
 import type { TransferFinalizeRecoveryAction } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type Props = CustomModalInjectedProps & Readonly<{
     title: string;
@@ -18,7 +19,7 @@ type Props = CustomModalInjectedProps & Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 18,
     },
     message: {
@@ -28,7 +29,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 10,
+        gap: theme.space.s10,
     },
 }));
 
@@ -69,7 +70,7 @@ export function TransferFinalizeRecoveryModal({
         titleTestID: 'transfer-finalize-recovery-title',
         closeButtonTestID: 'transfer-finalize-recovery-close',
         bodyScroll: 'auto' as const,
-        dimensions: { width: 440, maxHeightRatio: 0.9 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.9 },
         footer,
     }), [footer, title]));
 

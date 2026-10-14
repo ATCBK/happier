@@ -1011,7 +1011,7 @@ describe('Channels control-response outward custody', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       providerDeliveryAction, expect.objectContaining({ content: { text: 'xx' } }), expect.anything(),
     );
-    expect(store.rows.get(record.custodyId)?.obligation.content.text).toBe('x'.repeat(65));
+    expect(store.rows.get(record.custodyId)?.obligation.content?.text).toBe('x'.repeat(65));
   });
 
   it('constructs new Session projection custody from the canonical binding and its opaque delivery identity', async () => {
@@ -1237,7 +1237,8 @@ describe('Channels control-response outward custody', () => {
           materializationId: 'provider-replaced-before-handler',
         },
       } as const;
-      if (options.expectedExecutionOrigin?.materializationRef.materializationId
+      if (options.expectedExecutionOrigin === undefined || !('materializationRef' in options.expectedExecutionOrigin)
+        || options.expectedExecutionOrigin.materializationRef.materializationId
         !== currentExecutionOrigin.materializationRef.materializationId) {
         throw createPluginActionHandlerNotStartedError({
           code: 'plugin_action_handler_missing',
@@ -2001,6 +2002,42 @@ describe('Channels control-response outward custody', () => {
     expect(new Set(smallPageCustodyIds)).toEqual(unresolvedCustodyIds);
     expect(new Set(smallPageCustodyIds).size).toBe(3);
     expect(secondSmall.nextCursor).toBeUndefined();
+  });
+
+  it('projects a missing created-thread endpoint for ambiguous start recovery without disclosing mail content', async () => {
+    const state = new MemoryAccountCollection();
+    const deliveries = new MemoryAccountCollection();
+    await state.put(providerConnectionRow(), { expectedRevision: 'absent' });
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never, deliveriesCollection: deliveries as never,
+      signal: new AbortController().signal, now: () => 100,
+    });
+    const created = await store.ensure({
+      ...obligation(), source: { kind: 'conversationStart', sessionId: 'session-1', requestId: 'start-recovery' },
+      newThread: { recipients: ['private@example.test'], subject: 'Private subject' },
+      content: { text: 'Private body' }, deliveryKey: 'start-recovery',
+    });
+    if (created.kind !== 'created') throw new Error('Expected start custody');
+    const unknown = await store.compareAndSwap({ custodyId: created.record.custodyId,
+      expectedRevision: created.record.revision,
+      custody: { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [], threadBindingPending: true },
+    });
+    if (unknown.kind !== 'updated') throw new Error('Expected ambiguous start custody');
+    const page = await readConversationOutwardDeliveryResolutionPage({
+      deliveriesCollection: deliveries as never, connectionId: 'connection-1',
+    });
+    expect(page.rows).toEqual([{ custodyId: unknown.record.custodyId, revision: unknown.record.revision,
+      state: 'outcomeUnknown', createdThreadEndpointRequired: { parentId: endpoint.id },
+    }]);
+    expect(JSON.stringify(page)).not.toMatch(/Private|private@example/u);
+    const confirmed = await store.compareAndSwap({ custodyId: unknown.record.custodyId,
+      expectedRevision: unknown.record.revision,
+      custody: { ...unknown.record.custody, endpoint: { kind: 'thread', audience: 'direct', id: 'thread-confirmed', parentId: endpoint.id } },
+    });
+    if (confirmed.kind !== 'updated') throw new Error('Expected retained endpoint');
+    expect((await readConversationOutwardDeliveryResolutionPage({
+      deliveriesCollection: deliveries as never, connectionId: 'connection-1',
+    })).rows).toEqual([{ custodyId: confirmed.record.custodyId, revision: confirmed.record.revision, state: 'outcomeUnknown' }]);
   });
 
   it('reads only exact ambiguous-custody CAS facts and resolves them through the canonical Collection row', async () => {

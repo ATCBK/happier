@@ -42,6 +42,7 @@ it('records captured vendor evidence through strict host projection, authenticat
     const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
     const server = createAuthenticatedTestApp({ authentication: 'real' }) as Fastify;
     let failRowReads = false;
+    let rejectUsageWrite = false;
     let homeRequests = 0;
     const rowOutcomes: Array<{ method: string; status: string }> = [];
     let mutationParamsSchema: unknown;
@@ -52,6 +53,9 @@ it('records captured vendor evidence through strict host projection, authenticat
     });
     server.addHook('onRequest', async (request, reply) => {
         homeRequests += 1;
+        if (rejectUsageWrite && request.method === 'POST' && request.url === '/v1/account/entity-rows/prompt-library/skill-usage') {
+            return reply.code(503).send({ error: 'fixture_no_write' });
+        }
         // A lost Home response is a network boundary failure, not a fake row reader.
         if (failRowReads && request.method === 'GET' && request.url === '/v1/account/entity-rows/prompt-library') {
             return reply.code(503).send({ error: 'fixture_home_unavailable' });
@@ -132,7 +136,14 @@ it('records captured vendor evidence through strict host projection, authenticat
         expect(() => Reflect.apply(parseParams, mutationParamsSchema, [{ key: buildPromptLibraryPhysicalKeyV1(producerKey) }])).toThrow();
         expect(event.skills).toEqual([{ name: 'happier:contract-skill' }]);
         expect(AgentSessionRuntimeEventSchema.safeParse({ ...event, unexpected: true }).success).toBe(false);
+        rejectUsageWrite = true;
         expect(await projectRuntimeTranscriptEvent({ ...projection, event })).toEqual({ projected: true, kind: 'skill-usage' });
+        expect(await readPersisted()).toEqual({ revision: 0, value: { v: 1, lastUsedAt: {} } });
+        rejectUsageWrite = false;
+        now += 100;
+        // This is a fresh native use, never a queued replay of the rejected observation.
+        expect(await projectRuntimeTranscriptEvent({ ...projection, event: { ...event, sequence: 2, emittedAtMs: now } }))
+            .toEqual({ projected: true, kind: 'skill-usage' });
         expect(await readPersisted()).toEqual({ revision: 1, value: { v: 1, lastUsedAt: { 'library-contract-skill': now } } });
         expect(rowOutcomes).toContainEqual({ method: 'POST', status: 'updated' });
         await vi.waitFor(() => expect(wakes).toContainEqual(expect.objectContaining({ body: { t: 'account-change' } })));

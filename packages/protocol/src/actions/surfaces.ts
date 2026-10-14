@@ -92,6 +92,9 @@ export function resolveRuntimeActionSurfaces(actionId: RuntimeActionIdV1): PreNo
   if (actionId === 'browser.automation.cancelActive' || actionId === 'computer.target.close') {
     return { ...RUNTIME_ACTION_ENABLED_SURFACES, mcp: true };
   }
+  if (actionId === 'projects.service.relocate' && isRuntimeActionExecutorReal(actionId)) {
+    return { ...RUNTIME_ACTION_ENABLED_SURFACES, voice: true, mcp: true };
+  }
   return isRuntimeActionExecutorReal(actionId)
     ? RUNTIME_ACTION_ENABLED_SURFACES
     : RUNTIME_ACTION_DISABLED_SURFACES;

@@ -173,7 +173,7 @@ describe('UI machine connection Actions', () => {
             : { serverId, machineId: 'old' };
         const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: 'alice' };
         expect(await makeExecutor().execute(actionId, input, { ...context,
-            actionsSettings: { v: 1, actions: { [rawId]: { enabled: false } } },
+            actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { [rawId]: { enabled: false } } }),
         })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
         expect(harness.requestsFor(path)).toHaveLength(0);
         expect(await makeExecutor().execute(actionId, input, { ...context,

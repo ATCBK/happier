@@ -1,17 +1,17 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AttentionPreviewBehaviorSchema } from '../account/settings/attentionDeliveryPolicy.js';
 
 /** Content-free Machine alert; names are enriched only by the authenticated device. */
-export const MachineRemoteAlertV1Schema = lazyZodSchema(() => z.object({
+export const MachineRemoteAlertV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('machine_alert'),
   v: z.literal(1),
-  serverId: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
-  machineId: z.string().trim().min(1),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
+  machineId: z.string().check(z.trim(), z.minLength(1)),
   phase: z.enum(['offline', 'recovered']),
   previewBehavior: AttentionPreviewBehaviorSchema,
-}).strict());
+}));
 export type MachineRemoteAlertV1 = z.infer<typeof MachineRemoteAlertV1Schema>;
 
 /** The existing notice is updated or dismissed on recovery, never a new alert. */

@@ -5,9 +5,11 @@ import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/appro
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import type { StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { readResourceProposalApproval } from '@/components/approvals/resourceProposal/readResourceProposalApproval';
+import { resolveResourceProposalLabels } from '@/components/approvals/resourceProposal/resourceProposalLabels';
 import type { ResourceProposalRow } from '@/components/approvals/resourceProposal/resourceProposalPresentation';
 import {
   useResourceProposalCheck,
@@ -70,7 +72,7 @@ const SUGGESTIONS_TAB: MachinePageTabParams = {
 };
 
 export type MachineCleanupProposal = Readonly<{
-  artifact: Pick<DecryptedArtifact, 'id' | 'header' | 'createdAt'>;
+  artifact: DecryptedArtifact;
   approval: ApprovalRequest;
 }>;
 
@@ -84,13 +86,19 @@ export function selectMachineCleanupProposal(
   artifacts: readonly DecryptedArtifact[],
   target: MachineWidgetTarget,
   keepArtifactId: string | null,
+  previous: MachineCleanupProposal | null = null,
 ): MachineCleanupProposal | null {
   let best: MachineCleanupProposal | null = null;
   for (const artifact of artifacts) {
     if (artifact.header?.kind !== 'approval_request.v1') continue;
     const kept = artifact.id === keepArtifactId;
     if (!kept && artifact.header?.approvalStatus !== 'open') continue;
-    const parsed = approvalArtifactBodyMatchesHeaderV1(
+    const sameRevision = previous !== null && artifact.id === previous.artifact.id
+      && artifact.body === previous.artifact.body
+      && artifact.headerVersion === previous.artifact.headerVersion
+      && artifact.bodyVersion === previous.artifact.bodyVersion
+      && sameStrictJsonValue(artifact.header, previous.artifact.header);
+    const parsed = sameRevision ? { family: 'built_in' as const, request: previous.approval } : approvalArtifactBodyMatchesHeaderV1(
       artifact.header ?? {},
       typeof artifact.body === 'string' ? artifact.body : null,
     );
@@ -107,9 +115,10 @@ export function selectMachineCleanupProposal(
       !areServerProfileIdentifiersEquivalent(model.serverId, target.serverId)
     )
       continue;
-    if (kept) return { artifact, approval: parsed.request };
+    const proposal = artifact === previous?.artifact && sameRevision ? previous : { artifact, approval: parsed.request };
+    if (kept) return proposal;
     if (!best || artifact.createdAt > best.artifact.createdAt)
-      best = { artifact, approval: parsed.request };
+      best = proposal;
   }
   return best;
 }
@@ -139,9 +148,16 @@ function MachineSuggestionWidgetBody(
 ) {
   const artifacts = useArtifacts();
   const [decidedId, setDecidedId] = React.useState<string | null>(null);
+  const selectProposal = React.useMemo(() => {
+    let previous: MachineCleanupProposal | null = null;
+    return (artifacts: readonly DecryptedArtifact[], target: MachineWidgetTarget, kept: string | null) => {
+      previous = selectMachineCleanupProposal(artifacts, target, kept, previous);
+      return previous;
+    };
+  }, []);
   const proposal = React.useMemo(
-    () => selectMachineCleanupProposal(artifacts, props.target, decidedId),
-    [artifacts, decidedId, props.target],
+    () => selectProposal(artifacts, props.target, decidedId),
+    [artifacts, decidedId, props.target, selectProposal],
   );
   if (!proposal)
     return (
@@ -293,9 +309,7 @@ function MachineProposalSuggestion(
         <RoundButton
           testID={`${props.testID}.approve`}
           size="small"
-          title={t('resourceProposal.approve.trash', {
-            count: controller.selectedCount,
-          })}
+          title={resolveResourceProposalLabels(controller).approve}
           disabled={controller.approveWithheld || deciding}
           onPress={() => run('approve')}
         />
@@ -763,7 +777,7 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
   },
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

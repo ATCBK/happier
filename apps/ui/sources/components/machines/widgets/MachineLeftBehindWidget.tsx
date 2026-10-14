@@ -282,12 +282,12 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     flexShrink: 1,
     color: theme.colors.text.tertiary,
   },
   explanation: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     maxWidth: 300,
     color: theme.colors.text.secondary,
   },

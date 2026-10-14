@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
 import { McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, ReachPlaceV1Schema,
@@ -14,34 +14,29 @@ import { applyMcpServerConfigOverrideV1 } from './resolveMcpServerConfigForConte
 export const McpDetectedProviderV1Schema = AgentIdV1Schema;
 export type McpDetectedProviderV1 = z.infer<typeof McpDetectedProviderV1Schema>;
 
-export const DetectedMcpServerV1Schema = lazyZodSchema(() => z
-  .object({
+export const DetectedMcpServerV1Schema = lazyZodSchema(() => z.looseObject({
     provider: McpDetectedProviderV1Schema,
-    name: z.string().min(1),
+    name: z.string().check(z.minLength(1)),
     transport: McpServerCatalogEntryTransportV1Schema,
-    stdio: z
+    stdio: z.optional(z
       .object({
-        command: z.string().min(1),
+        command: z.string().check(z.minLength(1)),
         args: z.array(z.string()),
-      })
-      .optional(),
-    remote: z
+      })),
+    remote: z.optional(z
       .object({
-        url: z.string().min(1),
+        url: z.string().check(z.minLength(1)),
         headers: z.array(z.string()),
-      })
-      .optional(),
+      })),
     envKeys: z.array(z.string()),
     enabled: z.union([z.boolean(), z.null()]),
     // Older detection producers omit this presentation fact.
-    loadedInHappierSessions: z.boolean().optional(),
-    source: z.object({
+    loadedInHappierSessions: z.optional(z.boolean()),
+    source: z.looseObject({
       kind: z.enum(['user', 'project']),
-      path: z.string().min(1),
-    }).passthrough(),
-  })
-  .passthrough()
-  .superRefine((value, ctx) => {
+      path: z.string().check(z.minLength(1)),
+    }),
+  }).check(z.superRefine((value, ctx) => {
     if (value.transport === 'stdio') {
       if (!value.stdio) {
         ctx.addIssue({ code: 'custom', message: 'Missing stdio config', path: ['stdio'] });
@@ -57,7 +52,7 @@ export const DetectedMcpServerV1Schema = lazyZodSchema(() => z
     if (!value.remote) {
       ctx.addIssue({ code: 'custom', message: 'Missing remote config', path: ['remote'] });
     }
-  }));
+  })));
 
 export type DetectedMcpServerV1 = z.infer<typeof DetectedMcpServerV1Schema>;
 
@@ -67,35 +62,33 @@ export type DetectedMcpServerV1 = z.infer<typeof DetectedMcpServerV1Schema>;
  * detection request naming one. Such a source must stay visible as an
  * explicit incompleteness rather than collapsing into an empty result.
  */
-export const DaemonMcpServersDetectWarningV1Schema = lazyZodSchema(() => z.object({
-  provider: McpDetectedProviderV1Schema.optional(),
+export const DaemonMcpServersDetectWarningV1Schema = lazyZodSchema(() => z.looseObject({
+  provider: z.optional(McpDetectedProviderV1Schema),
   code: z.enum(['read_failed', 'parse_failed', 'unsupported']),
-  path: z.string().min(1).optional(),
-  detail: z.string().min(1).optional(),
-}).passthrough());
+  path: z.optional(z.string().check(z.minLength(1))),
+  detail: z.optional(z.string().check(z.minLength(1))),
+}));
 export type DaemonMcpServersDetectWarningV1 = z.infer<typeof DaemonMcpServersDetectWarningV1Schema>;
 
-export const DaemonMcpServersDetectRequestSchema = lazyZodSchema(() => z
-  .object({
-    machineId: z.string().min(1),
-    directory: z.string().min(1).max(10_000).optional(),
-    providers: z.array(McpDetectedProviderV1Schema).optional(),
-  })
-  .passthrough());
+export const DaemonMcpServersDetectRequestSchema = lazyZodSchema(() => z.looseObject({
+    machineId: z.string().check(z.minLength(1)),
+    directory: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+    providers: z.optional(z.array(McpDetectedProviderV1Schema)),
+  }));
 
 export type DaemonMcpServersDetectRequest = z.infer<typeof DaemonMcpServersDetectRequestSchema>;
 
 export const DaemonMcpServersDetectResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     servers: z.array(DetectedMcpServerV1Schema),
-    warnings: z.array(DaemonMcpServersDetectWarningV1Schema).optional(),
-  }).passthrough(),
-  z.object({
+    warnings: z.optional(z.array(DaemonMcpServersDetectWarningV1Schema)),
+  }),
+  z.looseObject({
     ok: z.literal(false),
     errorCode: z.enum(['invalid_request', 'internal_error']),
-    error: z.string().min(1),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type DaemonMcpServersDetectResponse = z.infer<typeof DaemonMcpServersDetectResponseSchema>;
 
@@ -112,31 +105,31 @@ export const DaemonMcpServersTestErrorCodeSchema = lazyZodSchema(() => z.enum([
 export type DaemonMcpServersTestErrorCode = z.infer<typeof DaemonMcpServersTestErrorCodeSchema>;
 
 export const DaemonMcpServersTestAuthoringRequestSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.looseObject({
     t: z.literal('draft'),
-    machineId: z.string().min(1),
-    directory: z.string().min(1).max(10_000),
+    machineId: z.string().check(z.minLength(1)),
+    directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
     server: McpServerCatalogEntryV1Schema,
-    binding: McpServerRuleV1Schema.nullish(),
-  }).passthrough(),
-  z.object({
+    binding: z.nullish(McpServerRuleV1Schema),
+  }),
+  z.looseObject({
     t: z.literal('byId'),
-    machineId: z.string().min(1),
-    directory: z.string().min(1).max(10_000),
-    serverId: z.string().min(1),
-    bindingId: z.string().min(1).optional(),
-  }).passthrough(),
+    machineId: z.string().check(z.minLength(1)),
+    directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
+    serverId: z.string().check(z.minLength(1)),
+    bindingId: z.optional(z.string().check(z.minLength(1))),
+  }),
 ]));
 // Exact 0.2 RPC ingress; current Actions and catalog rows never author this field.
 // Provenance: ../0.2 cd2bb4d853a259ae00ebc3e5981224e3e4bb5380,
 // daemonRpcV1.ts:98–107 and McpServerTestPanel.tsx:136–141. Remove with 0.2 client support.
-const retainedDraftTestRequest = lazyZodSchema(() => DaemonMcpServersTestAuthoringRequestSchema.options[0].extend({
-  binding: McpServerRuleV1Schema.omit({ agentId: true }).extend({
-    target: z.union([ReachPlaceV1Schema.options[0], ReachPlaceV1Schema.options[1], ReachPlaceV1Schema.options[3]]),
-    overrides: McpServerConfigOverrideFieldsV1Schema.optional(),
-  }).strict().nullish(),
+const retainedDraftTestRequest = lazyZodSchema(() => z.extend(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[0], {
+  binding: z.nullish((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(McpServerRuleV1Schema, { agentId: true }), {
+    target: z.union([ReachPlaceV1Schema._zod.def.options[0], ReachPlaceV1Schema._zod.def.options[1], ReachPlaceV1Schema._zod.def.options[3]]),
+    overrides: z.optional(McpServerConfigOverrideFieldsV1Schema),
+  }))),
 }));
-export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.preprocess(raw => {
+export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.pipe(z.transform(raw => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('t' in raw) || raw.t !== 'draft'
     || !('binding' in raw) || !raw.binding || typeof raw.binding !== 'object' || !('overrides' in raw.binding)) return raw;
   const retained = retainedDraftTestRequest.safeParse(raw);
@@ -145,28 +138,28 @@ export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.preproces
   // Draft Test supplies exactly one binding. Folding its configuration preserves
   // the predecessor winner's effect; the sole reach owner still checks its place.
   return { ...retained.data, server: applyMcpServerConfigOverrideV1(retained.data.server, overrides), binding };
-}, DaemonMcpServersTestAuthoringRequestSchema));
+}), DaemonMcpServersTestAuthoringRequestSchema));
 export type DaemonMcpServersTestRequest = z.infer<typeof DaemonMcpServersTestRequestSchema>;
 
 export const DaemonMcpServersTestResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
-    toolCount: z.number().int().min(0),
-    toolNamesSample: z.array(z.string()).optional(),
-    durationMs: z.number().int().min(0),
-    tools: McpServerToolsSnapshotV1Schema.shape.tools.optional(),
+    toolCount: z.number().check(z.int(), z.minimum(0)),
+    toolNamesSample: z.optional(z.array(z.string())),
+    durationMs: z.number().check(z.int(), z.minimum(0)),
+    tools: z.optional(McpServerToolsSnapshotV1Schema.shape.tools),
     protocolVersion: McpServerToolsSnapshotV1Schema.shape.protocolVersion,
     serverInfo: McpServerToolsSnapshotV1Schema.shape.serverInfo,
     instructions: McpServerToolsSnapshotV1Schema.shape.instructions,
-    stderrTail: z.string().optional(),
-  }).passthrough(),
-  z.object({
+    stderrTail: z.optional(z.string()),
+  }),
+  z.looseObject({
     ok: z.literal(false),
     errorCode: DaemonMcpServersTestErrorCodeSchema,
-    error: z.string().min(1),
-    durationMs: z.number().int().min(0),
-    runtimeMissing: z.string().min(1).optional(),
-    stderrTail: z.string().optional(),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+    durationMs: z.number().check(z.int(), z.minimum(0)),
+    runtimeMissing: z.optional(z.string().check(z.minLength(1))),
+    stderrTail: z.optional(z.string()),
+  }),
 ]));
 export type DaemonMcpServersTestResponse = z.infer<typeof DaemonMcpServersTestResponseSchema>;

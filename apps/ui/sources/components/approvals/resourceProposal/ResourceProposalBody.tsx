@@ -40,6 +40,7 @@ import {
   resolveResourceProposalOutcomes,
   resourceProposalChangedCount,
   resourceProposalSelectAllState,
+  resourceProposalTrashBytes,
   type ResourceProposalOutcome,
   type ResourceProposalRow,
 } from './resourceProposalPresentation';
@@ -383,6 +384,7 @@ const ProposalVolume = React.memo(function ProposalVolume(
     paths: readonly string[];
     selectedBytes: number;
     compact: boolean;
+    permanent: boolean;
   }>,
 ) {
   const storage = useMachineStorageSummary({
@@ -415,7 +417,7 @@ const ProposalVolume = React.memo(function ProposalVolume(
     <StorageVolumeRow
       volume={{ ...volume, pileBytes: props.selectedBytes }}
       compact={props.compact}
-      after="trashEmpties"
+      after={props.permanent ? 'cleanup' : 'trashEmpties'}
     />
   );
 });
@@ -440,6 +442,13 @@ function pileBarFor(
         freesBytes: display.bytes,
       };
     case 'trashed': {
+      if (display.receipt) {
+        if (display.receipt.kind !== 'ready' || display.receipt.remaining.length === 0) return null;
+        return { kind: 'held', batchId: display.result.batchId, count: display.receipt.remaining.length,
+          inTrashBytes: resourceProposalTrashBytes(display.result, display.receipt),
+          notActed: display.result.outcomes.filter(outcome => outcome.status !== 'moved' && outcome.status !== 'deleted').length,
+          emptiesAt: null };
+      }
       const acted = display.result.outcomes.filter(
         (outcome) => outcome.status === 'moved' || outcome.status === 'deleted',
       ).length;
@@ -468,7 +477,9 @@ function pileNote(controller: ResourceProposalController): string | null {
   if (display.kind === 'ask') {
     if (model.kind === 'processes') return t(model.actionId === 'machines.processes.kill'
       ? 'machineProcesses.kill.treeBody' : 'resourceProposal.note.processes');
-    return model.emptyAfter
+    return model.storageMode === 'delete'
+      ? t('machineStorage.review.whereDeleteNote')
+      : model.emptyAfter
       ? t('resourceProposal.note.emptyAfter')
       : t('resourceProposal.note.trash');
   }
@@ -706,10 +717,33 @@ export const ResourceProposalBody = React.memo(function ResourceProposalBody(
           paths={model.items.map((item) => item.path)}
           selectedBytes={controller.selectedBytes}
           compact={compact}
+          permanent={model.storageMode === 'delete'}
         />
       ) : null}
       {display.kind === 'stopped' ? (
         <StoppedSummary controller={controller} />
+      ) : null}
+      {display.kind === 'trashed' && display.receipt ? (
+        <View accessibilityLiveRegion="polite">
+          {display.receipt.kind === 'checking' ? (
+            <Text testID="resource-proposal-receipt-checking" style={styles.hint}>{t('resourceProposal.receiptChecking')}</Text>
+          ) : display.receipt.kind === 'unavailable' ? (
+            <Text testID="resource-proposal-receipt-unavailable" style={styles.hint}>{t('resourceProposal.receiptUnavailable')}</Text>
+          ) : <>
+            {display.receipt.deletedCount > 0 || display.receipt.freedBytes > 0 ? (
+              <Text style={styles.hint}>{display.receipt.deletedCount > 0
+                ? t('resourceProposal.receiptFreed', { count: display.receipt.deletedCount,
+                  amount: formatMachineBytes(display.receipt.freedBytes, 'storage') })
+                : t('machineStorage.pile.freed', { amount: formatMachineBytes(display.receipt.freedBytes, 'storage') })}</Text>
+            ) : null}
+            {display.receipt.restoredCount > 0 ? (
+              <Text style={styles.hint}>{t('resourceProposal.receiptRestored', { count: display.receipt.restoredCount })}</Text>
+            ) : null}
+            {display.receipt.unknownCount > 0 ? (
+              <Text testID="resource-proposal-receipt-unavailable" style={styles.hint}>{t('resourceProposal.receiptUnknown', { count: display.receipt.unknownCount })}</Text>
+            ) : null}
+          </>}
+        </View>
       ) : null}
       {display.kind === 'failed' ? (
         <Text testID="resource-proposal-failed" style={styles.hint}>
@@ -827,15 +861,15 @@ const styles = StyleSheet.create((theme) => ({
   stale: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: theme.space.s10,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s10,
     backgroundColor: theme.colors.state.attention.background,
   },
   staleCopy: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: theme.space.s2,
   },
   staleTitle: {
     ...Typography.default('semiBold'),
@@ -851,22 +885,22 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
     color: theme.colors.text.secondary,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s8,
   },
   allRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border.default,
   },
   allBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: theme.space.s10,
     minHeight: 32,
   },
   allText: {
@@ -909,7 +943,7 @@ const styles = StyleSheet.create((theme) => ({
   figures: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 16,
+    gap: theme.space.s16,
   },
   figuresCompact: {
     gap: 0,
@@ -936,14 +970,14 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: 'right',
   },
   bottom: {
-    gap: 8,
-    paddingTop: 6,
+    gap: theme.space.s8,
+    paddingTop: theme.space.s6,
   },
   loss: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: theme.space.s10,
   },
   lossText: {
     ...Typography.default(),
@@ -954,10 +988,10 @@ const styles = StyleSheet.create((theme) => ({
   leftOutHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s16,
     paddingTop: 14,
-    paddingBottom: 4,
+    paddingBottom: theme.space.s4,
   },
   leftOutTitle: {
     ...Typography.default('semiBold'),
@@ -968,16 +1002,16 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 4,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    gap: theme.space.s4,
+    paddingHorizontal: theme.space.s16,
+    paddingTop: theme.space.s8,
   },
   quiet: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: theme.space.s8,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s12,
   },
   quietText: {
     ...Typography.default(),

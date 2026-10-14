@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import {
     ExternalActionDaemonDispatchRequestSchema,
+    ExternalActionExecutionAuthorizationV1Schema,
     prepareExternalActionResponseEnvelopeV1,
 } from "@happier-dev/protocol/actions";
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from "@happier-dev/protocol/socketRpc";
@@ -175,10 +176,10 @@ describe("Redis Streams adapter current consumer composition", () => {
             io: cluster.nodes[0].io,
             resolveMachine: async () => "available",
             getServerIdentityId: async () => "server:external-action:cluster",
-            mintExecutionAuthorization: async (binding) => ({
+            mintExecutionAuthorization: async (binding) => ExternalActionExecutionAuthorizationV1Schema.parse({
                 v: 1,
                 token: "test-external-action-authorization",
-                binding,
+                binding: { ...binding, custodianAccountId: binding.accountId, installationId: 'installation-1' },
             }),
         });
 

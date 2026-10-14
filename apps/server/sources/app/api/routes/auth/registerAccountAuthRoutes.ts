@@ -12,12 +12,9 @@ import {
 import { inTx } from "@/storage/inTx";
 import { readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { evaluateProvisioningResponsePolicy } from "./provisioningResponsePolicy";
-import {
-    BOX_BUNDLE_MIN_BYTES,
-    inspectTerminalProvisioningV3Payload,
-    isValidBoxBundlePublicKey,
-    sealBoxBundle,
-} from "@happier-dev/protocol";
+import { BOX_BUNDLE_MIN_BYTES } from '@happier-dev/protocol/crypto/boxBundleFormat';
+import { inspectTerminalProvisioningV3Payload } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
+import { isValidBoxBundlePublicKey, sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { recordAuthEnrollmentOutcome } from "@/app/monitoring/metrics/authMetrics";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";

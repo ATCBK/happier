@@ -1,14 +1,4 @@
-import {
-    NO_HOME_CAPABILITIES_V1,
-    isActiveHomeAccountStatus,
-    type AccountStatusV1,
-    type HomeAccountMutationCapabilitiesV1,
-    type HomeAccountMutationCapabilityV1,
-    type HomeAccountMutationUnavailableReasonV1,
-    type HomeCapabilitiesV1,
-    type HomeRoleV1,
-    type TeamCreationPolicyV1,
-} from "@happier-dev/protocol";
+import { NO_HOME_CAPABILITIES_V1, isActiveHomeAccountStatus, type AccountStatusV1, type HomeAccountMutationCapabilitiesV1, type HomeAccountMutationCapabilityV1, type HomeAccountMutationUnavailableReasonV1, type HomeCapabilitiesV1, type HomeRoleV1, type TeamCreationPolicyV1 } from '@happier-dev/protocol/home/governance';
 
 import type { Tx } from "@/storage/inTx";
 

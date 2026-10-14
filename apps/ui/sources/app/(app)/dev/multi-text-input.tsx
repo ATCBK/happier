@@ -42,10 +42,9 @@ export default function MultiTextInputDemo() {
                         />
                     </View>
                     <Text style={{ 
-                        fontSize: 12, 
+                        ...Typography.variant('meta'),
                         color: '#999',
                         marginTop: 4,
-                        ...Typography.default()
                     }}>
                         Characters: {text1.length}
                     </Text>
@@ -79,10 +78,9 @@ export default function MultiTextInputDemo() {
                         />
                     </View>
                     <Text style={{ 
-                        fontSize: 12, 
+                        ...Typography.variant('meta'),
                         color: '#999',
                         marginTop: 4,
-                        ...Typography.default()
                     }}>
                         Characters: {text2.length}
                     </Text>
@@ -117,10 +115,9 @@ export default function MultiTextInputDemo() {
                         />
                     </View>
                     <Text style={{ 
-                        fontSize: 12, 
+                        ...Typography.variant('meta'),
                         color: '#999',
                         marginTop: 4,
-                        ...Typography.default()
                     }}>
                         Characters: {text3.length} | Max height: 60px
                     </Text>
@@ -155,10 +152,9 @@ export default function MultiTextInputDemo() {
                         />
                     </View>
                     <Text style={{ 
-                        fontSize: 12, 
+                        ...Typography.variant('meta'),
                         color: '#999',
                         marginTop: 4,
-                        ...Typography.default()
                     }}>
                         Characters: {text4.length} | Max height: 200px
                     </Text>
@@ -208,10 +204,9 @@ export default function MultiTextInputDemo() {
                         />
                     </View>
                     <Text style={{ 
-                        fontSize: 12, 
+                        ...Typography.variant('meta'),
                         color: '#999',
                         marginTop: 4,
-                        ...Typography.default()
                     }}>
                         Last key pressed: {lastKey || 'None'} | Characters: {text5.length}
                     </Text>

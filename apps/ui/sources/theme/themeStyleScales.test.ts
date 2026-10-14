@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { darkTheme, lightTheme } from '@/theme';
 
-import { applyThemeStyleScales, resolveThemeStyleScales } from './themeStyleScales';
+import { applyThemeStyleScales, HAPPIER_SPACE_STEPS, resolveThemeStyleScales } from './themeStyleScales';
 
 // Today's literal values, written out so a table edit that silently moves the default fails here.
 // One base of 10 with the derived steps (plugin-ui `radius.ts`); a modal card is a dialog.
 const TODAY_BORDER_RADIUS = { sm: 6, md: 8, lg: 10, xl: 14, xxl: 18, modalCard: 18 };
-const TODAY_MARGINS = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 };
 
 describe('theme style scales', () => {
     it('defaults to soft and lets each surface inherit or override the global finish without moving radii', () => {
@@ -28,8 +27,10 @@ describe('theme style scales', () => {
     it('keeps every default equal to the values the app renders today', () => {
         const scales = resolveThemeStyleScales();
 
+        expect(scales).not.toHaveProperty('margins');
+
         expect(scales.borderRadius).toEqual(TODAY_BORDER_RADIUS);
-        expect(scales.margins).toEqual(TODAY_MARGINS);
+        expect(scales.space).toEqual(HAPPIER_SPACE_STEPS);
         expect(scales.parts).toEqual({
             userBubble: { radius: 14, finish: 'soft' },
             // The composer stack: 14, 18 on Android (the test platform is not Android).
@@ -47,7 +48,7 @@ describe('theme style scales', () => {
 
         for (const theme of [lightTheme, darkTheme]) {
             expect(theme.borderRadius).toEqual(TODAY_BORDER_RADIUS);
-            expect(theme.margins).toEqual(TODAY_MARGINS);
+            expect(theme.space).toEqual(HAPPIER_SPACE_STEPS);
             expect(theme.parts).toEqual(scales.parts);
             expect(theme.transcript).toEqual(scales.transcript);
             expect(theme.typography).toEqual(scales.typography);
@@ -63,7 +64,7 @@ describe('theme style scales', () => {
         }
         expect(sharp.parts.toolCard.radius).toBe(sharp.borderRadius.md);
         expect(sharp.parts.userBubble.radius).toBe(sharp.borderRadius.xl);
-        expect(sharp.margins).toEqual(defaults.margins);
+        expect(sharp.space).toEqual(defaults.space);
         expect(sharp.transcript).toEqual(defaults.transcript);
         expect(sharp.typography).toEqual(defaults.typography);
     });
@@ -80,7 +81,7 @@ describe('theme style scales', () => {
         const compact = resolveThemeStyleScales({ density: 'compact' });
 
         expect(compact.transcript.messageGap).toBeLessThan(defaults.transcript.messageGap);
-        expect(compact.margins.lg).toBeLessThan(defaults.margins.lg);
+        expect(compact.space.s16).toBeLessThan(defaults.space.s16);
         expect(compact.borderRadius).toEqual(defaults.borderRadius);
     });
 

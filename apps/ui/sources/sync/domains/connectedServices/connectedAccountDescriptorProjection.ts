@@ -13,7 +13,12 @@ export type ConnectedAccountDescriptorProjectionErrorReason =
 
 export type ConnectedAccountDescriptorMachineProjection =
   | Readonly<{ kind: 'loading' }>
-  | Readonly<{ kind: 'ready'; descriptors: readonly ConnectedAccountUiProjectionEntryV1[] }>
+  | Readonly<{
+      kind: 'ready';
+      descriptors: readonly ConnectedAccountUiProjectionEntryV1[];
+      /** Static declarations remain visible when Administration withdraws execution. */
+      executionUnavailablePluginIds?: readonly string[];
+    }>
   | Readonly<{ kind: 'error'; reason: ConnectedAccountDescriptorProjectionErrorReason }>;
 
 export type ConnectedAccountDescriptorProjectionConflict =
@@ -137,9 +142,24 @@ function unionReadyConnectedAccountDescriptorProjections(
         const { occurrenceId, ...declaration } = entry;
         descriptor = declaration;
       }
-      return { value: descriptor, selectable: true };
+      return { value: descriptor, selectable: !descriptor.pluginId
+        || !projection.executionUnavailablePluginIds?.includes(descriptor.pluginId) };
   }));
-  const { variantsByIdentity, conflictingIdentities } = resolveFleetSupplyAgreement({ supplies,
+  const executableIdentities = new Set(supplies.filter(supply => supply.selectable)
+    .map(supply => connectedAccountDescriptorIdentity(supply.value)));
+  // Prefer admitted declarations for execution/conflict decisions. With no
+  // admitted supply, retain descriptive identity through the same union, but
+  // never let that declaration make the registry executable.
+  const visibleSupplies = supplies.map(supply => {
+    const descriptiveOnly = !supply.selectable && !executableIdentities.has(connectedAccountDescriptorIdentity(supply.value));
+    return descriptiveOnly ? {
+      selectable: true,
+      value: supply.value.availability.state === 'available' ? { ...supply.value,
+        availability: { state: 'blocked' as const, reason: 'execution_origin_unavailable' },
+      } : supply.value,
+    } : supply;
+  });
+  const { variantsByIdentity, conflictingIdentities } = resolveFleetSupplyAgreement({ supplies: visibleSupplies,
     identity: connectedAccountDescriptorIdentity, content: descriptorFingerprint });
 
   const descriptors = [...variantsByIdentity.entries()]

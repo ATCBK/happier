@@ -7,6 +7,13 @@ const reviewStartExports = reviewStart as typeof reviewStart & {
 };
 
 describe('ReviewStartInputSchema', () => {
+  it('admits the canonical explicit child default and rejects an invalid child selection', () => {
+    const input = { engineIds: ['codex'], instructions: 'Review.' };
+    expect(reviewStart.ReviewStartInputSchema.parse({ ...input, childSelection: 'agentDefault' }).childSelection)
+      .toBe('agentDefault');
+    expect(reviewStart.ReviewStartInputSchema.safeParse({ ...input, childSelection: 'inherit' }).success).toBe(false);
+  });
+
   it('validates the authored detached working directory before routing a Run', () => {
     const input = { target: { kind: 'detached' }, engineIds: ['claude'], instructions: 'Review.' };
     expect(reviewStart.ReviewStartInputSchema.parse({ ...input, cwd: '/repo/exact' }).cwd).toBe('/repo/exact');

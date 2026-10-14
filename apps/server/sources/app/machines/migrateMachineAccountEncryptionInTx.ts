@@ -1,7 +1,5 @@
-import {
-    machineStoredContentMatchesAccountMode,
-    type AccountEncryptionMigrateMachinesDirective,
-} from "@happier-dev/protocol";
+import { machineStoredContentMatchesAccountMode } from '@happier-dev/protocol/machines/machineStoredContent';
+import { type AccountEncryptionMigrateMachinesDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The one host-suffix family a plugin may declare instead of a single fixed
@@ -46,14 +46,14 @@ export function isCanonicalPluginNetworkHostSuffix(value: string): boolean {
   return !/^[0-9]+$/.test(labels[labels.length - 1] ?? '');
 }
 
-export const CanonicalPluginNetworkHostSuffixSchema = lazyZodSchema(() => z.string().superRefine((value, ctx) => {
+export const CanonicalPluginNetworkHostSuffixSchema = lazyZodSchema(() => z.string().check(z.superRefine((value, ctx) => {
   if (!isCanonicalPluginNetworkHostSuffix(value)) {
     ctx.addIssue({
       code: 'custom',
       message: 'Expected a normalized lowercase ASCII host suffix of at least two DNS labels.',
     });
   }
-}));
+})));
 
 /**
  * Decides whether one canonical HTTPS origin belongs to a declared host-suffix

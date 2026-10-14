@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { ProjectOpenDraftDocumentV2Schema } from '../projects/openProjectDraftV1.js';
 
@@ -44,29 +44,29 @@ export const SESSION_DRAFT_V2_ROUTE_READ = '/v2/account/session-drafts/read' as 
 export const SESSION_DRAFT_V2_ROUTE_LIST = '/v2/account/session-drafts/list' as const;
 export const SESSION_DRAFT_V2_ROUTE_MUTATE = '/v2/account/session-drafts/mutate' as const;
 
-const RunDraftAddressSchema = z.object({
+const RunDraftAddressSchema = z.strictObject({
   kind: z.literal('run'),
   sessionId: asProtocolZod(SessionIdSchema),
   runId: ExecutionRunIdSchema,
-}).strict();
-const DiscussionDraftAddressSchema = z.object({
+});
+const DiscussionDraftAddressSchema = z.strictObject({
   kind: z.literal('discussion'),
   sessionId: asProtocolZod(SessionIdSchema),
   discussionId: SessionDiscussionIdSchema,
-}).strict();
-const NewDiscussionDraftAddressSchema = z.object({
+});
+const NewDiscussionDraftAddressSchema = z.strictObject({
   kind: z.literal('newDiscussion'),
   sessionId: asProtocolZod(SessionIdSchema),
-}).strict();
+});
 
-export const ProjectOpenDraftAddressV2Schema = z.object({
+export const ProjectOpenDraftAddressV2Schema = z.strictObject({
   kind: z.literal('projectOpen'),
-  draftId: SessionDraftAddressV1Schema.options[0].shape.draftId,
-}).strict();
+  draftId: SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId,
+});
 
 /** Account-owned drafts follow Account mode, independently of Session availability. */
 export const AccountOwnedDraftAddressV2Schema = z.union([
-  SessionDraftAddressV1Schema.options[0],
+  SessionDraftAddressV1Schema._zod.def.options[0],
   ProjectOpenDraftAddressV2Schema,
 ]);
 export type AccountOwnedDraftAddressV2 = z.infer<typeof AccountOwnedDraftAddressV2Schema>;
@@ -148,61 +148,58 @@ export function parseCanonicalSessionDraftAddressV2(value: string): SessionDraft
   return parsed.success && canonicalSessionDraftAddressV2(parsed.data) === value ? parsed.data : null;
 }
 
-export const CanonicalSessionDraftAddressV2Schema = z.string().min(1).refine(
-  (value) => parseCanonicalSessionDraftAddressV2(value) !== null,
-  'Expected a canonical session draft address',
-);
+export const CanonicalSessionDraftAddressV2Schema = z.string().check(z.minLength(1), z.refine((value) => parseCanonicalSessionDraftAddressV2(value) !== null, 'Expected a canonical session draft address'));
 export type CanonicalSessionDraftAddressV2 = z.infer<typeof CanonicalSessionDraftAddressV2Schema>;
 
-const DiscussionDraftFieldSchema = <T extends z.ZodTypeAny>(value: T) => z.object({
-  mutationId: z.string().uuid(),
+const DiscussionDraftFieldSchema = <T extends z.ZodMiniType>(value: T) => z.strictObject({
+  mutationId: z.string().check(z.uuid()),
   value,
-}).strict();
+});
 
 /**
  * Human conversation drafts (Lane 05.03 semantics) composed at this one draft
  * document owner. They carry no Agent routing, delivery, authoring or
  * attachment bytes.
  */
-export const SessionDiscussionDraftDocumentV2Schema = z.object({
+export const SessionDiscussionDraftDocumentV2Schema = z.strictObject({
   v: z.literal(2),
   target: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('discussion') }).strict(),
-    z.object({ kind: z.literal('newDiscussion') }).strict(),
+    z.strictObject({ kind: z.literal('discussion') }),
+    z.strictObject({ kind: z.literal('newDiscussion') }),
   ]),
-  composer: z.object({
+  composer: z.strictObject({
     text: DiscussionDraftFieldSchema(z.string()),
     mentions: DiscussionDraftFieldSchema(z.array(StrictJsonValueSchema)),
-    attachments: DiscussionDraftFieldSchema(z.array(z.never()).max(0)),
-  }).strict(),
-  title: DiscussionDraftFieldSchema(z.string()).optional(),
-}).strict().superRefine((document, context) => {
+    attachments: DiscussionDraftFieldSchema(z.array(z.never()).check(z.maxLength(0))),
+  }),
+  title: z.optional(DiscussionDraftFieldSchema(z.string())),
+}).check(z.superRefine((document, context) => {
   if (document.title && document.target.kind !== 'newDiscussion') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['title'],
       message: 'Only a new-discussion draft carries a title field',
     });
   }
-});
+}));
 export type SessionDiscussionDraftDocumentV2 = z.infer<typeof SessionDiscussionDraftDocumentV2Schema>;
 
 /** New-session intent evolves here, never by widening the released V1 document. */
-export const NewSessionDraftDocumentV2Schema = z.object({
+export const NewSessionDraftDocumentV2Schema = z.strictObject({
   v: z.literal(2),
   composer: SessionDraftDocumentV1Schema.shape.composer,
-  target: z.object({
+  target: z.strictObject({
     kind: z.literal('newSession'),
     authoring: createSessionDraftAuthoringFieldsSchema(SyncedSessionAuthoringValueV2Schema),
-  }).strict(),
+  }),
   extensions: SessionDraftDocumentV1Schema.shape.extensions,
-}).strict().superRefine((document, context) => {
+}).check(z.superRefine((document, context) => {
   const extensionFields = Object.values(document.extensions)
     .reduce((count, fields) => count + Object.keys(fields).length, 0);
   if (3 + Object.keys(document.target.authoring).length + extensionFields > SESSION_DRAFT_MAX_FIELDS) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Draft field count exceeds the supported boundary' });
+    context.addIssue({ code: "custom", message: 'Draft field count exceeds the supported boundary' });
   }
-});
+}));
 export type NewSessionDraftDocumentV2 = z.infer<typeof NewSessionDraftDocumentV2Schema>;
 
 export const SessionDraftDocumentV2Schema = z.union([
@@ -225,31 +222,31 @@ function readManualRecipientRunId(document: SessionDraftDocumentV1): string | nu
   }
 }
 
-const SessionDraftPrivatePayloadV2OnlySchema = z.object({
+const SessionDraftPrivatePayloadV2OnlySchema = z.strictObject({
   v: z.literal(2),
   address: z.union([
     SessionDraftAddressV2OnlySchema,
-    SessionDraftAddressV1Schema.options[0],
+    SessionDraftAddressV1Schema._zod.def.options[0],
   ]),
   document: SessionDraftDocumentV2Schema,
-}).strict().superRefine((payload, context) => {
+}).check(z.superRefine((payload, context) => {
   if (payload.address.kind === 'run') {
     if (payload.document.v === 2) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['document', 'v'],
         message: 'A run draft carries the existing Session document shape',
       });
     } else if (readManualRecipientRunId(payload.document) !== payload.address.runId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['document', 'target', 'routing', 'recipient'],
         message: 'A run draft must select its own run as the manual recipient',
       });
     }
   } else if (payload.document.v !== 2 || payload.document.target.kind !== payload.address.kind) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['document', 'target', 'kind'],
       message: 'Draft payload address and document target must agree',
     });
@@ -259,11 +256,11 @@ const SessionDraftPrivatePayloadV2OnlySchema = z.object({
     > SESSION_DRAFT_MAX_PRIVATE_PAYLOAD_BYTES
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Draft private payload exceeds the supported boundary',
     });
   }
-});
+}));
 
 /**
  * V1 addresses keep their exact V1 payload envelope on the shared rows, so a V2
@@ -293,16 +290,16 @@ export function createSessionDraftPrivatePayloadV2(
 }
 
 export const SessionDraftStoredContentEnvelopeV2Schema = z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: SessionDraftPrivatePayloadV2Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
     /** Visible content epoch protects opaque newSession rows from V1 writers. */
-    v: z.literal(2).optional(),
-    c: z.string().min(1).max(SESSION_DRAFT_MAX_CIPHERTEXT_LENGTH),
-  }).strict(),
+    v: z.optional(z.literal(2)),
+    c: z.string().check(z.minLength(1), z.maxLength(SESSION_DRAFT_MAX_CIPHERTEXT_LENGTH)),
+  }),
 ]);
 export type SessionDraftStoredContentEnvelopeV2 = z.infer<typeof SessionDraftStoredContentEnvelopeV2Schema>;
 export const SessionDraftStoredContentEnvelopeV2StoredSchema = createStoredReadSchema(SessionDraftStoredContentEnvelopeV2Schema);
@@ -315,27 +312,27 @@ export function isSessionDraftContentV1(
 }
 
 /** Existing HTTP operation-update result; unaffected V1 drafts remain usable. */
-export const SessionDraftEpochUnavailableResponseV2Schema = z.object({
+export const SessionDraftEpochUnavailableResponseV2Schema = z.strictObject({
   error: z.literal('session_draft_epoch_unavailable'),
-}).strict();
+});
 
-export const SessionDraftRecordV2Schema = z.object({
+export const SessionDraftRecordV2Schema = z.strictObject({
   address: SessionDraftAddressV2Schema,
-  revision: z.number().int().nonnegative(),
-  content: SessionDraftStoredContentEnvelopeV2StoredSchema.nullable(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict();
+  revision: z.number().check(z.int(), z.nonnegative()),
+  content: z.nullable(SessionDraftStoredContentEnvelopeV2StoredSchema),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+});
 export type SessionDraftRecordV2 = z.infer<typeof SessionDraftRecordV2Schema>;
 
-export const SessionDraftReadRequestV2Schema = z.object({
+export const SessionDraftReadRequestV2Schema = z.strictObject({
   address: SessionDraftAddressV2Schema,
-}).strict();
+});
 export type SessionDraftReadRequestV2 = z.infer<typeof SessionDraftReadRequestV2Schema>;
 export const SessionDraftReadResponseV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('present'), record: SessionDraftRecordV2Schema }).strict(),
-  z.object({ status: z.literal('deleted'), record: SessionDraftRecordV2Schema }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
+  z.strictObject({ status: z.literal('present'), record: SessionDraftRecordV2Schema }),
+  z.strictObject({ status: z.literal('deleted'), record: SessionDraftRecordV2Schema }),
+  z.strictObject({ status: z.literal('absent') }),
 ]);
 export type SessionDraftReadResponseV2 = z.infer<typeof SessionDraftReadResponseV2Schema>;
 
@@ -349,34 +346,34 @@ export const SessionDraftAddressKindV2Schema = z.enum([
 ]);
 export type SessionDraftAddressKindV2 = z.infer<typeof SessionDraftAddressKindV2Schema>;
 
-export const SessionDraftListRequestV2Schema = z.object({
-  after: CanonicalSessionDraftAddressV2Schema.optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+export const SessionDraftListRequestV2Schema = z.strictObject({
+  after: z.optional(CanonicalSessionDraftAddressV2Schema),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(100))),
   /** Query selector only; it is never the V1/V2 compatibility barrier. */
-  addressKinds: z.array(SessionDraftAddressKindV2Schema).min(1).optional(),
-}).strict();
+  addressKinds: z.optional(z.array(SessionDraftAddressKindV2Schema).check(z.minLength(1))),
+});
 export type SessionDraftListRequestV2 = z.infer<typeof SessionDraftListRequestV2Schema>;
-export const SessionDraftListResponseV2Schema = z.object({
+export const SessionDraftListResponseV2Schema = z.strictObject({
   items: z.array(SessionDraftRecordV2Schema),
-  nextAfter: CanonicalSessionDraftAddressV2Schema.optional(),
-}).strict();
+  nextAfter: z.optional(CanonicalSessionDraftAddressV2Schema),
+});
 export type SessionDraftListResponseV2 = z.infer<typeof SessionDraftListResponseV2Schema>;
 
-export const SessionDraftMutateRequestV2Schema = z.object({
+export const SessionDraftMutateRequestV2Schema = z.strictObject({
   address: SessionDraftAddressV2Schema,
   expectedRevision: SessionDraftExpectedRevisionV1Schema,
-  content: SessionDraftStoredContentEnvelopeV2Schema.nullable(),
-}).strict();
+  content: z.nullable(SessionDraftStoredContentEnvelopeV2Schema),
+});
 export type SessionDraftMutateRequestV2 = z.infer<typeof SessionDraftMutateRequestV2Schema>;
 export const SessionDraftMutateResponseV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('updated'), record: SessionDraftRecordV2Schema }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('updated'), record: SessionDraftRecordV2Schema }),
+  z.strictObject({
     status: z.literal('conflict'),
     current: z.union([
       SessionDraftRecordV2Schema,
-      z.object({ status: z.literal('absent') }).strict(),
+      z.strictObject({ status: z.literal('absent') }),
     ]),
-  }).strict(),
+  }),
 ]);
 export type SessionDraftMutateResponseV2 = z.infer<typeof SessionDraftMutateResponseV2Schema>;
 
@@ -385,13 +382,13 @@ export type SessionDraftMutateResponseV2 = z.infer<typeof SessionDraftMutateResp
  * strict V1 hint schema, so a released V1 reader ignores it instead of feeding
  * an unknown address into a V1 draft handler.
  */
-export const SessionDraftChangeHintV2Schema = z.object({
+export const SessionDraftChangeHintV2Schema = z.strictObject({
   v: z.literal(2),
   sessionDraftV2: z.literal(true),
   address: SessionDraftAddressV2Schema,
-  revision: z.number().int().nonnegative(),
+  revision: z.number().check(z.int(), z.nonnegative()),
   status: z.enum(['present', 'deleted']),
-}).strict();
+});
 export type SessionDraftChangeHintV2 = z.infer<typeof SessionDraftChangeHintV2Schema>;
 export const SessionDraftSocketUpdateV2Schema = SessionDraftChangeHintV2Schema;
 export type SessionDraftSocketUpdateV2 = SessionDraftChangeHintV2;

@@ -397,6 +397,8 @@ export type RunnerDaemonCurrentGlobalExternalSessionsOwner = Pick<
 export function createRunnerDaemonPluginServicesHost(input: Readonly<{
     createInvocation(params: Readonly<{
         sessionId: string;
+        executionRunSnapshotId?: string;
+        runnerRetainedAgent?: AgentSessionRunnerBindingV1;
         runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
         retainedAgent: AgentSessionRunnerBindingV1;
         invocationId: string;
@@ -765,6 +767,8 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
     const dispatch = async (
         dispatchInput: Readonly<{
             sessionId: string;
+            executionRunSnapshotId?: string;
+            runnerRetainedAgent?: AgentSessionRunnerBindingV1;
             runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
             retainedAgent: AgentSessionRunnerBindingV1;
             operation: RunnerDaemonPluginServiceOperationV1;
@@ -824,6 +828,10 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             try {
                 created = await input.createInvocation({
                     sessionId,
+                    ...(dispatchInput.executionRunSnapshotId ? {
+                      executionRunSnapshotId: dispatchInput.executionRunSnapshotId,
+                      runnerRetainedAgent: dispatchInput.runnerRetainedAgent,
+                    } : {}),
                     runner,
                     retainedAgent,
                     invocationId: operation.invocationId,

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ProviderWireProtocol } from '../capabilities/v1.js';
 import { BundledProviderCatalogParserV1Schema, type BundledProviderCatalogParserV1 } from '../catalog/descriptorV1.js';
@@ -60,18 +60,18 @@ export function defaultCustomProviderCatalogParserV1(
   return protocol === 'anthropic' ? 'anthropic-models' : 'openai-models';
 }
 
-export const CustomProviderSimpleFormV1Schema = z.object({
-  name: z.string().trim().min(1).max(128),
+export const CustomProviderSimpleFormV1Schema = z.strictObject({
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   protocol: CustomProviderAuthoringProtocolV1Schema,
-  baseUrl: z.string().trim().min(1),
-  credentialStyle: CustomProviderCredentialStyleV1Schema.optional(),
-  credentialHeader: z.string().trim().min(1).optional(),
+  baseUrl: z.string().check(z.trim(), z.minLength(1)),
+  credentialStyle: z.optional(CustomProviderCredentialStyleV1Schema),
+  credentialHeader: z.optional(z.string().check(z.trim(), z.minLength(1))),
   catalog: z.enum(['manual', 'probe']),
-  modelsPath: ProviderOriginRelativePathSchema.optional(),
+  modelsPath: z.optional(ProviderOriginRelativePathSchema),
   // An authored choice always wins; omitting it takes the canonical preset
   // default. The parser is never re-derived from the protocol afterwards.
-  catalogParser: BundledProviderCatalogParserV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  catalogParser: z.optional(BundledProviderCatalogParserV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if ((value.credentialStyle === 'custom-header' || value.credentialStyle === 'custom-header-bearer') && !value.credentialHeader) {
     ctx.addIssue({ code: 'custom', path: ['credentialHeader'], message: 'A credential header is required for custom-header credentials' });
   }
@@ -81,36 +81,36 @@ export const CustomProviderSimpleFormV1Schema = z.object({
   if (value.catalog === 'probe' && !value.modelsPath) {
     ctx.addIssue({ code: 'custom', path: ['modelsPath'], message: 'A models path is required for probe catalogs' });
   }
-});
+}));
 export type CustomProviderSimpleFormV1 = z.infer<typeof CustomProviderSimpleFormV1Schema>;
 
-const CustomProviderAdvancedEndpointFormV1Schema = z.object({
+const CustomProviderAdvancedEndpointFormV1Schema = z.strictObject({
   protocol: CustomProviderAuthoringProtocolV1Schema,
-  baseUrl: z.string().trim().min(1),
-  publicHeaders: z.record(z.string(), z.string()).optional(),
-  credentialStyle: CustomProviderCredentialStyleV1Schema.optional(),
-  credentialHeader: z.string().trim().min(1).optional(),
-}).strict().superRefine((value, ctx) => {
+  baseUrl: z.string().check(z.trim(), z.minLength(1)),
+  publicHeaders: z.optional(z.record(z.string(), z.string())),
+  credentialStyle: z.optional(CustomProviderCredentialStyleV1Schema),
+  credentialHeader: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}).check(z.superRefine((value, ctx) => {
   if ((value.credentialStyle === 'custom-header' || value.credentialStyle === 'custom-header-bearer') && !value.credentialHeader) {
     ctx.addIssue({ code: 'custom', path: ['credentialHeader'], message: 'A credential header is required for custom-header credentials' });
   }
   if (value.credentialStyle !== 'custom-header' && value.credentialStyle !== 'custom-header-bearer' && value.credentialHeader) {
     ctx.addIssue({ code: 'custom', path: ['credentialHeader'], message: 'credentialHeader is only valid with custom-header credentials' });
   }
-});
+}));
 
-export const CustomProviderAdvancedFormV1Schema = z.object({
-  name: z.string().trim().min(1).max(128),
-  endpoints: z.array(CustomProviderAdvancedEndpointFormV1Schema).min(1).max(3),
-  probes: z.array(z.object({
+export const CustomProviderAdvancedFormV1Schema = z.strictObject({
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  endpoints: z.array(CustomProviderAdvancedEndpointFormV1Schema).check(z.minLength(1), z.maxLength(3)),
+  probes: z.array(z.strictObject({
     protocol: CustomProviderAuthoringProtocolV1Schema,
     path: ProviderOriginRelativePathSchema,
     // A user-authored custom template has no plugin behind it, so only a
     // catalog format the host bundles can ever serve it. A contributed format
     // is declared by the Provider plugin that also implements it.
     parser: BundledProviderCatalogParserV1Schema,
-  }).strict()).max(3),
-}).strict().superRefine((value, ctx) => {
+  })).check(z.maxLength(3)),
+}).check(z.superRefine((value, ctx) => {
   const protocols = new Set<ProviderWireProtocol>();
   value.endpoints.forEach((endpoint, index) => {
     if (protocols.has(endpoint.protocol)) {
@@ -129,7 +129,7 @@ export const CustomProviderAdvancedFormV1Schema = z.object({
     }
     probes.add(key);
   });
-});
+}));
 export type CustomProviderAdvancedFormV1 = z.infer<typeof CustomProviderAdvancedFormV1Schema>;
 
 const UNKNOWN_CAPABILITIES = Object.freeze({

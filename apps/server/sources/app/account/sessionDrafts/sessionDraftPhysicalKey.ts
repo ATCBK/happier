@@ -1,10 +1,5 @@
-import {
-    canonicalSessionDraftAddressV2,
-    isSessionDraftAddressV1,
-    parseCanonicalSessionDraftAddressV2,
-    type SessionDraftAddressV1,
-    type SessionDraftAddressV2,
-} from "@happier-dev/protocol";
+import { canonicalSessionDraftAddressV2, isSessionDraftAddressV1, parseCanonicalSessionDraftAddressV2, type SessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { type SessionDraftAddressV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
 
 import { ACCOUNT_SESSION_DRAFT_KV_PREFIX } from "@/app/kv/accountScopedKv";
 

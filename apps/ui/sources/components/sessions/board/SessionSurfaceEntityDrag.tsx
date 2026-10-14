@@ -5,7 +5,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { EntityDragItemV1, EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import { HAPPIER_CARRIED_SOURCE_OPACITY, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
 
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { EntityDropSettledFeedback, type EntityDropSettledMatch } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
@@ -178,8 +178,7 @@ export function SessionSurfaceEntityDragHandle(props: Readonly<{ drag: SessionSu
         return true;
     };
     return <>
-        <DropdownMenu open={open} onOpenChange={onOpenChange} selectedId={null} closeOnSelect={false}
-            items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label, subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+        <EntityDragGripChooser open={open} onOpenChange={onOpenChange} closeOnSelect={false} sections={sections}
             onSelect={id => chooser.select(destinations[Number(id)])}
             trigger={({ toggle }) => {
                 const grip = <GestureDetector gesture={props.drag.gesture}><EntityDragGripTrigger testID={props.testID}
@@ -210,12 +209,15 @@ export function SessionSurfaceEntityFeedback(props: Readonly<{ kind: SurfaceFeed
     const hints = useEntityStagedMoveHints();
     const latest = React.useRef(props); latest.current = props;
     const settledMatch = React.useMemo<EntityDropSettledMatch>(() => ({ item: item => surfaceFeedbackMatches(item, latest.current) }), []);
+    // A foreground list announces and clears its own move from acknowledged
+    // order. The surrounding surface must not keep a second runtime-only voice.
+    const sourceAnnounces = snapshot.sourceId !== null && runtime.describeSource(snapshot.sourceId)?.announcementOwner === 'source';
     const staged = (snapshot.phase === 'carrying' || snapshot.phase === 'pending') && surfaceFeedbackMatches(snapshot.item, props)
-        && runtime.getPointer() === null;
+        && !sourceAnnounces && runtime.getPointer() === null;
     const outcome = staged ? describeEntityDropOutcome(snapshot) : null;
     return <EntityDropSettledFeedback runtime={runtime} match={settledMatch} testID={props.testID}>
         {outcome ? <EntityStagedMoveDock outcome={outcome} hints={hints} testID={`${props.testID}-preview`} /> : null}
-        <PoliteAccessibilityStatus announcement={describeHappierDropAnnouncement(outcome)} transitionKey={JSON.stringify(snapshot.admission)} statusTestID={`${props.testID}-live-region`} />
+        <PoliteAccessibilityStatus announcement={describeHappierDropAnnouncement(outcome)} transitionKey={JSON.stringify([snapshot.phase, snapshot.targetId, outcome])} statusTestID={`${props.testID}-live-region`} />
     </EntityDropSettledFeedback>;
 }
 

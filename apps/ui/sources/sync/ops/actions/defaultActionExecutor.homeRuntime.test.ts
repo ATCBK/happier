@@ -63,7 +63,7 @@ describe('UI connected Machine Home restart Action', () => {
     const serverId = await harness.addHome({ name: 'Index Home', serverUrl: 'https://index.test', accountId: 'alice' });
     harness.answer(serverId, '/v1/home/search/rebuild', { body: { ok: true } });
     const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: 'alice',
-      presentUserConfirmation: { actionId: 'home.search.rebuild' } };
+      presentUserConfirmation: { actionId: 'home.search.rebuild' as const } };
     expect(await createDefaultActionExecutor().execute('home.search.rebuild', {}, context))
       .toEqual({ ok: true, result: { ok: true } });
     harness.answer(serverId, '/v1/home/search/rebuild', { body: { ok: false } });

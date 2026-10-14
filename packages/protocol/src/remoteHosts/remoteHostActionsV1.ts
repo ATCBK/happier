@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { RemoteHostRecordV1Schema, type RemoteHostRecordV1 } from './remoteHostSchemasV1.js';
 import { SharedSavedSecretCreateInputV1Schema, SavedSecretCatalogReferenceCensusV1Schema } from '../account/settings/savedSecretResourceActionsV1.js';
@@ -9,46 +9,46 @@ import { SystemTaskResultSchema } from '../system/tasks/spec.js';
 import type { RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
 export { REMOTE_HOST_ACTION_IDS_V1, isRemoteHostActionIdV1, type RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
 
-const Id = lazyZodSchema(() => z.string().trim().min(1));
-const Revision = lazyZodSchema(() => z.number().int().nonnegative());
+const Id = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const Revision = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const ExpectedRevision = lazyZodSchema(() => z.union([Revision, z.literal('absent')]));
-const Empty = lazyZodSchema(() => z.object({}).strict());
-const Address = lazyZodSchema(() => z.object({ hostId: Id, expectedRevision: ExpectedRevision }).strict());
-const ResourceRevision = lazyZodSchema(() => z.object({ resourceId: Id, revision: Revision }).strict());
-const TrustedKey = lazyZodSchema(() => z.object({ host: Id, port: z.number().int().min(1).max(65535),
-  algorithm: Id, fingerprintSha256: Id }).strict());
+const Empty = lazyZodSchema(() => z.strictObject({}));
+const Address = lazyZodSchema(() => z.strictObject({ hostId: Id, expectedRevision: ExpectedRevision }));
+const ResourceRevision = lazyZodSchema(() => z.strictObject({ resourceId: Id, revision: Revision }));
+const TrustedKey = lazyZodSchema(() => z.strictObject({ host: Id, port: z.number().check(z.int(), z.minimum(1), z.maximum(65535)),
+  algorithm: Id, fingerprintSha256: Id }));
 
-export const RemoteHostSaveActionInputV1Schema = lazyZodSchema(() => z.object({
+export const RemoteHostSaveActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   host: RemoteHostRecordV1Schema,
   expectedRevision: ExpectedRevision,
-  referencedSavedSecretRevisions: z.array(ResourceRevision).optional(),
-  savedSecretResources: z.array(SharedSavedSecretCreateInputV1Schema).optional(),
-  referenceCensus: SavedSecretCatalogReferenceCensusV1Schema.optional(),
-}).strict());
+  referencedSavedSecretRevisions: z.optional(z.array(ResourceRevision)),
+  savedSecretResources: z.optional(z.array(SharedSavedSecretCreateInputV1Schema)),
+  referenceCensus: z.optional(SavedSecretCatalogReferenceCensusV1Schema),
+}));
 export const RemoteHostCredentialSelectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('agent') }).strict(),
-  z.object({ kind: z.literal('keyfile') }).strict(),
-  z.object({ kind: z.literal('password'), resourceId: Id, expectedResourceRevision: Revision }).strict(),
-  z.object({ kind: z.literal('private_key'), resourceId: Id, expectedResourceRevision: Revision }).strict(),
+  z.strictObject({ kind: z.literal('agent') }),
+  z.strictObject({ kind: z.literal('keyfile') }),
+  z.strictObject({ kind: z.literal('password'), resourceId: Id, expectedResourceRevision: Revision }),
+  z.strictObject({ kind: z.literal('private_key'), resourceId: Id, expectedResourceRevision: Revision }),
 ]));
 
 export const REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1 = {
   'remote_hosts.list': Empty,
-  'remote_hosts.read': lazyZodSchema(() => z.object({ hostId: Id }).strict()),
+  'remote_hosts.read': lazyZodSchema(() => z.strictObject({ hostId: Id })),
   'remote_hosts.add': Empty,
   'remote_hosts.edit': Address,
   'remote_hosts.save': RemoteHostSaveActionInputV1Schema,
-  'remote_hosts.duplicate': lazyZodSchema(() => Address.extend({ newHostId: Id, name: Id }).strict()),
+  'remote_hosts.duplicate': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, { newHostId: Id, name: Id }))),
   'remote_hosts.delete': Address,
   'remote_hosts.connect': Address,
   'remote_hosts.setup_as_machine': Address,
   'remote_hosts.relay.use': Address,
-  'remote_hosts.relay.configure': lazyZodSchema(() => Address.extend({
+  'remote_hosts.relay.configure': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, {
     operation: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('configure'), config: RelayAccessConfigV1Schema }).strict(),
-      z.object({ kind: z.literal('disable') }).strict(),
+      z.strictObject({ kind: z.literal('configure'), config: RelayAccessConfigV1Schema }),
+      z.strictObject({ kind: z.literal('disable') }),
     ]),
-  }).strict()),
+  }))),
   'remote_hosts.relay.test': Address,
   'remote_hosts.cli.install_or_update': Address,
   'remote_hosts.daemon.install_or_update': Address,
@@ -61,36 +61,36 @@ export const REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1 = {
   'remote_hosts.relay.start': Address,
   'remote_hosts.relay.stop': Address,
   'remote_hosts.relay.restart': Address,
-  'remote_hosts.credential.change': lazyZodSchema(() => Address.extend({ credential: RemoteHostCredentialSelectionV1Schema }).strict()),
+  'remote_hosts.credential.change': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, { credential: RemoteHostCredentialSelectionV1Schema }))),
   'remote_hosts.personal_home.erase': Address,
   'remote_hosts.trusted_keys.list': Empty,
-  'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.object({ key: TrustedKey }).strict()),
-  'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.object({ keys: z.array(TrustedKey) }).strict()),
-  'remote_hosts.tunnel.stop': lazyZodSchema(() => z.object({ target: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('native'), leaseId: Id }).strict(),
-    z.object({ kind: z.literal('desktop'), tunnelKey: Id }).strict(),
-  ]) }).strict()),
+  'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.strictObject({ key: TrustedKey })),
+  'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.strictObject({ keys: z.array(TrustedKey) })),
+  'remote_hosts.tunnel.stop': lazyZodSchema(() => z.strictObject({ target: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('native'), leaseId: Id }),
+    z.strictObject({ kind: z.literal('desktop'), tunnelKey: Id }),
+  ]) })),
 } as const;
 const Refusal = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1) }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: Id }).strict(),
-  z.object({ status: z.literal('outcome_unknown') }).strict(),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: Id }),
+  z.strictObject({ status: z.literal('outcome_unknown') }),
 ]));
 const MutationResult = lazyZodSchema(() => z.union([Refusal,
-  z.object({ status: z.literal('updated'), hostId: Id, revision: Revision }).strict(),
+  z.strictObject({ status: z.literal('updated'), hostId: Id, revision: Revision }),
 ]));
 const OpenedResult = lazyZodSchema(() => z.union([Refusal,
-  z.object({ status: z.literal('opened'), route: Id, hostId: Id.optional() }).strict(),
+  z.strictObject({ status: z.literal('opened'), route: Id, hostId: z.optional(Id) }),
 ]));
 const TaskResult = lazyZodSchema(() => z.union([Refusal,
-  z.object({ status: z.literal('task_started'), taskId: Id }).strict(),
-  z.object({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }).strict(),
-  z.object({ status: z.literal('outcome_unknown'), taskId: Id }).strict(),
-  z.object({ status: z.literal('connected') }).strict(),
+  z.strictObject({ status: z.literal('task_started'), taskId: Id }),
+  z.strictObject({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }),
+  z.strictObject({ status: z.literal('outcome_unknown'), taskId: Id }),
+  z.strictObject({ status: z.literal('connected') }),
 ]));
 export const REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 = {
-  'remote_hosts.list': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('listed'), hosts: z.array(RemoteHostRecordV1Schema), revision: ExpectedRevision, complete: z.boolean() }).strict()])),
-  'remote_hosts.read': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('present'), host: RemoteHostRecordV1Schema, revision: ExpectedRevision }).strict()])),
+  'remote_hosts.list': lazyZodSchema(() => z.union([Refusal, z.strictObject({ status: z.literal('listed'), hosts: z.array(RemoteHostRecordV1Schema), revision: ExpectedRevision, complete: z.boolean() })])),
+  'remote_hosts.read': lazyZodSchema(() => z.union([Refusal, z.strictObject({ status: z.literal('present'), host: RemoteHostRecordV1Schema, revision: ExpectedRevision })])),
   'remote_hosts.add': OpenedResult,
   'remote_hosts.edit': OpenedResult,
   'remote_hosts.save': MutationResult,
@@ -115,11 +115,11 @@ export const REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 = {
   'remote_hosts.credential.change': MutationResult,
   'remote_hosts.personal_home.erase': TaskResult,
   'remote_hosts.trusted_keys.list': lazyZodSchema(() => z.union([Refusal,
-    z.object({ status: z.literal('listed'), keys: z.array(TrustedKey) }).strict()])),
-  'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('removed') }).strict()])),
-  'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('removed') }).strict()])),
+    z.strictObject({ status: z.literal('listed'), keys: z.array(TrustedKey) })])),
+  'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.union([Refusal, z.strictObject({ status: z.literal('removed') })])),
+  'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.union([Refusal, z.strictObject({ status: z.literal('removed') })])),
   'remote_hosts.tunnel.stop': lazyZodSchema(() => z.union([TaskResult,
-    z.object({ status: z.literal('released') }).strict()])),
+    z.strictObject({ status: z.literal('released') })])),
 } as const;
 export type RemoteHostActionInputByIdV1 = {
   readonly [Id in RemoteHostActionIdV1]: z.output<(typeof REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1)[Id]>;

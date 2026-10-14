@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { MACHINE_GUARD_ACTION_IDS } from '../../machines/guard/actionIdsV1.js';
 import { MachineGuardGetInputV1Schema, MachineGuardViewV1Schema } from '../../machines/guard/guardRpcV1.js';
@@ -8,17 +8,17 @@ import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 export { MACHINE_GUARD_ACTION_IDS } from '../../machines/guard/actionIdsV1.js';
 export type { MachineGuardActionId } from '../../machines/guard/actionIdsV1.js';
 export const MachineGuardActionIdSchema = lazyZodSchema(() => z.enum(MACHINE_GUARD_ACTION_IDS));
-export const MachineGuardKeepRunningInputV1Schema = lazyZodSchema(() => MachineGuardGetInputV1Schema.extend({
-  sessionId: z.string().trim().min(1).optional(), terminalKey: z.string().trim().min(1).optional(),
-}).strict().refine((input) => Boolean(input.sessionId) !== Boolean(input.terminalKey), { message: 'Exactly one session or terminal target is required' }));
-export const MachineGuardKeepRunningResultV1Schema = z.object({ status: z.enum(['kept', 'not_pending']) }).strict();
-export const MachineGuardSessionCeilingSetInputV1Schema = lazyZodSchema(() => MachineGuardGetInputV1Schema.extend({
-  sessionId: z.string().trim().min(1), bytes: z.number().int().positive().nullable(),
-}).strict());
+export const MachineGuardKeepRunningInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineGuardGetInputV1Schema, {
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))), terminalKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+})).check(z.refine((input) => Boolean(input.sessionId) !== Boolean(input.terminalKey), { message: 'Exactly one session or terminal target is required' })));
+export const MachineGuardKeepRunningResultV1Schema = z.strictObject({ status: z.enum(['kept', 'not_pending']) });
+export const MachineGuardSessionCeilingSetInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineGuardGetInputV1Schema, {
+  sessionId: z.string().check(z.trim(), z.minLength(1)), bytes: z.nullable(z.number().check(z.int(), z.positive())),
+})));
 export const MachineGuardSessionCeilingSetResultV1Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied'), appliesAt: z.enum(['now', 'next_start']) }).strict(),
-  z.object({ status: z.literal('unavailable'), appliesAt: z.enum(['now', 'next_start']),
-    reason: z.enum(['not_linux', 'no_user_manager', 'no_memory_controller']) }).strict(),
+  z.strictObject({ status: z.literal('applied'), appliesAt: z.enum(['now', 'next_start']) }),
+  z.strictObject({ status: z.literal('unavailable'), appliesAt: z.enum(['now', 'next_start']),
+    reason: z.enum(['not_linux', 'no_user_manager', 'no_memory_controller']) }),
 ]);
 export type MachineGuardSessionCeilingSetResultV1 = z.infer<typeof MachineGuardSessionCeilingSetResultV1Schema>;
 export const MACHINE_GUARD_ACTION_INPUT_SCHEMAS = {

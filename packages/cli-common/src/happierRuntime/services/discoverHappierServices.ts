@@ -7,7 +7,7 @@ import { resolvePublicReleaseRingLabelForId, type PublicReleaseRingLabel } from 
 
 import { resolveHappyHomeDirFromEnvironment } from '../../agents/resolveHappyHomeDir.js';
 import { readDefaultManagedReleaseChannelSync } from '../../firstPartyRuntime/defaultReleaseChannelState.js';
-import { splitQualifiedWindowsScheduledTaskName } from '../../service/windows.js';
+import { buildListWindowsScheduledTaskFolderPowerShellCommand, parseWindowsScheduledTaskFolderPowerShellJson, splitQualifiedWindowsScheduledTaskName } from '../../service/windows.js';
 import {
     listKnownServiceDefinitionFiles,
     parseLaunchdPlist,
@@ -344,7 +344,7 @@ function defaultCommandRunner(input: Readonly<{ cmd: string; args: readonly stri
         env: process.env,
         encoding: 'utf8',
         // Preserve the Scheduler discovery owner's existing configurable deadline.
-        ...(input.cmd === 'schtasks' ? { timeout: Number.isInteger(requestedTimeout) && requestedTimeout > 0 ? requestedTimeout : 15_000 } : {}),
+        ...((input.cmd === 'schtasks' || input.cmd === 'powershell.exe') ? { timeout: Number.isInteger(requestedTimeout) && requestedTimeout > 0 ? requestedTimeout : 15_000 } : {}),
     });
     return { stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''), status: result.status, error: result.error };
 }
@@ -358,19 +358,23 @@ function isKnownHappierLabel(label: string): boolean {
         || /^happier-server(?:[._-]|$)/iu.test(label);
 }
 
-function runScheduledTaskCommand(runner: DiscoverCommandRunner, args: readonly string[]): string {
-    const result = runner.run?.({ cmd: 'schtasks', args });
+function runScheduledTaskCommand(runner: DiscoverCommandRunner, args: readonly string[], command: 'schtasks' | 'powershell.exe' = 'schtasks'): string {
+    const result = runner.run?.({ cmd: command, args });
     if (typeof result === 'string') return result;
     if (!result) throw new Error('Scheduler query returned no result');
     if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(result.stderr?.trim() || `schtasks exited with status ${result.status}`);
+    if (result.status !== 0) throw new Error(result.stderr?.trim() || `${command} exited with status ${result.status}`);
     return result.stdout;
 }
 
 function listScheduledTaskNames(runner: DiscoverCommandRunner): string[] {
-    return runScheduledTaskCommand(runner, ['/Query', '/FO', 'CSV', '/NH']).split(/\r?\n/u).flatMap((line) => {
-        const rawName = /^"((?:[^"]|"")*)"/u.exec(line.trim())?.[1]?.replaceAll('""', '"').trim();
-        if (!rawName) return [];
+    const output = runScheduledTaskCommand(runner, [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+        buildListWindowsScheduledTaskFolderPowerShellCommand({ taskFolder: '\\Happier\\' }),
+    ], 'powershell.exe');
+    const taskPaths = parseWindowsScheduledTaskFolderPowerShellJson(output);
+    if (!taskPaths) throw new Error('Scheduler folder listing did not return a JSON task inventory');
+    return taskPaths.flatMap((rawName) => {
         const parsed = splitQualifiedWindowsScheduledTaskName(rawName);
         const name = `${parsed.taskPath}${parsed.taskName}`.replace(/^\\+/u, '');
         if (!name.toLowerCase().startsWith('happier\\') || !isKnownHappierLabel(parsed.taskName)) return [];

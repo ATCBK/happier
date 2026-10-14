@@ -93,7 +93,7 @@ export function RequireFriendsIdentityForFriendsBase(props: {
         <FriendsGateCentered title={t('friends.username.required')}>
             {props.approvalNotice}
             {props.usernameHint ? (
-                <Text style={{ textAlign: 'center', opacity: 0.7, marginBottom: 12 }}>
+                <Text style={{ textAlign: 'center', opacity: 0.7, marginBottom: theme.space.s12 }}>
                     {props.usernameHint}
                 </Text>
             ) : null}
@@ -112,9 +112,9 @@ export function RequireFriendsIdentityForFriendsBase(props: {
                     borderRadius: 10,
                     backgroundColor: inputColors.background,
                     color: inputColors.text,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    marginBottom: 12,
+                    paddingHorizontal: theme.space.s12,
+                    paddingVertical: theme.space.s10,
+                    marginBottom: theme.space.s12,
                 }}
                 placeholder={t('profile.username')}
                 placeholderTextColor={inputColors.placeholder}
@@ -126,13 +126,13 @@ export function RequireFriendsIdentityForFriendsBase(props: {
                 onPress={() => props.onSaveUsername?.(username)}
                 disabled={props.savingUsername === true || props.saveUsernameDisabled === true}
                 style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 12,
+                    paddingHorizontal: theme.space.s16,
+                    paddingVertical: theme.space.s12,
                     borderRadius: 10,
                     backgroundColor: theme.colors.button.primary.background,
                     minWidth: 180,
                     alignItems: 'center',
-                    marginBottom: 12,
+                    marginBottom: theme.space.s12,
                     opacity: props.savingUsername === true ? 0.6 : 1,
                 }}
             >

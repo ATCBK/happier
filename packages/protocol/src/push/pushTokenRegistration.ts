@@ -1,13 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { DeviceRemoteAlertPolicyV1Schema } from '../account/settings/accountRemoteAlertPolicy.js';
 
 export const PushTokenRegisterRequestSchema = z.object({
   token: z.string(),
-  clientServerUrl: z.string().optional(),
-  remoteAlerts: z.object({
-    registrationId: z.string().min(1),
-    policy: DeviceRemoteAlertPolicyV1Schema.nullable(),
-  }).strict().optional(),
+  clientServerUrl: z.optional(z.string()),
+  remoteAlerts: z.optional(z.strictObject({
+    registrationId: z.string().check(z.minLength(1)),
+    policy: z.nullable(DeviceRemoteAlertPolicyV1Schema),
+  })),
 });
 export const PushTokenRegisterResponseSchema = z.object({ success: z.literal(true) });
 export const PushTokenSchema = z.object({
@@ -15,15 +15,15 @@ export const PushTokenSchema = z.object({
   token: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
-  clientServerUrl: z.string().nullable().optional(),
+  clientServerUrl: z.optional(z.nullable(z.string())),
 });
 export const PushTokensResponseSchema = z.object({ tokens: z.array(PushTokenSchema) });
-export const PushTokensRemoteAlertProjectionV2Schema = z.object({
+export const PushTokensRemoteAlertProjectionV2Schema = z.strictObject({
   v: z.literal(2),
-  accountRemoteAlerts: z.object({
-    settingsVersion: z.number().int().nonnegative(),
+  accountRemoteAlerts: z.strictObject({
+    settingsVersion: z.number().check(z.int(), z.nonnegative()),
     status: z.enum(['disabled', 'current', 'stale']),
-  }).strict(),
-  tokens: z.array(PushTokenSchema.extend({ remoteAlerts: DeviceRemoteAlertPolicyV1Schema.nullable() }).strict()),
-}).strict();
+  }),
+  tokens: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PushTokenSchema, { remoteAlerts: z.nullable(DeviceRemoteAlertPolicyV1Schema) }))),
+});
 export type PushTokensRemoteAlertProjectionV2 = z.infer<typeof PushTokensRemoteAlertProjectionV2Schema>;

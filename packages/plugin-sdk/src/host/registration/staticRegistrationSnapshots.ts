@@ -17,7 +17,6 @@ import {
     captureStaticRegistrationMethod,
     requireStaticRegistrationObject,
 } from '../../registration/staticCapture.js';
-import type { PromptAssetAdapter } from '../../resources.js';
 import type { PluginDynamicResourceRuntime } from '../../services/resources.js';
 import type { PluginConnectedAccountRuntime } from '../../services/index.js';
 import type { VoiceProvidersRegistrationApi } from '../../voice/projections.js';
@@ -566,55 +565,6 @@ export function snapshotScmBackendRuntime(runtime: BackendRuntime): BackendRunti
     }) as BackendRuntime;
 }
 
-export function snapshotPromptAssetDescriptor(
-    descriptor: PromptAssetAdapter['descriptor'],
-): PromptAssetAdapter['descriptor'] {
-    // The descriptor is compared with its normalized manifest declaration, so
-    // it is the one registration payload whose data contract is deliberately closed.
-    return snapshotStaticData(
-        descriptor,
-        'Prompt Asset adapter descriptor',
-    ) as PromptAssetAdapter['descriptor'];
-}
-
-export function snapshotPromptAssetAdapter(adapter: PromptAssetAdapter): PromptAssetAdapter {
-    const receiver = requireObject(adapter, 'Prompt Asset adapter');
-    return Object.freeze({
-        descriptor: snapshotPromptAssetDescriptor(
-            readMember(receiver, 'descriptor') as PromptAssetAdapter['descriptor'],
-        ),
-        discover: captureStaticRegistrationMethod<PromptAssetAdapter['discover']>(
-            receiver,
-            'discover',
-            'Prompt Asset adapter.discover',
-            true,
-        )!,
-        read: captureStaticRegistrationMethod<PromptAssetAdapter['read']>(
-            receiver,
-            'read',
-            'Prompt Asset adapter.read',
-            true,
-        )!,
-        writeDoc: captureStaticRegistrationMethod<PromptAssetAdapter['writeDoc']>(
-            receiver,
-            'writeDoc',
-            'Prompt Asset adapter.writeDoc',
-            true,
-        )!,
-        writeBundle: captureStaticRegistrationMethod<PromptAssetAdapter['writeBundle']>(
-            receiver,
-            'writeBundle',
-            'Prompt Asset adapter.writeBundle',
-            true,
-        )!,
-        delete: captureStaticRegistrationMethod<PromptAssetAdapter['delete']>(
-            receiver,
-            'delete',
-            'Prompt Asset adapter.delete',
-            true,
-        )!,
-    }) as PromptAssetAdapter;
-}
 
 export function snapshotDynamicResourceRuntime(
     runtime: PluginDynamicResourceRuntime,
@@ -930,8 +880,6 @@ export function snapshotStaticRegistrationValue<
             return snapshotVoiceProviderRuntime(
                 value as RegisteredVoiceProviderRuntime,
             ) as PluginRegistrationValueByFamily[TFamily];
-        case 'promptAssets':
-            return snapshotPromptAssetAdapter(value as PromptAssetAdapter) as PluginRegistrationValueByFamily[TFamily];
         case 'resources':
             return snapshotDynamicResourceRuntime(
                 value as PluginDynamicResourceRuntime,

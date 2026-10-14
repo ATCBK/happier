@@ -120,7 +120,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 44,
         // Keep the post-wrap S3 command card and its primary action fully
         // visible at the binding 1440x900 reference viewport.
-        paddingTop: 48,
+        paddingTop: theme.space.s48,
         paddingBottom: 28,
         gap: 18,
     },
@@ -145,14 +145,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.dark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.10)',
         backgroundColor: theme.dark ? 'rgba(18,18,24,.55)' : 'rgba(255,255,255,.62)',
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         height: 34,
     },
     skipPillLabel: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
     },
 }));
 

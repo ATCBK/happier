@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { WIDGET_DEFINITION_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/widgets';
 
 import { Redirect, useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
@@ -33,6 +34,7 @@ import { useArtifactOperations } from './useArtifactOperations';
 import { useArtifactBody } from './useArtifactBody';
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
+import { ArtifactWidgetBody } from './ArtifactWidgetBody';
 
 function bodyMarkdown(artifact: DecryptedArtifact): string | null {
     const body = artifact.body;
@@ -133,6 +135,9 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
         artifactId={props.artifact.id} headerVersion={props.artifact.headerVersion} bodyVersion={props.artifact.bodyVersion}
         body={props.artifact.body} name={props.artifact.title || t('artifacts.untitled')} readPreview={sync.fetchArtifactHtmlPreview}
         preview={props.prepared?.htmlPreview} onRetry={props.onRetry} />;
+    // A saved widget reads as the widget itself, through the one widget surface owner.
+    if ((props.artifact.rawHeader ?? props.artifact.header)?.kind === WIDGET_DEFINITION_ARTIFACT_KIND_V1) return <ArtifactWidgetBody
+        artifactId={props.artifact.id} bodyVersion={props.artifact.bodyVersion} />;
     if (props.artifact.body !== null && typeof props.artifact.body === 'object') return <ArtifactBinaryBody
         artifactId={props.artifact.id} reference={props.artifact.body} name={props.artifact.title || t('artifacts.untitled')} readBytes={sync.fetchArtifactBinary}
         initialBytes={props.prepared?.binaryBytes} onRetry={props.onRetry} />;
@@ -199,7 +204,8 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
     ] : [];
     return (
         <View style={[styles.actions, props.presentation === 'pane' ? styles.paneActions : null]} testID="artifact:actions">
-            {canEdit && (artifact.body === undefined || artifact.body === null || typeof artifact.body === 'string') ? (
+            {/* Only a text document opens the text editor; a saved widget is edited where it lives. */}
+            {canEdit && classifyArtifactBrowserKind(artifact) !== 'widget' && (artifact.body === undefined || artifact.body === null || typeof artifact.body === 'string') ? (
                 <RoundButton
                     testID="artifact:edit"
                     size="small"
@@ -236,12 +242,12 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
 
 const stylesheet = StyleSheet.create((theme) => ({
     paneColumn: {
-        paddingHorizontal: 24,
-        paddingTop: 4,
-        paddingBottom: 32,
+        paddingHorizontal: theme.space.s24,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s32,
     },
     facts: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     factLine: {
         fontSize: 12.5,
@@ -253,7 +259,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     paneActions: {
         marginTop: 14,
@@ -262,10 +268,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: 1,
         backgroundColor: theme.colors.border.subtle,
         marginTop: 14,
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     headerDetails: {
-        marginTop: 10,
+        marginTop: theme.space.s10,
     },
     bodyPlaceholder: {
         minHeight: 160,

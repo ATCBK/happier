@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { MachineResourcesPolicyMutationV1Schema, MachineResourcesPolicyGetResultV1Schema, MachineResourcesPolicyMutationResultV1Schema } from '../../machines/resources/machineResourcesPolicyV1.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
@@ -7,18 +7,15 @@ import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 export const MACHINE_RESOURCES_ACTION_IDS = ['machines.resources.policy.get', 'machines.resources.policy.set'] as const;
 export type MachineResourcesActionId = typeof MACHINE_RESOURCES_ACTION_IDS[number];
 export const MachineResourcesActionIdSchema = lazyZodSchema(() => z.enum(MACHINE_RESOURCES_ACTION_IDS));
-export const MachineResourcesPolicyGetInputV1Schema = lazyZodSchema(() => z.object({ serverId: z.string().trim().min(1).optional(), machineId: z.string().trim().min(1) }).strict());
-export const MachineResourcesPolicySetInputV1Schema = lazyZodSchema(() => MachineResourcesPolicyGetInputV1Schema.extend(MachineResourcesPolicyMutationV1Schema.shape).strict());
-const policySetCliFields = lazyZodSchema(() => MachineResourcesPolicySetInputV1Schema.extend({
-  patch: MachineResourcesPolicyMutationV1Schema.shape.patch.optional(), allProcessesVisible: z.boolean().optional(),
-}).strict());
-export const MachineResourcesPolicySetCliInputV1Schema = lazyZodSchema(() => policySetCliFields.refine(
-  input => (input.patch === undefined) !== (input.allProcessesVisible === undefined),
-  'Supply either a policy patch or the All processes choice',
-));
+export const MachineResourcesPolicyGetInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: z.optional(z.string().check(z.trim(), z.minLength(1))), machineId: z.string().check(z.trim(), z.minLength(1)) }));
+export const MachineResourcesPolicySetInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineResourcesPolicyGetInputV1Schema, MachineResourcesPolicyMutationV1Schema.shape)));
+const policySetCliFields = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineResourcesPolicySetInputV1Schema, {
+  patch: z.optional(MachineResourcesPolicyMutationV1Schema.shape.patch), allProcessesVisible: z.optional(z.boolean()),
+})));
+export const MachineResourcesPolicySetCliInputV1Schema = lazyZodSchema(() => policySetCliFields.check(z.refine(input => (input.patch === undefined) !== (input.allProcessesVisible === undefined), 'Supply either a policy patch or the All processes choice')));
 export function bindMachineResourcesPolicySetCliInput(value: unknown): unknown {
   // The compiler may combine these caller flags with canonical whole-input JSON.
-  const { allProcessesVisible, ...input } = policySetCliFields.partial().parse(value);
+  const { allProcessesVisible, ...input } = lazyZodSchema(() => z.partial(policySetCliFields)).parse(value);
   return allProcessesVisible === undefined ? input : { ...input, patch: { processes: { allProcessesVisible } } };
 }
 export const MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS = {

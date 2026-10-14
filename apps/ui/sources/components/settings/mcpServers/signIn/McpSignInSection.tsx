@@ -1,0 +1,583 @@
+import * as React from 'react';
+import { Pressable, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { MCP_OAUTH_CALLBACK_URL_V1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
+
+import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { QRCode } from '@/components/qr';
+import { ConnectedAccountOAuthForm } from '@/components/settings/connectedServices/account/ConnectedAccountOAuthForm';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { Icon } from '@/components/ui/icons/Icon';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { Modal } from '@/modal';
+import { t } from '@/text';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
+
+import type { McpServerSignIn, McpSignInView } from './useMcpServerSignIn';
+
+type Props = Readonly<{
+  testID?: string;
+  name: string;
+  signIn: Pick<
+    McpServerSignIn,
+    'start' | 'cancel' | 'complete' | 'signOut' | 'busy'
+  > &
+    Readonly<{ view: McpSignInView }>;
+  /** Client refused: the Configuration's headers can carry an API key instead. */
+  onUseApiKey?: () => void;
+}>;
+
+function formatDay(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+  }).format(ms);
+}
+
+function formatLeft(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** Minutes and seconds left on the authorization link, ticking once a second while shown. */
+function useTimeLeft(expiresAtMs: number | null): string | null {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (expiresAtMs === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [expiresAtMs]);
+  return expiresAtMs === null ? null : formatLeft(expiresAtMs - now);
+}
+
+/** The words, the one action and its weight, for every state but the in-flight ones. */
+function Resting(
+  props: Readonly<{
+    testID: string;
+    chip?: CapabilityStatus;
+    title?: string;
+    body: string;
+    action?: Readonly<{
+      label: string;
+      display: 'default' | 'secondary' | 'inverted';
+      onPress: () => void;
+      disabled?: boolean;
+      loading?: boolean;
+    }>;
+    leading?: React.ReactNode;
+    footer?: React.ReactNode;
+  }>,
+) {
+  const styles = stylesheet;
+  return (
+    <SectionContentRow testID={props.testID}>
+      <View style={styles.resting}>
+        <View style={styles.restingText}>
+          {props.chip ? <CapabilityStatusChip status={props.chip} /> : null}
+          {props.title ? (
+            <View style={styles.titleRow}>
+              {props.leading}
+              <Text variant="label" emphasis="strong" style={styles.title}>
+                {props.title}
+              </Text>
+            </View>
+          ) : null}
+          <Text variant="body" style={styles.body}>
+            {props.body}
+          </Text>
+          {props.footer}
+        </View>
+        {props.action ? (
+          <RoundButton
+            testID={`${props.testID}:action`}
+            size="small"
+            display={props.action.display}
+            title={props.action.label}
+            onPress={props.action.onPress}
+            disabled={props.action.disabled}
+            loading={props.action.loading}
+          />
+        ) : null}
+      </View>
+    </SectionContentRow>
+  );
+}
+
+/** Signing in: the button became the wait; the browser, a phone or a pasted answer finishes it. */
+function Signing(
+  props: Readonly<{
+    testID: string;
+    name: string;
+    authorizationUrl: string;
+    expiresAtMs: number;
+    signIn: Props['signIn'];
+  }>,
+) {
+  const styles = stylesheet;
+  const { theme } = useUnistyles();
+  const [mode, setMode] = React.useState<'browser' | 'phone' | 'paste'>(
+    'browser',
+  );
+  const [copied, setCopied] = React.useState(false);
+  const left = useTimeLeft(props.expiresAtMs);
+  const copyLink = React.useCallback(async () => {
+    setCopied(await setClipboardStringSafe(props.authorizationUrl));
+  }, [props.authorizationUrl]);
+  const waiting = (label: string, trailing?: React.ReactNode) => (
+    <View style={styles.waitingRow}>
+      <ActivitySpinner size="small" />
+      <Text
+        variant="body"
+        style={styles.waiting}
+        accessibilityLiveRegion="polite"
+      >
+        {label}
+      </Text>
+      {trailing}
+    </View>
+  );
+  if (mode === 'paste') {
+    return (
+      <SectionContentRow testID={`${props.testID}:paste`}>
+        <View style={styles.stack}>
+          <Text variant="label" emphasis="strong" style={styles.title}>
+            {t('capabilities.mcpSignIn.pasteTitle')}
+          </Text>
+          <Text variant="body" style={styles.body}>
+            {t('capabilities.mcpSignIn.pasteBody')}
+          </Text>
+          <ConnectedAccountOAuthForm
+            embedded
+            authorizationUrl={props.authorizationUrl}
+            callbackUrl={MCP_OAUTH_CALLBACK_URL_V1}
+            submitting={false}
+            onCancel={() => setMode('browser')}
+            onSubmit={props.signIn.complete}
+          />
+        </View>
+      </SectionContentRow>
+    );
+  }
+  if (mode === 'phone') {
+    return (
+      <SectionContentRow testID={`${props.testID}:phone`}>
+        <View style={styles.phone}>
+          <View style={styles.qr}>
+            <QRCode data={props.authorizationUrl} size={168} />
+          </View>
+          <View style={styles.stack}>
+            <Text variant="label" emphasis="strong" style={styles.title}>
+              {t('capabilities.mcpSignIn.phoneTitle')}
+            </Text>
+            <Text variant="body" style={styles.body}>
+              {t('capabilities.mcpSignIn.phoneBody')}
+            </Text>
+            {waiting(
+              t('capabilities.mcpSignIn.phoneWaiting'),
+              left ? (
+                <Text variant="meta" style={styles.meta}>
+                  {t('capabilities.mcpSignIn.timeLeft', { time: left })}
+                </Text>
+              ) : null,
+            )}
+            <View style={styles.links}>
+              <Link
+                testID={`${props.testID}:this-device`}
+                label={t('capabilities.mcpSignIn.useThisDevice')}
+                onPress={() => setMode('browser')}
+              />
+              <Link
+                testID={`${props.testID}:cancel`}
+                label={t('capabilities.mcpSignIn.cancel')}
+                onPress={() => void props.signIn.cancel()}
+              />
+            </View>
+          </View>
+        </View>
+      </SectionContentRow>
+    );
+  }
+  return (
+    <>
+      <SectionContentRow testID={props.testID}>
+        <View style={styles.stack}>
+          <Text variant="label" emphasis="strong" style={styles.title}>
+            {t('capabilities.mcpSignIn.signingTitle')}
+          </Text>
+          <Text variant="body" style={styles.body}>
+            {t('capabilities.mcpSignIn.signingBody', { name: props.name })}
+          </Text>
+          {waiting(
+            t('capabilities.mcpSignIn.waiting', { name: props.name }),
+            <RoundButton
+              testID={`${props.testID}:cancel`}
+              size="small"
+              display="inverted"
+              title={t('capabilities.mcpSignIn.cancel')}
+              onPress={() => void props.signIn.cancel()}
+            />,
+          )}
+        </View>
+      </SectionContentRow>
+      <SectionContentRow testID={`${props.testID}:elsewhere`}>
+        <View style={styles.elsewhere}>
+          <Icon
+            name="device-mobile"
+            size={16}
+            color={theme.colors.text.tertiary}
+          />
+          <Text variant="body" style={styles.elsewhereText}>
+            {t('capabilities.mcpSignIn.notSignedInHere', { name: props.name })}{' '}
+            <Text
+              variant="body"
+              emphasis="strong"
+              style={styles.inlineLink}
+              onPress={() => setMode('phone')}
+              testID={`${props.testID}:use-phone`}
+            >
+              {t('capabilities.mcpSignIn.usePhone')}
+            </Text>
+            {` ${t('capabilities.mcpSignIn.or')} `}
+            <Text
+              variant="body"
+              emphasis="strong"
+              style={styles.inlineLink}
+              onPress={() => void copyLink()}
+              testID={`${props.testID}:copy-link`}
+            >
+              {copied
+                ? t('capabilities.mcpSignIn.linkCopied')
+                : t('capabilities.mcpSignIn.copyLink')}
+            </Text>
+          </Text>
+        </View>
+        <Link
+          testID={`${props.testID}:got-code`}
+          label={t('capabilities.mcpSignIn.pasteTitle')}
+          onPress={() => setMode('paste')}
+          quiet
+        />
+      </SectionContentRow>
+    </>
+  );
+}
+
+function Link(
+  props: Readonly<{
+    testID: string;
+    label: string;
+    onPress: () => void;
+    quiet?: boolean;
+  }>,
+) {
+  const styles = stylesheet;
+  return (
+    <Pressable
+      testID={props.testID}
+      accessibilityRole="link"
+      onPress={props.onPress}
+      hitSlop={8}
+      style={props.quiet ? styles.quietLinkBox : undefined}
+    >
+      {({ hovered }: { hovered?: boolean }) => (
+        <Text
+          variant="meta"
+          emphasis={props.quiet ? undefined : 'strong'}
+          style={[
+            props.quiet ? styles.quietLink : styles.link,
+            hovered ? styles.linkHover : null,
+          ]}
+        >
+          {props.label}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
+/**
+ * The server page's Sign-in section (T2, lab ms-B / ms-R): one sheet, one state at a time, one action.
+ * The grant belongs to the Account, so the copy speaks of every machine; the button becomes the wait.
+ */
+export function McpSignInSection(props: Props) {
+  const { view } = props.signIn;
+  const testID = props.testID ?? 'mcp.server.signin';
+  const { theme } = useUnistyles();
+  const styles = stylesheet;
+  const { name, signIn } = props;
+  const signOut = React.useCallback(async () => {
+    const confirmed = await Modal.confirm(
+      t('capabilities.mcpSignIn.signOutTitle', { name }),
+      t('capabilities.mcpSignIn.signOutBody', { name }),
+      {
+        confirmText: t('capabilities.mcpSignIn.signOut'),
+        destructive: true,
+      },
+    );
+    if (!confirmed) return;
+    if (!(await signIn.signOut()))
+      Modal.alert(
+        t('capabilities.mcpSignIn.signOut'),
+        t('capabilities.mcpSignIn.signOutFailed'),
+      );
+  }, [name, signIn]);
+
+  let body: React.ReactNode;
+  switch (view.state) {
+    case 'not_connected':
+    case 'starting':
+      body = (
+        <Resting
+          testID={`${testID}:not-connected`}
+          title={t('capabilities.mcpSignIn.notConnectedTitle', { name })}
+          body={t('capabilities.mcpSignIn.notConnectedBody', { name })}
+          action={{
+            label: t('capabilities.mcpSignIn.signIn'),
+            display: 'default',
+            loading: view.state === 'starting',
+            disabled: view.state === 'starting',
+            onPress: () => void signIn.start(),
+          }}
+        />
+      );
+      break;
+    case 'signing':
+      body = (
+        <Signing
+          testID={`${testID}:signing`}
+          name={name}
+          authorizationUrl={view.authorizationUrl}
+          expiresAtMs={view.expiresAtMs}
+          signIn={signIn}
+        />
+      );
+      break;
+    case 'finishing':
+      body = (
+        <Resting
+          testID={`${testID}:finishing`}
+          leading={<ActivitySpinner size="small" />}
+          title={t('capabilities.mcpSignIn.finishingTitle', {
+            machine: view.machineName,
+          })}
+          body={t('capabilities.mcpSignIn.finishingBody', {
+            name,
+            machine: view.machineName,
+          })}
+        />
+      );
+      break;
+    case 'connected':
+      body = (
+        <Resting
+          testID={`${testID}:connected`}
+          leading={
+            <Icon
+              name="check-circle"
+              size={16}
+              color={theme.colors.state.success.foreground}
+            />
+          }
+          title={
+            view.identity
+              ? t('capabilities.mcpSignIn.connectedAs', {
+                  identity: view.identity,
+                })
+              : t('capabilities.mcpSignIn.connected')
+          }
+          body={
+            view.lastUsedAt
+              ? t('capabilities.mcpSignIn.connectedSince', {
+                  date: formatDay(view.lastUsedAt),
+                })
+              : t('capabilities.mcpSignIn.connectedBody')
+          }
+          footer={
+            view.scopes.length > 0 ? (
+              <View style={styles.scopes}>
+                {view.scopes.map((scope) => (
+                  <Text key={scope} variant="meta" style={styles.scope}>
+                    {scope}
+                  </Text>
+                ))}
+              </View>
+            ) : undefined
+          }
+          action={{
+            label: t('capabilities.mcpSignIn.signOut'),
+            display: 'inverted',
+            loading: signIn.busy,
+            disabled: signIn.busy,
+            onPress: () => void signOut(),
+          }}
+        />
+      );
+      break;
+    case 'needs_more_access':
+      body = (
+        <Resting
+          testID={`${testID}:more-access`}
+          chip={{ kind: 'more_access' }}
+          body={t('capabilities.mcpSignIn.moreAccessBody', { name })}
+          action={{
+            label: t('capabilities.mcpSignIn.grantAccess'),
+            display: 'default',
+            onPress: () => void signIn.start({ stepUp: true }),
+          }}
+        />
+      );
+      break;
+    case 'expired':
+      body = (
+        <Resting
+          testID={`${testID}:expired`}
+          chip={{ kind: 'expired' }}
+          body={
+            view.reason === 'address_changed'
+              ? t('capabilities.mcpSignIn.addressChangedBody')
+              : t('capabilities.mcpSignIn.expiredBody', { name })
+          }
+          action={{
+            label: t('capabilities.mcpSignIn.reconnect'),
+            display: 'default',
+            onPress: () => void signIn.start(),
+          }}
+        />
+      );
+      break;
+    case 'revoked':
+      body = (
+        <Resting
+          testID={`${testID}:revoked`}
+          chip={{ kind: 'revoked' }}
+          body={t('capabilities.mcpSignIn.revokedBody', { name })}
+          action={{
+            label: t('capabilities.mcpSignIn.signInAgain'),
+            display: 'default',
+            onPress: () => void signIn.start(),
+          }}
+        />
+      );
+      break;
+    case 'did_not_finish':
+      body = (
+        <Resting
+          testID={`${testID}:did-not-finish`}
+          title={t('capabilities.mcpSignIn.didNotFinishTitle', { name })}
+          body={t('capabilities.mcpSignIn.didNotFinishBody')}
+          action={{
+            label: t('capabilities.mcpSignIn.tryAgain'),
+            display: 'secondary',
+            onPress: () => void signIn.start(),
+          }}
+        />
+      );
+      break;
+    case 'no_machine_online':
+      body = (
+        <Resting
+          testID={`${testID}:no-machine`}
+          title={t('capabilities.mcpSignIn.noMachineTitle')}
+          body={t('capabilities.mcpSignIn.noMachineBody')}
+          action={{
+            label: t('capabilities.mcpSignIn.signIn'),
+            display: 'default',
+            disabled: true,
+            onPress: () => void signIn.start(),
+          }}
+        />
+      );
+      break;
+    case 'client_refused':
+      body = (
+        <Resting
+          testID={`${testID}:client-refused`}
+          title={t('capabilities.mcpSignIn.clientRefusedTitle', { name })}
+          body={t('capabilities.mcpSignIn.clientRefusedBody')}
+          action={
+            props.onUseApiKey
+              ? {
+                  label: t('capabilities.mcpSignIn.useApiKey'),
+                  display: 'default',
+                  onPress: props.onUseApiKey,
+                }
+              : undefined
+          }
+        />
+      );
+      break;
+  }
+  return (
+    <ItemGroup testID={testID} title={t('capabilities.mcpSignIn.title')}>
+      {body}
+    </ItemGroup>
+  );
+}
+
+const stylesheet = StyleSheet.create((theme) => ({
+  resting: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s16,
+    minWidth: 0,
+  },
+  restingText: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.space.s4,
+    alignItems: 'flex-start',
+  },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  title: { color: theme.colors.text.primary, flexShrink: 1 },
+  body: { color: theme.colors.text.secondary },
+  meta: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
+  stack: { gap: theme.space.s6, minWidth: 0, flex: 1 },
+  waitingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+    marginTop: theme.space.s6,
+  },
+  waiting: { flex: 1, color: theme.colors.text.secondary },
+  elsewhere: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.space.s8,
+  },
+  elsewhereText: { flex: 1, color: theme.colors.text.secondary },
+  inlineLink: { color: theme.colors.text.primary },
+  link: { color: theme.colors.text.primary },
+  quietLinkBox: { marginTop: theme.space.s8, alignSelf: 'flex-start' },
+  quietLink: { color: theme.colors.text.secondary },
+  linkHover: { textDecorationLine: 'underline' },
+  links: {
+    flexDirection: 'row',
+    gap: theme.space.s16,
+    marginTop: theme.space.s6,
+  },
+  phone: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.space.s16,
+    alignItems: 'flex-start',
+  },
+  qr: { borderRadius: theme.borderRadius.md, overflow: 'hidden' },
+  scopes: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.space.s6,
+    marginTop: theme.space.s4,
+  },
+  scope: {
+    ...Typography.mono(),
+    color: theme.colors.text.secondary,
+    paddingHorizontal: theme.space.s6,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface.inset,
+  },
+}));

@@ -209,6 +209,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     connectedServicesMaterializationBaseDir, isAccountRuntimeCurrent: isCurrent, runAccountOperation: withHome,
     allowNativeAccountState: false,
     connectedAccountsOwner: purposes.owner,
+    activatePurposeBindings: purposes.activatePurposeBindings,
     providerAccountUsageStore, connectedServiceRuntimeQuotaSnapshots, daemonSessionMutationCustody,
     qualifiedConnectedAccountEstablishedRuntimeOwner: established, listScheduledQualifiedConnectedAccounts: purposes.listCoordinatorAccounts,
     subscribeConnectedAccountInvalidations: listener => {

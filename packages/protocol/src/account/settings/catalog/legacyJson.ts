@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../../../json/strictJsonValue.js';
 import { defineStoredReadProjection } from '../../../json/storedReadSchema.js';
@@ -16,28 +16,27 @@ export type BoundedLegacyJsonValue =
   | readonly BoundedLegacyJsonValue[]
   | { readonly [key: string]: BoundedLegacyJsonValue };
 
-function createBoundedLegacyJsonValueSchema(depthRemaining: number): z.ZodType<BoundedLegacyJsonValue> {
+function createBoundedLegacyJsonValueSchema(depthRemaining: number): z.ZodMiniType<BoundedLegacyJsonValue> {
   const scalar = z.union([
     z.null(),
     z.boolean(),
-    z.number().finite(),
-    z.string().max(ACCOUNT_SETTING_MAX_STRING_BYTES),
+    z.number(),
+    z.string().check(z.maxLength(ACCOUNT_SETTING_MAX_STRING_BYTES)),
   ]);
   if (depthRemaining === 0) return scalar;
 
   const child = createBoundedLegacyJsonValueSchema(depthRemaining - 1);
   return z.union([
     scalar,
-    z.array(child).max(ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES),
-    z.record(z.string().max(ACCOUNT_SETTING_MAX_STRING_BYTES), child)
-      .superRefine((value, ctx) => {
+    z.array(child).check(z.maxLength(ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES)),
+    z.record(z.string().check(z.maxLength(ACCOUNT_SETTING_MAX_STRING_BYTES)), child).check(z.superRefine((value, ctx) => {
         if (Object.keys(value).length > ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: `contains more than ${ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES} record entries`,
           });
         }
-      }),
+      })),
   ]);
 }
 
@@ -51,5 +50,5 @@ export const BoundedLegacyJsonValueSchema = defineStoredReadProjection(
   // Legacy readers historically receive their own mutable parsed copy. Strict
   // JSON validates unsafe structures first; Zod's JSON parser retains that copy
   // contract rather than exposing StrictJsonValueSchema's frozen snapshot.
-  () => StrictJsonValueSchema.pipe(z.json()),
+  () => z.pipe(StrictJsonValueSchema, z.json()),
 );

@@ -17,6 +17,7 @@ import { finishExecutionRun } from './finishExecutionRun';
 import { ScmDiffSummaryProfile } from './kinds/scmDiffSummary/ScmDiffSummaryProfile';
 import { readOrCreateSavedScmResult } from './kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
+import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
 
 const TEST_BACKEND_ID = `${'test'}.${'agent'}` as never;
 
@@ -127,6 +128,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
         controllers: Map<string, ExecutionRunBackendController>;
         voiceAgentManager: VoiceAgentManager;
         emitPublicStateUpdated(runId: string): void;
+        registerRunOccurrence: RegisterExecutionRunOccurrence;
         attachRetainedRunSessionInput(input: {
             runId: string; sidechainId: string; controller: ExecutionRunBackendController;
         }): { release(): Promise<void> } | null;
@@ -138,7 +140,12 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
     } as ExecutionRunState);
     internals.controllers.set('run-1', controller);
-    const attachment = internals.attachRetainedRunSessionInput({ runId: 'run-1', sidechainId: 'sidechain-1', controller });
+    const releaseOccurrence = internals.registerRunOccurrence({ runId: 'run-1', sidechainId: 'sidechain-1', controller });
+    const retainedAttachment = internals.attachRetainedRunSessionInput({ runId: 'run-1', sidechainId: 'sidechain-1', controller });
+    if (!retainedAttachment) { releaseOccurrence(); throw new Error('Missing retained Session input attachment'); }
+    const attachment = { ...retainedAttachment, release: async () => {
+        try { await retainedAttachment.release(); } finally { releaseOccurrence(); }
+    } };
     const emitRuntimeEvent = (event: Record<string, unknown>) => {
         if (!emit) throw new Error('retained delivery did not subscribe to runtime events');
         emit(event as RuntimeEvent);

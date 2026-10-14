@@ -2,7 +2,7 @@ import axios from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { createCliBoundSessionMetadataReader, resolveCliActionCallerSession } from './resolveCliActionCallerSession';
+import { createCliBoundSessionMetadataReader, resolveCliActionCallerSession, resolveCliActionCallerWorkflowTarget } from './resolveCliActionCallerSession';
 
 describe('Account Action caller Session metadata authority', () => {
   it('cancels remote caller preparation at the Account-currentness boundary', async () => {
@@ -84,16 +84,21 @@ describe('Account Action caller Session metadata authority', () => {
         ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
         : { session: rawSession } }));
     try {
-      const result = await resolveCliActionCallerSession({ credentials, boundSessionId: 'cli-global',
+      const params = { credentials, boundSessionId: 'cli-global',
         context: { surface: 'agent', actionCaller: { kind: 'session', sessionId, starterDepth: 2, turnDepth: 3 }, defaultSessionId: sessionId },
         // This is the bound process's real-shaped snapshot, not a normalizer.
         readBoundSession: async () => ({ metadata: { flavor: 'claude' }, workDepth: 0,
           backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
           machineId: 'wrong-machine', directory: '/wrong/repo' }),
-        resolveTransportForSession: (id) => resolveSessionTransportContext({ credentials, idOrPrefix: id }),
-      });
+        resolveTransportForSession: (id: string) => resolveSessionTransportContext({ credentials, idOrPrefix: id }),
+      } satisfies Parameters<typeof resolveCliActionCallerSession>[0];
+      const result = await resolveCliActionCallerSession(params);
       expect(result).toMatchObject({ sessionId, workDepth: 2, directory: '/owner/repo', machineId: 'caller-machine',
         backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } });
+      await expect(resolveCliActionCallerWorkflowTarget({ ...params, target: { kind: 'machine', machineId: 'caller-machine' } }))
+        .resolves.toEqual({ kind: 'machine', machineId: 'caller-machine', project: { machineId: 'caller-machine', directory: '/owner/repo' } });
+      await expect(resolveCliActionCallerWorkflowTarget({ ...params, target: { kind: 'machine', machineId: 'wrong-machine' } }))
+        .resolves.toBeNull();
     } finally { get.mockRestore(); }
   });
 

@@ -1,6 +1,6 @@
 import { act, useState } from 'react';
-import { describe, expect, it } from 'vitest';
-import { Treemap, Sunburst, type HappierChartPart } from '@happier-dev/plugin-ui/components';
+import { describe, expect, it, vi } from 'vitest';
+import { Treemap, Sunburst, layoutHappierTreemap, type HappierChartPart } from '@happier-dev/plugin-ui/components';
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { SURFACE_CONTEXT_THEME_FIXTURE as theme } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
 import { placeHappierSunburstLeaders } from './Sunburst.js';
@@ -35,6 +35,92 @@ function StorageChartHost({ kind }: Readonly<{ kind: 'map' | 'rings' }>) {
 }
 
 describe('storage charts through their public component entry', () => {
+  it('opens the same folded group with arrows/Enter and a pointer on its drawn tile', () => {
+    const foldedItems: readonly HappierChartPart[] = [
+      { key: 'large', label: 'Large', value: 96, valueLabel: '96 MB', tone: 'ink' },
+      { key: 'small-a', label: 'Small A', value: 2, valueLabel: '2 MB', tone: 'ink' },
+      { key: 'small-b', label: 'Small B', value: 2, valueLabel: '2 MB', tone: 'ink' },
+    ];
+    const size = { width: 408, height: 240 };
+    const minNodePx = { width: 100, height: 40 };
+    const { tiles } = layoutHappierTreemap(foldedItems, { ...size, minNodePx, gapPx: 2, headerPx: 34 });
+    const folded = tiles.find(tile => tile.folded !== null)!;
+    expect(folded.folded).toEqual(['small-a', 'small-b']);
+    const opened: string[] = [];
+    const mount = mountThroughReactNativeWeb(<Treemap theme={theme} items={foldedItems} {...size} minNodePx={minNodePx}
+      accessibilityLabel="Map" smallerLabel={count => `${count} smaller`} reducedMotion testID="folded-map"
+      onOpen={key => { opened.push(key); }} />);
+    const chart = mount.container.querySelector<HTMLElement>('[data-testid="folded-map"]')!;
+    const x = folded.rect.x + folded.rect.width / 2;
+    const y = folded.rect.y + folded.rect.height / 2;
+    try {
+      act(() => { chart.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y, buttons: 1 })); });
+      act(() => { chart.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y })); });
+      expect(opened).toEqual([folded.key]);
+      for (const key of ['ArrowRight', 'ArrowRight', 'Enter']) {
+        act(() => { chart.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); });
+      }
+      expect(opened).toEqual([folded.key, folded.key]);
+    } finally { mount.unmount(); }
+  });
+
+  it('points and opens where arcs are drawn during a morph and an interrupted retarget', async () => {
+    let frameId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
+    const advance = (time: number) => act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(time);
+    });
+    const pointed: (string | null)[] = [];
+    const opened: string[] = [];
+    const chart = (parts: readonly HappierChartPart[], centerLabel: string, reducedMotion = false) => <Sunburst theme={theme} items={parts}
+      width={760} height={408} minArcDegrees={2} centerLabel={centerLabel} centerValue="600 MB"
+      reducedMotion={reducedMotion}
+      accessibilityLabel="Rings" smallerLabel={count => `${count} smaller`} testID="morph-rings"
+      onPointAt={key => { pointed.push(key); }} onOpen={key => { opened.push(key); }} />;
+    const mount = mountThroughReactNativeWeb(chart(items, 'Root'));
+    const at = (radius: number, angle: number) => {
+      const element = mount.container.querySelector<HTMLElement>('[data-testid="morph-rings"]')!;
+      const x = 380 + radius * Math.sin(angle);
+      const y = 204 - radius * Math.cos(angle);
+      const move = new MouseEvent('pointermove', { bubbles: true, clientX: x, clientY: y });
+      act(() => { element.dispatchEvent(move); });
+      act(() => { element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y, buttons: 1 })); });
+      act(() => { element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y })); });
+    };
+    try {
+      await mount.render(chart(items[0]!.children!, 'Projects'));
+      advance(100);
+      advance(160);
+      // A is still moving inward from the second ring (107–140) to the first (56–104).
+      // Radius 118 is inside its drawn arc but outside every destination arc at this angle.
+      at(118, 1);
+      expect(pointed.at(-1)).toBe('projects/a');
+      expect(opened.at(-1)).toBe('projects/a');
+      const beforeRetarget = mount.container.querySelector('svg g path')!.getAttribute('d');
+      await mount.render(chart(items, 'Root'));
+      expect([...mount.container.querySelectorAll('svg g path')].map(path => path.getAttribute('d'))).toContain(beforeRetarget);
+      at(118, 3.1);
+      expect(pointed.at(-1)).toBe('projects/a');
+      expect(opened.at(-1)).toBe('projects/a');
+      advance(200);
+      advance(260);
+      // At 3.1 radians the destination is B, while the interrupted A is still drawn here.
+      at(120, 3.1);
+      expect(opened.at(-1)).toBe('projects/a');
+      // Enabling reduced motion while a transition is running must land the same level immediately.
+      await mount.render(chart(items, 'Root', true));
+      at(120, 3.1);
+      expect(opened.at(-1)).toBe('projects/b');
+      expect(frames.size).toBe(0);
+      at(80, 1);
+      expect(opened.at(-1)).toBe('projects');
+    } finally { mount.unmount(); vi.unstubAllGlobals(); }
+  });
+
   it.each(['map', 'rings'] as const)('%s navigates, collects, drills and goes up through real keyboard events', kind => {
     const mount = mountThroughReactNativeWeb(<StorageChartHost kind={kind} />);
     const chart = () => mount.container.querySelector<HTMLElement>('[data-testid="storage-chart"]')!;

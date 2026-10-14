@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import {
   SessionPermissionDecisionActorV1Schema,
@@ -13,7 +14,7 @@ import {
   CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD,
 } from '../sessions/presentation/currentSessionPresentationV1.js';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { ActionRequiredAuthoritySchema, type ActionRequiredAuthority } from '../actions/metadata.js';
 import { CallerInputConstraintsV1Schema, type CallerInputConstraintsV1 } from '../auth/callerInputConstraintsV1.js';
@@ -46,7 +47,7 @@ export const SOCKET_RPC_EVENTS = {
 export type SocketRpcEvent = (typeof SOCKET_RPC_EVENTS)[keyof typeof SOCKET_RPC_EVENTS];
 
 /** An omitted deadline uses the relay default; null belongs to caller lifecycle. */
-export const SocketRpcTimeoutMsSchema = lazyZodSchema(() => z.number().finite().positive().nullable().optional());
+export const SocketRpcTimeoutMsSchema = lazyZodSchema(() => z.optional(z.nullable(z.number().check(z.positive()))));
 
 export const SOCKET_RPC_TRANSPORT_RESPONSE_ENVELOPE_VERSION_V1 = 1 as const;
 
@@ -55,25 +56,25 @@ export const SOCKET_RPC_TRANSPORT_RESPONSE_ENVELOPE_VERSION_V1 = 1 as const;
  * reaches an RPC target, so a caller-local collision cannot cancel another
  * caller's request at that target.
  */
-export const SocketRpcRequestIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(160));
+export const SocketRpcRequestIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(160)));
 
 /** Original host-admitted Action facts, distinct from relay request correlation. Every object is closed. */
-export const SessionActionRpcOriginV1Schema = lazyZodSchema(() => z.object({
+export const SessionActionRpcOriginV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   caller: AgentStartSessionCallerV1Schema,
-  sourceTurnId: z.string().trim().min(1),
-  callerPermissionMode: asProtocolZod(AgentPermissionIntentV1Schema).nullable(),
-  causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1Schema.nullable().optional(),
-  workspaceWrites: z.enum(['allow', 'deny']).optional(),
-  requestId: z.string().trim().min(1),
-}).strict());
+  sourceTurnId: z.string().check(z.trim(), z.minLength(1)),
+  callerPermissionMode: zMini.nullable(asProtocolZod(AgentPermissionIntentV1Schema)),
+  causalPermissionAuthority: zMini.optional(zMini.nullable(SessionInputCausalPermissionAuthorityV1Schema)),
+  workspaceWrites: z.optional(z.enum(['allow', 'deny'])),
+  requestId: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type SessionActionRpcOriginV1 = Readonly<z.infer<typeof SessionActionRpcOriginV1Schema>>;
 
-export const SocketRpcSessionActionAuthorizationContextSchema = lazyZodSchema(() => z.object({
+export const SocketRpcSessionActionAuthorizationContextSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session.action'),
   sessionId: AgentStartSessionCallerV1Schema.shape.sessionId,
   origin: SessionActionRpcOriginV1Schema,
-}).strict());
+}));
 export type SocketRpcSessionActionAuthorizationContext = Readonly<z.infer<typeof SocketRpcSessionActionAuthorizationContextSchema>>;
 
 /** Session-routed Actions and exact Home-admitted private workspace phases retain Session origin. */
@@ -88,9 +89,9 @@ export function isSessionActionRpcMethodV1(method: string): boolean {
     || unscoped === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_RELEASE;
 }
 
-export const SocketRpcCancellationPayloadSchema = lazyZodSchema(() => z.object({
+export const SocketRpcCancellationPayloadSchema = lazyZodSchema(() => z.strictObject({
   requestId: SocketRpcRequestIdSchema,
-}).strict());
+}));
 
 export type SocketRpcCancellationPayload = z.infer<typeof SocketRpcCancellationPayloadSchema>;
 
@@ -101,84 +102,84 @@ export const SessionTransferRpcMethodV1Schema = lazyZodSchema(() => z.enum([
     RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
     RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT,
   ]));
-export const SessionTransferRoutingV1Schema = lazyZodSchema(() => z.object({
+export const SessionTransferRoutingV1Schema = lazyZodSchema(() => z.strictObject({
   method: SessionTransferRpcMethodV1Schema,
   t: z.enum(['session_attachment_upload_v1', 'session_attachment_download_v1']),
   sessionId: asProtocolZod(SessionIdSchema),
-}).strict().refine(value => ([RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK,
+}).check(z.refine(value => ([RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK,
   RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT] as readonly string[]).includes(value.method)
   ? value.t === 'session_attachment_upload_v1'
-  : value.t !== 'session_attachment_upload_v1'));
+  : value.t !== 'session_attachment_upload_v1')));
 
 export type SessionTransferRoutingV1 = Readonly<z.infer<typeof SessionTransferRoutingV1Schema>>;
 
 /** Exact private source workspace phase routing; the Home verifies the child socket before forwarding. */
-export const WorkspaceSyncSourceContextV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceSyncSourceContextV1Schema = lazyZodSchema(() => z.strictObject({
   machineAdmission: SocketRpcMachineAdmissionContextV1Schema,
   callerAuthority: ActionRequiredAuthoritySchema,
-  sessionActionOrigin: SessionActionRpcOriginV1Schema.optional(),
-  callerInputConstraints: CallerInputConstraintsV1Schema.optional(),
-  callerPermissionMode: asProtocolZod(AgentPermissionIntentV1Schema).nullable().optional(),
-  causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1Schema.nullable().optional(),
-  workspaceWrites: z.enum(['allow', 'deny']).optional(),
-}).strict());
+  sessionActionOrigin: z.optional(SessionActionRpcOriginV1Schema),
+  callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
+  callerPermissionMode: zMini.optional(zMini.nullable(asProtocolZod(AgentPermissionIntentV1Schema))),
+  causalPermissionAuthority: zMini.optional(zMini.nullable(SessionInputCausalPermissionAuthorityV1Schema)),
+  workspaceWrites: z.optional(z.enum(['allow', 'deny'])),
+}));
 export type WorkspaceSyncSourceContextV1 = Readonly<z.infer<typeof WorkspaceSyncSourceContextV1Schema>>;
-export const WorkspaceSyncSourceRoutingV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceSyncSourceRoutingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   phase: z.enum(['prepare', 'finalize', 'commit', 'abort']),
-  operationId: z.string().trim().min(1),
-  accountServerId: z.string().trim().min(1),
-  sourceMachineId: z.string().trim().min(1),
-  sourceRootPath: z.string().trim().min(1),
-  sourceSessionId: z.string().trim().min(1).optional(),
-  sourceContext: WorkspaceSyncSourceContextV1Schema.optional(),
-  originalActionEnvelope: z.lazy(() => ExternalActionRequestEnvelopeSchema).optional(),
-}).strict());
+  operationId: z.string().check(z.trim(), z.minLength(1)),
+  accountServerId: z.string().check(z.trim(), z.minLength(1)),
+  sourceMachineId: z.string().check(z.trim(), z.minLength(1)),
+  sourceRootPath: z.string().check(z.trim(), z.minLength(1)),
+  sourceSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  sourceContext: z.optional(WorkspaceSyncSourceContextV1Schema),
+  originalActionEnvelope: z.optional(z.lazy(() => ExternalActionRequestEnvelopeSchema)),
+}));
 export type WorkspaceSyncSourceRoutingV1 = Readonly<z.infer<typeof WorkspaceSyncSourceRoutingV1Schema>>;
 
 /** Original installed target packet, retained beside routing rather than inside its signed snapshot. */
-export const WorkspaceSyncSourceExecutionV1Schema = lazyZodSchema(() => z.object({
-  method: z.string().min(1),
+export const WorkspaceSyncSourceExecutionV1Schema = lazyZodSchema(() => z.strictObject({
+  method: z.string().check(z.minLength(1)),
   requestId: SocketRpcRequestIdSchema,
-  params: StrictJsonValueSchema.optional(),
+  params: zMini.optional(StrictJsonValueSchema),
   externalActionExecution: z.lazy(() => ExternalActionMachineRpcExecutionV1Schema),
-}).strict());
+}));
 export type WorkspaceSyncSourceExecutionV1 = Readonly<z.infer<typeof WorkspaceSyncSourceExecutionV1Schema>>;
 
 /** Target custody has its own phase binding; the moved Session need not live on this child. */
-export const WorkspaceSyncTargetRoutingV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceSyncTargetRoutingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   phase: z.enum(['preflight', 'prepare', 'release']),
-  operationId: z.string().trim().min(1),
-  accountServerId: z.string().trim().min(1),
-  targetMachineId: z.string().trim().min(1),
-  targetRootPath: z.string().trim().min(1),
+  operationId: z.string().check(z.trim(), z.minLength(1)),
+  accountServerId: z.string().check(z.trim(), z.minLength(1)),
+  targetMachineId: z.string().check(z.trim(), z.minLength(1)),
+  targetRootPath: z.string().check(z.trim(), z.minLength(1)),
   targetContext: WorkspaceSyncSourceContextV1Schema,
-}).strict());
+}));
 export type WorkspaceSyncTargetRoutingV1 = Readonly<z.infer<typeof WorkspaceSyncTargetRoutingV1Schema>>;
 
 /** The installed physical source writer retains the original child root for exact target custody phases. */
-export const WorkspaceSyncSourceWriterTargetRoutingV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceSyncSourceWriterTargetRoutingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  source: WorkspaceSyncSourceRoutingV1Schema.extend({ sourceContext: WorkspaceSyncSourceContextV1Schema }),
-  target: WorkspaceSyncTargetRoutingV1Schema.omit({ targetContext: true }),
-  sourceWriter: SocketRpcMachineAdmissionContextV1Schema.pick({ machineId: true, installationId: true }),
-}).strict().superRefine((routing, ctx) => {
+  source: z.extend(WorkspaceSyncSourceRoutingV1Schema, { sourceContext: WorkspaceSyncSourceContextV1Schema }),
+  target: z.omit(WorkspaceSyncTargetRoutingV1Schema, { targetContext: true }),
+  sourceWriter: zMini.pick(SocketRpcMachineAdmissionContextV1Schema, { machineId: true, installationId: true }),
+}).check(z.superRefine((routing, ctx) => {
   if (routing.source.accountServerId !== routing.target.accountServerId) {
     ctx.addIssue({ code: 'custom', path: ['target', 'accountServerId'], message: 'Workspace phases must retain the same Home' });
   }
   if (routing.source.sourceMachineId !== routing.source.sourceContext.machineAdmission.machineId) {
     ctx.addIssue({ code: 'custom', path: ['source', 'sourceContext', 'machineAdmission', 'machineId'], message: 'Source context must retain its original child' });
   }
-}));
+})));
 export type WorkspaceSyncSourceWriterTargetRoutingV1 = Readonly<z.infer<typeof WorkspaceSyncSourceWriterTargetRoutingV1Schema>>;
 
 /** Installed P2 may request only the seed of its already admitted Target prepare. */
-export const WorkspaceSyncSeedRoutingV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceSyncSeedRoutingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sourceWriterTarget: WorkspaceSyncSourceWriterTargetRoutingV1Schema,
   target: WorkspaceSyncTargetRoutingV1Schema,
-}).strict().superRefine((routing, ctx) => {
+}).check(z.superRefine((routing, ctx) => {
   const sourceContext = routing.sourceWriterTarget.source.sourceContext;
   const { targetContext, ...phase } = routing.target;
   if (routing.target.phase !== 'prepare' || routing.sourceWriterTarget.target.phase !== 'prepare'
@@ -191,7 +192,7 @@ export const WorkspaceSyncSeedRoutingV1Schema = lazyZodSchema(() => z.object({
       !== createCanonicalJsonSigningInput(sourceContext)) {
     ctx.addIssue({ code: 'custom', path: ['target', 'targetContext'], message: 'Seed must retain the original actor and ceilings' });
   }
-}));
+})));
 export type WorkspaceSyncSeedRoutingV1 = Readonly<z.infer<typeof WorkspaceSyncSeedRoutingV1Schema>>;
 
 export type SocketRpcRequestPayload = Readonly<{
@@ -227,23 +228,20 @@ export type SocketRpcRequestPayload = Readonly<{
 }>;
 
 export const SocketRpcTransportAcknowledgementV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('session.stop'),
     status: z.literal('stopped'),
-  }).strict(),
+  }),
 ]));
 
 export type SocketRpcTransportAcknowledgementV1 =
   z.infer<typeof SocketRpcTransportAcknowledgementV1Schema>;
 
-export const SocketRpcTransportResponseEnvelopeV1Schema = lazyZodSchema(() => z.object({
+export const SocketRpcTransportResponseEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(SOCKET_RPC_TRANSPORT_RESPONSE_ENVELOPE_VERSION_V1),
   result: z.unknown(),
-  acknowledgement: SocketRpcTransportAcknowledgementV1Schema.optional(),
-}).strict().refine(
-  (value) => Object.prototype.hasOwnProperty.call(value, 'result'),
-  { message: 'result is required', path: ['result'] },
-));
+  acknowledgement: z.optional(SocketRpcTransportAcknowledgementV1Schema),
+}).check(z.refine((value) => Object.prototype.hasOwnProperty.call(value, 'result'), { message: 'result is required', path: ['result'] })));
 
 export type SocketRpcTransportResponseEnvelopeV1 =
   z.infer<typeof SocketRpcTransportResponseEnvelopeV1Schema>;
@@ -512,6 +510,7 @@ const SOCKET_RPC_SESSION_WRITE_AUTHORIZATION: ReadonlyMap<string, SocketRpcSessi
     ...SESSION_RPC_AUTHORIZATION_ROWS,
     ...ADDITIONAL_SESSION_RPC_AUTHORIZATION_ROWS,
     ...[
+      RPC_METHODS.SCM_BRANCH_LIST,
       RPC_METHODS.SCM_PULL_REQUEST_LIST,
       RPC_METHODS.SCM_PULL_REQUEST_GET,
       RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE,

@@ -1,124 +1,120 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { KnownCanonicalToolNameV2 } from './names.js';
 import { ToolHappyMetaV2Schema, ToolHappierMetaV2Schema } from './meta.js';
 import { StructuredQuestionAnswersV1Schema } from '../structuredQuestionAnswersV1.js';
 
-const BaseEnvelopeSchema = lazyZodSchema(() => z.object({
-  _happier: ToolHappierMetaV2Schema.optional(),
+const BaseEnvelopeSchema = lazyZodSchema(() => z.looseObject({
+  _happier: z.optional(ToolHappierMetaV2Schema),
   // Legacy envelope key accepted for migration back-compat.
-  _happy: ToolHappyMetaV2Schema.optional(),
-  _raw: z.unknown().optional(),
-}).passthrough());
+  _happy: z.optional(ToolHappyMetaV2Schema),
+  _raw: z.optional(z.unknown()),
+}));
 
 // Common primitives (shared between many tools).
-const FilePathSchema = lazyZodSchema(() => z.string().min(1));
-const UrlSchema = lazyZodSchema(() => z.string().min(1));
+const FilePathSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const UrlSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 
-export const BashInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  command: z.string().min(1).optional(),
-  timeout: z.number().int().positive().optional(),
+export const BashInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  command: z.optional(z.string().check(z.minLength(1))),
+  timeout: z.optional(z.number().check(z.int(), z.positive())),
   // A *request* to detach the command. Only the result's `backgroundTaskId` attests that the
   // provider actually detached it, so renderers must not treat this flag as proof.
-  run_in_background: z.boolean().optional(),
-}).passthrough());
+  run_in_background: z.optional(z.boolean()),
+})));
 
-export const BashResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  exit_code: z.number().int().optional(),
-  errorMessage: z.string().optional(),
+export const BashResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  exit_code: z.optional(z.number().check(z.int())),
+  errorMessage: z.optional(z.string()),
   // Present only when the provider detached the command. This is the join key between the `Bash`
   // tool result and the background-task ledger/record that tracks the detached process.
-  backgroundTaskId: z.string().optional(),
-}).passthrough());
+  backgroundTaskId: z.optional(z.string()),
+})));
 
-export const ReadInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file_path: FilePathSchema.optional(),
-  limit: z.number().int().positive().optional(),
-  offset: z.number().int().min(0).optional(),
-}).passthrough());
+export const ReadInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file_path: z.optional(FilePathSchema),
+  limit: z.optional(z.number().check(z.int(), z.positive())),
+  offset: z.optional(z.number().check(z.int(), z.minimum(0))),
+})));
 
-export const ReadResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file: z.object({
+export const ReadResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file: z.optional(z.partial(z.object({
     content: z.string(),
-    filePath: FilePathSchema.optional(),
-    startLine: z.number().int().min(1).optional(),
-    numLines: z.number().int().positive().optional(),
-    totalLines: z.number().int().positive().optional(),
-  }).partial().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+    filePath: z.optional(FilePathSchema),
+    startLine: z.optional(z.number().check(z.int(), z.minimum(1))),
+    numLines: z.optional(z.number().check(z.int(), z.positive())),
+    totalLines: z.optional(z.number().check(z.int(), z.positive())),
+  }))),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const WriteInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file_path: FilePathSchema.optional(),
-  content: z.string().optional(),
-}).passthrough());
+export const WriteInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file_path: z.optional(FilePathSchema),
+  content: z.optional(z.string()),
+})));
 
-export const WriteResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  ok: z.boolean().optional(),
-  applied: z.boolean().optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const WriteResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  ok: z.optional(z.boolean()),
+  applied: z.optional(z.boolean()),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const EditInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file_path: FilePathSchema.optional(),
-  old_string: z.string().optional(),
-  new_string: z.string().optional(),
+export const EditInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file_path: z.optional(FilePathSchema),
+  old_string: z.optional(z.string()),
+  new_string: z.optional(z.string()),
   // Some providers emit full-file writes via Edit; preserve as optional canonical alias.
-  file_content: z.string().optional(),
-}).passthrough());
+  file_content: z.optional(z.string()),
+})));
 
-export const MultiEditInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file_path: FilePathSchema.optional(),
-  edits: z.array(z.object({
-    oldText: z.string().optional(),
-    newText: z.string().optional(),
-    old_string: z.string().optional(),
-    new_string: z.string().optional(),
-  }).passthrough()).optional(),
-}).passthrough());
+export const MultiEditInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file_path: z.optional(FilePathSchema),
+  edits: z.optional(z.array(z.looseObject({
+    oldText: z.optional(z.string()),
+    newText: z.optional(z.string()),
+    old_string: z.optional(z.string()),
+    new_string: z.optional(z.string()),
+  }))),
+})));
 
-export const EditResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  ok: z.boolean().optional(),
-  applied: z.boolean().optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const EditResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  ok: z.optional(z.boolean()),
+  applied: z.optional(z.boolean()),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const DeleteInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  file_path: FilePathSchema.optional(),
-  file_paths: z.array(FilePathSchema).optional(),
-}).passthrough());
+export const DeleteInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  file_path: z.optional(FilePathSchema),
+  file_paths: z.optional(z.array(FilePathSchema)),
+})));
 
-export const DeleteResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  ok: z.boolean().optional(),
-  applied: z.boolean().optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const DeleteResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  ok: z.optional(z.boolean()),
+  applied: z.optional(z.boolean()),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const DiffInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  unified_diff: z.string().optional(),
-  files: z.array(
-    z
-      .object({
-        file_path: FilePathSchema.optional(),
+export const DiffInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  unified_diff: z.optional(z.string()),
+  files: z.optional(z.array(
+    z.looseObject({
+        file_path: z.optional(FilePathSchema),
         // Preferred representation: per-file unified diff block.
-        unified_diff: z.string().min(1).optional(),
+        unified_diff: z.optional(z.string().check(z.minLength(1))),
         // Alternate representation (no unified diff available): provide old/new text directly.
-        oldText: z.string().optional(),
-        newText: z.string().optional(),
-        old_text: z.string().optional(),
-        new_text: z.string().optional(),
-      })
-      .passthrough()
-      .refine(
-        (value) => {
+        oldText: z.optional(z.string()),
+        newText: z.optional(z.string()),
+        old_text: z.optional(z.string()),
+        new_text: z.optional(z.string()),
+      }).check(z.refine((value) => {
           const hasUnified = typeof value.unified_diff === 'string' && value.unified_diff.trim().length > 0;
           const hasCamel =
             typeof value.oldText === 'string' &&
@@ -129,100 +125,98 @@ export const DiffInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
             typeof value.new_text === 'string' &&
             (value.old_text.length > 0 || value.new_text.length > 0);
           return hasUnified || hasCamel || hasSnake;
-        },
-        { message: 'Diff.files entries must include unified_diff or old/new text pairs' },
-      ),
-  ).optional(),
-}).passthrough());
+        }, { message: 'Diff.files entries must include unified_diff or old/new text pairs' })),
+  )),
+})));
 
-export const PatchInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  changes: z.record(z.string(), z.unknown()).optional(),
-  file_paths: z.array(FilePathSchema).optional(),
-}).passthrough());
+export const PatchInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  changes: z.optional(z.record(z.string(), z.unknown())),
+  file_paths: z.optional(z.array(FilePathSchema)),
+})));
 
-export const PatchResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  applied: z.boolean().optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const PatchResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  applied: z.optional(z.boolean()),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const GlobInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  pattern: z.string().optional(),
-}).passthrough());
-export const GrepInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  pattern: z.string().optional(),
-  query: z.string().optional(),
-}).passthrough());
-export const LSInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  path: FilePathSchema.optional(),
-}).passthrough());
-export const CodeSearchInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  query: z.string().optional(),
-  pattern: z.string().optional(),
-  text: z.string().optional(),
-}).passthrough());
+export const GlobInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  pattern: z.optional(z.string()),
+})));
+export const GrepInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  pattern: z.optional(z.string()),
+  query: z.optional(z.string()),
+})));
+export const LSInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  path: z.optional(FilePathSchema),
+})));
+export const CodeSearchInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  query: z.optional(z.string()),
+  pattern: z.optional(z.string()),
+  text: z.optional(z.string()),
+})));
 
-export const SearchResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  items: z.array(z.unknown()).optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const SearchResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  items: z.optional(z.array(z.unknown())),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const WebFetchInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  url: UrlSchema.optional(),
-}).passthrough());
+export const WebFetchInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  url: z.optional(UrlSchema),
+})));
 
-export const WebSearchInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  query: z.string().optional(),
-}).passthrough());
+export const WebSearchInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  query: z.optional(z.string()),
+})));
 
-export const WebResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  content: z.unknown().optional(),
-  text: z.string().optional(),
-  items: z.array(z.unknown()).optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const WebResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  content: z.optional(z.unknown()),
+  text: z.optional(z.string()),
+  items: z.optional(z.array(z.unknown())),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const TodoWriteInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  todos: z.array(z.object({
-    id: z.string().optional(),
-    content: z.string().min(1),
-    status: z.enum(['pending', 'in_progress', 'completed']).optional(),
-    priority: z.string().optional(),
-  }).passthrough()).optional(),
-}).passthrough());
+export const TodoWriteInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  todos: z.optional(z.array(z.looseObject({
+    id: z.optional(z.string()),
+    content: z.string().check(z.minLength(1)),
+    status: z.optional(z.enum(['pending', 'in_progress', 'completed'])),
+    priority: z.optional(z.string()),
+  }))),
+})));
 
-export const TodoReadInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({}).passthrough());
+export const TodoReadInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {})));
 
-export const TodoResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  todos: z.array(z.object({
-    id: z.string().optional(),
-    content: z.string().min(1),
-    status: z.enum(['pending', 'in_progress', 'completed']).optional(),
-    priority: z.string().optional(),
-  }).passthrough()).optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const TodoResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  todos: z.optional(z.array(z.looseObject({
+    id: z.optional(z.string()),
+    content: z.string().check(z.minLength(1)),
+    status: z.optional(z.enum(['pending', 'in_progress', 'completed'])),
+    priority: z.optional(z.string()),
+  }))),
+  errorMessage: z.optional(z.string()),
+})));
 
-export const TaskInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  operation: z.enum(['run', 'create', 'list', 'update', 'unknown']).optional(),
+export const TaskInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  operation: z.optional(z.enum(['run', 'create', 'list', 'update', 'unknown'])),
   // Many providers supply human-facing labels; keep these optional but typed so renderers
   // can safely access them.
-  title: z.string().optional(),
-  description: z.string().optional(),
-  status: z.string().optional(),
-  progress: z.number().optional(),
-}).passthrough());
+  title: z.optional(z.string()),
+  description: z.optional(z.string()),
+  status: z.optional(z.string()),
+  progress: z.optional(z.number()),
+})));
 
-export const TaskResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  content: z.string().optional(),
-  status: z.string().optional(),
-  progress: z.number().optional(),
-  tasks: z.array(z.unknown()).optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const TaskResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  content: z.optional(z.string()),
+  status: z.optional(z.string()),
+  progress: z.optional(z.number()),
+  tasks: z.optional(z.array(z.unknown())),
+  errorMessage: z.optional(z.string()),
+})));
 
 export const SubAgentInputV2Schema = TaskInputV2Schema;
 export const SubAgentResultV2Schema = TaskResultV2Schema;
@@ -236,222 +230,222 @@ export const SubAgentResultV2Schema = TaskResultV2Schema;
  * `TaskOutput` tool-result content to keep the transcript compact, so the result envelope stays
  * deliberately open rather than claiming a shape.
  */
-export const TaskOutputInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  task_id: z.string().optional(),
-  block: z.boolean().optional(),
-  timeout: z.number().optional(),
-}).passthrough());
+export const TaskOutputInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  task_id: z.optional(z.string()),
+  block: z.optional(z.boolean()),
+  timeout: z.optional(z.number()),
+})));
 
-export const TaskOutputResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const TaskOutputResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  errorMessage: z.optional(z.string()),
+})));
 
-export const TaskStopInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  task_id: z.string().optional(),
+export const TaskStopInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  task_id: z.optional(z.string()),
   // Deprecated by the SDK in favour of `task_id`; still accepted on the wire.
-  shell_id: z.string().optional(),
-}).passthrough());
+  shell_id: z.optional(z.string()),
+})));
 
-export const TaskStopResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  message: z.string().optional(),
-  task_id: z.string().optional(),
-  task_type: z.string().optional(),
-  command: z.string().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough());
+export const TaskStopResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  message: z.optional(z.string()),
+  task_id: z.optional(z.string()),
+  task_type: z.optional(z.string()),
+  command: z.optional(z.string()),
+  errorMessage: z.optional(z.string()),
+})));
 
 // Dynamic Workflow run. The provider-native input carries a workflow `script`; the result
 // carries the canonical tool-use/task ids used to join the transcript card to the durable
 // `activity/workflow_run.v1` snapshot. Kept permissive/passthrough — the workflow detail is
 // normalized into provider-agnostic activity records, not parsed from this envelope by UI.
-export const WorkflowInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  script: z.string().optional(),
-  name: z.string().optional(),
-  title: z.string().optional(),
-  description: z.string().optional(),
-}).passthrough());
+export const WorkflowInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  script: z.optional(z.string()),
+  name: z.optional(z.string()),
+  title: z.optional(z.string()),
+  description: z.optional(z.string()),
+})));
 
-export const WorkflowResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  task_id: z.string().optional(),
-  tool_use_id: z.string().optional(),
-  run_id: z.string().optional(),
-  status: z.string().optional(),
-  summary: z.string().optional(),
-}).passthrough());
+export const WorkflowResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  task_id: z.optional(z.string()),
+  tool_use_id: z.optional(z.string()),
+  run_id: z.optional(z.string()),
+  status: z.optional(z.string()),
+  summary: z.optional(z.string()),
+})));
 
-export const ReasoningInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  text: z.string().optional(),
-}).passthrough());
+export const ReasoningInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  text: z.optional(z.string()),
+})));
 
-export const ReasoningResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  text: z.string().optional(),
-}).passthrough());
+export const ReasoningResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  text: z.optional(z.string()),
+})));
 
-export const EnterPlanModeInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({}).passthrough());
+export const EnterPlanModeInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {})));
 
-export const ExitPlanModeInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  plan: z.string().optional(),
-}).passthrough());
+export const ExitPlanModeInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  plan: z.optional(z.string()),
+})));
 
-export const AskUserQuestionInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  questions: z.array(z.object({
+export const AskUserQuestionInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  questions: z.optional(z.array(z.looseObject({
     header: z.string(),
     question: z.string(),
     multiSelect: z.boolean(),
-    options: z.array(z.object({
+    options: z.array(z.looseObject({
       label: z.string(),
-      description: z.string().optional(),
-    }).passthrough()),
-  }).passthrough()).optional(),
-}).passthrough());
+      description: z.optional(z.string()),
+    })),
+  }))),
+})));
 
-export const AskUserQuestionResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  answers: z.union([
+export const AskUserQuestionResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  answers: z.optional(z.union([
     StructuredQuestionAnswersV1Schema,
     z.record(z.string(), z.string()),
-  ]).optional(),
-}).passthrough());
+  ])),
+})));
 
-export const SubAgentRunInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  intent: z.string().optional(),
-  backendId: z.string().optional(),
-  label: z.string().optional(),
-  policy: z.unknown().optional(),
-}).passthrough());
+export const SubAgentRunInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  intent: z.optional(z.string()),
+  backendId: z.optional(z.string()),
+  label: z.optional(z.string()),
+  policy: z.optional(z.unknown()),
+})));
 
-export const SubAgentRunResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  status: z.string().optional(),
-  summary: z.string().optional(),
-  runId: z.string().optional(),
-  callId: z.string().optional(),
-  sidechainId: z.string().optional(),
-  backendId: z.string().optional(),
-  intent: z.string().optional(),
-  startedAtMs: z.number().int().nonnegative().optional(),
-  finishedAtMs: z.number().int().nonnegative().optional(),
-  findingsDigest: z.object({
-    total: z.number().int().nonnegative(),
-    items: z.array(z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      severity: z.string().min(1),
-      category: z.string().min(1),
-      filePath: z.string().min(1).optional(),
-      startLine: z.number().int().min(1).optional(),
-      endLine: z.number().int().min(1).optional(),
-    }).passthrough()),
-  }).passthrough().optional(),
-  triage: z.object({
-    findings: z.array(z.object({
-      id: z.string().min(1),
-      status: z.string().min(1),
-      comment: z.string().min(1).optional(),
-    }).passthrough()),
-  }).passthrough().optional(),
-  limits: z.object({
-    findingsTruncated: z.boolean().optional(),
-    patchesTruncated: z.boolean().optional(),
-  }).passthrough().optional(),
-  error: z.object({
-    code: z.string().min(1),
-    message: z.string().optional(),
-  }).passthrough().optional(),
-}).passthrough());
+export const SubAgentRunResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  status: z.optional(z.string()),
+  summary: z.optional(z.string()),
+  runId: z.optional(z.string()),
+  callId: z.optional(z.string()),
+  sidechainId: z.optional(z.string()),
+  backendId: z.optional(z.string()),
+  intent: z.optional(z.string()),
+  startedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  finishedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  findingsDigest: z.optional(z.looseObject({
+    total: z.number().check(z.int(), z.nonnegative()),
+    items: z.array(z.looseObject({
+      id: z.string().check(z.minLength(1)),
+      title: z.string().check(z.minLength(1)),
+      severity: z.string().check(z.minLength(1)),
+      category: z.string().check(z.minLength(1)),
+      filePath: z.optional(z.string().check(z.minLength(1))),
+      startLine: z.optional(z.number().check(z.int(), z.minimum(1))),
+      endLine: z.optional(z.number().check(z.int(), z.minimum(1))),
+    })),
+  })),
+  triage: z.optional(z.looseObject({
+    findings: z.array(z.looseObject({
+      id: z.string().check(z.minLength(1)),
+      status: z.string().check(z.minLength(1)),
+      comment: z.optional(z.string().check(z.minLength(1))),
+    })),
+  })),
+  limits: z.optional(z.looseObject({
+    findingsTruncated: z.optional(z.boolean()),
+    patchesTruncated: z.optional(z.boolean()),
+  })),
+  error: z.optional(z.looseObject({
+    code: z.string().check(z.minLength(1)),
+    message: z.optional(z.string()),
+  })),
+})));
 
-const AgentTeamToolUseResultV2Schema = lazyZodSchema(() => z.object({
-  status: z.string().optional(),
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  lead_agent_id: z.string().optional(),
-  leadAgentId: z.string().optional(),
-  agent_id: z.string().optional(),
-  teammate_id: z.string().optional(),
-  name: z.string().optional(),
-  type: z.string().optional(),
-  content: z.string().optional(),
-}).passthrough());
+const AgentTeamToolUseResultV2Schema = lazyZodSchema(() => z.looseObject({
+  status: z.optional(z.string()),
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  lead_agent_id: z.optional(z.string()),
+  leadAgentId: z.optional(z.string()),
+  agent_id: z.optional(z.string()),
+  teammate_id: z.optional(z.string()),
+  name: z.optional(z.string()),
+  type: z.optional(z.string()),
+  content: z.optional(z.string()),
+}));
 
-export const AgentTeamCreateInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  description: z.string().optional(),
-  lead_agent_id: z.string().optional(),
-  leadAgentId: z.string().optional(),
-}).passthrough());
+export const AgentTeamCreateInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  description: z.optional(z.string()),
+  lead_agent_id: z.optional(z.string()),
+  leadAgentId: z.optional(z.string()),
+})));
 
-export const AgentTeamCreateResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  status: z.string().optional(),
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  description: z.string().optional(),
-  lead_agent_id: z.string().optional(),
-  leadAgentId: z.string().optional(),
-  tool_use_result: AgentTeamToolUseResultV2Schema.optional(),
-}).passthrough());
+export const AgentTeamCreateResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  status: z.optional(z.string()),
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  description: z.optional(z.string()),
+  lead_agent_id: z.optional(z.string()),
+  leadAgentId: z.optional(z.string()),
+  tool_use_result: z.optional(AgentTeamToolUseResultV2Schema),
+})));
 
-export const AgentTeamDeleteInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-}).passthrough());
+export const AgentTeamDeleteInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+})));
 
-export const AgentTeamDeleteResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  status: z.string().optional(),
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  tool_use_result: AgentTeamToolUseResultV2Schema.optional(),
-}).passthrough());
+export const AgentTeamDeleteResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  status: z.optional(z.string()),
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  tool_use_result: z.optional(AgentTeamToolUseResultV2Schema),
+})));
 
-export const AgentTeamSendMessageInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  type: z.string().optional(),
-  content: z.string().optional(),
-  message: z.string().optional(),
-  agent_id: z.string().optional(),
-  teammate_id: z.string().optional(),
-  name: z.string().optional(),
-}).passthrough());
+export const AgentTeamSendMessageInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  type: z.optional(z.string()),
+  content: z.optional(z.string()),
+  message: z.optional(z.string()),
+  agent_id: z.optional(z.string()),
+  teammate_id: z.optional(z.string()),
+  name: z.optional(z.string()),
+})));
 
-export const AgentTeamSendMessageResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  status: z.string().optional(),
-  team_name: z.string().optional(),
-  teamName: z.string().optional(),
-  type: z.string().optional(),
-  content: z.string().optional(),
-  tool_use_result: AgentTeamToolUseResultV2Schema.optional(),
-}).passthrough());
+export const AgentTeamSendMessageResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  status: z.optional(z.string()),
+  team_name: z.optional(z.string()),
+  teamName: z.optional(z.string()),
+  type: z.optional(z.string()),
+  content: z.optional(z.string()),
+  tool_use_result: z.optional(AgentTeamToolUseResultV2Schema),
+})));
 
-export const AcpHistoryImportInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  provider: z.string().optional(),
-  remoteSessionId: z.string().optional(),
-  localCount: z.number().int().min(0).optional(),
-  remoteCount: z.number().int().min(0).optional(),
-  note: z.string().optional(),
-  localTail: z.array(z.object({
-    role: z.string().optional(),
-    text: z.string().optional(),
-  }).passthrough()).optional(),
-  remoteTail: z.array(z.object({
-    role: z.string().optional(),
-    text: z.string().optional(),
-  }).passthrough()).optional(),
-}).passthrough());
+export const AcpHistoryImportInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  provider: z.optional(z.string()),
+  remoteSessionId: z.optional(z.string()),
+  localCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+  remoteCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+  note: z.optional(z.string()),
+  localTail: z.optional(z.array(z.looseObject({
+    role: z.optional(z.string()),
+    text: z.optional(z.string()),
+  }))),
+  remoteTail: z.optional(z.array(z.looseObject({
+    role: z.optional(z.string()),
+    text: z.optional(z.string()),
+  }))),
+})));
 
-export const WorkspaceIndexingPermissionInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  title: z.string().optional(),
-  options: z.unknown().optional(),
-  toolCall: z.unknown().optional(),
-}).passthrough());
+export const WorkspaceIndexingPermissionInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  title: z.optional(z.string()),
+  options: z.optional(z.unknown()),
+  toolCall: z.optional(z.unknown()),
+})));
 
-export const ChangeTitleInputV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  title: z.string().optional(),
-}).passthrough());
+export const ChangeTitleInputV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  title: z.optional(z.string()),
+})));
 
-export const ChangeTitleResultV2Schema = lazyZodSchema(() => BaseEnvelopeSchema.extend({
-  title: z.string().optional(),
-}).passthrough());
+export const ChangeTitleResultV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseEnvelopeSchema, {
+  title: z.optional(z.string()),
+})));
 
-const TOOL_INPUT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
+const TOOL_INPUT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodMiniType> = {
   Bash: BashInputV2Schema,
   Read: ReadInputV2Schema,
   Write: WriteInputV2Schema,
@@ -486,7 +480,7 @@ const TOOL_INPUT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   AgentTeamSendMessage: AgentTeamSendMessageInputV2Schema,
 };
 
-const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
+const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodMiniType> = {
   Bash: BashResultV2Schema,
   Read: ReadResultV2Schema,
   Write: WriteResultV2Schema,
@@ -494,7 +488,7 @@ const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   MultiEdit: EditResultV2Schema,
   Delete: DeleteResultV2Schema,
   Patch: PatchResultV2Schema,
-  Diff: BaseEnvelopeSchema.passthrough(),
+  Diff: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(BaseEnvelopeSchema)),
   Glob: SearchResultV2Schema,
   Grep: SearchResultV2Schema,
   LS: SearchResultV2Schema,
@@ -509,11 +503,11 @@ const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   TaskStop: TaskStopResultV2Schema,
   Workflow: WorkflowResultV2Schema,
   Reasoning: ReasoningResultV2Schema,
-  EnterPlanMode: BaseEnvelopeSchema.passthrough(),
-  ExitPlanMode: BaseEnvelopeSchema.passthrough(),
+  EnterPlanMode: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(BaseEnvelopeSchema)),
+  ExitPlanMode: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(BaseEnvelopeSchema)),
   AskUserQuestion: AskUserQuestionResultV2Schema,
-  AcpHistoryImport: BaseEnvelopeSchema.passthrough(),
-  WorkspaceIndexingPermission: BaseEnvelopeSchema.passthrough(),
+  AcpHistoryImport: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(BaseEnvelopeSchema)),
+  WorkspaceIndexingPermission: lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(BaseEnvelopeSchema)),
   change_title: ChangeTitleResultV2Schema,
   SubAgentRun: SubAgentRunResultV2Schema,
   AgentTeamCreate: AgentTeamCreateResultV2Schema,
@@ -521,10 +515,10 @@ const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   AgentTeamSendMessage: AgentTeamSendMessageResultV2Schema,
 };
 
-export function getToolInputSchemaV2(toolName: KnownCanonicalToolNameV2): z.ZodTypeAny {
+export function getToolInputSchemaV2(toolName: KnownCanonicalToolNameV2): z.ZodMiniType {
   return TOOL_INPUT_SCHEMAS[toolName];
 }
 
-export function getToolResultSchemaV2(toolName: KnownCanonicalToolNameV2): z.ZodTypeAny {
+export function getToolResultSchemaV2(toolName: KnownCanonicalToolNameV2): z.ZodMiniType {
   return TOOL_RESULT_SCHEMAS[toolName];
 }

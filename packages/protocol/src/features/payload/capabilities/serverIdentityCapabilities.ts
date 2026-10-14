@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SERVER_IDENTITY_ID_PATTERN = /^srv_[A-Za-z0-9._-]{1,60}$(?![\s\S])/;
 
@@ -29,10 +29,7 @@ export function areServerProfileIdentifiersEquivalent(
   return Boolean(leftScope && rightScope && leftScope === rightScope);
 }
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.preprocess(
-  normalizeServerIdentityIdCapability,
-  z.string().nullable().optional().default(null),
-));
+const ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z._default(z.optional(z.nullable(z.string())), null)));
 
 export const ServerIdentityCapabilitiesSchema = lazyZodSchema(() => z.object({
   serverIdentityId: ServerIdentityIdSchema,

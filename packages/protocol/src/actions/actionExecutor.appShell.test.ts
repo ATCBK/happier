@@ -38,7 +38,7 @@ describe('app shell Actions', () => {
     expect(spec.surfaces.mcp).toBe(true);
   });
 
-  it.each(['agent', 'mcp'] as const)('allows %s to mark an Inbox snapshot read without confirmation', async (surface) => {
+  it.each(['agent', 'mcp', 'voice'] as const)('allows %s to mark an Inbox snapshot read without confirmation', async (surface) => {
     const executor = createActionExecutor({
       appShellAction: async () => ({ results: [{ serverId: 'home-a', sessionId: 'session-a', status: 'succeeded' }] }),
     } as unknown as ActionExecutorDeps);
@@ -48,6 +48,20 @@ describe('app shell Actions', () => {
       ok: true, result: { results: [{ serverId: 'home-a', sessionId: 'session-a', status: 'succeeded' }] },
     });
   });
+
+  it.each(['session.work.get', 'inbox.get', 'inbox.mark_all_read'] as const)(
+    'retains approval admission for voice %s before the answering owner executes', async actionId => {
+      let ownerRead = false;
+      const executor = createActionExecutor({ isActionApprovalRequired: () => true,
+        appShellAction: async () => { ownerRead = true; throw new Error('Owner must not execute before approval'); },
+      } as unknown as ActionExecutorDeps);
+      const input = actionId === 'session.work.get' ? { sessionId: 'lead' }
+        : actionId === 'inbox.mark_all_read' ? { targets: [] } : {};
+      expect(await executor.execute(actionId, input, { surface: 'voice', authority: 'account_automation' }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(ownerRead).toBe(false);
+    },
+  );
 
   it('retains exact Home addresses and partial acknowledgement outcomes', async () => {
     const calls: unknown[] = [];

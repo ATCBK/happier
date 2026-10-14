@@ -41,11 +41,11 @@ describe('writeUiSessionStateField', () => {
             { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
         expect(await executor.execute('session.bot.set', { sessionId: 's1', bot: null }, { surface: 'cli' })).toMatchObject({ ok: true });
         expect(metadata).not.toHaveProperty('bot');
-        expect(metadata.work?.viewPreferences?.showToolCalls).toBe(false);
+        expect(metadata.work).toMatchObject({ viewPreferences: { showToolCalls: false } });
         expect(await executor.execute('session.view.toolCalls.set', { sessionId: 's1', showToolCalls: null },
             { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
-        expect(metadata.work?.viewPreferences?.showToolCalls).toBeUndefined();
-        expect(metadata.work?.sessionRolesV1?.notes).toBe('Keep');
+        expect(metadata.work).not.toHaveProperty('viewPreferences.showToolCalls');
+        expect(metadata.work).toMatchObject({ sessionRolesV1: { notes: 'Keep' } });
         expect(metadata.summary?.text).toBe('Renamed');
     });
     it('refuses a Bot inverse when refreshed metadata no longer contains the accepted marker', async () => {
@@ -70,8 +70,9 @@ describe('writeUiSessionStateField', () => {
         for (const value of [false, true, null] as const) {
             expect(await writeUiSessionStateField({ sessionId: 's1', fieldId: 'view.transcriptToolCalls', value,
                 metadataReason: 'ui-tool-visibility', updateSessionMetadataWithRetry })).toEqual({ ok: true, version: 9 });
-            expect(metadata.work?.viewPreferences?.showToolCalls).toBe(value ?? undefined);
-            expect(metadata.work?.sessionRolesV1?.notes).toBe('Keep');
+            if (value === null) expect(metadata.work).not.toHaveProperty('viewPreferences.showToolCalls');
+            else expect(metadata.work).toMatchObject({ viewPreferences: { showToolCalls: value } });
+            expect(metadata.work).toMatchObject({ sessionRolesV1: { notes: 'Keep' } });
             expect(metadata.summary).toEqual({ text: 'Name', updatedAt: 12 });
         }
     });

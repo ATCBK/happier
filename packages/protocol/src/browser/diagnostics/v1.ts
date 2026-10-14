@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { isRecord } from '../../common/records.js';
 import {
@@ -10,10 +10,10 @@ import {
 import { isSafeTelemetryHeaderName } from './egress/headers.js';
 import { rejectUnsafeBrowserEgressKeys } from './egress/keyRejection.js';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const EvalInlineStringValueSchema = lazyZodSchema(() => z.string().max(1024));
-const ExpandedPropertyStringValueSchema = lazyZodSchema(() => z.string().max(65_536));
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const EvalInlineStringValueSchema = lazyZodSchema(() => z.string().check(z.maxLength(1024)));
+const ExpandedPropertyStringValueSchema = lazyZodSchema(() => z.string().check(z.maxLength(65_536)));
 
 export const BrowserDiagnosticFamilyV1Schema = lazyZodSchema(() => z.enum([
   'console',
@@ -47,23 +47,19 @@ export const BrowserDiagnosticRedactionLevelV1Schema = lazyZodSchema(() => z.enu
 ]));
 export type BrowserDiagnosticRedactionLevelV1 = z.infer<typeof BrowserDiagnosticRedactionLevelV1Schema>;
 
-export const BrowserDiagnosticRedactionV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticRedactionV1Schema = lazyZodSchema(() => z.strictObject({
     level: BrowserDiagnosticRedactionLevelV1Schema,
-    queryRedacted: z.boolean().optional().default(true),
-    headersRedacted: z.boolean().optional().default(true),
-    truncated: z.boolean().optional().default(false),
-  })
-  .strict());
+    queryRedacted: z._default(z.optional(z.boolean()), true),
+    headersRedacted: z._default(z.optional(z.boolean()), true),
+    truncated: z._default(z.optional(z.boolean()), false),
+  }));
 export type BrowserDiagnosticRedactionV1 = z.infer<typeof BrowserDiagnosticRedactionV1Schema>;
 
-export const BrowserDiagnosticCollectorV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticCollectorV1Schema = lazyZodSchema(() => z.strictObject({
     collectorId: IdSchema,
-    nonce: z.string().trim().min(1).max(512),
-    version: z.string().trim().min(1).max(64),
-  })
-  .strict());
+    nonce: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    version: z.string().check(z.trim(), z.minLength(1), z.maxLength(64)),
+  }));
 export type BrowserDiagnosticCollectorV1 = z.infer<typeof BrowserDiagnosticCollectorV1Schema>;
 
 export const BrowserDiagnosticUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
@@ -117,17 +113,17 @@ export const BrowserDiagnosticEventKindV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type BrowserDiagnosticEventKindV1 = z.infer<typeof BrowserDiagnosticEventKindV1Schema>;
 
-const DiagnosticDataSchema = lazyZodSchema(() => z.record(z.string(), z.unknown()).superRefine((data, context) =>
+const DiagnosticDataSchema = lazyZodSchema(() => z.record(z.string(), z.unknown()).check(z.superRefine((data, context) =>
   rejectUnsafeBrowserEgressKeys(data, context, {
     message: 'Browser diagnostics data must not contain bodies, payloads, cookies, tokens, or storage values.',
-  })));
+  }))));
 
 function addInjectedDiagnosticDataIssue(
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   path: readonly (string | number)[],
 ): void {
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['data', ...path],
     message: 'Injected browser diagnostics may only contain allowlisted redacted metadata fields.',
   });
@@ -136,7 +132,7 @@ function addInjectedDiagnosticDataIssue(
 function rejectUnknownInjectedDiagnosticKeys(
   data: Readonly<Record<string, unknown>>,
   allowedKeys: ReadonlySet<string>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   for (const key of Object.keys(data)) {
     if (allowedKeys.has(key)) continue;
@@ -144,7 +140,7 @@ function rejectUnknownInjectedDiagnosticKeys(
   }
 }
 
-function refineInjectedResourceEntries(value: unknown, context: z.RefinementCtx): void {
+function refineInjectedResourceEntries(value: unknown, context: z.core.$RefinementCtx): void {
   if (!Array.isArray(value)) {
     addInjectedDiagnosticDataIssue(context, ['entries']);
     return;
@@ -191,7 +187,7 @@ function omitInjectedDataKeys(
 
 function refineInjectedStorageKeyInventory(
   data: Readonly<Record<string, unknown>>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (data.storageType !== 'localStorage' && data.storageType !== 'sessionStorage') {
     addInjectedDiagnosticDataIssue(context, ['storageType']);
@@ -237,7 +233,7 @@ function refineInjectedStorageKeyInventory(
 
 function refineInjectedHeaderBag(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   path: readonly (string | number)[],
 ): void {
   if (!isRecord(value)) {
@@ -258,7 +254,7 @@ function refineInjectedHeaderBag(
 function refineInjectedNetworkResponse(
   data: Readonly<Record<string, unknown>>,
   allowed: ReadonlySet<string>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   rejectUnknownInjectedDiagnosticKeys(data, allowed, context);
   for (const key of ['requestId', 'method', 'url'] as const) {
@@ -292,7 +288,7 @@ function refineInjectedNetworkResponse(
 function refineInjectedNumericMetadata(
   data: Readonly<Record<string, unknown>>,
   allowedKeys: ReadonlySet<string>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   for (const [key, value] of Object.entries(data)) {
     if (!allowedKeys.has(key)) {
@@ -308,7 +304,7 @@ function refineInjectedNumericMetadata(
 function refineInjectedBooleanMetadata(
   data: Readonly<Record<string, unknown>>,
   allowedKeys: ReadonlySet<string>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   for (const [key, value] of Object.entries(data)) {
     if (!allowedKeys.has(key)) {
@@ -327,7 +323,7 @@ function refineInjectedDiagnosticData(
     kind: BrowserDiagnosticEventKindV1;
     data: Record<string, unknown>;
   },
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (event.fidelity !== 'injectedPage') return;
 
@@ -384,8 +380,7 @@ function refineInjectedDiagnosticData(
   }
 }
 
-export const BrowserDiagnosticEventV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticEventV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     eventId: IdSchema,
     browserSessionId: IdSchema,
@@ -396,61 +391,56 @@ export const BrowserDiagnosticEventV1Schema = lazyZodSchema(() => z
     kind: BrowserDiagnosticEventKindV1Schema,
     fidelity: BrowserDiagnosticFidelityV1Schema,
     trusted: z.boolean(),
-    collector: BrowserDiagnosticCollectorV1Schema.optional(),
-    data: DiagnosticDataSchema.optional().default({}),
+    collector: z.optional(BrowserDiagnosticCollectorV1Schema),
+    data: z._default(z.optional(DiagnosticDataSchema), {}),
     redaction: BrowserDiagnosticRedactionV1Schema,
-    unavailableReason: BrowserDiagnosticUnavailableReasonV1Schema.optional(),
-  })
-  .strict()
-  .superRefine((event, context) => {
+    unavailableReason: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
+  }).check(z.superRefine((event, context) => {
     if (event.fidelity === 'injectedPage' && event.trusted) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['trusted'],
         message: 'Injected browser diagnostics are page-tamperable and must be marked untrusted.',
       });
     }
     if (event.fidelity === 'injectedPage' && !event.collector) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['collector'],
         message: 'Injected browser diagnostics require collector id, nonce, and version metadata.',
       });
     }
     refineInjectedDiagnosticData(event, context);
-  }));
+  })));
 export type BrowserDiagnosticEventV1 = z.infer<typeof BrowserDiagnosticEventV1Schema>;
 
-export const BrowserDiagnosticEventBatchV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticEventBatchV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.events'),
     browserSessionId: IdSchema,
     viewId: IdSchema,
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
-    events: z.array(BrowserDiagnosticEventV1Schema).max(200),
-  })
-  .strict()
-  .superRefine((batch, context) => {
+    events: z.array(BrowserDiagnosticEventV1Schema).check(z.maxLength(200)),
+  }).check(z.superRefine((batch, context) => {
     batch.events.forEach((event, index) => {
       if (event.browserSessionId !== batch.browserSessionId) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'browserSessionId'],
           message: 'Diagnostic batch event browserSessionId must match batch browserSessionId.',
         });
       }
       if (event.viewId !== batch.viewId) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'viewId'],
           message: 'Diagnostic batch event viewId must match batch viewId.',
         });
       }
       if (event.navigationGeneration !== batch.navigationGeneration) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'navigationGeneration'],
           message: 'Diagnostic batch event navigationGeneration must match batch navigationGeneration.',
         });
@@ -458,111 +448,97 @@ export const BrowserDiagnosticEventBatchV1Schema = lazyZodSchema(() => z
       if (event.fidelity !== 'injectedPage') return;
       if (event.collector?.collectorId !== batch.collector.collectorId) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'collector', 'collectorId'],
           message: 'Injected diagnostic event collectorId must match batch collectorId.',
         });
       }
       if (event.collector?.nonce !== batch.collector.nonce) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'collector', 'nonce'],
           message: 'Injected diagnostic event nonce must match batch nonce.',
         });
       }
       if (event.collector?.version !== batch.collector.version) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['events', index, 'collector', 'version'],
           message: 'Injected diagnostic event version must match batch version.',
         });
       }
     });
-  }));
+  })));
 export type BrowserDiagnosticEventBatchV1 = z.infer<typeof BrowserDiagnosticEventBatchV1Schema>;
 
-export const BrowserDiagnosticsSnapshotV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     machineId: IdSchema,
     generatedAt: NonNegativeIntSchema,
     refreshState: z.enum(['idle', 'refreshing', 'error']),
-    events: z.array(BrowserDiagnosticEventV1Schema).max(5_000),
-    diagnostics: z.array(z.record(z.string(), z.unknown())).default([]),
-  })
-  .strict());
+    events: z.array(BrowserDiagnosticEventV1Schema).check(z.maxLength(5_000)),
+    diagnostics: z._default(z.array(z.record(z.string(), z.unknown())), []),
+  }));
 export type BrowserDiagnosticsSnapshotV1 = z.infer<typeof BrowserDiagnosticsSnapshotV1Schema>;
 
-export const DaemonBrowserDiagnosticsSnapshotRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonBrowserDiagnosticsSnapshotRequestV1Schema = lazyZodSchema(() => z.strictObject({
     machineId: IdSchema,
-  })
-  .strict());
+  }));
 export type DaemonBrowserDiagnosticsSnapshotRequestV1 = z.infer<
   typeof DaemonBrowserDiagnosticsSnapshotRequestV1Schema
 >;
 
-export const DaemonBrowserDiagnosticsSnapshotResponseV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonBrowserDiagnosticsSnapshotResponseV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     snapshot: BrowserDiagnosticsSnapshotV1Schema,
-  })
-  .strict());
+  }));
 export type DaemonBrowserDiagnosticsSnapshotResponseV1 = z.infer<
   typeof DaemonBrowserDiagnosticsSnapshotResponseV1Schema
 >;
 
-export const BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema = lazyZodSchema(() => z
-  .object({
-    name: z.string().trim().min(1).max(256),
-    valuePreview: z.string().max(1024),
-    truncated: z.boolean().optional().default(false),
-  })
-  .strict());
+export const BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema = lazyZodSchema(() => z.strictObject({
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    valuePreview: z.string().check(z.maxLength(1024)),
+    truncated: z._default(z.optional(z.boolean()), false),
+  }));
 export type BrowserDiagnosticsRemoteObjectPreviewPropertyV1 = z.infer<
   typeof BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema
 >;
 
-export const BrowserDiagnosticsRemoteObjectV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsRemoteObjectV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.enum(['undefined', 'null', 'boolean', 'number', 'string', 'symbol', 'bigint', 'object', 'function']),
-    value: z.union([EvalInlineStringValueSchema, z.number(), z.boolean(), z.null()]).optional(),
-    objectId: IdSchema.optional(),
-    className: z.string().trim().min(1).max(256).optional(),
-    description: z.string().max(1024).optional(),
-    preview: z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).max(10).optional().default([]),
-  })
-  .strict()
-  .superRefine((value, context) => {
+    value: z.optional(z.union([EvalInlineStringValueSchema, z.number(), z.boolean(), z.null()])),
+    objectId: z.optional(IdSchema),
+    className: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    description: z.optional(z.string().check(z.maxLength(1024))),
+    preview: z._default(z.optional(z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).check(z.maxLength(10))), []),
+  }).check(z.superRefine((value, context) => {
     if ((value.type === 'object' || value.type === 'function') && !value.objectId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['objectId'],
         message: 'Object and function eval results must use remote-object references.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsRemoteObjectV1 = z.infer<typeof BrowserDiagnosticsRemoteObjectV1Schema>;
 
-export const BrowserDiagnosticsExpandedRemoteObjectV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsExpandedRemoteObjectV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.enum(['undefined', 'null', 'boolean', 'number', 'string', 'symbol', 'bigint', 'object', 'function']),
-    value: z.union([ExpandedPropertyStringValueSchema, z.number(), z.boolean(), z.null()]).optional(),
-    objectId: IdSchema.optional(),
-    className: z.string().trim().min(1).max(256).optional(),
-    description: z.string().max(1024).optional(),
-    preview: z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).max(10).optional().default([]),
-  })
-  .strict()
-  .superRefine((value, context) => {
+    value: z.optional(z.union([ExpandedPropertyStringValueSchema, z.number(), z.boolean(), z.null()])),
+    objectId: z.optional(IdSchema),
+    className: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    description: z.optional(z.string().check(z.maxLength(1024))),
+    preview: z._default(z.optional(z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).check(z.maxLength(10))), []),
+  }).check(z.superRefine((value, context) => {
     if ((value.type === 'object' || value.type === 'function') && !value.objectId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['objectId'],
         message: 'Object and function expanded property values must use remote-object references.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsExpandedRemoteObjectV1 = z.infer<
   typeof BrowserDiagnosticsExpandedRemoteObjectV1Schema
 >;
@@ -570,23 +546,20 @@ export type BrowserDiagnosticsExpandedRemoteObjectV1 = z.infer<
 export const BrowserDiagnosticsEvalTierV1Schema = lazyZodSchema(() => z.enum(['cdp', 'injectedPage']));
 export type BrowserDiagnosticsEvalTierV1 = z.infer<typeof BrowserDiagnosticsEvalTierV1Schema>;
 
-export const BrowserDiagnosticsEvalRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsEvalRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     evalRequestId: IdSchema,
     viewId: IdSchema,
     navigationGeneration: NonNegativeIntSchema,
     tier: BrowserDiagnosticsEvalTierV1Schema,
-    expression: z.string().trim().min(1).max(4096),
-    timeoutMs: z.number().int().positive().max(10_000).optional().default(2000),
+    expression: z.string().check(z.trim(), z.minLength(1), z.maxLength(4096)),
+    timeoutMs: z._default(z.optional(z.number().check(z.int(), z.positive(), z.maximum(10_000))), 2000),
     objectGroupId: IdSchema,
     diagnosticsInteractionEnabled: z.literal(true),
-  })
-  .strict());
+  }));
 export type BrowserDiagnosticsEvalRequestV1 = z.infer<typeof BrowserDiagnosticsEvalRequestV1Schema>;
 
-export const BrowserDiagnosticsEvalResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsEvalResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     evalRequestId: IdSchema,
     viewId: IdSchema,
@@ -594,14 +567,12 @@ export const BrowserDiagnosticsEvalResultV1Schema = lazyZodSchema(() => z
     status: z.enum(['completed', 'failed', 'timedOut', 'blocked', 'collectorDegraded']),
     tier: BrowserDiagnosticsEvalTierV1Schema,
     audited: z.literal(true),
-    result: BrowserDiagnosticsRemoteObjectV1Schema.optional(),
-    errorCode: BrowserDiagnosticUnavailableReasonV1Schema.optional(),
-  })
-  .strict());
+    result: z.optional(BrowserDiagnosticsRemoteObjectV1Schema),
+    errorCode: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
+  }));
 export type BrowserDiagnosticsEvalResultV1 = z.infer<typeof BrowserDiagnosticsEvalResultV1Schema>;
 
-export const BrowserDiagnosticsEvalCommandMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsEvalCommandMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.evalRequest'),
     browserSessionId: IdSchema,
@@ -609,37 +580,34 @@ export const BrowserDiagnosticsEvalCommandMessageV1Schema = lazyZodSchema(() => 
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     request: BrowserDiagnosticsEvalRequestV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.request.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'viewId'],
         message: 'Eval request viewId must match message viewId.',
       });
     }
     if (message.request.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'navigationGeneration'],
         message: 'Eval request navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.request.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'tier'],
         message: 'Injected eval command messages may only target the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsEvalCommandMessageV1 = z.infer<
   typeof BrowserDiagnosticsEvalCommandMessageV1Schema
 >;
 
-export const BrowserDiagnosticsEvalResultMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsEvalResultMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.evalResult'),
     browserSessionId: IdSchema,
@@ -647,37 +615,34 @@ export const BrowserDiagnosticsEvalResultMessageV1Schema = lazyZodSchema(() => z
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     result: BrowserDiagnosticsEvalResultV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.result.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'viewId'],
         message: 'Eval result viewId must match message viewId.',
       });
     }
     if (message.result.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'navigationGeneration'],
         message: 'Eval result navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.result.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'tier'],
         message: 'Injected eval result messages may only publish the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsEvalResultMessageV1 = z.infer<
   typeof BrowserDiagnosticsEvalResultMessageV1Schema
 >;
 
-export const BrowserDiagnosticsGetPropertiesRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsGetPropertiesRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     propertyRequestId: IdSchema,
     viewId: IdSchema,
@@ -686,25 +651,21 @@ export const BrowserDiagnosticsGetPropertiesRequestV1Schema = lazyZodSchema(() =
     objectId: IdSchema,
     objectGroupId: IdSchema,
     diagnosticsInteractionEnabled: z.literal(true),
-  })
-  .strict());
+  }));
 export type BrowserDiagnosticsGetPropertiesRequestV1 = z.infer<
   typeof BrowserDiagnosticsGetPropertiesRequestV1Schema
 >;
 
-export const BrowserDiagnosticsObjectPropertyV1Schema = lazyZodSchema(() => z
-  .object({
-    name: z.string().trim().min(1).max(256),
+export const BrowserDiagnosticsObjectPropertyV1Schema = lazyZodSchema(() => z.strictObject({
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     value: BrowserDiagnosticsExpandedRemoteObjectV1Schema,
-    enumerable: z.boolean().optional().default(false),
-  })
-  .strict());
+    enumerable: z._default(z.optional(z.boolean()), false),
+  }));
 export type BrowserDiagnosticsObjectPropertyV1 = z.infer<
   typeof BrowserDiagnosticsObjectPropertyV1Schema
 >;
 
-export const BrowserDiagnosticsGetPropertiesResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsGetPropertiesResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     propertyRequestId: IdSchema,
     viewId: IdSchema,
@@ -713,16 +674,14 @@ export const BrowserDiagnosticsGetPropertiesResultV1Schema = lazyZodSchema(() =>
     status: z.enum(['completed', 'failed', 'blocked', 'collectorDegraded']),
     audited: z.literal(true),
     objectId: IdSchema,
-    properties: z.array(BrowserDiagnosticsObjectPropertyV1Schema).max(100).optional().default([]),
-    errorCode: BrowserDiagnosticUnavailableReasonV1Schema.optional(),
-  })
-  .strict());
+    properties: z._default(z.optional(z.array(BrowserDiagnosticsObjectPropertyV1Schema).check(z.maxLength(100))), []),
+    errorCode: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
+  }));
 export type BrowserDiagnosticsGetPropertiesResultV1 = z.infer<
   typeof BrowserDiagnosticsGetPropertiesResultV1Schema
 >;
 
-export const BrowserDiagnosticsGetPropertiesCommandMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsGetPropertiesCommandMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.getPropertiesRequest'),
     browserSessionId: IdSchema,
@@ -730,37 +689,34 @@ export const BrowserDiagnosticsGetPropertiesCommandMessageV1Schema = lazyZodSche
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     request: BrowserDiagnosticsGetPropertiesRequestV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.request.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'viewId'],
         message: 'Get-properties request viewId must match message viewId.',
       });
     }
     if (message.request.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'navigationGeneration'],
         message: 'Get-properties request navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.request.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'tier'],
         message: 'Injected get-properties command messages may only target the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsGetPropertiesCommandMessageV1 = z.infer<
   typeof BrowserDiagnosticsGetPropertiesCommandMessageV1Schema
 >;
 
-export const BrowserDiagnosticsGetPropertiesResultMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsGetPropertiesResultMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.getPropertiesResult'),
     browserSessionId: IdSchema,
@@ -768,37 +724,34 @@ export const BrowserDiagnosticsGetPropertiesResultMessageV1Schema = lazyZodSchem
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     result: BrowserDiagnosticsGetPropertiesResultV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.result.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'viewId'],
         message: 'Get-properties result viewId must match message viewId.',
       });
     }
     if (message.result.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'navigationGeneration'],
         message: 'Get-properties result navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.result.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'tier'],
         message: 'Injected get-properties result messages may only publish the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsGetPropertiesResultMessageV1 = z.infer<
   typeof BrowserDiagnosticsGetPropertiesResultMessageV1Schema
 >;
 
-export const BrowserDiagnosticsReleaseObjectGroupRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsReleaseObjectGroupRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     releaseRequestId: IdSchema,
     viewId: IdSchema,
@@ -806,14 +759,12 @@ export const BrowserDiagnosticsReleaseObjectGroupRequestV1Schema = lazyZodSchema
     tier: BrowserDiagnosticsEvalTierV1Schema,
     objectGroupId: IdSchema,
     diagnosticsInteractionEnabled: z.literal(true),
-  })
-  .strict());
+  }));
 export type BrowserDiagnosticsReleaseObjectGroupRequestV1 = z.infer<
   typeof BrowserDiagnosticsReleaseObjectGroupRequestV1Schema
 >;
 
-export const BrowserDiagnosticsReleaseObjectGroupResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsReleaseObjectGroupResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     releaseRequestId: IdSchema,
     viewId: IdSchema,
@@ -822,15 +773,13 @@ export const BrowserDiagnosticsReleaseObjectGroupResultV1Schema = lazyZodSchema(
     status: z.enum(['completed', 'failed', 'blocked', 'collectorDegraded']),
     audited: z.literal(true),
     objectGroupId: IdSchema,
-    errorCode: BrowserDiagnosticUnavailableReasonV1Schema.optional(),
-  })
-  .strict());
+    errorCode: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
+  }));
 export type BrowserDiagnosticsReleaseObjectGroupResultV1 = z.infer<
   typeof BrowserDiagnosticsReleaseObjectGroupResultV1Schema
 >;
 
-export const BrowserDiagnosticsReleaseObjectGroupCommandMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsReleaseObjectGroupCommandMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.releaseObjectGroupRequest'),
     browserSessionId: IdSchema,
@@ -838,37 +787,34 @@ export const BrowserDiagnosticsReleaseObjectGroupCommandMessageV1Schema = lazyZo
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     request: BrowserDiagnosticsReleaseObjectGroupRequestV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.request.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'viewId'],
         message: 'Release-object-group request viewId must match message viewId.',
       });
     }
     if (message.request.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'navigationGeneration'],
         message: 'Release-object-group request navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.request.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'tier'],
         message: 'Injected release-object-group command messages may only target the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsReleaseObjectGroupCommandMessageV1 = z.infer<
   typeof BrowserDiagnosticsReleaseObjectGroupCommandMessageV1Schema
 >;
 
-export const BrowserDiagnosticsReleaseObjectGroupResultMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsReleaseObjectGroupResultMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.releaseObjectGroupResult'),
     browserSessionId: IdSchema,
@@ -876,31 +822,29 @@ export const BrowserDiagnosticsReleaseObjectGroupResultMessageV1Schema = lazyZod
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     result: BrowserDiagnosticsReleaseObjectGroupResultV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.result.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'viewId'],
         message: 'Release-object-group result viewId must match message viewId.',
       });
     }
     if (message.result.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'navigationGeneration'],
         message: 'Release-object-group result navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.result.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'tier'],
         message: 'Injected release-object-group result messages may only publish the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsReleaseObjectGroupResultMessageV1 = z.infer<
   typeof BrowserDiagnosticsReleaseObjectGroupResultMessageV1Schema
 >;
@@ -910,20 +854,17 @@ export type BrowserDiagnosticsElementPickerActionV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerActionV1Schema
 >;
 
-export const BrowserDiagnosticsElementPickerRectV1Schema = lazyZodSchema(() => z
-  .object({
-    x: z.number().finite(),
-    y: z.number().finite(),
-    width: z.number().finite().nonnegative(),
-    height: z.number().finite().nonnegative(),
-  })
-  .strict());
+export const BrowserDiagnosticsElementPickerRectV1Schema = lazyZodSchema(() => z.strictObject({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().check(z.nonnegative()),
+    height: z.number().check(z.nonnegative()),
+  }));
 export type BrowserDiagnosticsElementPickerRectV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerRectV1Schema
 >;
 
-export const BrowserDiagnosticsElementPickerRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsElementPickerRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     pickerRequestId: IdSchema,
     viewId: IdSchema,
@@ -931,25 +872,21 @@ export const BrowserDiagnosticsElementPickerRequestV1Schema = lazyZodSchema(() =
     tier: BrowserDiagnosticsEvalTierV1Schema,
     action: BrowserDiagnosticsElementPickerActionV1Schema,
     diagnosticsInteractionEnabled: z.literal(true),
-  })
-  .strict());
+  }));
 export type BrowserDiagnosticsElementPickerRequestV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerRequestV1Schema
 >;
 
-export const BrowserDiagnosticsElementSourceLocationV1Schema = lazyZodSchema(() => z
-  .object({
-    file: z.string().trim().min(1).max(1024),
-    line: z.number().int().positive().optional(),
-    column: z.number().int().positive().optional(),
-  })
-  .strict());
+export const BrowserDiagnosticsElementSourceLocationV1Schema = lazyZodSchema(() => z.strictObject({
+    file: z.string().check(z.trim(), z.minLength(1), z.maxLength(1024)),
+    line: z.optional(z.number().check(z.int(), z.positive())),
+    column: z.optional(z.number().check(z.int(), z.positive())),
+  }));
 export type BrowserDiagnosticsElementSourceLocationV1 = z.infer<
   typeof BrowserDiagnosticsElementSourceLocationV1Schema
 >;
 
-export const BrowserDiagnosticsElementPickerResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsElementPickerResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     pickerRequestId: IdSchema,
     viewId: IdSchema,
@@ -957,26 +894,24 @@ export const BrowserDiagnosticsElementPickerResultV1Schema = lazyZodSchema(() =>
     tier: BrowserDiagnosticsEvalTierV1Schema,
     status: z.enum(['selected', 'cancelled', 'blocked', 'failed', 'collectorDegraded']),
     audited: z.literal(true),
-    backendNodeRef: IdSchema.optional(),
-    selectorPath: z.string().trim().min(1).max(2048).optional(),
-    rect: BrowserDiagnosticsElementPickerRectV1Schema.optional(),
-    accessibleName: z.string().max(512).optional(),
+    backendNodeRef: z.optional(IdSchema),
+    selectorPath: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2048))),
+    rect: z.optional(BrowserDiagnosticsElementPickerRectV1Schema),
+    accessibleName: z.optional(z.string().check(z.maxLength(512))),
     /**
      * UB-7. The component that rendered the picked node and the source file it came from, read
      * from the framework metadata the page already exposes (React fiber). Absent whenever the page
      * is not a dev-build React tree — a picked element is still fully usable without them.
      */
-    componentName: z.string().trim().min(1).max(128).optional(),
-    sourceLocation: BrowserDiagnosticsElementSourceLocationV1Schema.optional(),
-    errorCode: BrowserDiagnosticUnavailableReasonV1Schema.optional(),
-  })
-  .strict());
+    componentName: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+    sourceLocation: z.optional(BrowserDiagnosticsElementSourceLocationV1Schema),
+    errorCode: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
+  }));
 export type BrowserDiagnosticsElementPickerResultV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerResultV1Schema
 >;
 
-export const BrowserDiagnosticsElementPickerCommandMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsElementPickerCommandMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.elementPickerRequest'),
     browserSessionId: IdSchema,
@@ -984,37 +919,34 @@ export const BrowserDiagnosticsElementPickerCommandMessageV1Schema = lazyZodSche
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     request: BrowserDiagnosticsElementPickerRequestV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.request.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'viewId'],
         message: 'Element-picker request viewId must match message viewId.',
       });
     }
     if (message.request.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'navigationGeneration'],
         message: 'Element-picker request navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.request.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['request', 'tier'],
         message: 'Injected element-picker command messages may only target the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsElementPickerCommandMessageV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerCommandMessageV1Schema
 >;
 
-export const BrowserDiagnosticsElementPickerResultMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserDiagnosticsElementPickerResultMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.diagnostics.elementPickerResult'),
     browserSessionId: IdSchema,
@@ -1022,31 +954,29 @@ export const BrowserDiagnosticsElementPickerResultMessageV1Schema = lazyZodSchem
     navigationGeneration: NonNegativeIntSchema,
     collector: BrowserDiagnosticCollectorV1Schema,
     result: BrowserDiagnosticsElementPickerResultV1Schema,
-  })
-  .strict()
-  .superRefine((message, context) => {
+  }).check(z.superRefine((message, context) => {
     if (message.result.viewId !== message.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'viewId'],
         message: 'Element-picker result viewId must match message viewId.',
       });
     }
     if (message.result.navigationGeneration !== message.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'navigationGeneration'],
         message: 'Element-picker result navigationGeneration must match message navigationGeneration.',
       });
     }
     if (message.result.tier !== 'injectedPage') {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['result', 'tier'],
         message: 'Injected element-picker result messages may only publish the injectedPage tier.',
       });
     }
-  }));
+  })));
 export type BrowserDiagnosticsElementPickerResultMessageV1 = z.infer<
   typeof BrowserDiagnosticsElementPickerResultMessageV1Schema
 >;

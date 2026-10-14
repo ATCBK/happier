@@ -51,7 +51,12 @@ export function useSaveLaunchProfile(options?: ProfileActionExecutionOptions): (
         }
         try {
             if (!resolution.created && profile.profileRecordRevision === undefined && !profile.artifactId) throw new Error('profile_editor_revision_unavailable');
+            // Seeds travel only when this save changed them: an unrelated edit never re-checks them against the library.
+            const seeds = resolution.profile.skillSeeds ?? [];
+            const persistedSeeds = resolution.created ? [] : currentProfile?.skillSeeds ?? [];
+            const seedsChanged = seeds.length !== persistedSeeds.length || seeds.some((id, index) => id !== persistedSeeds[index]);
             const result = await applyProfileSave({ profile: resolution.profile, secretBindings, legacyCloneSource,
+                ...(seedsChanged ? { skillSeeds: seeds } : {}),
                 expectedRevision: resolution.created || profile.profileRecordRevision === undefined ? 'absent' : profile.profileRecordRevision,
                 builtinNames: readBuiltInProfileNames() });
             if (result.status !== 'updated') {

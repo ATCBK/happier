@@ -330,6 +330,7 @@ export function createTrashStore(deps: TrashStoreDeps) {
         },
         reconcile(input: Readonly<{ canRunOwnerOperation?: () => boolean | Promise<boolean>; beforeEffect?: () => Promise<void> }> = {}) {
             return serialize(async () => {
+                let changed = false;
                 for (const record of await records()) {
                     const recoveryAdapter = record.manifest.phase !== 'moved' && record.manifest.ownerData !== undefined && deps.resolveOwnerAdapter
                         ? await deps.resolveOwnerAdapter(record.manifest.entry.categoryId, record.manifest.ownerData) : undefined;
@@ -373,7 +374,7 @@ export function createTrashStore(deps: TrashStoreDeps) {
                             await receipt(record, 'trash_emptied', record.manifest.entry.size.freesBytes, input.beforeEffect);
                         }
                         else if (record.manifest.phase === 'moved') throw new Error('Trash payload unexpectedly missing');
-                        await cleanup(record, input.beforeEffect); continue;
+                        await cleanup(record, input.beforeEffect); changed = true; continue;
                     }
                     await assertStoragePathIdentity(record.payloadPath, record.manifest.identity);
                     if (record.manifest.phase === 'prepared') {
@@ -390,11 +391,13 @@ export function createTrashStore(deps: TrashStoreDeps) {
                             await adapter.retire({ payloadPath: record.payloadPath, beforeEffect });
                             await beforeEffect();
                         }
-                        await measure(record); await input.beforeEffect?.(); record.manifest.phase = 'moved'; await save(record);
+                        await measure(record); await input.beforeEffect?.(); record.manifest.phase = 'moved'; await save(record); changed = true;
                     }
+                    const hadMovedReceipt = record.manifest.movedReceiptRecorded;
                     await receipt(record, 'trash_moved', 0, input.beforeEffect);
+                    if (!hadMovedReceipt && record.manifest.movedReceiptRecorded) changed = true;
                 }
-                notify();
+                if (changed) notify();
             });
         },
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },

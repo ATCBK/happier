@@ -33,6 +33,8 @@ import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema } f
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { publishSessionControlsMetadataBestEffort } from '@/agent/runtime/controls/publishSessionControlsMetadataBestEffort';
+import type { Metadata } from '@/api/types';
 
 const mocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -347,11 +349,18 @@ describe('workflow actual Session reuse metadata', () => {
   });
 
   it.each(['claude', 'another-agent'])('reads retained config catalog fields only for the current Agent (%s)', async agentId => {
+    let written: Metadata = { path: '/owner/checkout', host: 'test', machineId: 'machine-1',
+      runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } };
+    await publishSessionControlsMetadataBestEffort({
+      session: { updateMetadata: updater => { written = updater(written); } },
+      sessionConfigOptionsState: { v: 1, agentId, updatedAt: 200,
+        configOptions: [{ id: 'quality', name: 'Quality', type: 'string', currentValue: 'high' }] },
+    });
+    const catalog = written.sessionConfigOptionsV1!;
     mocks.fetchSessionById.mockResolvedValue({ ...session, metadataLayoutVersion: 0,
-      metadata: JSON.stringify({ path: '/owner/checkout', machineId: 'machine-1',
-        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
-        sessionConfigOptionsV1: { v: 1, agentId, updatedAt: 200, retiredCatalogField: true,
-          configOptions: [{ id: 'quality', name: 'Quality', type: 'string', currentValue: 'high', retiredOptionField: true }] },
+      metadata: JSON.stringify({ ...written,
+        sessionConfigOptionsV1: { ...catalog, retiredCatalogField: true,
+          configOptions: catalog.configOptions.map(option => ({ ...option, retiredOptionField: true })) },
       }), ownerMetadata: undefined });
     const resolved = await resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' });
     expect(resolved).not.toBeNull();

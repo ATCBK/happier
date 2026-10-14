@@ -5,6 +5,7 @@ import {
   TeamCredentialUsageLimitDenialV1Schema,
   TeamCredentialUsageLimitListInputV1Schema,
   TeamCredentialUsageLimitListOutputV1Schema,
+  TeamCredentialUsageQueryInputV1Schema,
   TeamCredentialUsageQueryResultV1Schema,
 } from './usageV1.js';
 
@@ -45,6 +46,16 @@ const usageLimit = {
     resetsAtUtc: '2026-09-09T00:00:00.000Z',
   },
 } as const;
+
+describe('Team credential usage query contract', () => {
+  it('admits every cost mode the shared usage analytics request admits, and rejects others', () => {
+    const base = { resourceId: 'resource-1', startMs: 0, endMs: 10 };
+    for (const costMode of ['auto', 'reported', 'estimated', 'api_equivalent'] as const) {
+      expect(TeamCredentialUsageQueryInputV1Schema.parse({ ...base, costMode }).costMode).toBe(costMode);
+    }
+    expect(TeamCredentialUsageQueryInputV1Schema.safeParse({ ...base, costMode: 'invoice' }).success).toBe(false);
+  });
+});
 
 describe('Team credential usage-limit paging contracts', () => {
   it('accepts an opaque cursor and a bounded page size', () => {

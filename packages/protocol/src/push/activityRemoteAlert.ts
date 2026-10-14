@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   AttentionPreviewBehaviorSchema,
@@ -24,19 +24,19 @@ import {
  * consumer rechecks.
  */
 export const ActivityRemoteAlertEventV1Schema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({
+  z.strictObject({
     type: z.literal('ready'),
-    messageSeq: z.number().int().positive().max(2_147_483_647),
-  }).strict(),
-  z.object({ type: z.literal('permission_request') }).strict(),
-  z.object({ type: z.literal('user_action_request') }).strict(),
-  z.object({ type: z.literal('assigned') }).strict(),
-  z.object({ type: z.literal('failed'), turnId: z.string().trim().min(1) }).strict(),
-  z.object({ type: z.literal('cancelled'), turnId: z.string().trim().min(1) }).strict(),
-  z.object({ type: z.literal('human_message'), messageSeq: z.number().int().positive().max(2_147_483_647) }).strict(),
-  z.object({ type: z.literal('message'), messageSeq: z.number().int().positive().max(2_147_483_647) }).strict(),
-  z.object({ type: z.literal('discussion_mention'), messageSeq: z.number().int().positive().max(2_147_483_647) }).strict(),
-  z.object({ type: z.literal('source_unavailable') }).strict(),
+    messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)),
+  }),
+  z.strictObject({ type: z.literal('permission_request') }),
+  z.strictObject({ type: z.literal('user_action_request') }),
+  z.strictObject({ type: z.literal('assigned') }),
+  z.strictObject({ type: z.literal('failed'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ type: z.literal('cancelled'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ type: z.literal('human_message'), messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)) }),
+  z.strictObject({ type: z.literal('message'), messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)) }),
+  z.strictObject({ type: z.literal('discussion_mention'), messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)) }),
+  z.strictObject({ type: z.literal('source_unavailable') }),
 ]));
 export type ActivityRemoteAlertEventV1 = z.infer<typeof ActivityRemoteAlertEventV1Schema>;
 
@@ -47,22 +47,22 @@ export const ActivityRemoteAlertSequenceDomainV2Schema = lazyZodSchema(() => z.e
 export type ActivityRemoteAlertSequenceDomainV2 = z.infer<typeof ActivityRemoteAlertSequenceDomainV2Schema>;
 
 /** The Agent-allocated identity of one committed permission/user-action request. */
-const ActivityRequestIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(191));
+const ActivityRequestIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(191)));
 
 const SessionTranscriptSequenceV2Schema = lazyZodSchema(() => z.object({
   sequenceDomain: z.literal('session_transcript'),
-  messageSeq: z.number().int().positive().max(2_147_483_647),
+  messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)),
 }));
 const DiscussionSequenceV2Schema = lazyZodSchema(() => z.object({
   sequenceDomain: z.literal('discussion'),
   discussionId: SessionDiscussionIdSchema,
-  messageSeq: z.number().int().positive().max(2_147_483_647),
+  messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)),
 }));
 
 /** Content-free committed message reference shared by Activity transports. */
 export const ActivityMessageReferenceV2Schema = lazyZodSchema(() => z.discriminatedUnion('sequenceDomain', [
-  SessionTranscriptSequenceV2Schema.strict(),
-  DiscussionSequenceV2Schema.strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(SessionTranscriptSequenceV2Schema),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DiscussionSequenceV2Schema),
 ]));
 
 /**
@@ -75,25 +75,25 @@ export const ActivityMessageReferenceV2Schema = lazyZodSchema(() => z.discrimina
  * Session transcript.
  */
 export const ActivityRemoteAlertEventV2Schema = lazyZodSchema(() => z.union([
-  SessionTranscriptSequenceV2Schema.extend({ type: z.literal('ready') }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionTranscriptSequenceV2Schema, { type: z.literal('ready') })),
   z.union([
-    SessionTranscriptSequenceV2Schema.extend({ type: z.literal('human_message') }).strict(),
-    DiscussionSequenceV2Schema.extend({ type: z.literal('human_message') }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionTranscriptSequenceV2Schema, { type: z.literal('human_message') })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DiscussionSequenceV2Schema, { type: z.literal('human_message') })),
   ]),
   z.union([
-    SessionTranscriptSequenceV2Schema.extend({ type: z.literal('message') }).strict(),
-    DiscussionSequenceV2Schema.extend({ type: z.literal('message') }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionTranscriptSequenceV2Schema, { type: z.literal('message') })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DiscussionSequenceV2Schema, { type: z.literal('message') })),
   ]),
-  DiscussionSequenceV2Schema.extend({ type: z.literal('discussion_mention') }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DiscussionSequenceV2Schema, { type: z.literal('discussion_mention') })),
   // The Agent-allocated request id is the cross-leg identity of one committed
   // request. It is optional only because a producer without a committed request
   // in hand must still be able to describe the category.
-  z.object({ type: z.literal('permission_request'), requestId: ActivityRequestIdSchema.optional() }).strict(),
-  z.object({ type: z.literal('user_action_request'), requestId: ActivityRequestIdSchema.optional() }).strict(),
-  z.object({ type: z.literal('assigned') }).strict(),
-  z.object({ type: z.literal('failed'), turnId: z.string().trim().min(1) }).strict(),
-  z.object({ type: z.literal('cancelled'), turnId: z.string().trim().min(1) }).strict(),
-  z.object({ type: z.literal('source_unavailable') }).strict(),
+  z.strictObject({ type: z.literal('permission_request'), requestId: z.optional(ActivityRequestIdSchema) }),
+  z.strictObject({ type: z.literal('user_action_request'), requestId: z.optional(ActivityRequestIdSchema) }),
+  z.strictObject({ type: z.literal('assigned') }),
+  z.strictObject({ type: z.literal('failed'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ type: z.literal('cancelled'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ type: z.literal('source_unavailable') }),
 ]));
 export type ActivityRemoteAlertEventV2 = z.infer<typeof ActivityRemoteAlertEventV2Schema>;
 
@@ -105,30 +105,30 @@ export type ActivityRemoteAlertEventV2 = z.infer<typeof ActivityRemoteAlertEvent
  * directly instead of maintaining another same-concept registry.
  */
 export const ACTIVITY_REMOTE_ALERT_EVENT_TYPES_V1: readonly ActivityRemoteAlertEventV1['type'][] =
-  ActivityRemoteAlertEventV1Schema.options.map((option) => option.shape.type.value);
+  ActivityRemoteAlertEventV1Schema._zod.def.options.map((option) => option.shape.type.value);
 
 /** The reference is the committed ready SessionMessage, never a delivery receipt. */
-export const ActivityRemoteAlertV1Schema = lazyZodSchema(() => z.object({
+export const ActivityRemoteAlertV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('activity_alert'),
   v: z.literal(1),
-  serverId: z.string().trim().min(1),
-  sessionId: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
   event: ActivityRemoteAlertEventV1Schema,
   previewBehavior: AttentionPreviewBehaviorSchema,
-}).strict());
+}));
 
 export type ActivityRemoteAlertV1 = z.infer<typeof ActivityRemoteAlertV1Schema>;
 
-export const ActivityRemoteAlertV2Schema = lazyZodSchema(() => z.object({
+export const ActivityRemoteAlertV2Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('activity_alert'),
   v: z.literal(2),
-  serverId: z.string().trim().min(1),
-  sessionId: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
   event: ActivityRemoteAlertEventV2Schema,
   previewBehavior: AttentionPreviewBehaviorSchema,
-}).strict());
+}));
 export type ActivityRemoteAlertV2 = z.infer<typeof ActivityRemoteAlertV2Schema>;
 
 /**

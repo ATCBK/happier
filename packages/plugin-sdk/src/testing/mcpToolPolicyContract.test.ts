@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { assertMcpToolPolicyInvocation, assertMcpToolPolicySecrets, type AgentMcpToolPolicyCallObservation, type AgentMcpToolPolicyInvocation } from './mcpToolPolicyContract.js';
 
 const permission = { server: 'server__a', serverId: 'catalog:a', tool: 'read', decision: 'approved', prompted: true, order: 1 } as const;
@@ -20,7 +20,7 @@ describe('MCP contract evidence sensitivity', () => {
             child.once('error', reject);
             child.once('close', code => code === 0 ? resolve() : reject(new Error(`Environment fixture exit ${code}`)));
         });
-        const observed = z.object({ env: z.record(z.string(), z.string()) }).strict().parse(JSON.parse(Buffer.concat(chunks).toString()));
+        const observed = z.strictObject({ env: z.record(z.string(), z.string()) }).parse(JSON.parse(Buffer.concat(chunks).toString()));
         expect(() => assertMcpToolPolicySecrets([secret], [observed])).toThrow();
     });
     it('detects secrets in full inherited environment, events and escaped native config', () => {

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { router } from 'expo-router';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
-import { IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_USAGE_COACH_PREFERENCES_V1 } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import {
   getUsageQueryKey,
@@ -35,6 +35,8 @@ import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { resolveUsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
+import { createProjectAccountRowsSync } from '@/sync/engine/projects/projectAccountRowsSync';
 
 const query = normalizeUsageQuery({
   period: { startMs: 0, endMs: 1000 },
@@ -155,6 +157,57 @@ const model: UsageWidgetBodyModel = {
 const props = { model, slice, query, serverId: 'home' };
 
 describe('Work and Coach widget bodies', () => {
+  it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
+    const pendingSlice = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting! }],
+      sources: [{ source: 'how_you_work', status: 'pending' }], nowMs: 1000 }).results[0]!;
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={pendingSlice}
+      model={{ ...model, slice: pendingSlice, pending: true }} id="usage_coach" testID="first-coach" />);
+    expect(screen.findHostByTestId('first-coach.empty')).toBeNull();
+    expect(screen.findHostByTestId('first-coach.loading')).not.toBeNull();
+    const settledSlice = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting! }],
+      howYouWork: [{ query, asOfMs: 1000, detail: { status: 'available', facts: [] } }], nowMs: 1000 }).results[0]!;
+    await screen.update(<UsageCoachWidget {...props} slice={settledSlice}
+      model={{ ...model, slice: settledSlice }} id="usage_coach" testID="first-coach" />);
+    expect(screen.findHostByTestId('first-coach.empty')).not.toBeNull();
+  });
+  it.each(['plain', 'e2ee'] as const)('names Work from the admitted protected Project producer and retires it on Account loss (%s)', async mode => {
+    const previous = storage.getState();
+    const scope = { serverId: 'home', accountId: 'work-label-account' };
+    const cipher = createProjectAccountRowCipherV1({ mode,
+      material: mode === 'plain' ? null : { type: 'legacy', secret: new Uint8Array(32).fill(5) },
+      randomBytes: length => new Uint8Array(length).fill(3) });
+    // Native/owner-root accounting has an organization label without fabricating
+    // a checkout that would retain a private path (the observed live Work producer).
+    const rowKey = { kind: 'project-organization' as const, serverId: 'producer-cli-profile', projectKey: 'p1' };
+    const content = cipher.seal({ key: rowKey, value: { label: 'Human project' } });
+    const owner = createProjectAccountRowsSync({ scope, cipher, isCurrent: () => true,
+      transport: { list: async () => ({ status: 'listed', coverage: 'complete', rows: [{ key: rowKey, revision: 1, content }] }),
+        mutate: async () => { throw new Error('Label read must not mutate Project rows'); } },
+      apply: snapshot => storage.getState().applyProjectAccountRowsForScope(scope, snapshot) });
+    try {
+      storage.setState({ profileScope: scope });
+      storage.getState().activateProjectAccountRowsScope(scope);
+      await owner.refresh();
+      const screen = await renderScreen(<UsageProjectLedgerWidget {...props} id="usage_project_ledger" testID="label-ledger" />);
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'locked'));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'ready'));
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.setState({ profileScope: { ...scope, serverId: 'other-home' } }));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await act(async () => storage.setState({ profileScope: scope }));
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.setState({ profileScope: { ...scope, accountId: 'other-account' } }));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await screen.unmount();
+    } finally {
+      storage.setState({ profileScope: previous.profileScope, projectAccountRows: previous.projectAccountRows,
+        pinnedWorkspaceRefIds: previous.pinnedWorkspaceRefIds });
+    }
+  });
   it('projects the measured growing request into Coach Why after a later zero-input observation', async () => {
     const rows = [100, 200, 300, 200, 0].map((input, index) => {
       const categories = { input, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0, total: input + 10 };
@@ -192,6 +245,8 @@ describe('Work and Coach widget bodies', () => {
     expect(once.findHostByTestId('coach.finding.context_bloat.trend')).toBeFalsy();
     const screen = await renderScreen(wide(evaluation));
     expect(screen.findHostByTestId('coach.finding.context_bloat.trend')).toBeTruthy();
+    // The spark's caption says it is the latest sample, not the finding's headline figure.
+    expect(screen.getTextContent()).toContain(t('usage.board.coach.latestSample', { value: '' }).trim());
   });
   it('does not open digest scheduling without a captured Account', async () => {
     const digestSlice = resolveUsagePageAggregation({ queries: [query],
@@ -255,6 +310,24 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findByTestId('value.autopsy.phases-select-commit:' + 'b'.repeat(40))).toBeNull();
     expect(text).toContain('Compaction');
     expect(screen.findByTestId('value.autopsy.unknownEnds')).toBeTruthy();
+  });
+  it('says only the PR is missing for a turn whose commit is linked, and keeps the broad absence for a turn with no git evidence', async () => {
+    const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
+    const branch = { ref: 'refs/heads/master', headSha: 'b'.repeat(40) };
+    const linked = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
+      contributions: [contribution('with-commit', 's1', 't1'), contribution('bare', 's1', 't2')], evidence: [],
+      branchEvidence: [{ sessionId: 's1', turnId: 't1', repositoryKey: 'opaque-repo', checkpointRef: 'checkpoint/s1/t1',
+        checkpointCommitSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), attributionScope: 'no_happier_checkpoint_overlap_observed', branch }] }));
+    const screen = await renderScreen(<UsageSessionValueWidget {...props} query={sessionQuery}
+      slice={{ ...slice, shownQuery: sessionQuery, work: linked }} id="usage_session_value" testID="value" />);
+    const text = screen.getTextContent();
+    expect(text).toContain('bbbbbbb');
+    expect(text).toContain(t('usage.board.work.reason_missing_pr'));
+    expect(text).toContain(t('usage.board.work.reason_missing_evidence'));
+    // The turn's one caption line leads with the PR state and what was linked, and ends with the long checkpoint ref.
+    const linkedRow = screen.findAllByType(HappierDataRows).find(rows => rows.props.testID === 'value.autopsy.turns')!.props.rows.find((row: readonly unknown[]) => String(row[3]).includes('bbbbbbb'));
+    expect(linkedRow[2]).toBe(t('usage.board.work.reason_missing_pr'));
+    expect(String(linkedRow[linkedRow.length - 1])).toContain('checkpoint/s1/t1');
   });
   it('formats witnessed Autopsy git moments in the preferred language without changing their instants', async () => {
     const previous = getPreferredLanguage();

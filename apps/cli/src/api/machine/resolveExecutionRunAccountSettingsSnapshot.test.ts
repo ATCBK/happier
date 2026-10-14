@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { FeaturesResponseSchema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
@@ -11,6 +12,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createExecutionRunAccountSettingsSnapshotResolver } from './resolveExecutionRunAccountSettingsSnapshot';
+import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
 
@@ -57,6 +59,15 @@ function captureHomeReads(onCatalogRead?: () => void, sharedSecret = false) {
 }
 
 describe('Machine Execution Run owner account snapshot', () => {
+    it.each(['', '   ', 'run-machine'])('preserves the typed Account refusal with diagnostic Machine %j', async machineId => {
+        const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId, serverHttpBaseUrl: 'https://run-owner.test',
+            readCredentials: async () => null, isOwnerCurrent: () => true, onSettings() {} });
+        try {
+            await expect(resolver()).rejects.toMatchObject({ code: 'provider_authorization_changed', retryable: true, action: 'retry' });
+            const refusal = ProviderErrorV1Schema.parse(await resolver().catch(error => error));
+            expect(refusal.machineId).toBe(machineId.trim() || undefined);
+        } finally { await resolver.dispose(); }
+    });
     it('withdraws a demanded captured catalog when its Home refresh is unavailable', async () => {
         const reads = captureHomeReads();
         const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'run-machine', serverHttpBaseUrl: 'https://run-owner.test',
@@ -122,9 +133,18 @@ describe('Machine Execution Run owner account snapshot', () => {
             resolved: { directory: '/repo', strictMode: true, serversByName: select(admitted).selectedServersByName },
             savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(admitted), processEnv: {}, tmpDir: null,
         });
-        expect(materialized.mcpServers).toMatchObject({ 'wilson-brief': { env: { WILSON_TOKEN: 'synthetic-home-token' } } });
-        expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
-        materialized.cleanup();
+        try {
+            const configPath = materialized.mcpServers['wilson-brief']?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+            if (!configPath) throw new Error('Missing owned MCP launcher configuration');
+            // The real stdio materializer protects secret values in this file,
+            // rather than publishing them in the Agent-facing launcher env.
+            const launch: unknown = JSON.parse(await readFile(configPath, 'utf8'));
+            expect(launch).toMatchObject({ env: { WILSON_TOKEN: 'synthetic-home-token' } });
+            expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+        } finally {
+            materialized.cleanup();
+            await resolver.dispose();
+        }
     });
 
     it('admits the demanded MCP catalog from the exact owner Home without borrowing focused Account state', async () => {

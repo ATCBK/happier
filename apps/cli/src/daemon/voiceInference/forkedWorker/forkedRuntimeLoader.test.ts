@@ -1,13 +1,11 @@
 import type { ModelPackManifest } from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { configuration, reloadConfiguration } from '@/configuration';
+import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { getFirstPartyComponentCatalogEntry, resolveFirstPartyVersionInstallPath } from '@happier-dev/cli-common/firstPartyRuntime';
-import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installables';
-import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 
 import { createForkedVoiceInferenceRuntimeHandle } from './forkedRuntimeLoader';
 import type { VoiceInferenceWorkerChannel } from './forkedRuntimeClient';
@@ -34,7 +32,6 @@ const manifest: ModelPackManifest = {
 const homes: string[] = [];
 const handles: ReturnType<typeof createForkedVoiceInferenceRuntimeHandle>[] = [];
 let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE']);
-let optionalRuntimeEntrypoint: string;
 
 beforeEach(async () => {
   const { access } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -43,16 +40,6 @@ beforeEach(async () => {
   homes.push(home);
   envScope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE: undefined });
   reloadConfiguration();
-  const source = BUILT_IN_INSTALLABLES_REGISTRY.descriptorsByKey[INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME]?.descriptor.source;
-  if (source?.kind !== 'first_party_runtime') throw new Error('fixture requires the actual first-party Voice component');
-  const entry = getFirstPartyComponentCatalogEntry(source.componentId).nodeEntrypointRelativePath;
-  if (!entry) throw new Error('fixture requires the actual declared Node entrypoint');
-  optionalRuntimeEntrypoint = join(resolveFirstPartyVersionInstallPath({
-    componentId: source.componentId, versionId: configuration.currentCliVersion,
-    channel: configuration.publicReleaseRing, processEnv: { ...process.env, HAPPIER_HOME_DIR: home },
-  }), entry);
-  await fsPromises.mkdir(dirname(optionalRuntimeEntrypoint), { recursive: true });
-  await fsPromises.writeFile(optionalRuntimeEntrypoint, 'export {};\n', 'utf8');
 });
 
 afterEach(async () => {
@@ -99,11 +86,12 @@ function createInMemoryWorkerChannel(runtime: VoiceInferenceRuntime): VoiceInfer
 }
 
 describe('forked voice inference runtime loader', () => {
-  it('prepares the managed runtime once before exposing or spawning the forked engine', async () => {
+  it('prepares the source native runtime once before exposing or spawning the forked engine', async () => {
     const observations: string[] = [];
+    const sourceRuntimeEntrypoint = createRequire(import.meta.url).resolve('sherpa-onnx-node/sherpa-onnx.js');
     const { access: nativeAccess } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     vi.mocked(fsPromises.access).mockImplementation(async (...args) => {
-      if (String(args[0]) === optionalRuntimeEntrypoint) observations.push('prepared');
+      if (String(args[0]) === sourceRuntimeEntrypoint) observations.push('prepared');
       await nativeAccess(...args);
     });
     const runtime: VoiceInferenceRuntime = {
@@ -118,6 +106,8 @@ describe('forked voice inference runtime loader', () => {
     });
     handles.push(handle);
 
+    expect(handle.readProcessRoots()).toEqual([]);
+    expect(observations).toEqual([]);
     const first = await handle.runtimeLoader();
     const second = await handle.runtimeLoader();
     expect(first).toBe(second);

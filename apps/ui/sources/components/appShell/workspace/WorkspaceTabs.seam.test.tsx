@@ -9,6 +9,9 @@ import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
+import type { DestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { clearActiveUnsavedChangesGuard, registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 const route = vi.hoisted(() => ({ pathname: '/session/named/info', params: { id: 'named' } as Record<string, string>, platform: 'web' as 'web' | 'ios' }));
 // Expo supplies a local module and local params for each retained native scene.
@@ -85,11 +88,113 @@ afterAll(async () => {
 afterEach(async () => {
     route.platform = 'web'; route.pathname = '/session/named/info'; route.params = { id: 'named' };
     standardCleanup();
+    clearActiveUnsavedChangesGuard();
     try { await disconnectHome?.(); }
     finally { await disposeHome?.(); restoreBrowserLocks?.(); vi.restoreAllMocks(); }
 });
 
 describe('workspace tabs production composition', () => {
+    it.each(['phone close', 'unavailable phone tab', 'pane keyboard'] as const)('routes %s through disabled, required and waived Action policy while retaining dirty work', async entry => {
+        const phone = entry !== 'pane keyboard';
+        route.platform = phone ? 'ios' : 'web'; route.pathname = phone ? '/all-tabs' : '/settings'; route.params = {};
+        window.history.replaceState(null, '', route.pathname);
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: `https://workspace-close-${entry.replaceAll(' ', '-')}.test`, accountId: 'alice', currentAccount: true,
+            settings: { keyboardShortcutsV2Enabled: true } }], route: request => artifacts.handle(request.path, {
+                method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
+            }) ?? undefined });
+        disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
+        const [{ storage }, stateModule, persistenceModule, { PhoneOpenTabsRail }, { WorkspaceShell }, { normalizeActionsSettingsV1 }] = await Promise.all([
+            import('@/sync/domains/state/storage'), import('./workspaceState'), import('./workspacePersistence'),
+            import('./PhoneOpenTabsRail'), import('./WorkspaceShell'), import('@happier-dev/protocol/actions/actionSettings'),
+        ]);
+        const initial = storage.getState();
+        const { Modal } = await import('@/modal');
+        const scope = storage.getState().profileScope;
+        if (!scope) throw new Error('The close journey requires the applied Account');
+        if (entry === 'phone close') {
+            route.pathname = '/session/pinned'; route.params = { serverId: scope.serverId };
+        }
+        const [{ WorkspaceProvider }, , , , , { KeyboardShortcutProvider }, { AppPaneProvider }, , catalogModule] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const target: DestinationRef = entry === 'phone close'
+            ? { kind: 'session', params: { id: 'pinned', serverId: scope.serverId } }
+            : { kind: 'removed-plugin', params: { id: 'pinned' } };
+        let saved = stateModule.createWorkspaceState({ id: 'pinned-close', target, pinned: !phone, preview: false });
+        saved = stateModule.reduceWorkspaceState(saved, { type: 'openTab', groupId: saved.focusedGroupId,
+            tab: { id: 'other-close', target: { kind: 'removed-plugin', params: { id: 'other' } }, pinned: false, preview: false } });
+        saved = stateModule.reduceWorkspaceState(saved, { type: 'activateTab', groupId: saved.focusedGroupId, tabId: 'pinned-close' });
+        storage.setState({ isDataReady: true, localSettings: { ...storage.getState().localSettings, workspaceLayoutV1: {
+            [persistenceModule.workspaceLayoutScopeKey({ ...scope, windowId: 'main' })]: persistenceModule.serializeWorkspaceLayout(saved),
+        } } });
+        if (!phone) window.sessionStorage.setItem('happier.workspace.windowIdV1', 'main');
+        let navigation!: WorkspaceNavigationContextValue;
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+            <WorkspaceProvider enabled={!phone} phone={phone} catalog={catalog}>{owner => {
+                navigation = owner;
+                return phone ? <PhoneOpenTabsRail /> : <WorkspaceShell catalog={catalog} />;
+            }}</WorkspaceProvider>
+        </AppPaneProvider></KeyboardShortcutProvider>);
+        const trigger = async () => {
+            if (entry === 'phone close') await act(async () => { navigation.phone?.activateTab('pinned-close'); });
+            if (entry === 'unavailable phone tab') vi.mocked(Modal.alert).mockClear();
+            await act(async () => {
+                if (entry === 'pane keyboard') {
+                    const key = new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', altKey: true, bubbles: true, cancelable: true });
+                    window.dispatchEvent(key);
+                    expect(key.defaultPrevented).toBe(true);
+                } else screen.pressByTestId(entry === 'phone close' ? 'phone-rail-tab-close-pinned-close' : 'phone-rail-tab-pinned-close');
+            });
+            if (entry === 'unavailable phone tab') {
+                const buttons = vi.mocked(Modal.alert).mock.calls.at(-1)?.[2];
+                expect(buttons).toHaveLength(2);
+                expect(navigation.state.tabs['pinned-close']).toBeDefined();
+                await act(async () => { buttons?.find(button => button.onPress)?.onPress?.(); });
+            }
+        };
+        const policy = async (choice: 'disabled' | 'require' | 'waive', version: number) => {
+            const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: { 'workspace.tabs.close': choice === 'disabled' ? { enabled: false } : choice === 'require' ? { approvalRequiredSurfaces: ['ui'] } : {} },
+                ...(choice === 'waive' ? { approvalWaivedSurfaces: { 'workspace.tabs.close': ['ui'] } } : {}),
+            }) };
+            homes.replaceAccountSettings('home', { settings, version });
+            await act(async () => { storage.getState().applySettingsForScope(scope, settings, version); });
+        };
+        let unregisterGuard: (() => void) | undefined;
+        try {
+            await policy('disabled', 2);
+            vi.mocked(Modal.alertAsync).mockClear();
+            await trigger();
+            expect(navigation.state.tabs['pinned-close']).toBeDefined();
+            expect(navigation.state.tabs['other-close']).toBeDefined();
+            await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalled());
+            expect(artifacts.list()).toHaveLength(0);
+            await policy('require', 3);
+            await trigger();
+            await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1));
+            expect(navigation.state.tabs['pinned-close']).toBeDefined();
+            expect(navigation.state.tabs['other-close']).toBeDefined();
+            await policy('waive', 4);
+            vi.mocked(Modal.confirm).mockClear();
+            const decision = vi.fn(async () => 'keepEditing' as const);
+            unregisterGuard = registerMountedTabUnsavedChangesGuard('pinned-close', {
+                isDirtyRef: { current: true }, requestDecision: decision, tag: 'workspace-close-journey',
+            });
+            await trigger();
+            await vi.waitFor(() => expect(decision).toHaveBeenCalled());
+            expect(navigation.state.tabs['pinned-close']).toBeDefined();
+            expect(navigation.state.tabs['other-close']).toBeDefined();
+            unregisterGuard();
+            await trigger();
+            await vi.waitFor(async () => { await act(async () => {}); expect(navigation.state.tabs['pinned-close']).toBeUndefined(); });
+            expect(artifacts.list()).toHaveLength(1);
+            expect(Modal.confirm).not.toHaveBeenCalled();
+            if (phone) expect(navigation.state.tabs['other-close']).toBeDefined();
+            else expect(navigation.state.tabs['other-close']).toBeUndefined();
+        } finally { unregisterGuard?.(); await screen.unmount(); storage.setState(initial, true); }
+    });
     it('names the real native Session info route in the phone rail and switcher and follows its rename', async () => {
         route.platform = 'ios';
         restoreBrowserLocks = installBrowserStorageLockBoundary();
@@ -147,7 +252,7 @@ describe('workspace tabs production composition', () => {
             </>;
         }}</WorkspaceProvider></AppPaneProvider></InjectedAuthProvider>;
         const screen = await renderScreen(element());
-        const railTitles = () => screen.findByTestId('phone-open-tabs-rail')?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
+        const railTitles = () => screen.findByTestId('phone-open-tabs-rail')?.findAll((node: { type: unknown; props: Record<string, unknown> }) => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
         const switcherTitles = () => (screen.root.findByType('NativeTitleSwitcher').props.switcher as ReturnType<typeof useSessionSwitcher>).prepare().rows.up.map(row => row.title);
         try {
             expect(navigation.active).toBe(false);
@@ -218,7 +323,7 @@ describe('workspace tabs production composition', () => {
         // Cold broken composition: retained last-known titles must not mask a missing publisher.
         let screen = await renderScreen(element(true), renderOptions);
         const unboundTab = navigation.state.groups[navigation.state.focusedGroupId]!.activeTabId;
-        const unboundText = screen.findByTestId(`workspace-tab-${unboundTab}`)?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
+        const unboundText = screen.findByTestId(`workspace-tab-${unboundTab}`)?.findAll((node: { type: unknown; props: Record<string, unknown> }) => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
         expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
         expect(unboundText).not.toContain('Fix workspace tabs');
         await screen.unmount();
@@ -248,7 +353,7 @@ describe('workspace tabs production composition', () => {
             expect(navigation.active).toBe(true);
             expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
             const sessionTab = group().activeTabId;
-            const label = () => screen.findByTestId(`workspace-tab-${sessionTab}`)?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string')
+            const label = () => screen.findByTestId(`workspace-tab-${sessionTab}`)?.findAll((node: { type: unknown; props: Record<string, unknown> }) => typeof node.type === 'string' && typeof node.props.children === 'string')
                 .map(node => node.props.children);
             expect(label()).toContain('Fix workspace tabs');
             await act(async () => { storage.getState().applySessions([named('Workspace tabs renamed')]); });

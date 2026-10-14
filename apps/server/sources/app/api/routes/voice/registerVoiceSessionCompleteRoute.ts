@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { isResolvedServerFeatureEnabledForGating, resolveServerFeaturesForGating } from "@/app/features/catalog/serverFeatureGate";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { createVoiceRouteAbortScope } from "./voiceRouteAbortScope";
@@ -18,7 +18,7 @@ export function registerVoiceSessionCompleteRoute(app: Fastify): void {
             response: {
                 200: z.object({
                     ok: z.literal(true),
-                    durationSeconds: z.number().int().min(0),
+                    durationSeconds: z.number().check(z.int(), z.minimum(0)),
                 }),
                 404: z.object({
                     ok: z.literal(false),

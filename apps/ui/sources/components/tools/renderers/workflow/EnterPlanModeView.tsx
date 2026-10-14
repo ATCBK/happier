@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -31,12 +32,11 @@ export const EnterPlanModeView = React.memo<ToolViewProps>(({ detailLevel, messa
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: 8,
-        paddingVertical: 4,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     title: {
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     body: {

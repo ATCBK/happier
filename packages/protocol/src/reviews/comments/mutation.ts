@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { StoredJsonContentEnvelopeSchema } from '../../storage/storedJsonContentEnvelope.js';
 import {
   ReviewCommentAnchorIndexV1Schema,
@@ -24,8 +24,8 @@ import {
 import { ReviewCommentBulkTransitionRequestV1Schema, ReviewCommentOperationErrorCodeV1Schema } from './actions.js';
 
 const markers = {
-  hasReason: z.boolean().optional(),
-  evidenceCount: z.number().int().nonnegative().optional(),
+  hasReason: z.optional(z.boolean()),
+  evidenceCount: z.optional(z.number().check(z.int(), z.nonnegative())),
 };
 const createShape = ReviewCommentCreateRequestV1Schema.shape;
 const { anchor: _anchor, snapshot: _snapshot, body: _body, eventEnvelope: _createEvent,
@@ -46,67 +46,67 @@ const { reason: _bulkReason, evidence: _bulkEvidence, eventEnvelope: _bulkEvent,
   ...bulkStructural } = ReviewCommentBulkTransitionRequestV1Schema.shape;
 
 export const ReviewCommentStructuralMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('actionId', [
-  z.object({ actionId: z.literal('reviews.comments.create'), input: z.object({
-    ...createStructural, ...markers, anchorIndex: ReviewCommentAnchorIndexV1Schema.pick({ kind: true }).strict(),
-  }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.transition'), input: z.object({ ...transitionStructural, ...markers }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.edit'), input: z.object({ ...editStructural, ...markers }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.reply'), input: z.object({ ...replyStructural, ...markers }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.redact'), input: z.object({ ...redactStructural, ...markers }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.setDisposition'), input: z.object(dispositionStructural).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.attachEvidence'), input: z.object({ ...attachStructural, evidenceCount: z.number().int().positive() }).strict() }).strict(),
-  z.object({ actionId: z.literal('reviews.comments.bulkTransition'), input: z.object({ ...bulkStructural, ...markers }).strict() }).strict(),
-]).superRefine((value, ctx) => validateReviewCommentScopeV1(value.input, ctx)));
+  z.strictObject({ actionId: z.literal('reviews.comments.create'), input: z.strictObject({
+    ...createStructural, ...markers, anchorIndex: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.pick(ReviewCommentAnchorIndexV1Schema, { kind: true })),
+  }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.transition'), input: z.strictObject({ ...transitionStructural, ...markers }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.edit'), input: z.strictObject({ ...editStructural, ...markers }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.reply'), input: z.strictObject({ ...replyStructural, ...markers }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.redact'), input: z.strictObject({ ...redactStructural, ...markers }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.setDisposition'), input: z.strictObject(dispositionStructural) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.attachEvidence'), input: z.strictObject({ ...attachStructural, evidenceCount: z.number().check(z.int(), z.positive()) }) }),
+  z.strictObject({ actionId: z.literal('reviews.comments.bulkTransition'), input: z.strictObject({ ...bulkStructural, ...markers }) }),
+]).check(z.superRefine((value, ctx) => validateReviewCommentScopeV1(value.input, ctx))));
 export type ReviewCommentStructuralMutationV1 = z.infer<typeof ReviewCommentStructuralMutationV1Schema>;
 
-export const ReviewCommentStoredSourceV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentStoredSourceV1Schema = lazyZodSchema(() => z.strictObject({
   structural: ReviewCommentStructuralV1Schema,
   source: ReviewCommentSensitiveMigrationSourceV1Schema,
-}).strict());
+}));
 export type ReviewCommentStoredSourceV1 = z.infer<typeof ReviewCommentStoredSourceV1Schema>;
 
-export const ReviewCommentPrepareMutationRequestV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentPrepareMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   mutation: ReviewCommentStructuralMutationV1Schema,
-  contentCommitment: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  createRequestFingerprint: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
-}).strict());
+  contentCommitment: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/)),
+  createRequestFingerprint: z.optional(z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/))),
+}));
 export type ReviewCommentPrepareMutationRequestV1 = z.infer<typeof ReviewCommentPrepareMutationRequestV1Schema>;
 
-export const ReviewCommentPreparedRecordV1Schema = lazyZodSchema(() => z.object({
-  previous: ReviewCommentStoredSourceV1Schema.optional(),
+export const ReviewCommentPreparedRecordV1Schema = lazyZodSchema(() => z.strictObject({
+  previous: z.optional(ReviewCommentStoredSourceV1Schema),
   structural: ReviewCommentStructuralV1Schema,
-  event: ReviewCommentEventV1Schema.optional(),
-}).strict());
+  event: z.optional(ReviewCommentEventV1Schema),
+}));
 export type ReviewCommentPreparedRecordV1 = z.infer<typeof ReviewCommentPreparedRecordV1Schema>;
 
-export const ReviewCommentMutationFailureV1Schema = lazyZodSchema(() => z.object({
-  commentId: z.string().min(1), errorCode: ReviewCommentOperationErrorCodeV1Schema, error: z.string(),
-}).strict());
+export const ReviewCommentMutationFailureV1Schema = lazyZodSchema(() => z.strictObject({
+  commentId: z.string().check(z.minLength(1)), errorCode: ReviewCommentOperationErrorCodeV1Schema, error: z.string(),
+}));
 
-export const ReviewCommentPrepareMutationResponseV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), receipt: z.string().min(1),
+export const ReviewCommentPrepareMutationResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), receipt: z.string().check(z.minLength(1)),
   request: ReviewCommentPrepareMutationRequestV1Schema,
   records: z.array(ReviewCommentPreparedRecordV1Schema),
   replayed: z.boolean(), failed: z.array(ReviewCommentMutationFailureV1Schema),
-  bulkActionId: z.string().min(1).optional(),
-}).strict());
+  bulkActionId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ReviewCommentPrepareMutationResponseV1 = z.infer<typeof ReviewCommentPrepareMutationResponseV1Schema>;
 
-export const ReviewCommentCommitMutationRequestV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), receipt: z.string().min(1),
-  records: z.array(z.object({
-    commentId: z.string().min(1),
+export const ReviewCommentCommitMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), receipt: z.string().check(z.minLength(1)),
+  records: z.array(z.strictObject({
+    commentId: z.string().check(z.minLength(1)),
     sensitiveEnvelope: StoredJsonContentEnvelopeSchema,
-    eventEnvelope: StoredJsonContentEnvelopeSchema.optional(),
-  }).strict()),
-}).strict());
+    eventEnvelope: z.optional(StoredJsonContentEnvelopeSchema),
+  })),
+}));
 export type ReviewCommentCommitMutationRequestV1 = z.infer<typeof ReviewCommentCommitMutationRequestV1Schema>;
-export const ReviewCommentCommitMutationResponseV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentCommitMutationResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), comments: z.array(z.union([StoredReviewCommentV1Schema, ReviewCommentStoredSourceV1Schema])),
   replayed: z.boolean(), failed: z.array(ReviewCommentMutationFailureV1Schema),
-  bulkActionId: z.string().min(1).optional(),
-}).strict());
+  bulkActionId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ReviewCommentCommitMutationResponseV1 = z.infer<typeof ReviewCommentCommitMutationResponseV1Schema>;
 
 export function projectReviewCommentStructuralMutationV1(actionId: z.input<typeof ReviewCommentMutationActionIdV1Schema>, input: Record<string, unknown>): ReviewCommentStructuralMutationV1 {

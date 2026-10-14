@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_ORGANIZATION_MAX_FOLDERS,
@@ -11,29 +11,24 @@ import { SessionOrganizationContentEnvelopeSchema } from './contentSchemas.js';
 import { SessionOrganizationLabelKindSchema } from './ordering.js';
 
 const SessionOrganizationMigrationInventoryVersionSchema = z
-  .number()
-  .int()
-  .nonnegative()
-  .max(Number.MAX_SAFE_INTEGER);
+  .number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER));
 
-export const SessionOrganizationAccountEncryptionMigrationInventorySchema = z
-  .object({
+export const SessionOrganizationAccountEncryptionMigrationInventorySchema = z.strictObject({
     version: SessionOrganizationMigrationInventoryVersionSchema,
-    folders: z.array(z.object({
-      folderId: z.string().min(1).max(SESSION_ORGANIZATION_MAX_ID_LENGTH),
+    folders: z.array(z.strictObject({
+      folderId: z.string().check(z.minLength(1), z.maxLength(SESSION_ORGANIZATION_MAX_ID_LENGTH)),
       display: SessionOrganizationContentEnvelopeSchema,
-    }).strict()).max(SESSION_ORGANIZATION_MAX_FOLDERS),
-    tags: z.array(z.object({
-      tagId: z.string().min(1).max(SESSION_ORGANIZATION_MAX_ID_LENGTH),
+    })).check(z.maxLength(SESSION_ORGANIZATION_MAX_FOLDERS)),
+    tags: z.array(z.strictObject({
+      tagId: z.string().check(z.minLength(1), z.maxLength(SESSION_ORGANIZATION_MAX_ID_LENGTH)),
       display: SessionOrganizationContentEnvelopeSchema,
-    }).strict()).max(SESSION_ORGANIZATION_MAX_TAGS),
-    labels: z.array(z.object({
+    })).check(z.maxLength(SESSION_ORGANIZATION_MAX_TAGS)),
+    labels: z.array(z.strictObject({
       labelKind: SessionOrganizationLabelKindSchema,
-      scopeKey: z.string().min(1).max(SESSION_ORGANIZATION_MAX_KEY_LENGTH),
+      scopeKey: z.string().check(z.minLength(1), z.maxLength(SESSION_ORGANIZATION_MAX_KEY_LENGTH)),
       display: SessionOrganizationContentEnvelopeSchema,
-    }).strict()).max(SESSION_ORGANIZATION_MAX_LABELS),
-  })
-  .strict();
+    })).check(z.maxLength(SESSION_ORGANIZATION_MAX_LABELS)),
+  });
 
 export type SessionOrganizationAccountEncryptionMigrationInventory = z.infer<
   typeof SessionOrganizationAccountEncryptionMigrationInventorySchema

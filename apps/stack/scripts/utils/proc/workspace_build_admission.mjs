@@ -14,6 +14,12 @@ import { JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE } from './jsonOwnerFileLock.mjs';
 const workerPath = fileURLToPath(import.meta.url);
 const sourceRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
 
+/** The startup worker owns this policy for its entire finite construction,
+ * including nested compiler leaves. Routing markers alone grant no exemption. */
+export function isWorkspaceBuildStartup({ env = process.env, devStartup = false } = {}) {
+  return devStartup || env.HAPPIER_WORKSPACE_BUILD_STARTUP === '1';
+}
+
 async function hasInheritedWorkspaceLease(env) {
   const { callerHoldsWorkspaceBundleLock } = await import('../../../../../packages/cli-common/workspaceBundleLock.mjs');
   let leases;
@@ -30,16 +36,33 @@ async function hasInheritedWorkspaceLease(env) {
 /** Finite build transport. The native owner decides capacity; this adapter
  * supplies only its existing canonical workspace leases and process boundary.
  */
-export async function runWorkspaceBuildAdmission({ command, args = [], locks = [], cwd = process.cwd(),
+export function resolveWorkspaceBuildAdmissionInvocation({ command, args = [], locks = [],
   repoDir = sourceRoot, launcherPath = resolve(repoDir, 'apps/stack/bin/hstack-exec'), env = process.env,
-  signal, admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir,
-  stdio = 'inherit', onStdout, onStderr, captureStdout = true, captureStderr = true }) {
+  admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir, devStartup = false }) {
   locks = workspaceBuildResources(locks, dependencyInstallDir, env);
-  const invocation = process.platform === 'win32' || !admissionRequired
+  if (isWorkspaceBuildStartup({ env, devStartup })) {
+    // Stack's own source construction is startup-critical, with private
+    // outputs. Reuse protected local jobs placement and resource custody,
+    // without joining validation's capacity queue.
+    const workerArgs = [workerPath, '--dev-startup', JSON.stringify(locks), launcherPath, admissionClass, '--', command, ...args];
+    return process.platform === 'win32'
+      ? { command: process.execPath, args: workerArgs }
+      : { command: '/bin/sh', args: [launcherPath, '--local', '--', process.execPath, ...workerArgs] };
+  }
+  return process.platform === 'win32' || !admissionRequired
     ? { command: process.execPath, args: [workerPath, '--standalone', JSON.stringify(locks), launcherPath, admissionClass, '--', command, ...args] }
     : { command: '/bin/sh', args: [launcherPath, '--heavyweight-admission', `--class=${admissionClass}`,
       `--machine=${env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? 'worker' : 'local'}`,
       `--workspace-locks=${JSON.stringify(locks)}`, '--', command, ...args] };
+}
+
+export async function runWorkspaceBuildAdmission({ command, args = [], locks = [], cwd = process.cwd(),
+  repoDir = sourceRoot, launcherPath = resolve(repoDir, 'apps/stack/bin/hstack-exec'), env = process.env,
+  signal, admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir, devStartup = false,
+  stdio = 'inherit', onStdout, onStderr, captureStdout = true, captureStderr = true }) {
+  const invocation = resolveWorkspaceBuildAdmissionInvocation({ command, args, locks, repoDir,
+    launcherPath, env, admissionClass, admissionRequired, dependencyInstallDir, devStartup });
+  if (isWorkspaceBuildStartup({ env, devStartup })) env = { ...env, HAPPIER_HSTACK_DISPATCH_CONTROL: '1' };
   return await new Promise(resolveResult => {
     const child = spawn(invocation.command, invocation.args, { cwd, env, signal, stdio });
     let stdout = '', stderr = '', error;
@@ -184,10 +207,11 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   const [mode, rawLocks, launcherPath, admissionClass, delimiter, command, ...args] = argv;
   // Already-parsed launchers still use --worker and --worker-try. Keep their
   // one-attempt transport while current launchers reuse event-wait custody.
-  if (!['--worker', '--worker-try', '--worker-events', '--worker-events-inherited', '--worker-inherited', '--standalone'].includes(mode) || delimiter !== '--' || !command) {
+  if (!['--worker', '--worker-try', '--worker-events', '--worker-events-inherited', '--worker-inherited', '--standalone', '--dev-startup'].includes(mode) || delimiter !== '--' || !command) {
     throw new Error('Invalid workspace admission worker invocation');
   }
   const locks = parseLocks(rawLocks);
+  if (mode === '--dev-startup') process.env.HAPPIER_WORKSPACE_BUILD_STARTUP = '1';
   const inheritedWorkspaceLease = await hasInheritedWorkspaceLease(process.env);
   if (mode === '--standalone' && process.platform === 'linux') {
     const { requiresTypeScriptAdmission } = await import('../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs');
@@ -205,7 +229,8 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, interrupt);
   // A native pipe uses event-loop custody, not a blocking filesystem read
   // which can strand the worker during cancellation or normal lock release.
-  controlInput = mode !== '--standalone' ? new Socket({ fd: 4, readable: true, writable: false }) : null;
+  const standalone = mode === '--standalone' || mode === '--dev-startup';
+  controlInput = !standalone ? new Socket({ fd: 4, readable: true, writable: false }) : null;
   controls = controlInput ? createInterface({ input: controlInput }) : null;
   const lines = controls?.[Symbol.asyncIterator]();
   controls?.once('close', interrupt);
@@ -215,7 +240,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   let waitSnapshot;
   let running = false;
   let reportedBusy = false;
-  const acquire = mode === '--standalone' || mode === '--worker'
+  const acquire = standalone || mode === '--worker'
     ? run => withWorkspaceBuildResources({ locks, env: process.env, signal: cancellation.signal }, run)
     : run => withLocks(locks, process.env, cancellation.signal, run);
   try {
@@ -223,7 +248,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
       if (eventMode) waitSnapshot = observation.observer.capture(observation.readSnapshot);
       try {
         await acquire(async env => {
-          if (mode !== '--standalone') {
+          if (!standalone) {
             writeSync(3, inheritedWorkspaceLease ? 'ready-inherited\n' : 'ready\n');
             const decision = await lines.next();
             if (decision.done || decision.value === 'release') return;
@@ -244,7 +269,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
           delete env.HSTACK_ADMISSION_WAIT_ROOT;
           delete env.HSTACK_ADMISSION_WAITER;
           cancellation.signal.throwIfAborted();
-          const invocation = mode === '--standalone'
+          const invocation = standalone
             ? process.platform === 'win32'
               ? (await import('../process/resolveCommandInvocation.mjs')).resolveCommandInvocation({ command, args, env })
               : { command, args }

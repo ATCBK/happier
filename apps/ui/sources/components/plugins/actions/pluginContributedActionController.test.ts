@@ -314,14 +314,14 @@ const CLIENT_REGISTERED_TARGET = Object.freeze({
     exportName: 'activate',
     platform: 'web' as const,
 });
-const CLIENT_REGISTERED_EXECUTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const CLIENT_REGISTERED_EXECUTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_client_registered_action',
     materializationRef: Object.freeze({
         pluginId: CLIENT_REGISTERED_PLUGIN_ID,
         machineId: 'machine-client-registered-action',
         materializationId: 'materialization-client-registered-action',
     }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
 const CLIENT_REGISTERED_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_REGISTERED_EXECUTION_ORIGIN.materializationRef.machineId,
     serverId: 'server-client-registered-action',
@@ -405,8 +405,7 @@ function createRegisteredClientActionFixture(
                 },
                 platforms: [CLIENT_REGISTERED_TARGET.platform],
             },
-            serverIdentityId: CLIENT_REGISTERED_EXECUTION_ORIGIN.serverIdentityId,
-            materializationRef: CLIENT_REGISTERED_EXECUTION_ORIGIN.materializationRef,
+            executionOrigin: CLIENT_REGISTERED_EXECUTION_ORIGIN,
             priority: 0,
             dangerLevel: 'safe',
             available: true,
@@ -493,6 +492,19 @@ function createRegisteredClientActionFixture(
 }
 
 describe('plugin contributed Action controller', () => {
+    it('selects JSON input for an exact Action with no declared input schema', async () => {
+        const declared = action({ id: 'unconstrained', inputHints: null, scopes: ['settings'], surfaces: ['plugin'], placementBindings: [] });
+        machineRpcWithServerScopeMock.mockImplementation(async () => ({ ok: true }));
+        const controller = createPluginContributedActionController({ resolveCurrent: () => snapshot([declared]) });
+        await expect(controller.selectExactBoundActionInput({
+            action: { pluginId: 'acme.channels', localId: declared.id },
+            expectedOccurrenceId: 'contributor-generation-a',
+            draft: { note: 'kept' },
+        })).resolves.toEqual({ kind: 'direct', result: { kind: 'submitted', input: { note: 'kept' },
+            action: { pluginId: 'acme.channels', localId: declared.id }, connectedAccount: { kind: 'none' },
+            presentation: { connectedAccountLabel: null } } });
+    });
+
     it('preserves a schema-valid host-filled draft for an exact no-form Action', async () => {
         const controller = createPluginContributedActionController({
             resolveCurrent: () => snapshot([action({

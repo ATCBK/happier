@@ -70,7 +70,9 @@ import { resolveAcpLaunch } from '../../../../../../cli/src/agent/acp/catalog/co
 import { refreshDaemonAcpCatalog } from '../../../../../../cli/src/agent/acp/catalog/hydrateAcpCatalog';
 import { runWithServerHttpBaseUrl } from '../../../../../../cli/src/api/client/serverHttpBaseUrl';
 import { tryHandleSkillsCliCommand } from '../../../../../../cli/src/cli/actions/skillsNameArgAdapter';
-import type { ActionCliExecutionDeps } from '../../../../../../cli/src/cli/actions/executeCommand';
+import { tryHandleMcpServerCliCommand } from '../../../../../../cli/src/cli/actions/adapters/mcpServersArgv';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '../../../../../../cli/src/cli/actions/compiledCommands';
+import { runCompiledActionCliCommand, type ActionCliExecutionDeps } from '../../../../../../cli/src/cli/actions/executeCommand';
 import { buildSessionMetadataEnvelopeCreateFields } from '../../../../../../cli/src/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { readSessionCapabilitySelectionFromMetadataV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
@@ -84,6 +86,11 @@ import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { enableSchemaValidation } from '@/app/api/utils/enableSchemaValidation';
 import { enableErrorHandlers } from '@/app/api/utils/enableErrorHandlers';
 import { startSocket } from '@/app/api/socket';
+import { registerExternalActionRoutes } from '../actions/registerExternalActionRoutes';
+import { registerExternalActionRpcHandler } from '../../../../../../cli/src/rpc/handlers/externalAction';
+import { createDaemonExternalActionTargetResolver } from '../../../../../../cli/src/daemon/externalActions/daemonExternalActionTargetResolver';
+import { verifyExternalActionExecutionAuthorizationCurrent } from '../../../../../../cli/src/api/externalActionExecutionAuthorization';
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions';
 import type { Fastify as AppFastify } from '@/app/api/types';
 import { accountRoutes } from '../account/accountRoutes';
 import { artifactsRoutes } from './artifactsRoutes';
@@ -137,11 +144,14 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
         featuresRoutes(app);
         machinesRoutes(app);
         startSocket(app);
+        registerExternalActionRoutes(app);
         await app.listen({ port: 0, host: '127.0.0.1' });
         const address = app.server.address();
         if (!address || typeof address === 'string') throw new Error('Expected the HTTP listener');
         origin = `http://127.0.0.1:${address.port}`;
-        const policy = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'skills.create': ['cli', 'agent'] } });
+        const policy = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+            'skills.create': ['cli', 'agent'], 'mcp.servers.create': ['cli'],
+        } });
         const policyWrite = await app.inject({ method: 'POST', url: '/v2/account/settings', headers: {
             authorization: `Bearer ${token}`, ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
         }, payload: { expectedVersion: 0, content: { t: 'plain', v: { actionsSettingsV1: policy } } } });
@@ -448,7 +458,7 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             expect(await misbound.execute('mcp.servers.create', createInput, context))
                 .toMatchObject({ ok: false, errorCode: 'registry_unavailable' });
             expect(await readCatalog()).toEqual(beforeMiswiring);
-            const created = await misbound.execute('mcp.servers.create', createInput, context);
+            const created = await executor.execute('mcp.servers.create', createInput, context);
             expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
             if (!created.ok) throw new Error('Expected the composed registry create');
             const receipt = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.create'].parse(created.result);
@@ -568,6 +578,83 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
                 env: packageEntry.env, origin: { kind: 'registry', provenance: { ref: { kind: 'version', version: '1.1.0' } } },
             });
             expect(repinned.catalog.bindings).toEqual(final.catalog.bindings);
+
+            // The released add spelling must reach the compiled Action, its real
+            // credential factory and the same Account CAS used by registry adds.
+            const credentials = { token, encryption: null, credentialProvenance: 'stored_session' } as const;
+            const privateExecutor = await createCliActionExecutorFromCredentials({ credentials, serverId: origin, serverApiUrl: origin,
+                readCredentials: async () => credentials, pluginActionExecutionOwner: 'current_process',
+                resolveServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated',
+                    features: resolveServerFeaturePayload(process.env, serverFeatureRegistry) }),
+            });
+            const createdSecret = await privateExecutor.execute('secrets.create', {
+                name: 'MCP argv token', value: 'mcp-argv-fixture-value',
+            }, context);
+            expect(createdSecret, JSON.stringify(createdSecret)).toMatchObject({ ok: true });
+            if (!createdSecret.ok) throw new Error('Expected the private resource producer');
+            const argvSecret = secretOutputs['secrets.create'].parse(createdSecret.result);
+            const cliDeps: Partial<ActionCliExecutionDeps> = {
+                readCredentialsFn: async () => credentials,
+                readCredentialsForServerIdFn: async id => id === origin ? credentials : null,
+                getServerProfileFn: async id => ({ id, name: 'Test Home', serverUrl: origin, webappUrl: origin,
+                    createdAt: 0, updatedAt: 0, lastUsedAt: 0 }),
+                createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params, pluginActionExecutionOwner: 'current_process' }),
+            };
+            const previousExitCode = process.exitCode;
+            let output = '';
+            const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk, encodingOrCallback, callback) => {
+                output += String(chunk);
+                const completed = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+                completed?.();
+                return true;
+            });
+            try {
+                process.exitCode = 0;
+                expect(await tryHandleMcpServerCliCommand({ argv: ['mcp', 'servers', 'add', '--name', 'argv_stdio',
+                    '--transport', 'stdio', '--command', 'mcp-fixture', '--arg', 'literal argument', '--arg=--read-only',
+                    '--arg', '--server-id=not-a-selected-home', '--arg', '--',
+                    '--env', `TOKEN=secret:${argvSecret.secretId}`, '--env', 'LITERAL=text:secret:not-a-reference',
+                    '--server-id', origin, '--json'], actionExecutionDeps: cliDeps })).toBe(true);
+                expect(process.exitCode ?? 0).toBe(0);
+                const envelope: unknown = JSON.parse(output.trim());
+                expect(envelope, JSON.stringify(envelope)).toMatchObject({ ok: true });
+                if (!envelope || typeof envelope !== 'object' || !('data' in envelope)) throw new Error('Expected MCP add CLI output');
+                const argvReceipt = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.create'].parse(envelope.data);
+                expect(argvReceipt).toMatchObject({ status: 'updated' });
+                if (argvReceipt.status !== 'updated') throw new Error('Expected MCP argv CAS receipt');
+                expect(argvReceipt.revision).not.toBe(repinned.row.revision);
+                const afterArgv = await readCatalog();
+                const argvEntry = afterArgv.catalog.servers.find(server => server.name === 'argv_stdio');
+                expect(argvEntry).toMatchObject({ transport: 'stdio', stdio: {
+                    command: 'mcp-fixture', args: ['literal argument', '--read-only', '--server-id=not-a-selected-home', '--'],
+                }, env: { TOKEN: { t: 'savedSecret', secretId: argvSecret.secretRef },
+                    LITERAL: { t: 'literal', v: 'secret:not-a-reference' } } });
+                if (!argvEntry) throw new Error('Expected MCP argv entry in strict persisted catalog');
+                expect(afterArgv.row.revision).toBe(argvReceipt.revision);
+                expect(afterArgv.catalog.bindings.filter(rule => rule.serverId === argvEntry.id)).toMatchObject([
+                    { target: { t: 'allMachines' }, enabled: true },
+                ]);
+                expect(afterArgv.catalog.servers.filter(server => server.id !== argvEntry.id)).toEqual(repinned.catalog.servers);
+
+                const listCommand = findCompiledActionCliCommand(['mcp', 'servers', 'list'], listCompiledActionCliCommands());
+                if (!listCommand) throw new Error('Expected compiled MCP list');
+                output = '';
+                await runCompiledActionCliCommand({ command: listCommand,
+                    argv: ['mcp', 'servers', 'list', '--server-id', origin, '--json'], deps: cliDeps });
+                expect(process.exitCode ?? 0).toBe(0);
+                const listed: unknown = JSON.parse(output.trim());
+                expect(listed, JSON.stringify(listed)).toMatchObject({ ok: true });
+                if (!listed || typeof listed !== 'object' || !('data' in listed)) throw new Error('Expected MCP list CLI output');
+                const cliSnapshot = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(listed.data);
+                expect(cliSnapshot).toMatchObject({ status: 'ready', authority: 'active', revision: argvReceipt.revision });
+                if (cliSnapshot.status !== 'ready') throw new Error('Expected ready MCP CLI catalog');
+                expect(cliSnapshot.catalog.servers.find(server => server.id === argvEntry.id)).toMatchObject({
+                    id: argvEntry.id, name: argvEntry.name, transport: 'stdio',
+                });
+            } finally {
+                stdout.mockRestore();
+                process.exitCode = previousExitCode;
+            }
         } finally { upstream.mockRestore(); }
     });
 
@@ -589,7 +676,8 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
         const pnpm = join(root, 'pnpm');
         const env = { ...process.env, HAPPIER_HOME_DIR: root, HAPPIER_PNPM_BIN: pnpm, HAPPIER_JS_RUNTIME_PATH: process.execPath };
         const owner = createAgentInstallJobOwner({ accountId, env,
-            installerDeps: { execFileWithDeadline: async (_command, args) => {
+            installerDeps: { execFileWithDeadline: async (command, args, options) => {
+                if (command !== pnpm) return promisify(execFile)(command, [...args], { env: options.env, encoding: 'utf8' });
                 // Substitute only npm's process. The real installer selects its bin,
                 // records the package/definition identity and promotes the workspace.
                 const workspace = args[1]!;
@@ -766,6 +854,18 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             // An upstream change cannot silently replace the version the user reviewed.
             npmEntry.version = '0.89.2';
             npmEntry.distribution.npx.package = '@agentclientprotocol/claude-agent-acp@0.89.2';
+            const checked = await registryExecutor.execute('registries.updates.check', { kind: 'agent', keys: [result.definition.id] }, context);
+            expect(checked, JSON.stringify(checked)).toMatchObject({ ok: true });
+            if (!checked.ok) throw new Error('Expected Agent checker registration');
+            const observation = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(checked.result);
+            expect(observation.results).toEqual([{ kind: 'agent', key: result.definition.id,
+                upstream: { state: 'update_available', latest: { kind: 'version', version: npmEntry.version } } }]);
+            const observedCatalog = await readCatalog();
+            expect(observedCatalog.record.definitions[0]).toMatchObject({ launch: { version: '0.89.1' },
+                env: { SEAM_ENV: { t: 'literal', v: 'personal-edit' } }, origin: { upstream: observation.results[0]!.upstream } });
+            expect(await registryExecutor.execute('registries.updates.check', { kind: 'agent', keys: [result.definition.id] }, context))
+                .toMatchObject({ ok: true });
+            expect((await readCatalog()).row.revision).toBe(observedCatalog.row.revision);
             expect(await registryExecutor.execute('agents.acp.backends.installFromRegistry', input, context)).toMatchObject({ ok: false });
             expect((await readCatalog()).record.definitions.find(entry => entry.id === result.definition.id))
                 .toMatchObject({ launch: { version: '0.89.1' }, env: { SEAM_ENV: { t: 'literal', v: 'personal-edit' } } });
@@ -839,6 +939,39 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
                 AcpBackendDefinitionV1Schema.parse(mapped.definition);
                 AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [mapped.definition] });
             }
+            const uvEntry = registry.agents.find(entry => entry.id === 'fast-agent');
+            if (!uvEntry) throw new Error('Missing captured uv Agent');
+            const uv = join(root, 'tools', 'uv', 'current', 'bin', 'uv');
+            await mkdir(dirname(uv), { recursive: true });
+            // Fixture only the vendor process; actual registry admission, row
+            // CAS, authenticated job RPC, install and launch remain composed.
+            await writeFile(uv, `#!${process.execPath}\nconst fs=require('node:fs');const path=require('node:path');
+if(process.argv.slice(2).join(' ')!=='tool install fast-agent-acp==0.10.1') throw new Error('Wrong registry uv pin');
+fs.mkdirSync(process.env.UV_TOOL_BIN_DIR,{recursive:true});
+fs.writeFileSync(path.join(process.env.UV_TOOL_BIN_DIR,'fast-agent-acp'),'#!/bin/sh\\nprintf "registry-uv\\\\n"\\n',{mode:0o755});\n`);
+            await chmod(uv, 0o755);
+            const uvAdded = await registryExecutor.execute('agents.acp.backends.installFromRegistry', {
+                fromRegistry: { sourceId: source.id, itemId: uvEntry.id, version: uvEntry.version }, installOn: [machineId],
+            }, context);
+            expect(uvAdded, JSON.stringify(uvAdded)).toMatchObject({ ok: true });
+            if (!uvAdded.ok) throw new Error('Expected uv registry admission');
+            const uvResult = AgentsAcpBackendsInstallFromRegistryOutputV1Schema.parse(uvAdded.result);
+            await vi.waitFor(async () => {
+                const status = await registryExecutor.execute('machines.agents.install.status', {
+                    machineId, jobId: uvResult.jobs[0]!.jobId, cursor: 0,
+                }, context);
+                expect(status).toMatchObject({ ok: true });
+                if (!status.ok) throw new Error('Expected uv job read');
+                expect(DaemonAgentInstallReadResponseSchema.parse(status.result)).toMatchObject({
+                    ok: true, done: true, outcome: { kind: 'succeeded', version: '0.10.1' },
+                });
+            }, { timeout: serverIntegrationConfig.test?.testTimeout });
+            const uvLaunch = await resolveAcpLaunch({ accountId, definition: uvResult.definition, env,
+                platform: process.platform, arch: process.arch });
+            expect(uvLaunch.kind).toBe('ready');
+            if (uvLaunch.kind !== 'ready') throw new Error('Expected uv executable');
+            expect((await promisify(execFile)(uvLaunch.command, uvLaunch.args, { env: { ...env, ...uvLaunch.runtimeEnv, PATH: '' } })).stdout)
+                .toBe('registry-uv\n');
         } finally {
             daemonSocket?.close();
             manager?.onSocketDisconnect();
@@ -1053,7 +1186,7 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             bytes: new Uint8Array(Buffer.from(file.contentBase64, 'base64')) }));
         const treeSha = computeGitTreeShaV1(bytes);
         let currentBytes = bytes;
-        let rateLimited = false;
+        let upstreamFailure: Readonly<{ status: number; headers?: Record<string, string> }> | null = null;
         const liveFetch = globalThis.fetch;
         const upstreamReads: string[] = [];
         // GitHub is the external boundary; Account HTTP, storage and Action owners stay real.
@@ -1061,7 +1194,7 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
             if (!['api.github.com', 'raw.githubusercontent.com'].includes(url.hostname)) return liveFetch(input, init);
             upstreamReads.push(url.href);
-            if (rateLimited) return new Response('', { status: 429 });
+            if (upstreamFailure) return new Response('', upstreamFailure);
             if (url.pathname.endsWith('/.claude-plugin/marketplace.json')) return new Response('', { status: 404 });
             if (url.hostname === 'raw.githubusercontent.com') {
                 expect(url.pathname.includes(`/${reviewedCommit}/`) || url.pathname.includes(`/${head}/`)).toBe(true);
@@ -1077,7 +1210,68 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
                 : { name: 'skills', default_branch: 'main' };
             return Response.json(value);
         });
+        const machineId = randomUUID(), installationId = randomUUID();
+        const installation = tweetnacl.sign.keyPair();
+        const credentials = { token, encryption: null } as const;
+        const installationProof = signMachineInstallationProof({ payload: { version: 1, machineId, installationId, accountId },
+            privateKey: installation.secretKey });
+        let machineSocket: Socket | undefined;
         try {
+            const registered = await app.inject({ method: 'POST', url: '/v1/machines', headers: {
+                authorization: `Bearer ${token}`, ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+            }, payload: { id: machineId, installationId, installationPublicKey: encodeBase64(installation.publicKey, 'base64url'),
+                installationProof, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                metadata: encodePlainMachineStoredContent({ host: 'registry-update-seam', platform: process.platform,
+                    arch: process.arch, homeDir: tmpdir(), happyCliVersion: '0.3.0' }),
+            } });
+            expect(registered.statusCode, registered.body).toBe(200);
+            await db.machine.update({ where: { id: machineId }, data: { active: true, lastActiveAt: new Date(),
+                operationProtocolCapabilitiesRevision: 1,
+                operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } },
+            } });
+            const rpcManager = new RpcHandlerManager({ scopePrefix: machineId, localMachineId: machineId, encryptionMode: 'plain',
+                authorizeRequest: request => authorizeMachineRpcRequest(request, { machineId,
+                    resolveCustodianAccountId: async () => accountId, resolveInstallationId: () => installationId,
+                    verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input,
+                        privateKey: installation.secretKey, daemonToken: token, serverHttpBaseUrl: origin }),
+                }),
+            });
+            registerExternalActionRpcHandler(rpcManager, { machineId, currentServerId: origin, currentServerHttpBaseUrl: origin,
+                resolveAccountId: async () => accountId, resolveInstallationId: () => installationId,
+                externalActionMachineRequestPrivateKey: installation.secretKey,
+                verifyExecutionAuthorization: input => verifyExternalActionExecutionAuthorizationCurrent({ ...input,
+                    privateKey: installation.secretKey, installationId, serverHttpBaseUrl: origin }),
+                resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl: origin }),
+                executor,
+            });
+            machineSocket = ioClient(origin, { path: '/v1/updates/', transports: ['websocket'], autoConnect: false,
+                reconnection: false, auth: { token, clientType: 'machine-scoped', machineId, installationId,
+                    installationPublicKey: encodeBase64(installation.publicKey, 'base64url'), installationProof,
+                    ...buildAccountStoredContentCompatibilitySocketAuthV1(CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION),
+                },
+            });
+            const daemonSocket = machineSocket;
+            daemonSocket.on(SOCKET_RPC_EVENTS.REQUEST, (request, acknowledge) => {
+                void runWithServerHttpBaseUrl(origin, () => rpcManager.handleRequest(request)).then(acknowledge);
+            });
+            daemonSocket.on('connect', () => rpcManager.onSocketConnect(daemonSocket));
+            daemonSocket.on('disconnect', () => rpcManager.onSocketDisconnect());
+            await new Promise<void>((resolve, reject) => {
+                daemonSocket.once('connect', resolve); daemonSocket.once('connect_error', reject); daemonSocket.connect();
+            });
+            expect(await rpcManager.waitForRegisteredHandlers([EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1], {
+                timeoutMs: serverIntegrationConfig.test!.testTimeout!,
+            })).toEqual({ status: 'ready' });
+            const checkThroughHome = async (skillId: string) => {
+                const response = await fetch(`${origin}/v1/actions/registries.updates.check`, { method: 'POST',
+                    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+                    body: JSON.stringify({ v: 1, requestId: randomUUID(), target: { kind: 'machine', machineId },
+                        input: { kind: 'skill', keys: [skillId] } }),
+                });
+                const body: unknown = await response.json();
+                expect(response.status, JSON.stringify(body)).toBe(200);
+                return ExternalActionResponseEnvelopeV1Schema.parse(body).execution;
+            };
             const created = await executor.execute('registries.sources.create', { url: 'https://github.com/example/skills' }, context);
             expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
             if (!created.ok) throw new Error('Expected source creation');
@@ -1109,7 +1303,7 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             expect(upstreamReads.filter(url => url.includes('/commits/')).at(-1)).toContain(`/${reviewedCommit}`);
             const skillId = result.skillIds[0]!;
             currentBytes = bytes.map(file => file.path === 'SKILL.md' ? { ...file, bytes: new TextEncoder().encode(markdown + '\nNew upstream instructions') } : file);
-            const checked = await executor.execute('registries.updates.check', { kind: 'skill', keys: [skillId] }, context);
+            const checked = await checkThroughHome(skillId);
             expect(checked, JSON.stringify(checked)).toMatchObject({ ok: true });
             if (!checked.ok) throw new Error('Expected registered update checker');
             const observation = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(checked.result);
@@ -1129,18 +1323,31 @@ describe('capability Actions through the production CLI host, HTTP, SQLite and S
             expect(Buffer.from(instructions.theirs!.contentBase64, 'base64').toString()).toBe(markdown + '\nNew upstream instructions');
             expect(inputs.costDelta.theirs.bodyTokens).toBeGreaterThan(inputs.costDelta.mine.bodyTokens);
             const beforeRepeat = await db.artifact.findUniqueOrThrow({ where: { id: skillId } });
-            expect(await executor.execute('registries.updates.check', { kind: 'skill', keys: [skillId] }, context)).toMatchObject({ ok: true });
+            expect(await checkThroughHome(skillId)).toMatchObject({ ok: true });
             expect(await db.artifact.findUniqueOrThrow({ where: { id: skillId } })).toEqual(beforeRepeat);
-            rateLimited = true;
-            const failedCheck = await executor.execute('registries.updates.check', { kind: 'skill', keys: [skillId] }, context);
-            if (!failedCheck.ok) throw new Error('Expected per-item unchecked observation');
-            expect(REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(failedCheck.result).results)
-                .toEqual([{ kind: 'skill', key: skillId, upstream: { state: 'unchecked', reason: { state: 'rate_limited' } } }]);
-            expect(await db.artifact.findUniqueOrThrow({ where: { id: skillId } })).toEqual(beforeRepeat);
+            for (const failure of [
+                { status: 403, headers: { 'x-ratelimit-remaining': '0' }, reason: { state: 'rate_limited' } },
+                { status: 429, reason: { state: 'rate_limited' } },
+                { status: 403, reason: { state: 'auth_failed' } },
+            ]) {
+                upstreamFailure = failure;
+                const failedCheck = await checkThroughHome(skillId);
+                expect(failedCheck, JSON.stringify(failedCheck)).toMatchObject({ ok: true });
+                if (!failedCheck.ok) throw new Error('Expected per-item unchecked observation');
+                expect(REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(failedCheck.result).results)
+                    .toEqual([{ kind: 'skill', key: skillId, upstream: { state: 'unchecked', reason: failure.reason } }]);
+                expect(await db.artifact.findUniqueOrThrow({ where: { id: skillId } })).toEqual(beforeRepeat);
+            }
+            upstreamFailure = null;
+            const recovered = await checkThroughHome(skillId);
+            expect(recovered).toMatchObject({ ok: true });
+            if (!recovered.ok) throw new Error('Expected reachable source recovery');
+            expect(REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(recovered.result).results)
+                .toEqual(observation.results);
             await vi.waitFor(() => expect(updates.some(update => {
                 const parsed = UpdateContainerSchema.safeParse(update);
                 return parsed.success && parsed.data.body.t === 'update-artifact' && parsed.data.body.artifactId === skillId;
             })).toBe(true));
-        } finally { upstream.mockRestore(); }
+        } finally { machineSocket?.close(); upstream.mockRestore(); }
     });
 });

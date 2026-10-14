@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MachineLiveStreamCodecIdV1Schema } from './codecsV1.js';
 import { MachineLiveStreamInputModeV1Schema } from './controlV1.js';
 
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
 export const MachineLiveStreamCaptureSourceKindV1Schema = lazyZodSchema(() => z.enum([
   'screen',
@@ -25,39 +25,33 @@ export const MachineLiveStreamCaptureSidebandKindV1Schema = lazyZodSchema(() => 
   'capture_health',
 ]));
 
-export const MachineLiveStreamCaptureHealthV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamCaptureHealthV1Schema = lazyZodSchema(() => z.strictObject({
     status: z.enum(['available', 'starting', 'degraded', 'unavailable']),
-    reasonCode: z.string().min(1).optional(),
-    droppedFrames: NonNegativeIntSchema.optional(),
-    lastFrameAtMs: NonNegativeIntSchema.optional(),
-  })
-  .strict());
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+    droppedFrames: z.optional(NonNegativeIntSchema),
+    lastFrameAtMs: z.optional(NonNegativeIntSchema),
+  }));
 
-export const MachineLiveStreamCaptureSourceV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamCaptureSourceV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    sourceId: z.string().min(1),
+    sourceId: z.string().check(z.minLength(1)),
     sourceKind: MachineLiveStreamCaptureSourceKindV1Schema,
-    displayName: z.string().min(1).optional(),
-    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).min(1),
-    maxWidth: PositiveIntSchema.optional(),
-    maxHeight: PositiveIntSchema.optional(),
-    maxFramesPerSecond: PositiveIntSchema.optional(),
+    displayName: z.optional(z.string().check(z.minLength(1))),
+    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).check(z.minLength(1)),
+    maxWidth: z.optional(PositiveIntSchema),
+    maxHeight: z.optional(PositiveIntSchema),
+    maxFramesPerSecond: z.optional(PositiveIntSchema),
     inputMode: MachineLiveStreamInputModeV1Schema,
-    sidebands: z.array(MachineLiveStreamCaptureSidebandKindV1Schema).default([]),
+    sidebands: z._default(z.array(MachineLiveStreamCaptureSidebandKindV1Schema), []),
     health: MachineLiveStreamCaptureHealthV1Schema,
-  })
-  .passthrough());
+  }));
 
-export const MachineLiveStreamCaptureUnavailableV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamCaptureUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sourceId: z.string().min(1).optional(),
-    reasonCode: z.string().min(1),
-    sourceKind: MachineLiveStreamCaptureSourceKindV1Schema.optional(),
-  })
-  .strict());
+    sourceId: z.optional(z.string().check(z.minLength(1))),
+    reasonCode: z.string().check(z.minLength(1)),
+    sourceKind: z.optional(MachineLiveStreamCaptureSourceKindV1Schema),
+  }));
 
 export type MachineLiveStreamCaptureSourceKindV1 = z.infer<
   typeof MachineLiveStreamCaptureSourceKindV1Schema

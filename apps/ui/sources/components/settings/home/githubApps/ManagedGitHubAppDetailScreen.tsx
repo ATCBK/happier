@@ -3,7 +3,7 @@ import { signInConnectionStatusLabel } from '@/components/settings/identity/sign
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -53,7 +53,7 @@ export const ManagedGitHubAppDetailContent = React.memo(function ManagedGitHubAp
     const [pending, setPending] = React.useState<string | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [notice, setNotice] = React.useState<string | null>(null);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const copyCallbackUrl = React.useCallback(async (url: string) => {
         if (!await setClipboardStringSafe(url)) {
             await Modal.alertAsync(t('common.error'), t('items.failedToCopyToClipboard'));

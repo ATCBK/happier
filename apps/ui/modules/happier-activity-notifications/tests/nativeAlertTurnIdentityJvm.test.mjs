@@ -424,7 +424,7 @@ private fun sortedWakeScenarioKeys(input: JSONObject): List<String> =
   }.sorted()
 `;
 
-test('Android Machine enrichment uses authenticated own-Machine metadata and recovery only dismisses', (t) => {
+test('Android Machine enrichment shares presentation for offline and requested return, with quiet ordinary recovery', (t) => {
   const toolchain = discoverKotlinToolchain();
   if (!toolchain) { t.skip('Kotlin toolchain unavailable; Machine enrichment requires the JVM gate'); return; }
   const work = mkdtempSync(join(tmpdir(), 'happier-machine-enrichment-'));
@@ -490,8 +490,18 @@ fun main(args: Array<String>) {
       println("$case|\${enriched.data["title"]}|\${enriched.data["message"]}|$requests")
       if (case == "recovered") {
         ActivityNotificationPresenter.present(context, message, alert)
+        check(ExpoPresentationDelegate.presented == 1)
+        check(ExpoPresentationDelegate.dismissed.isEmpty())
+        val quiet = RemoteMessage(mapOf("body" to body))
+        ActivityNotificationPresenter.present(context, quiet, alert)
+        check(ExpoPresentationDelegate.dismissed.isEmpty())
+        check(ExpoPresentationDelegate.presented == 1)
+        check(ExpoPresentationDelegate.notifications.single().notificationRequest.content.body?.opt("phase") == "recovered")
+        val offlineMessage = RemoteMessage(mapOf("body" to body.replace("recovered", "offline"), "message" to "Offline"))
+        ActivityNotificationPresenter.present(context, offlineMessage, MachineRemoteAlert.parse(offlineMessage)!!)
+        ActivityNotificationPresenter.present(context, quiet, alert)
         check(ExpoPresentationDelegate.dismissed == listOf("machine_alert:srv-1:acc-1:machine-1"))
-        check(ExpoPresentationDelegate.presented == 0)
+        check(ExpoPresentationDelegate.notifications.isEmpty())
       }
     }
   } finally { server.stop(0) }
@@ -507,9 +517,9 @@ fun main(args: Array<String>) {
       // the canonical envelope adapter and real AES-GCM worker beneath it.
       ['NativeCrypto.kt', 'package dev.happier.cryptoworker\nobject HappierCryptoWorkerNative { fun openDataKeyEnvelopeV1(envelope: ByteArray, recipient: ByteArray): ByteArray? = if (envelope.contentEquals(byteArrayOf(1)) && recipient.contentEquals(byteArrayOf(9))) ByteArray(32) { 7 } else null; fun openSecretboxJson(ciphertext: ByteArray, key: ByteArray): ByteArray? = null }'],
       ['Firebase.kt', 'package com.google.firebase.messaging\nclass RemoteMessage(val data: Map<String, String>) { val from: String? = null; val messageId: String? = null; val sentTime: Long = 1; class Builder(from: String) { var data = emptyMap<String, String>(); fun setMessageId(id: String) = this; fun setData(value: Map<String, String>): Builder { data=value; return this }; fun build() = RemoteMessage(data) } }'],
-      ['Models.kt', 'package expo.modules.notifications.notifications.model\nclass RemoteNotificationContent(message: com.google.firebase.messaging.RemoteMessage)\nclass NotificationRequest(val identifier: String, content: RemoteNotificationContent, trigger: Any)\nclass Notification(val notificationRequest: NotificationRequest, date: java.util.Date)'],
+      ['Models.kt', 'package expo.modules.notifications.notifications.model\nclass RemoteNotificationContent(message: com.google.firebase.messaging.RemoteMessage) { val body = message.data["body"]?.let { org.json.JSONObject(it) } }\nclass NotificationRequest(val identifier: String, val content: RemoteNotificationContent, trigger: Any)\nclass Notification(val notificationRequest: NotificationRequest, date: java.util.Date)'],
       ['Trigger.kt', 'package expo.modules.notifications.notifications.model.triggers\nclass FirebaseNotificationTrigger(message: com.google.firebase.messaging.RemoteMessage)'],
-      ['Presentation.kt', 'package expo.modules.notifications.service.delegates\nclass ExpoPresentationDelegate(context: android.content.Context) { companion object { var dismissed = emptyList<String>(); var presented = 0 }; fun dismissNotifications(ids: Collection<String>) { dismissed = ids.toList() }; fun presentNotification(notification: expo.modules.notifications.notifications.model.Notification, behavior: Any?) { presented += 1 } }'],
+      ['Presentation.kt', 'package expo.modules.notifications.service.delegates\nclass ExpoPresentationDelegate(context: android.content.Context) { companion object { var dismissed = emptyList<String>(); var presented = 0; var notifications = emptyList<expo.modules.notifications.notifications.model.Notification>() }; fun getAllPresentedNotifications() = notifications; fun dismissNotifications(ids: Collection<String>) { dismissed = ids.toList(); notifications = notifications.filter { it.notificationRequest.identifier !in ids } }; fun presentNotification(notification: expo.modules.notifications.notifications.model.Notification, behavior: Any?) { presented += 1; notifications = notifications.filter { it.notificationRequest.identifier != notification.notificationRequest.identifier } + notification } }'],
       ['Probe.kt', probe],
     ].map(([name, source]) => { const path = join(work, name); writeFileSync(path, source); return path; });
     const classes = join(work, 'classes');

@@ -1,4 +1,3 @@
-import { assertMcpRuntimeServerRegistrationSafe } from './hosted/safety';
 import type { PluginHostedMcpServerSpec } from './hosted/runtimeTypes';
 import type { HostedMcpRuntimeEndpoint } from './runtimeTypes';
 
@@ -100,6 +99,7 @@ export async function createPluginHostedMcpServerHandle(params: Readonly<{
     startRuntimeEndpoint?: StartPluginHostedMcpRuntimeEndpoint;
     toolNameSource?: 'mcpServer';
 }>): Promise<PluginHostedMcpServerHandle> {
+    const { assertMcpRuntimeServerRegistrationSafe } = await import('./hosted/safety');
     assertMcpRuntimeServerRegistrationSafe(params.spec, { pluginId: params.pluginId, toolNameSource: params.toolNameSource });
     if (params.registry.has(params.pluginId, params.spec.id)) {
         throw new Error(`Hosted MCP server '${params.spec.id}' is already active for plugin '${params.pluginId}'`);

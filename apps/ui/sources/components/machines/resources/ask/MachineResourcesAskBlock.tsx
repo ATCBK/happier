@@ -13,11 +13,16 @@ import { NewSessionEmbeddedHostProvider } from '@/components/sessions/new/naviga
 import { useNewSessionEmbeddedHostState } from '@/components/sessions/new/navigation/useNewSessionEmbeddedHostState';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { readHappierStorageBytes } from '@/components/machines/storage/storageViewModel';
+import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
 import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
 import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useMachineStorageSummary } from '@/sync/domains/machines/storage/useMachineStorageSummary';
+import { useMachineProcesses } from '@/sync/domains/machines/processes/useMachineProcesses';
+import { selectMachineProcessesLeftBehind } from '@/sync/domains/machines/processes/selectMachineProcessesLeftBehind';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
@@ -51,6 +56,14 @@ export const MachineResourcesAskBlock = React.memo(
       serverId: props.serverId,
       machineId: props.machineId,
     });
+    // Observe the reports the tabs already hold; Ask never creates sampling demand.
+    const storage = useMachineStorageSummary({ serverId: props.serverId, machineId: props.machineId, enabled: false });
+    const processes = useMachineProcesses({ serverId: props.serverId, machineId: props.machineId,
+      scope: 'happier', view: 'tree', active: false });
+    const automations = useAutomationsSupport({ scopeKind: 'spawn', serverId: props.serverId });
+    const happierStorageBytes = storage.summary ? readHappierStorageBytes(storage.summary) : null;
+    const leftBehindCount = processes.answer?.state === 'live'
+      ? selectMachineProcessesLeftBehind(processes.answer.leftBehind).count : null;
     const reported = summary?.kind === 'reporting' ? summary.summary : null;
     const calm = summary?.kind === 'reporting' && summary.attention?.level === 'calm';
     const guardEnabled = policy.policy
@@ -78,12 +91,17 @@ export const MachineResourcesAskBlock = React.memo(
               }
             : {}),
           guardEnabled,
-          automationsEnabled: true,
+          happierStorageBytes,
+          leftBehindCount,
+          automationsEnabled: automations.enabled,
         }),
       [
-      language,
+        language,
+        automations.enabled,
         calm,
         guardEnabled,
+        happierStorageBytes,
+        leftBehindCount,
         homeDir,
         props.machineId,
         props.machineName,
@@ -92,15 +110,10 @@ export const MachineResourcesAskBlock = React.memo(
         reported,
       ],
     );
-    const lastReportSuggestions = React.useMemo(
-      // Notify me currently delivers immediately; it cannot register a machine-return notification.
-      // Do not offer that operation as a composer fill or an inert notification tile.
-      () => suggestions.filter((suggestion) => suggestion.kind !== 'notifyWhenBack'),
-      [suggestions],
-    );
     const fillGlobalComposer = React.useCallback((suggestion: HomeComposerSuggestionFill) => {
       const lifetime = captureActiveServerAccountScopeLifetime();
-      const outcome = lifetime && seedAndOpenNewSession({
+      const scope = selectActiveServerAccountScopeForServer(lifetime?.scope ?? null, props.serverId);
+      const outcome = lifetime && scope && seedAndOpenNewSession({
         seed: { prompt: suggestion.prompt },
         scope: lifetime.scope,
         isCurrent: lifetime.isCurrent,
@@ -112,7 +125,7 @@ export const MachineResourcesAskBlock = React.memo(
       if (!outcome || outcome.kind !== 'opened') {
         Modal.alert(t('common.error'), t('errors.operationFailed'));
       }
-    }, [router]);
+    }, [props.serverId, router]);
 
     return (
       <ItemGroup
@@ -136,7 +149,7 @@ export const MachineResourcesAskBlock = React.memo(
             />
           ) : (
             <HubComposerSuggestionList
-              suggestions={lastReportSuggestions}
+              suggestions={suggestions}
               onFill={fillGlobalComposer}
             />
           )}

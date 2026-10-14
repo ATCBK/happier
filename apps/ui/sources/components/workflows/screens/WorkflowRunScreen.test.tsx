@@ -354,6 +354,7 @@ async function renderRunScreen(overrides: Readonly<{
     historyNextCursor?: string;
     acceptedContext?: unknown;
     invocationListFailure?: Error;
+    getRunFailure?: Error;
     canEdit?: boolean;
     wrap?: (screen: React.ReactElement) => React.ReactElement;
 }> = {}) {
@@ -379,6 +380,7 @@ async function renderRunScreen(overrides: Readonly<{
             ? {}
             : { finalOutputInvocationId: overrides.finalOutputInvocationId }),
     });
+    if (overrides.getRunFailure !== undefined) detailActions.getRun.mockRejectedValue(overrides.getRunFailure);
     if (overrides.invocationListFailure === undefined) {
         detailActions.listInvocations.mockImplementation(async (input: Readonly<{ lifecycles?: readonly string[]; includeContent?: boolean }>) => (
             input.lifecycles?.length === 1 && input.lifecycles[0] === 'failed'
@@ -676,6 +678,24 @@ describe('WorkflowRunScreen', () => {
         </DestinationInstanceHost> });
         await screen.pressByTestIdAsync('workflow-run-selected-header.close');
         expect(replace).toHaveBeenCalledWith('/workflows/runs/11111111-1111-4111-8111-111111111111');
+    });
+
+    it('keeps Back in the phone header when the Run no longer exists, even with no history to go back to', async () => {
+        Object.assign(platformViewport, { width: 390, height: 844 });
+        const screen = await renderRunScreen({
+            getRunFailure: new WorkflowActionError({ message: 'Workflow Run not found', rawCode: 'run_not_found' }),
+            wrap: body => <DestinationInstanceHost tabId="hold-tab"
+                ref={{ kind: 'workflowRun', params: { runId: '11111111-1111-4111-8111-111111111111' } }}
+                pathname="/workflows/runs/11111111-1111-4111-8111-111111111111" focused visible phone
+                navigation={{ ...routerSpy, replace: vi.fn(), canGoBack: () => false }}>
+                {body}
+            </DestinationInstanceHost>,
+        });
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.findByTestId('workflow-run-load-failed')).not.toBeNull();
+        });
+        expect(screen.findByTestId('workflow-run-back')).not.toBeNull();
     });
 
     it('admits an accepted repeat with frozen child and role after their live sources change or disappear', async () => {

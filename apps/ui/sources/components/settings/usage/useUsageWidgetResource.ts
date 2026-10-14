@@ -51,8 +51,13 @@ export function useUsageWidgetBodyModel(resource: UsageWidgetResource, instanceI
     const key = row?.key;
     const current = lifetime?.isCurrent() === true && query !== undefined && key !== undefined;
     const authorityLost = isPluginUiResourceReadAuthorityLost(snapshot);
-    const slice = current && !authorityLost && snapshot.value
+    const projectedSlice = current && !authorityLost && snapshot.value
         ? decodeUsageQueryResource(snapshot.value).results.find(value => value.key === key) : undefined;
+    // Page chrome can name the producer's pending reads before any facts arrive.
+    // A source-only revision is not a zero-valued body or previous-period value.
+    const slice = projectedSlice?.pending && !projectedSlice.accounting && !projectedSlice.quota?.length
+        && !projectedSlice.sources.some(source => source.asOfMs !== undefined || source.status === 'error')
+        ? undefined : projectedSlice;
     const identity = React.useMemo<UsageWidgetQueryIdentity | null>(() => current && query && lifetime
         ? { query, authority: lifetime.scope } : null, [current, lifetime, key]);
     const prior = React.useRef<Readonly<{ instanceId: string; identity: UsageWidgetQueryIdentity;

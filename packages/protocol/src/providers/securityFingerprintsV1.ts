@@ -11,7 +11,7 @@ import {
   type QualifiedConnectedAccountPurposeBindingsV1,
 } from '../connect/connectedAccountPurposeBindings.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { CapabilitySupport, ProviderWireProtocol } from './capabilities/v1.js';
 import { CapabilitySupportSchema, ProviderWireProtocolSchema } from './capabilities/v1.js';
 import type { ProviderCatalogProbeV1 } from './catalog/descriptorV1.js';

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import type { SessionListScopeV1 } from "@happier-dev/protocol";
+import type { SessionListScopeV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { type Tx } from "@/storage/inTx";
 import {
     createSessionsWithDiscussionMentionWhere,

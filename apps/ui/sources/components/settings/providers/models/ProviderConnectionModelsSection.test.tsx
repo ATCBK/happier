@@ -11,7 +11,8 @@ import {
     type DaemonProviderModelRowV1,
 } from '@happier-dev/protocol/rpc';
 
-import { activateStorageAccountScope, createMachineFixture, createDeferred, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen as renderBaseScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { createMachineFixture, createDeferred, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen as renderBaseScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
 import type { ProviderModelLoadUiResult } from '@/providers/hooks/useProviderModelLoadAction';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 import type { HomeDomainAnswer } from '@/dev/testkit/harness/homeGovernanceHarness';

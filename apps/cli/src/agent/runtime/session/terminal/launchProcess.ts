@@ -20,7 +20,8 @@ import {
 } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
 import type { PluginExecAgentCliGrantRecord } from '@/plugins/runtime/exec/system/tools/definitions';
 import { isDeniedPathOnlyRuntimeName } from '@/plugins/runtime/exec/system/tools/runtimeDeny';
-import { terminateProcessTree as defaultKillProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { createProcessTreeStopper, terminateProcessTree as defaultKillProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { logger } from '@/ui/logger';
 import {
     createManagedChildProcess as defaultCreateManagedChildProcess,
     type ManagedChildProcess,
@@ -204,6 +205,7 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
                     }),
                 }),
                 args: Object.freeze([...launch.args]),
+                ...(launch.providerExitOwnership ? { providerExitOwnership: launch.providerExitOwnership } : {}),
                 source: launch.source,
                 resolvedPath: launch.resolvedPath,
             });
@@ -229,17 +231,17 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
                 windowsHide: request.windowsHide,
                 windowsVerbatimArguments: request.windowsVerbatimArguments,
             });
-            let stopped = false;
-            const stop = async (options?: Readonly<{ graceMs?: number }>): Promise<void> => {
-                if (stopped) {
-                    return;
-                }
-                stopped = true;
-                request.signal?.removeEventListener('abort', abortListener);
+            const stopProcess = createProcessTreeStopper(async options => {
                 await terminateProcessTree(child, options);
-            };
+                request.signal?.removeEventListener('abort', abortListener);
+            });
+            const stop = stopProcess.stop;
             const abortListener = (): void => {
-                void stop();
+                void stop().catch(() => {
+                    logger.infoFile('[terminal-runtime] Process termination after cancellation failed', {
+                        code: 'terminal_process_stop_failed',
+                    });
+                });
             };
             request.signal?.addEventListener('abort', abortListener, { once: true });
 
@@ -248,23 +250,24 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
             try {
                 managed = createManagedChildProcess(child);
                 readBufferedStderr = bufferChildStderr(child);
+                assertNotAborted(request.signal);
             } catch (error) {
-                await stop().catch(() => undefined);
+                try {
+                    await stop();
+                } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], 'Terminal process launch and cleanup failed', { cause: error });
+                }
                 throw error;
-            }
-            if (request.signal?.aborted) {
-                await stop().catch(() => undefined);
-                throw createAbortError();
             }
 
             return Object.freeze({
                 pid: managed.pid,
                 waitForTermination: async () => {
-                    try {
-                        return mapTerminationEvent(await managed.waitForTermination());
-                    } finally {
+                    const termination = await managed.waitForTermination();
+                    if (termination.type === 'exited' || termination.type === 'signaled') {
                         request.signal?.removeEventListener('abort', abortListener);
                     }
+                    return mapTerminationEvent(termination);
                 },
                 stop,
                 readBufferedStderr,

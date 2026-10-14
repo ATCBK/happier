@@ -40,7 +40,7 @@ function listText(role: keyof typeof HAPPIER_COLLECTION_LIST_TEXT) {
 
 const styles = StyleSheet.create((theme) => ({
     // A line state (a failed read) on the rows' text edge, between the list's rows.
-    stateLine: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset, paddingVertical: theme.margins.xs },
+    stateLine: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset, paddingVertical: theme.space.s4 },
     surface: {
         backgroundColor: theme.colors.surface.base,
     },
@@ -153,6 +153,8 @@ export function CollectionListGroupLabel(props: Readonly<{
     mark?: React.ReactNode;
     /** One small control or state at the label's end (a group's "+"). */
     trailing?: React.ReactNode;
+    /** `menu`: the label heads menu-role rows (a popover or sheet) and starts on their text edge. */
+    presentation?: 'list' | 'menu';
     testID?: string;
 }>) {
     const { testID, ...label } = props;

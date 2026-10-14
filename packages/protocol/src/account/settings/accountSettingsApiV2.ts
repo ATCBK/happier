@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AccountEncryptionCurrentnessResponseSchema } from '../encryptionMode.js';
 import { ProfileReferenceGuardRevisionV1Schema } from '../../profiles/profileRecordSchemaV1.js';
 import { ProfileRecordIdV1Schema } from '../../profiles/v2/profileId.js';
@@ -54,12 +54,10 @@ export const ACCOUNT_SETTINGS_V2_UPDATE_REQUEST_MAX_UTF8_BYTES = Math.max(
 ) + ACCOUNT_REMOTE_ALERT_POLICY_MAX_UTF8_BYTES
   + serializedUtf8ByteLength({ remoteAlertPolicy: null }) - serializedUtf8ByteLength(null) - 1;
 
-export const AccountSettingsV2GetResponseSchema = lazyZodSchema(() => z
-  .object({
-    content: AccountSettingsStoredContentEnvelopeSchema.nullable(),
-    version: z.number().int().min(0),
-  })
-  .strict());
+export const AccountSettingsV2GetResponseSchema = lazyZodSchema(() => z.strictObject({
+    content: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
+    version: z.number().check(z.int(), z.minimum(0)),
+  }));
 
 export type AccountSettingsV2GetResponse = z.infer<typeof AccountSettingsV2GetResponseSchema>;
 
@@ -67,38 +65,34 @@ export type AccountSettingsV2GetResponse = z.infer<typeof AccountSettingsV2GetRe
  * Route admission validates the structural request before the write-bound
  * schema classifies an otherwise valid but oversized envelope.
  */
-export const AccountSettingsV2UpdateRequestAdmissionSchema = lazyZodSchema(() => z
-  .object({
-    content: AccountSettingsStoredContentEnvelopeSchema.nullable(),
-    expectedVersion: z.number().int().min(0),
-    expectedProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema.optional(),
-    remoteAlertPolicy: AccountRemoteAlertPolicyV1Schema.nullable().optional(),
-  })
-  .strict());
+export const AccountSettingsV2UpdateRequestAdmissionSchema = lazyZodSchema(() => z.strictObject({
+    content: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
+    expectedVersion: z.number().check(z.int(), z.minimum(0)),
+    expectedProfileTransferRevision: z.optional(ProfileReferenceGuardRevisionV1Schema),
+    remoteAlertPolicy: z.optional(z.nullable(AccountRemoteAlertPolicyV1Schema)),
+  }));
 
-export const AccountSettingsV2UpdateRequestSchema = lazyZodSchema(() => z
-  .object({
-    content: AccountSettingsStoredContentEnvelopeWriteSchema.nullable(),
-    expectedVersion: z.number().int().min(0),
-    expectedProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema.optional(),
-    remoteAlertPolicy: AccountRemoteAlertPolicyV1Schema.nullable().optional(),
-  })
-  .strict());
+export const AccountSettingsV2UpdateRequestSchema = lazyZodSchema(() => z.strictObject({
+    content: z.nullable(AccountSettingsStoredContentEnvelopeWriteSchema),
+    expectedVersion: z.number().check(z.int(), z.minimum(0)),
+    expectedProfileTransferRevision: z.optional(ProfileReferenceGuardRevisionV1Schema),
+    remoteAlertPolicy: z.optional(z.nullable(AccountRemoteAlertPolicyV1Schema)),
+  }));
 
 export type AccountSettingsV2UpdateRequest = z.infer<typeof AccountSettingsV2UpdateRequestSchema>;
 
 export const AccountSettingsV2UpdateResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ success: z.literal(false), error: z.literal('profile-transfer-mismatch'),
-    currentProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema }).strict(),
+  z.strictObject({ success: z.literal(false), error: z.literal('profile-transfer-mismatch'),
+    currentProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema }),
   z.object({
     success: z.literal(true),
-    version: z.number().int().min(0),
+    version: z.number().check(z.int(), z.minimum(0)),
   }),
   z.object({
     success: z.literal(false),
     error: z.literal('version-mismatch'),
-    currentVersion: z.number().int().min(0),
-    currentContent: AccountSettingsStoredContentEnvelopeSchema.nullable(),
+    currentVersion: z.number().check(z.int(), z.minimum(0)),
+    currentContent: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
   }),
   z.object({
     success: z.literal(false),
@@ -118,83 +112,83 @@ export type AccountSettingsV2UpdateResponse = z.infer<typeof AccountSettingsV2Up
 export const AccountSettingsV2HistoryContentKindV1Schema = lazyZodSchema(() => z.enum(['encrypted', 'plain', 'empty']));
 export type AccountSettingsV2HistoryContentKindV1 = z.infer<typeof AccountSettingsV2HistoryContentKindV1Schema>;
 
-export const AccountSettingsV2HistoryListResponseSchema = lazyZodSchema(() => z.object({
+export const AccountSettingsV2HistoryListResponseSchema = lazyZodSchema(() => z.strictObject({
     snapshots: z.array(z.object({
-        version: z.number().int().min(0),
-        createdAt: z.string().datetime(),
+        version: z.number().check(z.int(), z.minimum(0)),
+        createdAt: z.string().check(z.iso.datetime()),
         contentKind: AccountSettingsV2HistoryContentKindV1Schema,
-        byteLength: z.number().int().min(0),
+        byteLength: z.number().check(z.int(), z.minimum(0)),
     })),
-}).strict());
+}));
 export type AccountSettingsV2HistoryListResponse = z.infer<typeof AccountSettingsV2HistoryListResponseSchema>;
 
-export const AccountSettingsV2HistoryDetailResponseSchema = lazyZodSchema(() => z.object({
-    content: AccountSettingsStoredContentEnvelopeSchema.nullable(),
-    version: z.number().int().min(0),
-    createdAt: z.string().datetime(),
-}).strict());
+export const AccountSettingsV2HistoryDetailResponseSchema = lazyZodSchema(() => z.strictObject({
+    content: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
+    version: z.number().check(z.int(), z.minimum(0)),
+    createdAt: z.string().check(z.iso.datetime()),
+}));
 export type AccountSettingsV2HistoryDetailResponse = z.infer<typeof AccountSettingsV2HistoryDetailResponseSchema>;
 
 /** Private exact-version transport. Action observations contain versions, never these envelopes. */
 export const AccountSettingsHistorySavedSecretTransferV1Schema = lazyZodSchema(() => {
-  const destination = z.object({ resourceId: z.string().refine(id => {
+  const destination = z.object({ resourceId: z.string().check(z.refine(id => {
     try { formatSharedSavedSecretRefV1(id); return true; } catch { return false; }
-  }), expectedRevision: z.number().int().nonnegative().safe(),
+  })), expectedRevision: z.number().check(z.int(), z.nonnegative(), z.int()),
   });
   return z.union([
-    destination.extend({ savedSecretId: z.string().min(1) }).strict(),
-    destination.extend({ source: z.object({ kind: z.literal('legacy-inference-openai-key') }).strict() }).strict(),
-    destination.extend({ source: z.object({ kind: z.literal('notification-channel-signing-secret'), channelId: z.string().min(1) }).strict() }).strict(),
-    destination.extend({ source: z.object({ kind: z.literal('remote-host-ssh-credential'), hostId: z.string().min(1),
-      slot: z.enum(['password', 'identityPrivateKey']) }).strict() }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destination, { savedSecretId: z.string().check(z.minLength(1)) })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destination, { source: z.strictObject({ kind: z.literal('legacy-inference-openai-key') }) })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destination, { source: z.strictObject({ kind: z.literal('notification-channel-signing-secret'), channelId: z.string().check(z.minLength(1)) }) })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destination, { source: z.strictObject({ kind: z.literal('remote-host-ssh-credential'), hostId: z.string().check(z.minLength(1)),
+      slot: z.enum(['password', 'identityPrivateKey']) }) })),
   ]);
 });
 export type AccountSettingsHistorySavedSecretTransferV1 = z.infer<typeof AccountSettingsHistorySavedSecretTransferV1Schema>;
 /** Actual current Role retention receipts; an explicit empty inventory is still complete. */
-export const AccountSettingsHistoryLegacyRoleArtifactTransferV1Schema = lazyZodSchema(() => z.object({
-  artifactId: z.string().uuid(), expectedRevision: WorkflowArtifactRevisionV1Schema,
-}).strict());
+export const AccountSettingsHistoryLegacyRoleArtifactTransferV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactId: z.string().check(z.uuid()), expectedRevision: WorkflowArtifactRevisionV1Schema,
+}));
 export type AccountSettingsHistoryLegacyRoleArtifactTransferV1 = RoleArtifactRetentionReceiptV1;
 /** Exact admitted private catalog rows, never caller-supplied source-root authority. */
-export const AccountSettingsHistoryPrivateCatalogRevisionsV1Schema = lazyZodSchema(() => z.object({
-  providerConnections: z.number().int().nonnegative().safe().optional(),
-  connectedConfigurations: z.number().int().nonnegative().safe().optional(),
-  connectedPurposes: z.number().int().nonnegative().safe().optional(),
-  connectedPresentation: z.number().int().nonnegative().safe().optional(),
-  connectedAcknowledgements: z.number().int().nonnegative().safe().optional(),
-  notificationChannels: z.number().int().nonnegative().safe().optional(),
-  mcp: z.number().int().nonnegative().safe().optional(),
-  acp: z.number().int().nonnegative().safe().optional(),
-  remoteHosts: z.number().int().nonnegative().safe().optional(),
-}).strict());
+export const AccountSettingsHistoryPrivateCatalogRevisionsV1Schema = lazyZodSchema(() => z.strictObject({
+  providerConnections: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  connectedConfigurations: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  connectedPurposes: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  connectedPresentation: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  connectedAcknowledgements: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  notificationChannels: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  mcp: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  acp: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  remoteHosts: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+}));
 export type AccountSettingsHistoryPrivateCatalogRevisionsV1 = z.infer<typeof AccountSettingsHistoryPrivateCatalogRevisionsV1Schema>;
 export const AccountSettingsV2HistoryMutationRequestSchema = lazyZodSchema(() => {
-  const captured = z.object({
-    expectedSettingsVersion: z.number().int().nonnegative().safe(),
+  const captured = z.strictObject({
+    expectedSettingsVersion: z.number().check(z.int(), z.nonnegative(), z.int()),
     expectedProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema,
-    expectedEncryptionCurrentness: AccountEncryptionCurrentnessResponseSchema.pick({
+    expectedEncryptionCurrentness: z.pick(AccountEncryptionCurrentnessResponseSchema, {
         mode: true, signingKeyFingerprint: true, contentKeyFingerprint: true,
     }),
-  }).strict();
+  });
   return z.union([
-    captured.extend({ expectedContent: AccountSettingsStoredContentEnvelopeSchema.nullable(),
-      operation: z.object({ kind: z.literal('normalize'), removedRoots: z.array(z.string().min(1)),
-        transferredProfileIds: z.array(ProfileRecordIdV1Schema).optional(),
-        transferredPromptLibraryKeys: z.array(PromptLibraryCatalogKeyV1Schema).optional(),
-        savedSecretTransfers: z.array(AccountSettingsHistorySavedSecretTransferV1Schema).optional(),
-        legacyRoleArtifactTransfers: z.array(AccountSettingsHistoryLegacyRoleArtifactTransferV1Schema).optional(),
-        transferredPrivateCatalogRevisions: AccountSettingsHistoryPrivateCatalogRevisionsV1Schema.optional(),
-        content: AccountSettingsStoredContentEnvelopeWriteSchema.nullable() }).strict() }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(captured, { expectedContent: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
+      operation: z.strictObject({ kind: z.literal('normalize'), removedRoots: z.array(z.string().check(z.minLength(1))),
+        transferredProfileIds: z.optional(z.array(ProfileRecordIdV1Schema)),
+        transferredPromptLibraryKeys: z.optional(z.array(PromptLibraryCatalogKeyV1Schema)),
+        savedSecretTransfers: z.optional(z.array(AccountSettingsHistorySavedSecretTransferV1Schema)),
+        legacyRoleArtifactTransfers: z.optional(z.array(AccountSettingsHistoryLegacyRoleArtifactTransferV1Schema)),
+        transferredPrivateCatalogRevisions: z.optional(AccountSettingsHistoryPrivateCatalogRevisionsV1Schema),
+        content: z.nullable(AccountSettingsStoredContentEnvelopeWriteSchema) }) })),
     // Purge addresses the immutable retained version, including unreadable at-rest
     // data. No opening or echo of its credential bytes is needed for this intent.
-    captured.extend({ expectedContent: AccountSettingsStoredContentEnvelopeSchema.nullable().optional(),
-      operation: z.object({ kind: z.literal('purge') }).strict() }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(captured, { expectedContent: z.optional(z.nullable(AccountSettingsStoredContentEnvelopeSchema)),
+      operation: z.strictObject({ kind: z.literal('purge') }) })),
   ]);
 });
 export type AccountSettingsV2HistoryMutationRequest = z.infer<typeof AccountSettingsV2HistoryMutationRequestSchema>;
-export const AccountSettingsV2HistoryMutationResponseSchema = lazyZodSchema(() => z.object({
+export const AccountSettingsV2HistoryMutationResponseSchema = lazyZodSchema(() => z.strictObject({
     status: z.enum(['applied', 'unchanged', 'conflict', 'not_found', 'invalid_content', 'storage_unavailable']),
-}).strict());
+}));
 export type AccountSettingsV2HistoryMutationResponse = z.infer<typeof AccountSettingsV2HistoryMutationResponseSchema>;
 
 /**
@@ -202,8 +196,8 @@ export type AccountSettingsV2HistoryMutationResponse = z.infer<typeof AccountSet
  * E2EE content, so it can never remain a second restore writer beside
  * client-side classification-aware restore.
  */
-export const AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema = lazyZodSchema(() => z.object({
+export const AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema = lazyZodSchema(() => z.strictObject({
     error: z.literal('account_settings_restore_client_update_required'),
-}).strict());
+}));
 export type AccountSettingsV2HistoryRestoreClientUpdateRequiredResponse =
     z.infer<typeof AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema>;

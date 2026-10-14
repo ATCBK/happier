@@ -62,7 +62,7 @@ export const RoleCollectionRow = React.memo(function RoleCollectionRow(
 
 const styles = StyleSheet.create((theme) => ({
   edited: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

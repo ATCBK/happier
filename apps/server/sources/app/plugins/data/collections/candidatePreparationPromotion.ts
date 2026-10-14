@@ -1,9 +1,6 @@
 import type { Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv, type DbProvider } from "@/storage/prisma";
-import type {
-    NormalizedPluginAccountCollectionContractV1,
-    PluginCollectionProjectionV1,
-} from "@happier-dev/protocol";
+import type { NormalizedPluginAccountCollectionContractV1, PluginCollectionProjectionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 
 import {
     advancePluginCollectionRevision,

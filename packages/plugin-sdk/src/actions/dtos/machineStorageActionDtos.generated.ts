@@ -179,8 +179,8 @@ export type MachineStorageActionInputById = {
         machineId: string;
         scanId?: string | undefined;
         view?: {
-            tab: 'find' | 'old' | 'folders' | 'large' | 'insights';
-            depth: 1 | 2 | 3;
+            tab: 'old' | 'folders' | 'large' | 'insights' | 'find';
+            depth: 1 | 3 | 2;
             nodeId?: string | undefined;
             sort?: {
                 by: 'size' | 'items' | 'name' | 'changed' | 'since';
@@ -381,6 +381,7 @@ export type MachineStorageActionResultById = {
         }[];
         inTrashBytes: number;
         freedBytes: number;
+        trashEntryIds?: string[] | undefined;
     };
     readonly "machines.storage.deleteNow": {
         batchId: string;
@@ -395,6 +396,7 @@ export type MachineStorageActionResultById = {
         }[];
         inTrashBytes: number;
         freedBytes: number;
+        trashEntryIds?: string[] | undefined;
     };
     readonly "machines.storage.trash.empty": {
         outcomes: {

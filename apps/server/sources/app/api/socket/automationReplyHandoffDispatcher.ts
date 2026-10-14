@@ -1,10 +1,5 @@
-import {
-    AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1,
-    AutomationReplyHandoffDispatchRequestV1Schema,
-    AutomationReplyHandoffDispatchResultV1Schema,
-    type AutomationReplyHandoffDispatchResultV1,
-} from "@happier-dev/protocol";
-import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from "@happier-dev/protocol/rpc";
+import { AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1, AutomationReplyHandoffDispatchRequestV1Schema, AutomationReplyHandoffDispatchResultV1Schema, type AutomationReplyHandoffDispatchResultV1 } from '@happier-dev/protocol/automations/event';
+import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/socketRpc';
 import type { Server } from "socket.io";
 
 import { forwardRpcCall, type RpcForwardResult } from "./rpc/forwardRpcCall";

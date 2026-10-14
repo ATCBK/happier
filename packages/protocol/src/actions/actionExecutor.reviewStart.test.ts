@@ -13,6 +13,24 @@ const workflowStartContext: AgentStartContextV1 = {
 };
 
 describe('createActionExecutor (review.start)', () => {
+  it.each([undefined, 'agentDefault'] as const)('carries explicit child selection %s through Review fanout to the Run receiver', async childSelection => {
+    const requests: ReturnType<typeof ExecutionRunStartRequestSchema.parse>[] = [];
+    const executor = createActionExecutor({
+      // The machine transport is the boundary; the Action normalization, fanout
+      // and receiver schema stay real so dropping the field changes the result.
+      executionRunStart: async (_sessionId, input) => {
+        requests.push(ExecutionRunStartRequestSchema.parse(input));
+        return { runId: 'review-1', callId: 'review-call', sidechainId: 'review-call' };
+      },
+      reviewEnginesList: async () => ({ items: [{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }] }),
+    } as ActionExecutorDeps);
+    expect(await executor.execute('review.start', {
+      sessionId: 's1', engineIds: ['codex', 'claude'], instructions: 'Review.',
+      ...(childSelection ? { childSelection } : {}),
+    }, { surface: 'ui' })).toMatchObject({ ok: true, result: { results: [{ ok: true }, { ok: true }] } });
+    expect(requests.map(request => request.childSelection)).toEqual([childSelection, childSelection]);
+  });
+
   it.each([
     { selected: 'openai-codex:group:pool-X', expected: { connectedServices: { v: 2, bindingsByServiceId: {
       'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'pool-X' },

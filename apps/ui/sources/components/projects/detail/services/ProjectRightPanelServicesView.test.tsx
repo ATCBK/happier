@@ -2,6 +2,13 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
+import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
+    ExternalActionExecutionAuthorizationV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { DaemonLocalServicePublicPreviewCreateResponseV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import type { IModal } from '@/modal/types';
@@ -9,6 +16,7 @@ import { buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localSer
 import { pressTestInstanceAsync, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import {
     applyLocalServicePublicPreviewSnapshot,
     createLocalServicePublicPreviewState,
@@ -21,10 +29,16 @@ installHomeGovernanceBoundaries(home);
 const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
 const { ProjectRightPanelServicesView } = await import('./ProjectRightPanelServicesView');
 const { createFrontDoorRuntimeActionExecutor } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    router: { push: navigation.push },
+}).module);
 // Only the daemon network is substituted; the mounted host and all Action dispatch run for real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
@@ -32,18 +46,21 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
+const modalAlertMock = vi.hoisted(() => vi.fn());
 const modalShowMock = vi.hoisted(() => vi.fn<IModal['show']>(() => 'modal-id'));
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
         confirmResult: true,
-        spies: { confirm: modalConfirmMock, show: modalShowMock },
+        spies: { confirm: modalConfirmMock, show: modalShowMock, alert: modalAlertMock },
     }).module;
 });
 
 async function publishFeatures(serverId: string, publicPreviewEnabled: boolean) {
-    const features = createRootLayoutFeaturesResponse({ features: {
+    const features = createRootLayoutFeaturesResponse({ capabilities: {
+        serverIdentity: { serverIdentityId: 'srv_services_project' },
+    }, features: {
         localServices: { enabled: true, inventory: { enabled: true }, launcher: { enabled: true },
             preview: { enabled: true }, publicPreview: { enabled: publicPreviewEnabled } },
         browser: { enabled: true, viewTargets: { enabled: true } },
@@ -52,7 +69,9 @@ async function publishFeatures(serverId: string, publicPreviewEnabled: boolean) 
     home.answer(serverId, '/v1/features/authenticated', { body: features });
     // The real decision hook reads the Home's canonical published snapshot.
     const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
-    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features,
+        serverIdentityId: features.capabilities.serverIdentity.serverIdentityId } });
+    return features;
 }
 
 function buildLauncherState() {
@@ -123,22 +142,132 @@ function buildPublicPreviewState() {
 
 describe('ProjectRightPanelServicesView', () => {
     let serverId: string;
+    let serverIdentityId: string;
     beforeEach(async () => {
         await home.reset();
-        serverId = await home.addHome({ name: 'Project Home', serverUrl: 'https://project.example.test', accountId: 'project-account', currentAccount: true });
-        await publishFeatures(serverId, true);
+        serverId = await home.addHome({ name: 'Project Home', serverUrl: 'https://project.example.test', accountId: 'project-account',
+            serverIdentityId: 'srv_services_project', currentAccount: true });
+        const features = await publishFeatures(serverId, true);
+        if (!features.capabilities.serverIdentity.serverIdentityId) throw new Error('expected_home_identity');
+        serverIdentityId = features.capabilities.serverIdentity.serverIdentityId;
         rpc.machine.mockReset();
         rpc.machine.mockImplementation(async () => { throw new Error('unexpected_machine_rpc'); });
-        const scope = { serverId, accountId: 'project-account' };
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'project-account' };
         storage.setState({ profileScope: scope, settingsScope: scope });
         storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: { v: 1,
             approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'], 'localServices.publicPreview.create': ['ui'] },
         } }), 1);
         modalConfirmMock.mockClear();
+        navigation.push.mockClear();
+        modalAlertMock.mockClear();
         modalShowMock.mockReset();
         modalShowMock.mockImplementation(() => 'modal-id');
     });
     afterEach(async () => { await home.reset(); });
+
+    it('opens and consumes the shared approval for a declared Service Start without granting the feed launch authority', async () => {
+        const workspace = { serverId, machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/repo' };
+        const target = { id: 'declared:web', source: 'managed_service' as const, machineId: workspace.machineId,
+            workspace, declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest' as const, name: 'web' } },
+            title: 'Web', confidence: 'high' as const, state: 'unavailable' as const, unavailableReason: 'launch_unavailable', actions: [] };
+        await home.requireUiApproval(serverId, 'localServices.launcher.start');
+        await installOwnMachineApprovalReplayBoundary({ harness: home, serverId, accountId: 'project-account', machineId: workspace.machineId,
+            runtimeActionExecute: createDefaultRuntimeActionExecutor() });
+        const running = { ...target, state: 'available' as const, serviceState: 'running' as const, actions: ['manage' as const] };
+        rpc.machine.mockImplementation(async ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) return DaemonLocalServiceLauncherStartResponseV1Schema.parse({
+                protocolVersion: 1, machineId: workspace.machineId, targetId: target.id, status: 'succeeded',
+                snapshot: { v: 1, machineId: workspace.machineId, updatedAt: 2, targets: [running] },
+            });
+            throw new Error(`unexpected_rpc:${method}`);
+        });
+        const screen = await renderScreen(<ProjectRightPanelServicesView machineId={workspace.machineId} serverId={serverId}
+            inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+            launcherState={applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
+                v: 1, machineId: workspace.machineId, updatedAt: 1, targets: [target],
+            })} />);
+        try {
+            screen.pressByTestId('project-rightpanel-services-row:declared:web-start');
+            await vi.waitFor(() => expect(home.artifacts(serverId).list()).toHaveLength(1));
+            const artifactId = home.artifacts(serverId).list()[0]!.id;
+            expect(navigation.push).toHaveBeenCalledWith(expect.stringContaining(`/inbox/approvals/${artifactId}`));
+            expect(rpc.machine.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START)).toHaveLength(0);
+            expect(await decideApprovalAsInbox(serverId, artifactId, 'approve')).toMatchObject({ ok: true });
+            await vi.waitFor(() => expect(rpc.machine.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START)).toHaveLength(1));
+            expect(modalAlertMock).not.toHaveBeenCalled();
+        } finally { await screen.unmount(); }
+    });
+
+    it('routes a real daemon Setup refusal through the Action front door into retained preparation and its command review', async () => {
+        const workspace = { serverId, machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/repo' };
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'project-account' };
+        storage.setState({ projectAccountRows: createProjectAccountRowsFixture(scope, { workspaceRefs: [
+            { id: workspace.workspaceId, ...workspace, createdAtMs: 1, projectKey: 'project' },
+        ] }) });
+        storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: { v: 1,
+            approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'], 'projects.prepare': ['ui'] },
+        } }), 2);
+        const consent = { kind: 'pendingApproval', code: 'project_setup_consent_required', reviewedEffectDigest: 'a'.repeat(64),
+            reviewedEffect: { v: 1, purpose: 'setup', commands: [{ kind: 'command', command: 'echo setup', cwd: '.', os: 'linux' }] } } as const;
+        const held = ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'service-preparation', revision: 1,
+            actionId: 'projects.prepare', state: 'accepted', scope: { accountId: scope.accountId, machineId: workspace.machineId },
+            title: 'Setup', createdAt: 1, cancellation: 'supported', setupReview: consent,
+            domainRef: { kind: 'projectCommand', purpose: 'setup', serverId, machineId: workspace.machineId,
+                workspaceRefId: workspace.workspaceId, cwd: workspace.rootPath, sourceWorkspace: workspace } });
+        const target = { id: 'declared:web', source: 'managed_service' as const, machineId: workspace.machineId,
+            workspace, declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest' as const, name: 'web' } },
+            title: 'Web', confidence: 'high' as const, state: 'unavailable' as const, unavailableReason: 'launch_unavailable', actions: [] };
+        // Finite preparation uses the captured Home's HTTP Action admission, not ambient RPC.
+        const machine = ExternalActionMachineBootstrapV1Schema.parse({ id: workspace.machineId,
+            kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            installationId: 'service-machine-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            runnerContentKeyBinding: null, access: { custodian: { accountId: scope.accountId, displayName: 'Project account' },
+                role: 'manage', resourceMode: 'plain', accessState: 'ready' } });
+        home.answer(serverId, '/v1/machines', { body: [machine] });
+        home.answer(serverId, '/v1/actions/projects.prepare/execution-authorization', { select: body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-setup-root', binding: {
+                accountId: scope.accountId, authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId,
+                machineId: machine.id, installationId: machine.installationId, custodianAccountId: scope.accountId,
+                accountEncryptionMode: 'plain', actionId: 'projects.prepare', requestId: request.envelope.requestId,
+                target: request.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+            } }) };
+        } });
+        home.answer(serverId, '/v1/actions/projects.prepare', { select: body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.prepare',
+                requestId: request.envelope.requestId, execution: { ok: true,
+                    result: ProjectCommandActionOutputV1Schema.parse({ operation: held }) } }) };
+        } });
+        rpc.machine.mockImplementation(async ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) return DaemonLocalServiceLauncherStartResponseV1Schema.parse({
+                protocolVersion: 1, machineId: workspace.machineId, targetId: target.id, status: 'denied',
+                reasonCode: consent.code, reviewedEffect: consent.reviewedEffect, reviewedEffectDigest: consent.reviewedEffectDigest,
+                snapshot: { v: 1, machineId: workspace.machineId, updatedAt: 1, targets: [target] },
+            });
+            if (method === ACTION_OPERATION_RPC_METHODS_V2.get) return { kind: 'found', operation: held };
+            if (method === ACTION_OPERATION_RPC_METHODS_V2.list) return { items: [held], nextCursor: null };
+            throw new Error(`unexpected_rpc:${method}`);
+        });
+        const execute = vi.fn(createFrontDoorRuntimeActionExecutor());
+        const screen = await renderScreen(<ProjectRightPanelServicesView machineId={workspace.machineId} serverId={serverId} runtimeActionExecute={execute}
+            inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+            launcherState={applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
+                v: 1, machineId: workspace.machineId, updatedAt: 1, targets: [target],
+            })} />);
+        await flushHookEffects();
+        screen.pressByTestId('project-rightpanel-services-row:declared:web-start');
+        await vi.waitFor(() => expect(screen.findByTestId('project-rightpanel-services-setup-review-approve')).toBeTruthy());
+        expect(screen.getTextContent()).toContain('echo setup');
+        expect(modalAlertMock).not.toHaveBeenCalled();
+        const startRequest = rpc.machine.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START)?.[0];
+        // Native Start includes preparation/review; the caller's lifetime owns it, as for Scripts.
+        expect(startRequest).toMatchObject({ operationTimeoutMs: null, signal: expect.any(AbortSignal) });
+        expect(home.requestsFor('/v1/actions/projects.prepare').map(request =>
+            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input))
+            .toEqual([{ workspace: { ...workspace, serverId: serverIdentityId }, phase: 'setup' }]);
+        await screen.unmount();
+    });
 
     it('passes supplied local service launcher state into the Services pane', async () => {
         const screen = await renderScreen(

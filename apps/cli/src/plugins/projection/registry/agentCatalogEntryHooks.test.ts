@@ -339,6 +339,9 @@ describe('Agent registration catalog projections', () => {
     });
     expect(projected).not.toHaveProperty('getConnectedServicesMaterializer');
     expect(projected).not.toHaveProperty('resolveConnectedServiceMaterializedHomeRoot');
+    expect(projected.connectedAccountNativeHome).toEqual({
+      environmentKey: 'ACME_CONFIG_DIR', defaultRelativePath: '.acme',
+    });
 
     const late = projected.verifyResumeReachable?.({
       vendorResumeId: 'vendor-1',
@@ -349,6 +352,7 @@ describe('Agent registration catalog projections', () => {
     });
     current = false;
     settleReachability({ ok: true });
+    expect(projected.connectedAccountNativeHome).toBeUndefined();
     await expect(late).resolves.toEqual({
       ok: false,
       reason: 'plugin_generation_retired',

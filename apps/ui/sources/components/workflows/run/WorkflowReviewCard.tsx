@@ -3,7 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { classifyWorkflowHoldV1, WorkflowAuthoredInputV1Schema, type WorkflowInvocationLifecycleV1, type WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { sameStrictJsonValue, StrictJsonValueSchema, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import type { WorkflowResultContract } from '@happier-dev/protocol/workflows/workflowV1';
+import { workflowInputTitle, type WorkflowResultContract } from '@happier-dev/protocol/workflows/workflowV1';
 import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
 import { resolveHappierChoiceControl, resolveHappierStateAnnouncement } from '@happier-dev/plugin-ui/presentation';
@@ -77,8 +77,8 @@ export type WorkflowReviewCardProps = Readonly<{
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
     filled: { flex: 1, minHeight: 0 },
-    actions: { gap: theme.margins.sm, alignItems: 'stretch' },
-    head: { gap: theme.margins.xs },
+    actions: { gap: theme.space.s8, alignItems: 'stretch' },
+    head: { gap: theme.space.s4 },
     secondary: { color: theme.colors.text.secondary },
     /** A value read back (a step's input, a published result): primary ink in both themes. */
     value: { color: theme.colors.text.primary },
@@ -322,7 +322,7 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
             </SectionContentRow> : null}
             {editing && !noValueNeeded ? decisionEditor ?? (fields && fieldForm ? projected.map((field) => {
                 const schema = fields[field.definition.name]!;
-                const label = schema.title ?? field.definition.name;
+                const label = workflowInputTitle(field.definition, schema);
                 const id = `${prefix}-field-${field.definition.name}`;
                 const fieldError = fieldErrorOf(field);
                 if (field.definition.valueType === 'boolean') return <SegmentedChoiceItem key={field.definition.name}

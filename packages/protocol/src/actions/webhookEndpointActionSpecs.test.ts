@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { serializeActionSpec } from './actionCatalog.js';
 
 import {
@@ -61,14 +61,14 @@ describe('webhook endpoint ActionSpecs', () => {
     // Present-user authority is host-stamped, so openness never implies a
     // plugin caller can satisfy the Action: automation callers receive the
     // typed `present_user_required` failure instead of a hidden method.
-    // `delivery.movePending` stays a host-internal delivery control and is
-    // admitted on no caller surface beyond ui/cli hosts.
+    // Delivery control is requestable through Agent/MCP with configurable
+    // default approval; direct API/plugin admission remains withheld.
     const HOST_INTERNAL_PRESENT_USER_ACTION_IDS = [
       'plugin.webhook.delivery.movePending',
     ] as const;
     for (const actionId of PRESENT_USER_ACTION_IDS) {
       const spec = getActionSpec(actionId);
-      expect(spec.requiredAuthority).toBe('present_user');
+      expect(spec.requiredAuthority).toBe(actionId === 'plugin.webhook.delivery.movePending' ? 'account_automation' : 'present_user');
       const hostExposed = !HOST_INTERNAL_PRESENT_USER_ACTION_IDS.includes(
         actionId as (typeof HOST_INTERNAL_PRESENT_USER_ACTION_IDS)[number],
       );

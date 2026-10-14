@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHappierMcpToolNamingResolver } from '../../../../../../../apps/cli/src/mcp/runtime/projectMcpToolNames';
 
 import {
   buildOpenCodeSessionMcpProjection,
   canonicalizeOpenCodeProjectedMcpToolName,
   disconnectOpenCodeMcpServers,
   registerOpenCodeMcpServers,
+  resolveOpenCodeProjectedMcpToolName,
 } from './mcpRegistration.js';
 import type { OpenCodeRuntimeContext } from './runtimeContext.js';
 import type { OpenCodeServerClient } from './openCodeServerClient.js';
@@ -25,11 +27,53 @@ function createRegistrationHarness() {
   };
 }
 
+function projected(server: string, identity = 'happier-session-1') {
+  return buildOpenCodeSessionMcpProjection(identity, { [server]: { command: '/fixture' } }).registrations[0]!.projectedName;
+}
+
 function projection(mcpServers: unknown) {
   return buildOpenCodeSessionMcpProjection('happier-session-1', mcpServers);
 }
 
 describe('registerOpenCodeMcpServers', () => {
+  it('keeps unchanged names independent of a later unavailable alias inventory', async () => {
+    let available = true;
+    const resolve = createHappierMcpToolNamingResolver({ command: '/fixture' }, async () => {
+      if (!available) throw new Error('inventory unavailable');
+      return ['change_title', 'plugin_' + 'long_'.repeat(12)];
+    });
+    const naming = (await resolve({ serverName: 'happier', toolNameMaxLength: 40 }))!;
+    const projected = buildOpenCodeSessionMcpProjection('session-a', { happier: { command: '/fixture' } }, resolve, naming.aliasPrefix);
+    const server = projected.registrations[0]!.projectedName;
+    available = false;
+    expect(resolveOpenCodeProjectedMcpToolName(`${server}_change_title`, projected)).toBe('mcp__happier__change_title');
+  });
+
+  it('resolves transport aliases through the current host inventory without retaining removed identity', async () => {
+    const original = 'plugin_' + 'long_name_'.repeat(9);
+    let names = ['change_title', original];
+    const resolve = createHappierMcpToolNamingResolver({ command: '/fixture' }, async () => names);
+    const server = buildOpenCodeSessionMcpProjection('session-a', { happier: { command: '/fixture' } }).registrations[0]!.projectedName;
+    const initial = (await resolve({ serverName: 'happier', toolNameMaxLength: 64 - server.length - 1 }))!;
+    const projection = buildOpenCodeSessionMcpProjection('session-a', { happier: { command: '/fixture' } }, resolve, initial.aliasPrefix);
+    const alias = initial.tools.find(tool => tool.originalName === original)!.projectedName;
+    expect(`${server}_${alias}`.length).toBeLessThanOrEqual(64);
+    await expect(resolveOpenCodeProjectedMcpToolName(`${server}_${alias}`, projection)).resolves.toBe(`mcp__happier__${original}`);
+    names = ['change_title', 'refreshed_' + 'tool_'.repeat(16)];
+    const current = (await resolve({ serverName: 'happier', toolNameMaxLength: 64 - server.length - 1 }))!;
+    const added = current.tools[1]!;
+    await expect(resolveOpenCodeProjectedMcpToolName(`${server}_${added.projectedName}`, projection)).resolves.toBe(`mcp__happier__${added.originalName}`);
+    await expect(resolveOpenCodeProjectedMcpToolName(`${server}_${alias}`, projection)).resolves.toBe(`${server}_${alias}`);
+    expect(resolveOpenCodeProjectedMcpToolName(`${server}_change_title`, projection)).toBe('mcp__happier__change_title');
+  });
+
+  it('reserves model-name room while keeping the session isolation prefix', () => {
+    const result = buildOpenCodeSessionMcpProjection('a'.repeat(25), { happier: { command: '/fixture' } });
+    const name = result.registrations[0]!.projectedName;
+    expect(`${name}_${'t'.repeat(40)}`.length).toBeLessThanOrEqual(64);
+    expect(name).toMatch(/^happier-session-/);
+  });
+
   it('uses the longest projected alias while preserving original server and known tool names', () => {
     const result = buildOpenCodeSessionMcpProjection('session-a', {
       docs: { command: '/fixture' }, 'docs.team__prod': { command: '/fixture' },
@@ -49,15 +93,13 @@ describe('registerOpenCodeMcpServers', () => {
       custom: { command: '/bin/custom-mcp' },
     });
 
-    expect(first.registrations.map(({ originalName, projectedName }) => ({ originalName, projectedName }))).toEqual([
-      { originalName: 'happier', projectedName: 'happier-session-session-a--happier' },
-      { originalName: 'custom', projectedName: 'happier-session-session-a--custom' },
-    ]);
-    expect(second.registrations.map(({ projectedName }) => projectedName)).toEqual([
-      'happier-session-session-b--happier',
-      'happier-session-session-b--custom',
-    ]);
-    expect(first.requiredHappierServerName).toBe('happier-session-session-a--happier');
+    const names = [...first.registrations, ...second.registrations].map(registration => registration.projectedName);
+    expect(new Set(names).size).toBe(4);
+    expect(names.every(name => name.startsWith('happier-session-'))).toBe(true);
+    expect(buildOpenCodeSessionMcpProjection('session-a', {
+      happier: { command: '/bin/happier-mcp' }, custom: { command: '/bin/custom-mcp' },
+    })).toEqual(first);
+    expect(first.requiredHappierServerName).toBe(first.registrations[0]!.projectedName);
   });
 
   it('keeps long colliding prefixes distinct within the released V2 namespace limit', () => {
@@ -70,7 +112,7 @@ describe('registerOpenCodeMcpServers', () => {
 
     expect(names).toHaveLength(2);
     expect(new Set(names).size).toBe(2);
-    expect(names).toEqual(names.map((name) => expect.stringMatching(/^[A-Za-z0-9_-]{64}$/)));
+    expect(names).toEqual(names.map((name) => expect.stringMatching(/^happier-session-[0-9a-z]{7}$/)));
     expect(canonicalizeOpenCodeProjectedMcpToolName(
       `${names[0]}_lookup`,
       result,
@@ -111,7 +153,7 @@ describe('registerOpenCodeMcpServers', () => {
     const harness = createRegistrationHarness();
     let resolveOptional!: () => void;
     harness.mcpAdd.mockImplementation(async ({ name }) => {
-      if (name === 'happier-session-happier-session-1--slow_custom') {
+      if (name === projected('slow_custom')) {
         await new Promise<void>((resolve) => {
           resolveOptional = resolve;
         });
@@ -137,13 +179,13 @@ describe('registerOpenCodeMcpServers', () => {
     await expect(registration).resolves.toEqual({
       requiredHappier: { status: 'ready' },
       registeredServers: [
-        { directory: '/repo', name: 'happier-session-happier-session-1--slow_custom' },
-        { directory: '/repo', name: 'happier-session-happier-session-1--happier' },
+        { directory: '/repo', name: projected('slow_custom') },
+        { directory: '/repo', name: projected('happier') },
       ],
     });
     expect(harness.mcpAdd).toHaveBeenNthCalledWith(2, {
       directory: '/repo',
-      name: 'happier-session-happier-session-1--happier',
+      name: projected('happier'),
       config: {
         type: 'local',
         enabled: true,
@@ -168,7 +210,7 @@ describe('registerOpenCodeMcpServers', () => {
       }),
     })).resolves.toEqual({
       requiredHappier: { status: 'ready' },
-      registeredServers: [{ directory: '/repo', name: 'happier-session-happier-session-1--happier' }],
+      registeredServers: [{ directory: '/repo', name: projected('happier') }],
     });
 
     const requiredFailureHarness = createRegistrationHarness();

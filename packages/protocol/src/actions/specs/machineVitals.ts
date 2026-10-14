@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { MachineVitalsGetInputV1Schema, MachineVitalsHistoryGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '../../machines/vitals/machineVitalsRpcV1.js';
 import { MachineVitalsHistoryV1Schema } from '../../machines/vitals/machineVitalsHistoryV1.js';
@@ -9,13 +9,13 @@ import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 export const MACHINE_VITALS_ACTION_IDS = ['machines.vitals.get', 'machines.vitals.history.get', 'machines.vitals.summaries.list'] as const;
 export type MachineVitalsActionId = typeof MACHINE_VITALS_ACTION_IDS[number];
 export const MachineVitalsActionIdSchema = lazyZodSchema(() => z.enum(MACHINE_VITALS_ACTION_IDS));
-export const MachineVitalsSummariesListInputV1Schema = lazyZodSchema(() => z.object({ serverId: z.string().trim().min(1).optional() }).strict());
-export const MachineVitalsSummariesListOutputV1Schema = lazyZodSchema(() => z.array(z.object({
+export const MachineVitalsSummariesListInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: z.optional(z.string().check(z.trim(), z.minLength(1))) }));
+export const MachineVitalsSummariesListOutputV1Schema = lazyZodSchema(() => z.array(z.strictObject({
   machineId: z.string(), name: z.string(), presence: z.enum(['online', 'offline']),
   state: z.enum(['reporting', 'unavailable', 'not_reporting', 'offline']),
   attention: z.optional(MachineResourceAttentionV1Schema),
   summary: z.optional(MachineResourceSummaryV1Schema),
-}).strict()));
+})));
 export const MACHINE_VITALS_ACTION_INPUT_SCHEMAS = {
   'machines.vitals.get': MachineVitalsGetInputV1Schema,
   'machines.vitals.history.get': MachineVitalsHistoryGetInputV1Schema,

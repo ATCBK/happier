@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
@@ -146,10 +147,10 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 12,
-        paddingTop: 12,
-        paddingBottom: 10,
+        gap: theme.space.s10,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s10,
     },
     icon: {
         width: 18,
@@ -160,11 +161,10 @@ const styles = StyleSheet.create((theme) => ({
     headerText: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     title: {
-        fontSize: 13,
-        fontWeight: '700',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     subtitle: {
@@ -172,7 +172,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     viewButton: {
-        padding: 6,
+        padding: theme.space.s6,
         borderRadius: 8,
     },
     viewButtonPressed: {
@@ -181,10 +181,10 @@ const styles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     preview: {
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s12,
     },
 }));

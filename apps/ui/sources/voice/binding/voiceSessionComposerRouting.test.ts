@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
 
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
+
 import { getStorage } from '@/sync/domains/state/storage';
 import { writeVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
 import { createVoiceSessionBindingStore } from './voiceConversationBindingStore';
@@ -16,7 +22,7 @@ function setCurrentConversationSession(conversationSessionId: string, metadata: 
             [conversationSessionId]: createSessionFixture({
                 id: conversationSessionId,
                 serverId: 'server-a',
-                metadata: { ...createSessionFixture().metadata,
+                metadata: { ...fixtureMetadata,
                     ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}) },
             }),
         },

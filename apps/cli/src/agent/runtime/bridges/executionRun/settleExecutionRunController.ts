@@ -25,7 +25,6 @@ export async function settleExecutionRunController(args: Readonly<{
         // Marker writes are best effort; the terminal waiter still has to settle.
       }
       if (args.controller.kind === 'backend') {
-        const backend = args.controller.backend;
         args.controller.currentInputPermissionRequestStore?.releaseResponseTarget();
         const liveInterventionRetired = createExecutionRunCodedError(
           'execution_run_not_allowed',
@@ -47,18 +46,20 @@ export async function settleExecutionRunController(args: Readonly<{
             // A caller callback cannot block controller retirement.
           }
         }
-        // Retire this occurrence's target input custody and witness before the
-        // provider is asked to dispose, so no late claim or settlement can be
-        // attributed to a controller that is no longer current.
-        const release = args.controller.releaseSessionInputAttachment;
-        args.controller.releaseSessionInputAttachment = undefined;
-        if (release) {
-          try {
-            await release();
-          } catch {
-            // Retirement is best effort; the terminal waiter still has to settle.
-          }
+      }
+      // Both controller families retire their occurrence before provider
+      // cleanup. Backend registrations also carry target input custody.
+      const release = args.controller.releaseSessionInputAttachment;
+      args.controller.releaseSessionInputAttachment = undefined;
+      if (release) {
+        try {
+          await release();
+        } catch {
+          // Retirement is best effort; the terminal waiter still has to settle.
         }
+      }
+      if (args.controller.kind === 'backend') {
+        const backend = args.controller.backend;
         try {
           await backend.abortPendingPermissionRequests?.('Execution run settled');
         } catch {

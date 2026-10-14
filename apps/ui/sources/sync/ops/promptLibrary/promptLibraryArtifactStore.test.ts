@@ -21,10 +21,6 @@ import {
 import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import {
-  updateSkillPromptBundleWithEntry,
-  removeSkillPromptBundleEntry,
-} from './promptBundles';
 
 // The third-party markdown renderer is outside this Artifact-only journey.
 vi.mock(
@@ -80,8 +76,8 @@ async function home(
 describe('UI qualified prompt-library Artifact authority', () => {
   it('returns the real bundle creation revision even when a subsequent content read is unavailable', async () => {
     const f = fixture = await createPlainArtifactHomeFixture('https://creation-receipt.test', {
-      handleRequest: (path, init) => path.startsWith('/v1/artifacts/') && (!init?.method || init.method === 'GET')
-        ? Promise.resolve(Response.json({ error: 'unavailable' }, { status: 503 })) : null,
+      handleRequest: async (path, init) => path.startsWith('/v1/artifacts/') && (!init?.method || init.method === 'GET')
+        ? Response.json({ error: 'unavailable' }, { status: 503 }) : null,
     });
     const result = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store,
       request: { title: 'Sample', bundleSchemaId: 'skills.skill_md_v1', entries: [{ path: 'SKILL.md',
@@ -278,65 +274,6 @@ describe('UI qualified prompt-library Artifact authority', () => {
     ).rejects.toMatchObject({ code: 'version_mismatch' });
     expect(f.boundary.readPlainBody('current')).toBe('concurrent');
   });
-
-  it.each(['update', 'remove'] as const)(
-    'refuses a stale supporting-entry %s without rebasing the bundle revision',
-    async (operation) => {
-      const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [] } }] });
-      const f = await home(
-        'prompt_bundle.v2',
-        JSON.stringify({
-          v: 1,
-          entries: [
-            {
-              path: 'SKILL.md',
-              contentBase64: Buffer.from('---\nname: skill\ndescription: Test skill\n---\n# Skill').toString('base64'),
-              contentKind: 'utf8',
-            },
-            {
-              path: 'notes.md',
-              contentBase64: 'b3JpZ2luYWw=',
-              contentKind: 'utf8',
-            },
-          ],
-          createdAtMs: 1,
-          updatedAtMs: 1,
-        }),
-        { handleRequest: catalog.handle },
-      );
-      const { PromptBundleBodyV1Schema } = await import('@happier-dev/protocol/prompts/library/promptBundleSchemas');
-      const originalBody = f.boundary.readPlainBody('current');
-      if (!originalBody) throw new Error('Missing seeded skill body');
-      const original = PromptBundleBodyV1Schema.parse(JSON.parse(originalBody));
-      const concurrentBody = JSON.stringify({ ...original, entries: original.entries.map(entry => entry.path === 'notes.md'
-        ? { ...entry, contentBase64: Buffer.from('concurrent').toString('base64') } : entry) });
-      f.boundary.beforeNextUpdate(async () => {
-        await f.boundary.handle('/v1/artifacts/current', {
-          method: 'POST',
-          body: JSON.stringify({
-            body: encodePlainArtifactStoredContent({
-              body: concurrentBody,
-            }),
-            expectedBodyVersion: 1,
-          }),
-        });
-      });
-      await expect(
-        operation === 'update'
-          ? updateSkillPromptBundleWithEntry({
-              artifactId: 'current',
-              path: 'notes.md',
-              content: 'stale',
-            })
-          : removeSkillPromptBundleEntry({
-              artifactId: 'current',
-              path: 'notes.md',
-            }),
-      ).rejects.toMatchObject({ code: 'revision_conflict' });
-      expect(f.boundary.readPlainBody('current')).toBe(concurrentBody);
-      expect(f.boundary.read('current')).toMatchObject({ headerVersion: 1, bodyVersion: 2 });
-    },
-  );
 
   it('suppresses a required memory document using only current header facts', async () => {
     const f = await home(

@@ -131,6 +131,23 @@ describe('EmbeddedTerminalPaneFrame states (terminal lab ST)', () => {
         expect(requestRestart).toHaveBeenCalledTimes(1);
     });
 
+    it('presents a borrowed read-only output as a light log: no title row, no Reset, Refresh, paste, selection copy or Restart', async () => {
+        const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
+            title: 'test',
+            controller: makeController({ status: 'exited', readOnly: true }),
+            surface: React.createElement('TerminalSurface'),
+            toolbarActionsStart: React.createElement('OwnerCopy', { testID: 'owner-copy' }),
+            onCopySelection: () => {},
+            onPaste: () => {},
+            testIdPrefix: 'term',
+            platformOS: 'web',
+        }));
+        expect(screen.findByTestId('owner-copy')).toBeTruthy();
+        for (const control of ['clear', 'restart', 'paste', 'copy-selection']) expect(screen.findByTestId(`term-${control}`)).toBeFalsy();
+        expect(screen.findByTestId('term-state-line')).toBeTruthy();
+        expect(screen.findByTestId('term-state-line-action')).toBeFalsy();
+    });
+
     it('keeps the output when the machine goes offline, with one line and Check again', async () => {
         const retryConnect = vi.fn();
         const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {

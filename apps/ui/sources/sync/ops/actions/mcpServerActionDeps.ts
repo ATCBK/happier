@@ -1,11 +1,15 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1,
     MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { McpServerCatalogSnapshotV1Schema } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { readMcpPluginItemMetadataFromProjectionV1 } from '@happier-dev/protocol/mcp/servers/pluginItemsV1';
 import { randomUUID } from '@/platform/randomUUID';
-import { readMcpServerCatalogInContext, mutateMcpServerCatalogInContext } from '@/sync/api/account/apiMcpServerCatalog';
+import { readMcpServerCatalogInContext, mutateMcpServerCatalogInContext, classifyMcpServerCatalogReadFailure } from '@/sync/api/account/apiMcpServerCatalog';
+import { observeMcpServerCatalog, refreshMcpServerCatalog } from '@/sync/engine/settings/mcpServerCatalogEngine';
+import { getMcpServerCatalogSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { LazyActionAccountContext } from './actionAccountContext';
@@ -30,6 +34,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
         const subscription = account.accountLifetime.onRetire(() => retired.abort());
         const cancellation = mergeAbortSignals([retired.signal, context.signal]);
         const assertCurrent = () => { account.assertCurrent(); cancellation.signal.throwIfAborted(); };
+        let releaseCatalog: (() => void) | undefined;
         try {
             assertCurrent();
             const readPluginItems = async () => {
@@ -69,7 +74,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                         ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
                 },
                 describeConnectedService: (machineId, command) => machineRpcWithServerScope({ machineId, serverId: account.serverId,
-                    accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId,
+                    accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId ?? undefined,
                     method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
                     payload: ConnectedAccountControlCommandRequestSchema.parse({ v: 1, machineId,
                         command }),
@@ -95,6 +100,38 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                     return { machineId, agents };
                 },
                 readCatalog: async () => {
+                    if (request.actionId === 'mcp.servers.tools.list' || request.actionId === 'mcp.servers.list') {
+                        // Borrow only authority maintained by the existing observed catalog owner.
+                        // First demand after missing wakes synchronously withdraws retained freshness.
+                        const scope = account.accountLifetime.scope;
+                        releaseCatalog ??= observeMcpServerCatalog(scope);
+                        try {
+                            const { encryption } = await account.resolveAccountEncryption();
+                            const admitted = await resolveAccountStorageContext(account.credentials, { encryption, request: account.request });
+                            assertCurrent();
+                            let snapshot = getMcpServerCatalogSnapshot(scope);
+                            if ((snapshot.status !== 'ready' && snapshot.status !== 'partial') || snapshot.stale || !snapshot.value) {
+                                await refreshMcpServerCatalog(scope);
+                                const checked = await resolveAccountStorageContext(account.credentials, { encryption, request: account.request });
+                                assertCurrent();
+                                if (checked.mode !== admitted.mode) return { status: 'unavailable', reason: 'account-mode-mismatch' };
+                                snapshot = getMcpServerCatalogSnapshot(scope);
+                            }
+                            if ((snapshot.status !== 'ready' && snapshot.status !== 'partial') || snapshot.stale || !snapshot.value) {
+                                if (snapshot.status === 'loading') return { status: 'loading' };
+                                if (snapshot.status === 'unavailable') return McpServerCatalogSnapshotV1Schema.parse({
+                                    status: 'unavailable', reason: snapshot.reason ?? 'authority-not-confirmed',
+                                });
+                                return { status: 'unavailable', reason: 'authority-not-confirmed' };
+                            }
+                            // Lists retain incomplete/inactive neighbors; the Protocol tools consumer
+                            // still requires ready, active authority before disclosing tool settings.
+                            const opened = { catalog: snapshot.value, revision: snapshot.revision,
+                                authority: snapshot.authority, diagnostics: snapshot.diagnostics,
+                                ...(snapshot.cleanup ? { cleanup: snapshot.cleanup } : {}) };
+                            return snapshot.status === 'ready' ? { status: 'ready', ...opened } : { status: 'partial', ...opened };
+                        } catch (cause) { return classifyMcpServerCatalogReadFailure(cause, cancellation.signal); }
+                    }
                     const snapshot = await readMcpServerCatalogInContext(account, cancellation.signal);
                     assertCurrent();
                     return snapshot;
@@ -113,7 +150,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                     let response: unknown;
                     try {
                         response = await machineRpcWithServerScope({ machineId, serverId: account.serverId,
-                            accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId,
+                            accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId ?? undefined,
                             method: actionId === 'mcp.servers.test' ? RPC_METHODS.DAEMON_MCP_SERVERS_TEST : RPC_METHODS.DAEMON_MCP_SERVERS_DETECT,
                             payload: input, authorization: context.rpcSessionAuthorization, signal: cancellation.signal,
                             operationTimeoutMs: null, onDispatched: assertCurrent });
@@ -137,6 +174,6 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 },
             })(request);
         } catch (cause) { return projectMcpServerActionFailureV1(cause); }
-        finally { subscription.dispose(); cancellation.dispose(); }
+        finally { releaseCatalog?.(); subscription.dispose(); cancellation.dispose(); }
     };
 }

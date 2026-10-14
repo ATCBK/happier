@@ -51,7 +51,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       { exec: exec.service, sessionHooks: hooks.service });
     const params = {
       ctx, directory: '/tmp/claude-project', launchEnv: {}, happierSessionId: 'sdk-confined',
-      permissionMode: 'yolo', allowedTools: ['Read(//tmp/attachments/**)', 'mcp__wilson__*'],
+      permissionMode: 'yolo', allowedTools: ['read(//tmp/attachments/**)', 'websearch', 'mcp__wilson__*'],
       unlistedTools: 'deny' as const,
       advancedOptions: { tools: ['default'] },
     };
@@ -60,8 +60,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await operations.sendProviderTurnPrompt('process the attachment');
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
-      expect(args[args.indexOf('--tools') + 1]).toBe('Read');
-      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read(//tmp/attachments/**),mcp__wilson__*');
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read,WebSearch');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read(//tmp/attachments/**),WebSearch,mcp__wilson__*');
       expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
       expect(args).not.toContain('--allow-dangerously-skip-permissions');
       const pluginFiles = hooks.service.createPluginDir.mock.calls[0]?.[0].files ?? [];
@@ -71,7 +71,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       expect(fallback({ hook_event_name: 'PreToolUse', tool_name: 'Read' }).hookSpecificOutput.permissionDecision).toBe('deny');
       const terminal = await operations.prepareTerminalPresentation();
       if (terminal.kind !== 'terminal_launch') throw new Error('Expected native terminal launch');
-      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('Read');
+      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('Read,WebSearch');
       expect(terminal.plan.argv[terminal.plan.argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
     } finally { await operations.disposeProviderSession(); }
   });
@@ -141,7 +141,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const runtimeEvents: Array<{ kind: string }> = [];
     operations.subscribeRuntimeEvents(event => runtimeEvents.push(event));
     try {
-      await operations.prepareTerminalPresentation();
+      const initialPresentation = await operations.prepareTerminalPresentation();
+      await operations.observeTerminalExecution({ kind: 'started', plan: initialPresentation.plan });
       const hook = sessionHooks.service.startServer.mock.calls[0]?.[0].onSessionHook;
       if (!hook) throw new Error('native session hook server did not start');
       await hook('idle-claude-id', {
@@ -156,7 +157,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it('witnesses native MCP inventory and deduplicated calls through successful SDK completion', async () => {
+  it.each([undefined, 0])('witnesses native MCP inventory and deduplicated calls through successful SDK completion (queued count %s)', async queuedTurnCount => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
     const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
@@ -182,8 +183,11 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         content: [{ type: 'tool_use', id: 'call-1', name: 'mcp__docs__find', input: { query: 'private text' } }] } };
       await exec.emit(call);
       await exec.emit(call);
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: 'queued work remains', session_id: 'native-mcp',
+        queued_turn_count: 1, usage: {}, modelUsage: {} });
+      expect(events).not.toContainEqual(expect.objectContaining({ kind: 'mcp-tool-usage' }));
       await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'native-mcp',
-        queued_turn_count: 0, usage: {}, modelUsage: {} });
+        ...(queuedTurnCount === undefined ? {} : { queued_turn_count: queuedTurnCount }), usage: {}, modelUsage: {} });
       await operations.waitForProviderTurnCompletion();
       expect(events).toContainEqual(expect.objectContaining({ kind: 'mcp-tool-usage', coverage: 'complete',
         servers: [{ serverName: 'docs', toolCallCount: 1, schemaBytes: null },
@@ -1091,7 +1095,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it('targets task-id-only background work once instead of broadly interrupting the foreground query', async () => {
+  it('interrupts foreground work before targeting task-id-only background work once', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
@@ -1116,6 +1120,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         task_id: 'task-without-session',
         task_type: 'local_agent',
       });
+
+      await operations.cancelProviderTurn();
+      await operations.waitForProviderTurnCompletion();
+      expect(exec.written.some((record) => (record as any)?.request?.subtype === 'interrupt')).toBe(true);
 
       const cancellation = operations.cancelProviderTurn();
       await vi.waitFor(() => {
@@ -1142,7 +1150,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       ))).toEqual([expect.objectContaining({
         request: { subtype: 'stop_task', task_id: 'task-without-session' },
       })]);
-      expect(exec.written.some((record) => (record as any)?.request?.subtype === 'interrupt')).toBe(false);
+      expect(exec.written.filter((record) => (record as any)?.request?.subtype === 'interrupt')).toHaveLength(1);
     } finally {
       await operations.disposeProviderSession();
     }
@@ -1220,7 +1228,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     operations.subscribeUsageObservation(observation => observations.push(observation));
     operations.subscribeEffectiveModel(evidence => effectiveModels.push(evidence.modelId));
     try {
-      operations.beginProviderTurn();
+      operations.beginProviderTurn('host-paid-turn');
       await operations.sendProviderTurnPrompt('prompt');
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       await exec.emit({ type: 'assistant', uuid: 'main-record', session_id: 'native-session',
@@ -1236,12 +1244,13 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
           'claude-haiku-4-5': { inputTokens: 20, outputTokens: 3, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } });
       await completion;
       expect(observations).toEqual([
-        expect.objectContaining({ nativeRecordId: 'main-record', modelId: 'claude-sonnet-4-6' }),
+        expect.objectContaining({ nativeRecordId: 'main-record', modelId: 'claude-sonnet-4-6', turnId: 'host-paid-turn' }),
         expect.objectContaining({ nativeRecordId: 'child-record', inferenceId: 'child-request', modelId: 'claude-haiku-4-5', tokens: expect.objectContaining({ total: 23 }) }),
         expect.objectContaining({ nativeRecordId: 'unknown-child-record', modelId: null }),
         expect.objectContaining({ source: 'claude-sdk-result', nativeRecordId: 'failed-summary', modelId: null,
           tokens: expect.objectContaining({ total: 35 }), cost: expect.objectContaining({ reportedUsd: 0.2, costSource: 'provider_reported_api_equivalent' }) }),
       ]);
+      for (const observation of observations.slice(1)) expect(observation).not.toHaveProperty('turnId');
       expect(effectiveModels).not.toContain('claude-haiku-4-5');
     } finally { await operations.disposeProviderSession(); }
   });
@@ -2783,9 +2792,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       return { status: 'refreshed' as const, result: { credentialRevision: `revision-${refreshCount}` } };
     });
     const native = createClaudeNativeAgentSdkContext({
-      services: { logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }, exec: {},
-        sessions: { current: { auth: { services: { refreshRuntimeAuth } } } } },
-      session: { services: { nativeHome: { readFiles: async () => ({ '.credentials.json': new TextEncoder().encode(
+      services: { logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }, exec: {} },
+      session: { services: { auth: { services: { refreshRuntimeAuth } }, nativeHome: { readFiles: async () => ({ '.credentials.json': new TextEncoder().encode(
         JSON.stringify({ claudeAiOauth: { accessToken: nativeAccessToken, refreshToken: 'private-rotation', scopes: ['user:inference'] } }),
       ) }) } } },
     } as unknown as AgentSessionRuntimeContext);
@@ -3061,6 +3069,681 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
+  it('retires only the exited SDK query while a newer query owns live background work', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx,
+      directory: '/tmp/claude-project',
+      launchEnv: {},
+      permissionMode: 'default',
+      happierSessionId: 'happy-query-overlap',
+      publishSdkMessages: true,
+    });
+    const activityEvents: AgentSessionRuntimeEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents((event) => activityEvents.push(event));
+    const snapshot = () => activityEvents.at(-1);
+    const result = {
+      type: 'result', subtype: 'success', is_error: false,
+      session_id: 'native-query-overlap', result: 'Foreground finished.', queued_turn_count: 0,
+      num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8,
+    };
+
+    try {
+      operations.beginProviderTurn('turn-a');
+      await expect(operations.sendProviderTurnPrompt('launch task A')).resolves.toMatchObject({ kind: 'accepted' });
+      const processA = exec.processes[0];
+      if (!processA) throw new Error('Expected the first SDK process');
+      await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-query-overlap' });
+      await processA.emit({
+        type: 'system', subtype: 'task_started', session_id: 'native-query-overlap',
+        task_id: 'task-a', task_type: 'local_agent', is_backgrounded: true,
+      });
+      await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'active', activeCount: 1 }));
+      await processA.emit(result);
+      await operations.waitForProviderTurnCompletion();
+
+      operations.beginProviderTurn('turn-b');
+      await expect(operations.sendProviderTurnPrompt('launch task B')).resolves.toMatchObject({ kind: 'accepted' });
+      const processB = exec.processes[1];
+      if (!processB) throw new Error('Expected the second SDK process');
+      await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-query-overlap' });
+      await processB.emit({
+        type: 'system', subtype: 'task_started', session_id: 'native-query-overlap',
+        task_id: 'task-b', task_type: 'local_agent', is_backgrounded: true,
+      });
+      await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'active', activeCount: 2 }));
+
+      await processA.exitWith({ exitCode: 1, signal: null });
+      await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'active', activeCount: 1 }));
+
+      await processB.emit({
+        type: 'system', subtype: 'task_notification', session_id: 'native-query-overlap',
+        task_id: 'task-b', status: 'completed',
+      });
+      await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'idle', activeCount: 0 }));
+      await processB.emit(result);
+      await operations.waitForProviderTurnCompletion();
+      await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'idle', activeCount: 0 }));
+    } finally {
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it.each(['terminal', 'process-exit'] as const)(
+    'preserves a task resumed by the newer SDK query when the old query reports %s',
+    async (oldQueryEvidence) => {
+      const exec = createSdkExecFixture();
+      const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+        exec: exec.service,
+      });
+      const operations = createClaudeAgentSdkProviderOperations({
+        ctx,
+        directory: '/tmp/claude-project',
+        launchEnv: {},
+        permissionMode: 'default',
+        happierSessionId: 'happy-query-resume',
+        publishSdkMessages: true,
+      });
+      const activityEvents: AgentSessionRuntimeEvent[] = [];
+      operations.subscribeCanonicalAgentSessionEvents((event) => activityEvents.push(event));
+      const snapshot = () => activityEvents.at(-1);
+      const result = {
+        type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-query-resume', result: 'Foreground finished.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8,
+      };
+
+      try {
+        operations.beginProviderTurn('turn-a');
+        await operations.sendProviderTurnPrompt('launch the shared task');
+        const processA = exec.processes[0];
+        if (!processA) throw new Error('Expected the first SDK process');
+        await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-query-resume' });
+        await processA.emit({
+          type: 'system', subtype: 'task_started', session_id: 'native-query-resume',
+          task_id: 'shared-task', task_type: 'local_agent', is_backgrounded: true,
+        });
+        await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'active', activeCount: 1 }));
+        await processA.emit(result);
+        await operations.waitForProviderTurnCompletion();
+
+        operations.beginProviderTurn('turn-b');
+        await operations.sendProviderTurnPrompt('resume the shared task');
+        const processB = exec.processes[1];
+        if (!processB) throw new Error('Expected the second SDK process');
+        await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-query-resume' });
+        await processB.emit({
+          type: 'user', session_id: 'native-query-resume',
+          tool_use_result: { success: true, resumedAgentId: 'shared-task' },
+        });
+        await processB.emit(result);
+        await operations.waitForProviderTurnCompletion();
+
+        if (oldQueryEvidence === 'terminal') {
+          await processA.emit({
+            type: 'system', subtype: 'task_notification', session_id: 'native-query-resume',
+            task_id: 'shared-task', status: 'completed',
+          });
+        } else {
+          await processA.exitWith({ exitCode: 1, signal: null });
+        }
+        await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'active', activeCount: 1 }));
+
+        await processB.emit({
+          type: 'system', subtype: 'task_notification', session_id: 'native-query-resume',
+          task_id: 'shared-task', status: 'completed',
+        });
+        await vi.waitFor(() => expect(snapshot()).toMatchObject({ state: 'idle', activeCount: 0 }));
+      } finally {
+        await operations.disposeProviderSession();
+      }
+    },
+  );
+
+  it.each(['launch-exit', 'stale-stop'] as const)(
+    'uses exact owned tool calls for hook task activity without presentation (%s)', async (evidence) => {
+      const exec = createSdkExecFixture();
+      const hooks = createSessionHooksFixture();
+      const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+        exec: exec.service, sessionHooks: hooks.service,
+      });
+      const operations = createClaudeAgentSdkProviderOperations({
+        ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+        happierSessionId: 'happy-owned-hook',
+      });
+      const activityEvents: AgentSessionRuntimeEvent[] = [];
+      operations.subscribeCanonicalAgentSessionEvents((event) => activityEvents.push(event));
+      const result = { type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-owned-hook', result: 'Foreground finished.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 };
+      try {
+        operations.beginProviderTurn('turn-a');
+        await operations.sendProviderTurnPrompt('launch task through native hooks');
+        const processA = exec.processes[0];
+        if (!processA) throw new Error('Expected the first SDK process');
+        const request = hooks.service.startServer.mock.calls[0]?.[0] as Readonly<{
+          onSessionHook?: (providerSessionId: string, payload: Readonly<Record<string, unknown>>) => void | Promise<void>;
+        }> | undefined;
+        if (!request?.onSessionHook) throw new Error('Expected the first-party session hook boundary');
+        await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-owned-hook' });
+        await processA.emit({ type: 'assistant', session_id: 'native-owned-hook', message: {
+          role: 'assistant', content: [{ type: 'tool_use', id: 'owned-agent-call', name: 'Agent', input: { run_in_background: true } }],
+        } });
+        await request.onSessionHook('native-owned-hook', {
+          hook_event_name: 'PostToolUse', session_id: 'native-owned-hook', tool_use_id: 'owned-agent-call',
+          tool_name: 'Agent', tool_input: { run_in_background: true },
+          tool_response: { status: 'async_launched', agentId: 'hook-shared-task' },
+        });
+        await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+        await processA.emit(result);
+        await operations.waitForProviderTurnCompletion();
+        if (evidence === 'launch-exit') {
+          await processA.exitWith({ exitCode: 1, signal: null });
+          await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 }));
+        } else {
+          await processA.emit({ type: 'assistant', session_id: 'native-owned-hook', message: {
+            role: 'assistant', content: [{ type: 'tool_use', id: 'old-stop-call', name: 'TaskStop', input: { task_id: 'hook-shared-task' } }],
+          } });
+          operations.beginProviderTurn('turn-b');
+          await operations.sendProviderTurnPrompt('resume the same task');
+          const processB = exec.processes[1];
+          if (!processB) throw new Error('Expected the second SDK process');
+          await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-owned-hook' });
+          await processB.emit({ type: 'user', session_id: 'native-owned-hook',
+            tool_use_result: { success: true, resumedAgentId: 'hook-shared-task' } });
+          await processB.emit(result);
+          await operations.waitForProviderTurnCompletion();
+          for (const toolUseId of ['old-stop-call', 'unattributed-stop-call']) {
+            await request.onSessionHook('native-owned-hook', {
+              hook_event_name: 'PostToolUse', session_id: 'native-owned-hook', tool_use_id: toolUseId,
+              tool_name: 'TaskStop', tool_input: { task_id: 'hook-shared-task' },
+              tool_response: { task_id: 'hook-shared-task', status: 'stopped' },
+            });
+            expect(activityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 });
+          }
+          await processB.emit({ type: 'system', subtype: 'task_notification', session_id: 'native-owned-hook',
+            task_id: 'hook-shared-task', status: 'completed' });
+          await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 }));
+        }
+      } finally {
+        await operations.disposeProviderSession();
+      }
+    },
+  );
+
+  it.each(['direct', 'wrapper'] as const)(
+    'requires qualified provider closure after the %s process exits', async (ownership) => {
+      const exec = ownership === 'direct' ? createSdkExecFixture() : createSdkExecFixture({});
+      const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+      const operations = createClaudeAgentSdkProviderOperations({
+        ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+        happierSessionId: 'happy-qualified-exit',
+      });
+      const activity: AgentSessionRuntimeEvent[] = [];
+      operations.subscribeCanonicalAgentSessionEvents(event => activity.push(event));
+      try {
+        operations.beginProviderTurn('turn-a');
+        await operations.sendProviderTurnPrompt('launch a background task');
+        const process = exec.processes[0];
+        if (!process) throw new Error('Expected the SDK process');
+        await process.emit({ type: 'system', subtype: 'init', session_id: 'native-qualified-exit' });
+        await process.emit({ type: 'system', subtype: 'task_started', session_id: 'native-qualified-exit',
+          task_id: 'owned-task', task_type: 'local_agent', is_backgrounded: true });
+        await process.emit({ type: 'result', subtype: 'success', is_error: false,
+          session_id: 'native-qualified-exit', result: 'Foreground complete.', queued_turn_count: 0,
+          num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+        await operations.waitForProviderTurnCompletion();
+        expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 });
+        await process.exitWith({ exitCode: 0, signal: null });
+        await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({
+          state: ownership === 'direct' ? 'idle' : 'unknown', activeCount: 0,
+        }));
+      } finally {
+        await operations.disposeProviderSession();
+      }
+    },
+  );
+
+  it.each(['background', 'foreground'] as const)(
+    'preserves newer %s cancellation ownership when an old task cancellation completes', async (mode) => {
+      const exec = createSdkExecFixture();
+      const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+      const operations = createClaudeAgentSdkProviderOperations({
+        ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+        happierSessionId: 'happy-pending-cancellation',
+      });
+      const activity: AgentSessionRuntimeEvent[] = [];
+      operations.subscribeCanonicalAgentSessionEvents(event => activity.push(event));
+      const result = { type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-pending-cancellation', result: 'Foreground complete.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 };
+      const readCancellationRequest = (records: readonly unknown[]) => records.find(value => {
+        if (!value || typeof value !== 'object' || !('request' in value)) return false;
+        const request = value.request;
+        return request && typeof request === 'object' && 'subtype' in request
+          && (request.subtype === 'stop_task' || request.subtype === 'interrupt');
+      });
+      try {
+        operations.beginProviderTurn('turn-a');
+        await operations.sendProviderTurnPrompt('launch the shared task');
+        const processA = exec.processes[0];
+        if (!processA) throw new Error('Expected the first SDK process');
+        await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-pending-cancellation' });
+        await processA.emit({ type: 'system', subtype: 'task_started', session_id: 'native-pending-cancellation',
+          task_id: 'shared-task', task_type: 'local_agent', is_backgrounded: true });
+        await processA.emit(result);
+        await operations.waitForProviderTurnCompletion();
+        const aWrites = processA.written.length;
+        const oldCancellation = operations.cancelProviderTurn();
+        await vi.waitFor(() => expect(readCancellationRequest(processA.written.slice(aWrites))).toBeDefined());
+        const oldRequest = readCancellationRequest(processA.written.slice(aWrites));
+        if (!oldRequest || typeof oldRequest !== 'object' || !('request_id' in oldRequest)) throw new Error('Expected the old cancellation request');
+
+        operations.beginProviderTurn('turn-b');
+        await operations.sendProviderTurnPrompt('resume the shared task in the new query');
+        const processB = exec.processes[1];
+        if (!processB) throw new Error('Expected the second SDK process');
+        await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-pending-cancellation' });
+        await processB.emit({ type: 'user', session_id: 'native-pending-cancellation',
+          tool_use_result: { success: true, resumedAgentId: 'shared-task' } });
+        if (mode === 'background') {
+          await processB.emit(result);
+          await operations.waitForProviderTurnCompletion();
+        }
+        await processA.emit({ type: 'control_response', response: {
+          subtype: 'success', request_id: oldRequest.request_id, response: {},
+        } });
+        await expect(oldCancellation).resolves.toBe(true);
+        if (mode === 'background') expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 });
+
+        const bWrites = processB.written.length;
+        let nextResult: boolean | undefined;
+        const nextCancellation = operations.cancelProviderTurn(mode === 'foreground' ? 'turn-b' : undefined);
+        void nextCancellation.then(value => { nextResult = value; });
+        await vi.waitFor(() => expect(nextResult !== undefined || readCancellationRequest(processB.written.slice(bWrites)) !== undefined).toBe(true));
+        const nextRequest = readCancellationRequest(processB.written.slice(bWrites));
+        // Settle the real vendor control boundary before asserting the RED.
+        if (nextRequest && typeof nextRequest === 'object' && 'request_id' in nextRequest) {
+          await processB.emit({ type: 'control_response', response: {
+            subtype: 'success', request_id: nextRequest.request_id, response: {},
+          } });
+        }
+        await expect(nextCancellation).resolves.toBe(true);
+        expect(nextRequest).toMatchObject({ request: mode === 'background'
+          ? { subtype: 'stop_task', task_id: 'shared-task' } : { subtype: 'interrupt' } });
+      } finally {
+        await operations.disposeProviderSession();
+      }
+    },
+  );
+
+  it.each(['foreground', 'foreground-own-child', 'background', 'cancelled-foreground'] as const)('cancels the current %s without targeting work owned by another query', async (mode) => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-owned-cancellation',
+    });
+    try {
+      operations.beginProviderTurn('turn-a');
+      await operations.sendProviderTurnPrompt('launch background task A');
+      const processA = exec.processes[0];
+      if (!processA) throw new Error('Expected the first SDK process');
+      await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-cancellation' });
+      await processA.emit({ type: 'system', subtype: 'task_started', session_id: 'native-cancellation',
+        task_id: 'owned-task-a', task_type: 'local_agent', is_backgrounded: true });
+      await processA.emit({ type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-cancellation', result: 'Background continues.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await operations.waitForProviderTurnCompletion();
+      operations.beginProviderTurn('turn-b');
+      await operations.sendProviderTurnPrompt('new foreground work');
+      const processB = exec.processes[1];
+      if (!processB) throw new Error('Expected the second SDK process');
+      if (mode === 'foreground-own-child') {
+        await processB.emit({ type: 'system', subtype: 'task_started', session_id: 'native-cancellation',
+          task_id: 'owned-task-b', task_type: 'local_agent', is_backgrounded: true });
+      }
+      if (mode === 'background') {
+        await processB.emit({ type: 'result', subtype: 'success', is_error: false,
+          session_id: 'native-cancellation', result: 'New foreground complete.', queued_turn_count: 0,
+          num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+        await operations.waitForProviderTurnCompletion();
+      }
+      if (mode === 'cancelled-foreground') {
+        await operations.cancelProviderTurn('turn-b');
+        await operations.waitForProviderTurnCompletion();
+        expect(processB.written.some(value => value && typeof value === 'object' && 'request' in value
+          && value.request && typeof value.request === 'object' && 'subtype' in value.request
+          && value.request.subtype === 'interrupt')).toBe(true);
+      }
+      const backgroundCancellation = mode === 'background' || mode === 'cancelled-foreground';
+      const previousWrites = { all: exec.written.length, a: processA.written.length, b: processB.written.length };
+      const cancellation = operations.cancelProviderTurn(backgroundCancellation ? undefined : 'turn-b');
+      const readCancellationRequest = (records: readonly unknown[]) => records.find((value) => {
+        if (!value || typeof value !== 'object' || !('request' in value)) return false;
+        const request = value.request;
+        return !!request && typeof request === 'object' && 'subtype' in request
+          && (request.subtype === 'stop_task' || request.subtype === 'interrupt');
+      });
+      // Settle whichever OS boundary received the request so RED does not strand cleanup.
+      await vi.waitFor(() => expect(readCancellationRequest(exec.written.slice(previousWrites.all))).toBeDefined());
+      const stop = readCancellationRequest(exec.written.slice(previousWrites.all));
+      if (!stop || typeof stop !== 'object') throw new Error('Expected a cancellation request');
+      if ('request_id' in stop) {
+        const receivingProcess = readCancellationRequest(processA.written.slice(previousWrites.a)) ? processA : processB;
+        await receivingProcess.emit({ type: 'control_response', response: {
+          subtype: 'success', request_id: stop.request_id, response: {},
+        } });
+      }
+      await cancellation;
+      if (!backgroundCancellation) {
+        expect(readCancellationRequest(processB.written.slice(previousWrites.b))).toMatchObject({ request: { subtype: 'interrupt' } });
+        expect(readCancellationRequest(processA.written.slice(previousWrites.a))).toBeUndefined();
+      } else {
+        expect(readCancellationRequest(processA.written.slice(previousWrites.a))).toMatchObject({ request: { subtype: 'stop_task', task_id: 'owned-task-a' } });
+        expect(readCancellationRequest(processB.written.slice(previousWrites.b))).toBeUndefined();
+      }
+    } finally {
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it.each(['foreground', 'background'] as const)('does not guess a query owner for uncorrelated hook cancellation (%s)', async (mode) => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service, sessionHooks: hooks.service,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-unowned-cancellation',
+    });
+    try {
+      operations.beginProviderTurn('turn-b');
+      await operations.sendProviderTurnPrompt('owned foreground work');
+      const processB = exec.processes[0];
+      if (!processB) throw new Error('Expected the owned SDK process');
+      await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-unowned-cancellation' });
+      const request = hooks.service.startServer.mock.calls[0]?.[0] as Readonly<{
+        onSessionHook?: (providerSessionId: string, payload: Readonly<Record<string, unknown>>) => void | Promise<void>;
+      }> | undefined;
+      if (!request?.onSessionHook) throw new Error('Expected the first-party session hook boundary');
+      await request.onSessionHook('native-unowned-cancellation', {
+        hook_event_name: 'PostToolUse', session_id: 'native-unowned-cancellation',
+        tool_name: 'Agent', tool_input: { run_in_background: true },
+        tool_response: { status: 'async_launched', agentId: 'unowned-hook-task' },
+      });
+      if (mode === 'background') {
+        await processB.emit({ type: 'result', subtype: 'success', is_error: false,
+          session_id: 'native-unowned-cancellation', result: 'Foreground finished.', queued_turn_count: 0,
+          num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+        await operations.waitForProviderTurnCompletion();
+      }
+      const cancellation = operations.cancelProviderTurn(mode === 'foreground' ? 'turn-b' : undefined);
+      const settled = cancellation.then(value => ({ value }));
+      let cancellationResult: { value: boolean } | undefined;
+      void settled.then(value => { cancellationResult = value; });
+      const readControl = () => processB.written.find(value => value && typeof value === 'object' && 'request' in value);
+      await vi.waitFor(() => expect(readControl() !== undefined || cancellationResult !== undefined).toBe(true));
+      const control = readControl();
+      if (control && typeof control === 'object' && 'request_id' in control) {
+        await processB.emit({ type: 'control_response', response: {
+          subtype: 'success', request_id: control.request_id, response: {},
+        } });
+      }
+      const result = await cancellation;
+      if (mode === 'foreground') {
+        expect(control).toMatchObject({ request: { subtype: 'interrupt' } });
+        expect(result).toBe(true);
+      } else {
+        expect(control).toBeUndefined();
+        expect(result).toBe(false);
+      }
+    } finally {
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it('does not restore cancellation ownership from native rows buffered before the old process exit', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-buffered-exit',
+    });
+    const activityEvents: AgentSessionRuntimeEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents(event => activityEvents.push(event));
+    const result = { type: 'result', subtype: 'success', is_error: false,
+      session_id: 'native-buffered-exit', result: 'Foreground complete.', queued_turn_count: 0,
+      num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 };
+    try {
+      operations.beginProviderTurn('turn-a');
+      await operations.sendProviderTurnPrompt('launch task A');
+      const processA = exec.processes[0];
+      if (!processA) throw new Error('Expected the first SDK process');
+      await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-buffered-exit' });
+      await processA.emit({ type: 'system', subtype: 'task_started', session_id: 'native-buffered-exit',
+        task_id: 'buffered-a', task_type: 'local_agent', is_backgrounded: true });
+      await processA.emit(result);
+      await operations.waitForProviderTurnCompletion();
+      operations.beginProviderTurn('turn-b');
+      await operations.sendProviderTurnPrompt('launch task B');
+      const processB = exec.processes[1];
+      if (!processB) throw new Error('Expected the second SDK process');
+      await processB.emit({ type: 'system', subtype: 'init', session_id: 'native-buffered-exit' });
+      await processB.emit({ type: 'system', subtype: 'task_started', session_id: 'native-buffered-exit',
+        task_id: 'buffered-b', task_type: 'local_agent', is_backgrounded: true });
+      await processB.emit(result);
+      await operations.waitForProviderTurnCompletion();
+      // The OS can deliver a batch of final stdout records before its exit receipt;
+      // the real SDK queue may consume the batch after process-stop reconciliation.
+      const bufferedRows = [0, 1, 2].map(() => ({ type: 'system', subtype: 'task_progress',
+        session_id: 'native-buffered-exit', task_id: 'buffered-a' }));
+      const tail = Promise.all([...bufferedRows, {
+        type: 'system', subtype: 'task_started', session_id: 'native-buffered-exit',
+        task_id: 'buffered-ghost', task_type: 'local_agent', is_backgrounded: true,
+      }].map(row => processA.emit(row)));
+      await processA.exitWith({ exitCode: 1, signal: null });
+      await tail;
+      await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+      let cancellationSettled = false;
+      const cancellation = operations.cancelProviderTurn().then(
+        value => { cancellationSettled = true; return { ok: true, value }; },
+        error => { cancellationSettled = true; return { ok: false, error }; },
+      );
+      const stop = () => processB.written.find(value => !!value && typeof value === 'object'
+        && 'request' in value && !!value.request && typeof value.request === 'object'
+        && 'subtype' in value.request && value.request.subtype === 'stop_task');
+      await vi.waitFor(() => expect(stop() !== undefined || cancellationSettled).toBe(true));
+      const request = stop();
+      if (request && typeof request === 'object' && 'request_id' in request) {
+        await processB.emit({ type: 'control_response', response: {
+          subtype: 'success', request_id: request.request_id, response: {},
+        } });
+      }
+      await expect(cancellation).resolves.toMatchObject({ ok: true, value: true });
+      expect(request).toMatchObject({ request: { subtype: 'stop_task', task_id: 'buffered-b' } });
+    } finally {
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it('demotes an owned task and reports failed process cleanup without replacing the provider failure', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-cleanup-failure',
+    });
+    const activityEvents: AgentSessionRuntimeEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents((event) => activityEvents.push(event));
+    let restoreDispose: (() => void) | undefined;
+    try {
+      operations.beginProviderTurn('turn-cleanup');
+      await operations.sendProviderTurnPrompt('launch work before provider failure');
+      const process = exec.processes[0];
+      if (!process) throw new Error('Expected an owned SDK process');
+      const handle = await exec.spawnClient.mock.results[0]?.value;
+      if (!handle) throw new Error('Expected the OS boundary handle');
+      const dispose = vi.spyOn(handle, 'dispose').mockRejectedValue(new Error('Secret physical cleanup payload'));
+      restoreDispose = () => dispose.mockRestore();
+      await process.emit({ type: 'system', subtype: 'init', session_id: 'native-cleanup' });
+      await process.emit({
+        type: 'system', subtype: 'task_started', session_id: 'native-cleanup',
+        task_id: 'cleanup-task', task_type: 'local_agent', is_backgrounded: true,
+      });
+      await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+      const completion = operations.waitForProviderTurnCompletion();
+      const failure = expect(completion).rejects.toThrow('rate limited');
+      await process.emit({
+        type: 'result', subtype: 'error_during_execution', is_error: true,
+        session_id: 'native-cleanup', errors: ['rate limited'], num_turns: 1,
+        total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8,
+      });
+      await failure;
+      await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'unknown', activeCount: 0 }));
+      expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), {
+        code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'unknown', activeCount: 0,
+      });
+    } finally {
+      restoreDispose?.();
+      await operations.disposeProviderSession();
+    }
+  });
+
+  it.each(['active-background', 'previous-cleanup-failed'] as const)('rejects explicit retirement on failed physical shutdown while still stopping the other owned query (%s)', async (mode) => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-retirement-failure',
+    });
+    const activityEvents: AgentSessionRuntimeEvent[] = [];
+    operations.subscribeCanonicalAgentSessionEvents((event) => activityEvents.push(event));
+    let restoreDispose: (() => void) | undefined;
+    try {
+      operations.beginProviderTurn('turn-a');
+      await operations.sendProviderTurnPrompt('launch background work');
+      const processA = exec.processes[0];
+      if (!processA) throw new Error('Expected the first SDK process');
+      await processA.emit({ type: 'system', subtype: 'init', session_id: 'native-retirement' });
+      await processA.emit({ type: 'system', subtype: 'task_started', session_id: 'native-retirement',
+        task_id: 'retirement-task', task_type: 'local_agent', is_backgrounded: true });
+      await processA.emit({ type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-retirement', result: 'Background continues.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await operations.waitForProviderTurnCompletion();
+      const handleA = await exec.spawnClient.mock.results[0]?.value;
+      if (!handleA) throw new Error('Expected the first OS boundary handle');
+      const failure = new Error('Physical provider shutdown failed');
+      const dispose = vi.spyOn(handleA, 'dispose').mockRejectedValue(failure);
+      restoreDispose = () => dispose.mockRestore();
+      if (mode === 'previous-cleanup-failed') {
+        await processA.emit({ type: 'system', subtype: 'task_notification', session_id: 'native-retirement',
+          task_id: 'retirement-task', status: 'completed' });
+        await vi.waitFor(() => expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), {
+          code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'unknown', activeCount: 0,
+        }));
+      }
+      operations.beginProviderTurn('turn-b');
+      await operations.sendProviderTurnPrompt('other owned foreground process');
+      const handleB = await exec.spawnClient.mock.results[1]?.value;
+      if (!handleB) throw new Error('Expected the second OS boundary handle');
+      let secondQueryStopped = false;
+      void handleB.process.exit.then(() => { secondQueryStopped = true; });
+      await expect(operations.disposeProviderSession()).rejects.toBe(failure);
+      await vi.waitFor(() => expect(secondQueryStopped).toBe(true));
+      expect(activityEvents.at(-1)).toMatchObject({ state: 'unknown', activeCount: 0 });
+      expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), {
+        code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'unknown', activeCount: 0,
+      });
+    } finally {
+      restoreDispose?.();
+      await exec.resolveExit();
+      await operations.disposeProviderSession().catch(() => undefined);
+    }
+  });
+
+  it('does not spawn a transient control query after explicit retirement has begun', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-control-retirement',
+    });
+    try {
+      operations.beginProviderTurn('turn-control-retirement');
+      await operations.sendProviderTurnPrompt('background work before a control refresh');
+      const process = exec.processes[0];
+      if (!process) throw new Error('Expected the owned SDK process');
+      await process.emit({ type: 'system', subtype: 'init', session_id: 'native-control-retirement' });
+      await process.emit({ type: 'system', subtype: 'task_started', session_id: 'native-control-retirement',
+        task_id: 'control-retirement-task', task_type: 'local_agent', is_backgrounded: true });
+      await process.emit({ type: 'result', subtype: 'success', is_error: false,
+        session_id: 'native-control-retirement', result: 'Background continues.', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await operations.waitForProviderTurnCompletion();
+      const refresh = operations.updateProviderConfiguration({ configOption: { id: 'context_usage_refresh', value: 1 } });
+      await operations.disposeProviderSession();
+      // Settle any incorrectly spawned OS boundary so the RED does not strand a control request.
+      await exec.resolveExit();
+      await refresh;
+      expect(exec.processes).toHaveLength(1);
+    } finally {
+      await exec.resolveExit();
+      await operations.disposeProviderSession().catch(() => undefined);
+    }
+  });
+
+  it('still retires owned processes when ordered source observation release fails', async () => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const terminalHost = createTerminalHostFixture().service;
+    const events = createEventsFixture().service;
+    const base = createPluginContextFixture(terminalHost, events, { exec: exec.service, sessionHooks: hooks.service });
+    const releaseFailure = new Error('Ordered source release failed');
+    const ctx = createPluginContextFixture(terminalHost, events, {
+      exec: exec.service, sessionHooks: hooks.service,
+      transcripts: {
+        ...base.agentRuntime.transcripts,
+        // Host-owned observation boundary can reject while releasing its native subscription.
+        followSource: async () => ({ dispose: async () => { throw releaseFailure; } }),
+      },
+    });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'happy-source-release', enableSessionWorkState: true,
+    });
+    try {
+      operations.beginProviderTurn('turn-source-release');
+      await operations.sendProviderTurnPrompt('owned foreground before source retirement');
+      const process = exec.processes[0];
+      const handle = await exec.spawnClient.mock.results[0]?.value;
+      if (!process || !handle) throw new Error('Expected the owned OS boundary handle');
+      await process.emit({ type: 'system', subtype: 'init', session_id: 'native-source-release' });
+      const request = hooks.service.startServer.mock.calls[0]?.[0] as Readonly<{
+        onSessionHook?: (providerSessionId: string, payload: Readonly<Record<string, unknown>>) => void | Promise<void>;
+      }> | undefined;
+      if (!request?.onSessionHook) throw new Error('Expected the first-party hook boundary');
+      await request.onSessionHook('native-source-release', {
+        hook_event_name: 'SessionStart', session_id: 'native-source-release', source: 'resume',
+      });
+      let stopped = false;
+      void handle.process.exit.then(() => { stopped = true; });
+      await expect(operations.disposeProviderSession()).rejects.toBe(releaseFailure);
+      await vi.waitFor(() => expect(stopped).toBe(true));
+    } finally {
+      await exec.resolveExit();
+      await operations.disposeProviderSession().catch(() => undefined);
+    }
+  });
+
   it('keeps Runtime Activity idle after an exact SDK error result with no active provider tasks', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
@@ -3178,11 +3861,13 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         status: 'completed',
       });
 
-      expect(runtimeActivityEvents).toHaveLength(eventsAfterTaskUpdated);
-      expect(runtimeActivityEvents.at(-1)).toEqual(expect.objectContaining({
+      expect(runtimeActivityEvents.slice(eventsAfterTaskUpdated)).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ state: 'active' }),
+      ]));
+      await vi.waitFor(() => expect(runtimeActivityEvents.at(-1)).toEqual(expect.objectContaining({
         state: 'idle',
         activeCount: 0,
-      }));
+      })));
       expect(writeStateField).not.toHaveBeenCalledWith(expect.objectContaining({ fieldId: 'runtime.activity' }));
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);

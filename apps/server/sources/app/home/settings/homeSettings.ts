@@ -1,17 +1,9 @@
 import * as privacyKit from "privacy-kit";
-import {
-    readHomeAuthenticationPolicyV1,
-    isHomeGovernanceSettingKey,
-    validateHomeSettingsWrite,
-    type HomeSettingEntryV1,
-    type HomeSettingsInvalidReasonV1,
-    type HomeSettingsProjectionV1,
-    type HomeSettingsSetInputV1,
-    type ServerConfigEntry,
-    type ServerConfigEnv,
-    type ServerConfigRegistry,
-    type ServerConfigValue,
-} from "@happier-dev/protocol";
+import { readHomeAuthenticationPolicyV1, type HomeSettingEntryV1, type HomeSettingsInvalidReasonV1, type HomeSettingsProjectionV1, type HomeSettingsSetInputV1 } from '@happier-dev/protocol/home/governance';
+import { isHomeGovernanceSettingKey } from '@happier-dev/protocol/serverConfig/homeSettingsOwnership';
+import { validateHomeSettingsWrite } from '@happier-dev/protocol/serverConfig/homeSettingsWrite';
+import { type ServerConfigEntry, type ServerConfigRegistry, type ServerConfigValue } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
+import { type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { resolveFeatureDecisionsFromEnv } from "@/app/features/registry";
 import { recordHomeAdministrationEventInTx, type HomeAdministrationActor } from "@/app/home/audit/homeAdministrationEvents";

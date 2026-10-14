@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import type { Tx } from "@/storage/inTx";
-import { projectSessionAccessCapabilitiesV1, type SessionAudienceSelectionV1 } from "@happier-dev/protocol";
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { type SessionAudienceSelectionV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { resolveTeamMembershipContextInTx } from "@/app/teams/memberships/effectiveMembership";
 import { resolveTeamGroupMembershipContextInTx } from "@/app/teams/groups/effectiveGroupMembership";
 import { createSessionTranscriptShareableWhere, isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";

@@ -1,7 +1,4 @@
-import {
-    ACCOUNT_DIRECTORY_ERROR_CODES_V1,
-    type AccountDirectoryErrorCodeV1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_DIRECTORY_ERROR_CODES_V1, type AccountDirectoryErrorCodeV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import type { FastifyError, FastifyReply } from "fastify";
 import { InactiveAccountError } from "@/app/auth/accountStatus";
 

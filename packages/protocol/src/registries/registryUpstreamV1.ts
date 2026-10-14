@@ -1,34 +1,34 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { RegistryContentRefV1Schema, type RegistryContentRefV1 } from './registryItemsV1.js';
 import { RegistrySourceStatusV1Schema, type RegistrySourceStatusV1 } from './registryListV1.js';
 import { RegistryKindV1Schema, type RegistryKindV1 } from './registrySourcesV1.js';
 
 /** Persisted item state; format readers consume this without importing the checker. */
-export const RegistryUpstreamV1Schema = lazyZodSchema(() => z.object({
+export const RegistryUpstreamV1Schema = lazyZodSchema(() => z.strictObject({
   state: z.enum(['current', 'update_available', 'removed_from_source']),
-  latest: RegistryContentRefV1Schema.optional(),
-}).strict());
+  latest: z.optional(RegistryContentRefV1Schema),
+}));
 export type RegistryUpstreamV1 = z.infer<typeof RegistryUpstreamV1Schema>;
 
 const RegistrySourceFailureV1Schema = lazyZodSchema(() => {
   // The source-status owner declares success first and a nonempty failure tail.
-  const [, firstFailure, ...remainingFailures] = RegistrySourceStatusV1Schema.options;
+  const [, firstFailure, ...remainingFailures] = RegistrySourceStatusV1Schema._zod.def.options;
   return z.discriminatedUnion('state', [firstFailure, ...remainingFailures]);
 });
 
 /** Failed checks are session observations, never stored upstream state. */
 export const RegistryUpstreamCheckV1Schema = lazyZodSchema(() => z.union([
   RegistryUpstreamV1Schema,
-  z.object({ state: z.literal('unchecked'), reason: RegistrySourceFailureV1Schema }).strict(),
+  z.strictObject({ state: z.literal('unchecked'), reason: RegistrySourceFailureV1Schema }),
 ]));
 export type RegistryUpstreamCheckV1 = RegistryUpstreamV1 | Readonly<{
   state: 'unchecked'; reason: Exclude<RegistrySourceStatusV1, { state: 'ok' }>;
 }>;
-export const RegistryUpdateCheckResultV1Schema = lazyZodSchema(() => z.object({
-  checkedAt: z.number().int().nonnegative(),
-  results: z.array(z.object({ kind: RegistryKindV1Schema, key: z.string().min(1), upstream: RegistryUpstreamCheckV1Schema }).strict()),
-}).strict());
+export const RegistryUpdateCheckResultV1Schema = lazyZodSchema(() => z.strictObject({
+  checkedAt: z.number().check(z.int(), z.nonnegative()),
+  results: z.array(z.strictObject({ kind: RegistryKindV1Schema, key: z.string().check(z.minLength(1)), upstream: RegistryUpstreamCheckV1Schema })),
+}));
 export type RegistryUpdateCheckResultV1 = Readonly<{
   checkedAt: number;
   results: readonly Readonly<{ kind: RegistryKindV1; key: string; upstream: RegistryUpstreamCheckV1 }>[];

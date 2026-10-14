@@ -1,18 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
-import {
-    ExternalSessionOperationSocketCommandV1Schema,
-    ExternalSessionMaterializationPublicationV1Schema,
-    makeExternalSessionHistoricalImportBatchIdV1,
-    validateExternalSessionOperationSocketBatchV1,
-    type ExternalSessionMaterializationPublicationV1,
-    type ExternalSessionOperationClaimV1,
-    type ExternalSessionOperationSocketBatchLimitsV1,
-    type ExternalSessionOperationSocketCommandV1,
-    type ExternalSessionOperationSocketResponseV1,
-    type ExternalSessionPriorStableStorageV1,
-} from "@happier-dev/protocol";
+import { ExternalSessionOperationSocketCommandV1Schema, makeExternalSessionHistoricalImportBatchIdV1, validateExternalSessionOperationSocketBatchV1, type ExternalSessionOperationClaimV1, type ExternalSessionOperationSocketBatchLimitsV1, type ExternalSessionOperationSocketCommandV1, type ExternalSessionOperationSocketResponseV1 } from '@happier-dev/protocol/sessions/external/operationActionsV1';
+import { ExternalSessionMaterializationPublicationV1Schema, type ExternalSessionMaterializationPublicationV1, type ExternalSessionPriorStableStorageV1 } from '@happier-dev/protocol/sessions/external/operationV1';
 
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { initializeExternalLinkedSessionStorage } from "@/app/session/externalLinkedSessionStorageInitialization";

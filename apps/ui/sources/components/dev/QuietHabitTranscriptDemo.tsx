@@ -73,6 +73,6 @@ export default function QuietHabitTranscriptDemo() {
 const styles = StyleSheet.create((theme) => ({
     frame: { width: '100%', backgroundColor: theme.colors.surface.base },
     transcript: { flex: 1 },
-    content: { paddingVertical: theme.margins.lg, gap: theme.margins.sm },
-    composer: { padding: theme.margins.lg },
+    content: { paddingVertical: theme.space.s16, gap: theme.space.s8 },
+    composer: { padding: theme.space.s16 },
 }));

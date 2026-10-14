@@ -5,6 +5,7 @@ import type { SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessi
 
 import {
     composeSessionServerStartDraft,
+    type SessionServerStartDraftSeed,
     type SessionServerStartDraftPresentation,
 } from './serverStartDraftComposer';
 
@@ -29,6 +30,27 @@ function presentResolved(
 }
 
 describe('Session server-start draft composer', () => {
+    it('carries a rich existing recipe through the no-effect selection seed and strict settlement', async () => {
+        const existingDraft: SessionServerStartSpawnDraftV1 = {
+            ...serverStartDraft,
+            modelSelection: { v: 1, updatedAt: 12, ref: {
+                agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'sonnet',
+            } },
+            profileId: 'profile-1',
+            allowedTools: ['mcp__wilson-intake__*'],
+            unlistedTools: 'deny',
+            organizationPlacement: { folderId: 'intake', tagIds: ['email'] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false,
+                forceIncludeServerIds: ['wilson-intake'], forceExcludeServerIds: [] } },
+        };
+        const present = vi.fn(({ seed }: Readonly<{ seed: SessionServerStartDraftSeed }>) => presentResolved(seed.existingDraft));
+        const outcome = await composeSessionServerStartDraft({
+            draft: { existingDraft }, target, isCurrent: () => true, present,
+        });
+        expect(outcome).toEqual({ kind: 'submitted', draft: existingDraft });
+        expect(present).toHaveBeenCalledWith({ seed: { existingDraft }, target });
+    });
+
     it('whitelists only safe seed fields and settles an exact no-invoke Session draft', async () => {
         const present = vi.fn(() => presentResolved(serverStartDraft));
 

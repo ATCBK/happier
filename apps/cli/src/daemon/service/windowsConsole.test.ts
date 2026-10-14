@@ -1,3 +1,4 @@
+import { ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -43,7 +44,11 @@ describe('Windows background CLI process consoles', () => {
       mkdirSync(join(directory, '.happier', 'services'), { recursive: true });
       Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
       vi.stubEnv('PATH', directory);
-      spawnSyncMock.mockReturnValue({ status: 0, stdout: '', stderr: '' });
+      spawnSyncMock.mockImplementation((command: string, args: readonly string[] = []) => ({
+        status: 0,
+        stdout: command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : '',
+        stderr: '',
+      }));
       runDaemonServiceCommands([
         { cmd: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', 'Stop-ScheduledTask'] },
         { cmd: 'schtasks', args: ['/Run', '/TN', 'Happier\\happier-daemon.default'] },
@@ -62,6 +67,7 @@ describe('Windows background CLI process consoles', () => {
   it('hides background CLI children while retaining an explicit interactive visibility choice', async () => {
     await withTempHappyCliEntrypoint(async (entrypoint) => {
       envScope.patch({ HAPPIER_CLI_SUBPROCESS_RUNTIME: 'node', HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: entrypoint });
+      spawnMock.mockImplementation(() => new ChildProcess());
       spawnHappyCLI(['daemon', 'start-sync'], { stdio: 'ignore' });
       expect(spawnMock.mock.calls[0]?.[2].windowsHide).toBe(true);
       spawnHappyCLI(['daemon', 'start-sync'], { stdio: 'ignore', windowsHide: undefined });
@@ -79,7 +85,11 @@ describe('Windows background CLI process consoles', () => {
       for (const name of ['schtasks.exe', 'powershell.exe']) writeFileSync(join(homeDir, name), '');
       vi.stubEnv('PATH', homeDir);
       mkdirSync(join(homeDir, 'services'), { recursive: true });
-      spawnSyncMock.mockReturnValue({ status: 0, stdout: '', stderr: '' });
+      spawnSyncMock.mockImplementation((command: string, args: readonly string[] = []) => ({
+        status: 0,
+        stdout: command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : '',
+        stderr: '',
+      }));
       const { runDaemonServiceCliCommand } = await import('./cli');
       const output = captureStdoutJsonOutput<{ ok: boolean; daemon: { running: boolean } }>();
       try {

@@ -1,0 +1,908 @@
+import * as React from 'react';
+import { ScrollView, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import {
+  Collection,
+  useHappierCollection,
+  type CollectionDetailRenderContext,
+} from '@happier-dev/plugin-ui/components';
+import {
+  REGISTRY_FORMAT_KINDS_V1,
+  type RegistryFormatV1,
+  type RegistryKindV1,
+  type RegistrySourceDescriptorV1,
+} from '@happier-dev/protocol/registries';
+import type { z } from 'zod';
+import type { RegistryDetectedSourceV1Schema } from '@happier-dev/protocol/registries';
+
+import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
+import { CapabilityDetailHeader } from '@/components/capabilities/detail/CapabilityDetailHeader';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { Switch } from '@/components/ui/forms/Switch';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { PageLeaveActions } from '@/components/ui/layout/PageLeaveActions';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { Text } from '@/components/ui/text/Text';
+import { CATALOG_SURFACE_LIST_ROLE } from '@/modal/components/card/commandSurfaceCard';
+import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
+
+import { describeRegistrySourceStatus } from './describeRegistrySourceStatus';
+import {
+  registryFormatIcon,
+  registryFormatLabel,
+  registryItemCountLabel,
+  registrySourceKindLabel,
+  registrySourceHost,
+  registrySourceLocation,
+} from './registrySourcePresentation';
+import { useRegistryItems } from './useRegistryItems';
+import { SavedSecretPickerModal } from '@/components/ui/forms/valueRefs/SavedSecretPickerModal';
+import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
+import { Modal } from '@/modal';
+import { useRegistrySourceMutations } from './useRegistrySourceMutations';
+import { useRegistrySources } from './useRegistrySources';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
+
+type Detected = z.infer<typeof RegistryDetectedSourceV1Schema>;
+export type RegistrySourcesViewItemFromSource = Readonly<{
+  title: string;
+  ref?: string;
+  onOpen: () => void;
+}>;
+
+const NEW_KEY = 'registry:new';
+type Row = Readonly<{ key: string; source: RegistrySourceDescriptorV1 | null }>;
+const keyOf = (row: Row) => row.key;
+const NEW_ROW: Row = { key: NEW_KEY, source: null };
+
+/**
+ * Registries, one level in (P4 I-7, lab sa R1/R2): every source that lists this kind as a collection beside its
+ * details — rename, use in Browse, refresh, the items added from it, remove — with "New registry" first, which opens
+ * the add form (paste a link, live detection, name, Add registry). The same view is the body of Settings → Plugins →
+ * Sources (kind "plugin").
+ */
+export function RegistrySourcesView(
+  props: Readonly<{
+    kind: RegistryKindV1;
+    initialIntent?: 'manage' | 'add';
+    itemsFromSource?: (
+      sourceId: string,
+    ) => readonly RegistrySourcesViewItemFromSource[];
+    /** A registry was added (or an existing one matched): the opener selects it. */
+    onSourceAdded?: (sourceId: string) => void;
+    onBack?: () => void;
+    testID: string;
+  }>,
+): React.ReactElement {
+  const { theme } = useUnistyles();
+  const sources = useRegistrySources(props.kind);
+  const rows = React.useMemo<readonly Row[]>(
+    () => [
+      NEW_ROW,
+      ...sources.sources.map((source) => ({ key: source.id, source })),
+    ],
+    [sources.sources],
+  );
+  const [openKey, setOpenKey] = React.useState<string | null>(() =>
+    props.initialIntent === 'add' ? NEW_KEY : null,
+  );
+  // Manage opens on the first registry the person added (else the first one), once the list is known. On a phone
+  // the list is the page and details push, so it lands on the list instead.
+  const phone = useDeviceType() === 'phone';
+  const settled = React.useRef(props.initialIntent === 'add' || phone);
+  React.useEffect(() => {
+    if (settled.current || !sources.hasValue) return;
+    settled.current = true;
+    const first =
+      sources.sources.find((source) => source.origin.kind === 'user') ??
+      sources.sources[0];
+    if (first) setOpenKey(first.id);
+  }, [sources.hasValue, sources.sources]);
+
+  const model = useHappierCollection<Row>({
+    items: rows,
+    keyOf,
+    openKey,
+    onOpenChange: setOpenKey,
+  });
+  const mark = React.useCallback(
+    (name: IconName) => (
+      <Icon
+        name={name}
+        size={ICON_SIZE.md}
+        color={theme.colors.text.secondary}
+      />
+    ),
+    [theme.colors.text.secondary],
+  );
+  const anatomy = React.useMemo(
+    () =>
+      buildCapabilityCollectionAnatomy<Row>({
+        title: (row) =>
+          row.source?.title ?? t('capabilities.registries.view.newRow'),
+        description: (row) =>
+          row.source === null
+            ? t('capabilities.registries.view.newRowBody')
+            : locationUnlessTitle(row.source),
+        mark: (row) =>
+          mark(row.source === null ? 'plus' : registryFormatIcon(row.source)),
+        facts: (row) => ({
+          presentation: 'row',
+          extra:
+            row.source === null
+              ? []
+              : [
+                  registrySourceKindLabel(row.source),
+                  ...(row.source.enabled
+                    ? []
+                    : [t('capabilities.registries.format.off')]),
+                ],
+        }),
+        accessibilityLabel: (row) =>
+          row.source?.title ?? t('capabilities.registries.view.newRow'),
+        testID: (row) => `${props.testID}:row:${row.key}`,
+      }),
+    [mark, props.testID],
+  );
+
+  const renderDetail = (
+    key: string,
+    context: CollectionDetailRenderContext,
+  ) => {
+    if (key === NEW_KEY) {
+      return (
+        <RegistryAddForm
+          kind={props.kind}
+          pushed={context.pushed}
+          onCancel={() => setOpenKey(null)}
+          onAdded={(sourceId) => {
+            setOpenKey(sourceId);
+            props.onSourceAdded?.(sourceId);
+          }}
+          testID={`${props.testID}:add`}
+        />
+      );
+    }
+    const source = sources.sources.find((candidate) => candidate.id === key);
+    if (!source) return null;
+    return (
+      <RegistrySourceDetail
+        key={source.id}
+        kind={props.kind}
+        source={source}
+        itemsFromSource={props.itemsFromSource?.(source.id) ?? []}
+        onRemoved={() => setOpenKey(null)}
+        testID={`${props.testID}:detail`}
+      />
+    );
+  };
+
+  return (
+    <CoreCollectionScope>
+      <View style={styles.fill} testID={props.testID}>
+        <Collection<Row>
+          model={model}
+          anatomy={anatomy}
+          accessibilityLabel={t('capabilities.registries.view.listLabel')}
+          presentation="list"
+          detail="auto"
+          renderDetail={renderDetail}
+          minListWidth={CATALOG_SURFACE_LIST_ROLE.minListWidthPx}
+          minDetailWidth={CATALOG_SURFACE_LIST_ROLE.minDetailWidthPx}
+          preferredListRatio={CATALOG_SURFACE_LIST_ROLE.preferredListRatio}
+          loading={sources.loading && !sources.hasValue}
+          testID={`${props.testID}:collection`}
+          listTestID={`${props.testID}:list`}
+          detailTestID={`${props.testID}:detail-pane`}
+        />
+      </View>
+    </CoreCollectionScope>
+  );
+}
+
+/**
+ * The source's token (P4 F4): names where it is sent before the tap, binds a private Saved Secret through
+ * `registries.sources.token.set` (applied directly, D22) and offers Undo for the change just made.
+ */
+function RegistrySourceTokenRow(props: Readonly<{ source: RegistrySourceDescriptorV1; testID: string }>) {
+  const { theme } = useUnistyles();
+  const { source } = props;
+  const mutations = useRegistrySourceMutations();
+  const catalog = useSavedSecretCatalog();
+  const [busy, setBusy] = React.useState(false);
+  const [last, setLast] = React.useState<Readonly<{ added: boolean; previous: RegistrySourceDescriptorV1['token'] | null }> | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  const host = isGitHubSource(source) ? t('capabilities.registries.detail.tokenGitHubHost') : registrySourceHost(source.url);
+  const currentRef = source.token?.secretRef ?? null;
+  const currentName = currentRef === null ? null
+    : catalog.picker.personalSecrets.find((secret) => secret.id === currentRef)?.name
+      ?? catalog.picker.sharedEntries.find((entry) => entry.ref === currentRef)?.name ?? null;
+  const apply = React.useCallback((token: RegistrySourceDescriptorV1['token'] | null, undo: boolean) => {
+    const previous = source.token ?? null;
+    setBusy(true);
+    setFailed(false);
+    mutations.setToken({ sourceId: source.id, token })
+      .then(() => setLast(undo ? null : { added: token !== null, previous }))
+      .catch(() => setFailed(true))
+      .finally(() => setBusy(false));
+  }, [mutations, source.id, source.token]);
+  const choose = React.useCallback(() => {
+    Modal.show({
+      component: SavedSecretPickerModal,
+      props: {
+        selectedId: currentRef,
+        includeNoneRow: currentRef !== null,
+        onSelectId: (secretRef: string | null) => {
+          if (secretRef === currentRef) return;
+          apply(secretRef === null ? null : { secretRef }, false);
+        },
+      },
+      chrome: { kind: 'card', title: t('capabilities.registries.detail.tokenPickTitle'), dimensions: { size: 'lg' } },
+      closeOnBackdrop: true,
+    });
+  }, [apply, currentRef]);
+  const subtitle = failed ? t('capabilities.registries.detail.updateFailed')
+    : last ? (last.added ? t('capabilities.registries.detail.tokenAdded') : t('capabilities.registries.detail.tokenRemoved'))
+    : currentRef !== null ? t('capabilities.registries.detail.tokenSet', { name: currentName ?? t('capabilities.registries.detail.tokenTitle'), host })
+    : t('capabilities.registries.detail.tokenNone', { host });
+  return (
+    <Item
+      testID={props.testID}
+      title={t('capabilities.registries.detail.tokenTitle')}
+      subtitle={subtitle}
+      subtitleLines={0}
+      {...(failed ? { subtitleStyle: { color: theme.colors.status.error } } : {})}
+      rightElement={
+        <View style={styles.tokenActions}>
+          {last ? (
+            <RoundButton size="small" display="secondary" title={t('capabilities.registries.detail.undo')}
+              disabled={busy} onPress={() => apply(last.previous, true)} testID={`${props.testID}:undo`} />
+          ) : null}
+          <RoundButton size="small" display="secondary"
+            title={currentRef === null ? t('capabilities.registries.detail.tokenAdd') : t('capabilities.registries.detail.tokenChange')}
+            loading={busy} disabled={busy} onPress={choose} testID={`${props.testID}:choose`} />
+        </View>
+      }
+    />
+  );
+}
+
+function isGitHubSource(source: Pick<RegistrySourceDescriptorV1, 'url'>): boolean {
+  try { return new URL(source.url).host === 'github.com'; } catch { return false; }
+}
+
+/** One details column: the body scrolls, the footer (its one primary, or the way out) stays. */
+function DetailFrame(
+  props: Readonly<{
+    children: React.ReactNode;
+    footer?: React.ReactNode;
+    pushed?: boolean;
+  }>,
+) {
+  return (
+    <View style={styles.fill}>
+      <ScrollView
+        style={styles.fill}
+        contentContainerStyle={[
+          styles.body,
+          props.pushed ? styles.bodyPushed : null,
+        ]}
+      >
+        {props.children}
+      </ScrollView>
+      {props.footer ? <View style={styles.footer}>{props.footer}</View> : null}
+    </View>
+  );
+}
+
+function formatClock(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function RegistrySourceDetail(
+  props: Readonly<{
+    kind: RegistryKindV1;
+    source: RegistrySourceDescriptorV1;
+    itemsFromSource: readonly RegistrySourcesViewItemFromSource[];
+    onRemoved: () => void;
+    testID: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { source } = props;
+  const mutations = useRegistrySourceMutations();
+  const [name, setName] = React.useState(source.title);
+  const lifetime = useActiveServerAccountScopeLifetime();
+  const noticeKey = `registry-source:${JSON.stringify(lifetime?.scope)}:${source.id}`;
+  React.useEffect(() => {
+    const retirement = lifetime?.onRetire(() => retirePresentationNotice(noticeKey));
+    return () => { retirement?.dispose(); retirePresentationNotice(noticeKey); };
+  }, [lifetime, noticeKey]);
+  const [busy, setBusy] = React.useState<'remove' | 'enable' | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  // The page of this source answers count, status and "Checked HH:MM"; it reads only while the source is on.
+  const items = useRegistryItems(
+    { kind: props.kind, sourceIds: [source.id] },
+    source.enabled,
+  );
+  const page =
+    items.pages.find((candidate) => candidate.sourceId === source.id) ?? null;
+  // Unknown is not zero: a source that failed to answer has no count.
+  const count =
+    page === null || page.status.state !== 'ok'
+      ? undefined
+      : (page.total ??
+        (page.nextCursor === null ? page.items.length : undefined));
+  const status = page?.status ?? null;
+  const failure =
+    status !== null && status.state !== 'ok'
+      ? describeRegistrySourceStatus(status)
+      : null;
+  const editable = source.origin.kind === 'user';
+  const purpose =
+    source.origin.kind === 'built_in'
+      ? t('capabilities.registries.detail.builtInPurpose')
+      : source.origin.kind === 'plugin'
+        ? t('capabilities.registries.detail.pluginPurpose', {
+            plugin: source.origin.pluginId,
+          })
+        : t('capabilities.registries.detail.userPurpose', { kind: props.kind });
+
+  const commitName = React.useCallback(() => {
+    const next = name.trim();
+    if (!editable || next === '' || next === source.title) return;
+    setError(null);
+    mutations
+      .update({ sourceId: source.id, title: next })
+      .then(() => { if (!lifetime?.isCurrent()) return; publishPresentationNotice({ key: noticeKey, message: next, severity: 'info',
+        undo: { label: t('bots.undo'), run: () => {
+          if (!lifetime.isCurrent()) return;
+          void mutations.update({ sourceId: source.id, title: source.title }).then(result => {
+            if (!lifetime.isCurrent()) return;
+            setName(result.source.title);
+            retirePresentationNotice(noticeKey);
+          }).catch(() => { if (lifetime.isCurrent()) publishPresentationNotice({ key: noticeKey,
+            message: t('capabilities.registries.detail.updateFailed'), severity: 'error' }); });
+        } } }); })
+      .catch(() => setError(t('capabilities.registries.detail.updateFailed')));
+  }, [editable, mutations, name, source.id, source.title, lifetime, noticeKey]);
+  const setEnabled = React.useCallback(
+    (enabled: boolean) => {
+      setBusy('enable');
+      setError(null);
+      mutations
+        .update({ sourceId: source.id, enabled })
+        .then(() => { if (!lifetime?.isCurrent()) return; publishPresentationNotice({ key: noticeKey, message: source.title, severity: 'info',
+          undo: { label: t('bots.undo'), run: () => {
+            if (!lifetime.isCurrent()) return;
+            void mutations.update({ sourceId: source.id, enabled: source.enabled }).then(() => {
+              if (lifetime.isCurrent()) retirePresentationNotice(noticeKey);
+            }).catch(() => { if (lifetime.isCurrent()) publishPresentationNotice({ key: noticeKey,
+              message: t('capabilities.registries.detail.updateFailed'), severity: 'error' }); });
+          } } }); })
+        .catch(() => setError(t('capabilities.registries.detail.updateFailed')))
+        .finally(() => setBusy(null));
+    },
+    [mutations, source.id, source.enabled, source.title, lifetime, noticeKey],
+  );
+  const remove = React.useCallback(() => {
+    setBusy('remove');
+    setError(null);
+    mutations
+      .delete(source.id)
+      .then(() => props.onRemoved())
+      .catch((failure: unknown) => {
+        // A declined confirmation is the person's answer, not a failure.
+        if ((failure as { code?: string } | null)?.code === 'approval_denied')
+          return;
+        setError(t('capabilities.registries.detail.removeFailed'));
+      })
+      .finally(() => setBusy(null));
+  }, [mutations, props, source.id]);
+
+  const checked =
+    status?.state === 'ok'
+      ? t('capabilities.registries.detail.checked', {
+          time: formatClock(status.fetchedAt),
+        })
+      : null;
+  // The count already leads the header's facts; the refresh line says only when it was read.
+  const refreshLine = checked ?? t('capabilities.registries.detail.notChecked');
+
+  return (
+    <DetailFrame
+      footer={
+        editable ? (
+          <PageLeaveActions
+            testID={`${props.testID}:leave`}
+            actions={[
+              {
+                label: t('capabilities.registries.detail.remove'),
+                icon: 'trash',
+                display: 'bordered',
+                busy: busy === 'remove',
+                onPress: remove,
+                testID: `${props.testID}:remove`,
+              },
+            ]}
+            footnote={t('capabilities.registries.detail.removeNote', {
+              kind: props.kind,
+            })}
+          />
+        ) : undefined
+      }
+    >
+      <CapabilityDetailHeader
+        testID={`${props.testID}:header`}
+        mark={
+          <Icon
+            name={registryFormatIcon(source)}
+            size={ICON_SIZE.lg}
+            color={theme.colors.text.primary}
+          />
+        }
+        title={source.title}
+        purpose={purpose}
+        facts={{
+          extra: [
+            registrySourceKindLabel(source),
+            ...(count === undefined
+              ? []
+              : [registryItemCountLabel(props.kind, count)!]),
+          ],
+        }}
+      />
+      {error ? (
+        <Text
+          variant="meta"
+          style={{ color: theme.colors.status.error }}
+          testID={`${props.testID}:error`}
+        >
+          {error}
+        </Text>
+      ) : null}
+      {editable ? (
+        <ItemGroup>
+          <Item
+            title={t('capabilities.registries.detail.nameTitle')}
+            subtitle={t('capabilities.registries.detail.nameBody')}
+            accessoryLayout="stacked"
+            rightElement={
+              <FieldTextInput
+                testID={`${props.testID}:name`}
+                value={name}
+                onChangeText={setName}
+                onBlur={commitName}
+                onSubmitEditing={commitName}
+                returnKeyType="done"
+                accessibilityLabel={t(
+                  'capabilities.registries.detail.nameTitle',
+                )}
+              />
+            }
+          />
+        </ItemGroup>
+      ) : null}
+      <ItemGroup title={t('capabilities.registries.detail.sourceTitle')}>
+        <Item
+          title={registrySourceLocation(source)}
+          titleStyle={styles.mono}
+          subtitle={
+            source.ref
+              ? t('capabilities.registries.detail.refOn', { ref: source.ref })
+              : undefined
+          }
+        />
+        <Item
+          testID={`${props.testID}:refresh`}
+          title={t('capabilities.registries.detail.refresh')}
+          subtitle={failure ?? refreshLine}
+          subtitleLines={0}
+          {...(failure
+            ? { subtitleStyle: { color: theme.colors.state.warning.textForeground } }
+            : {})}
+          rightElement={
+            <RoundButton
+              size="small"
+              display="secondary"
+              title={t('capabilities.registries.detail.refreshNow')}
+              leading={
+                <Icon
+                  name="arrows-clockwise"
+                  size={ICON_SIZE.sm}
+                  color={theme.colors.text.primary}
+                />
+              }
+              loading={items.loading && source.enabled}
+              disabled={!source.enabled}
+              onPress={() => void items.refresh()}
+              testID={`${props.testID}:refresh-now`}
+            />
+          }
+        />
+        {editable && source.format !== 'happier-catalog' ? (
+          <RegistrySourceTokenRow source={source} testID={`${props.testID}:token`} />
+        ) : null}
+        <Item
+          title={t('capabilities.registries.detail.useTitle')}
+          subtitle={t('capabilities.registries.detail.useBody', {
+            kind: props.kind,
+          })}
+          subtitleLines={0}
+          rightElement={
+            <Switch
+              testID={`${props.testID}:enabled`}
+              value={source.enabled}
+              disabled={busy === 'enable'}
+              onValueChange={setEnabled}
+            />
+          }
+        />
+      </ItemGroup>
+      {props.itemsFromSource.length > 0 ? (
+        <ItemGroup
+          title={t('capabilities.registries.detail.fromItTitle', {
+            kind: props.kind,
+          })}
+        >
+          {props.itemsFromSource.map((item, index) => (
+            <Item
+              key={`${item.title}:${index}`}
+              testID={`${props.testID}:from:${index}`}
+              title={item.title}
+              subtitle={
+                item.ref
+                  ? t('capabilities.registries.detail.fromItRow', {
+                      ref: item.ref,
+                    })
+                  : t('capabilities.registries.detail.fromItRowNoRef')
+              }
+              showChevron
+              onPress={item.onOpen}
+            />
+          ))}
+        </ItemGroup>
+      ) : null}
+    </DetailFrame>
+  );
+}
+
+/** The formats this kind can be browsed from, each with its words ("What you can add"). */
+function addableFormats(kind: RegistryKindV1): readonly RegistryFormatV1[] {
+  return (
+    [
+      'git',
+      'claude-marketplace',
+      'mcp-registry',
+      'acp-registry',
+      'happier-catalog',
+    ] as const
+  ).filter((format) => REGISTRY_FORMAT_KINDS_V1[format].includes(kind));
+}
+function formatOption(
+  format: RegistryFormatV1,
+  kind: RegistryKindV1,
+): Readonly<{ title: string; body: string }> {
+  switch (format) {
+    case 'claude-marketplace':
+      return {
+        title: t('capabilities.registries.add.marketplaceTitle'),
+        body: t('capabilities.registries.add.marketplaceBody'),
+      };
+    case 'mcp-registry':
+      return {
+        title: t('capabilities.registries.add.mcpRegistryTitle'),
+        body: t('capabilities.registries.add.mcpRegistryBody'),
+      };
+    case 'acp-registry':
+      return {
+        title: t('capabilities.registries.add.acpRegistryTitle'),
+        body: t('capabilities.registries.add.acpRegistryBody'),
+      };
+    case 'happier-catalog':
+      return {
+        title: t('capabilities.registries.add.catalogTitle'),
+        body: t('capabilities.registries.add.catalogBody'),
+      };
+    default:
+      return {
+        title: t('capabilities.registries.add.gitTitle'),
+        body: t('capabilities.registries.add.gitBody', { kind }),
+      };
+  }
+}
+function unsupportedCopy(
+  reason: Extract<Detected, { unsupported: string }>['unsupported'],
+): string {
+  switch (reason) {
+    case 'organisation':
+      return t('capabilities.registries.add.organisation');
+    case 'needs_token':
+      return t('capabilities.registries.add.needsToken');
+    case 'unreachable':
+      return t('capabilities.registries.add.unreachable');
+    default:
+      return t('capabilities.registries.add.unknownFormat');
+  }
+}
+function looksLikeLink(value: string): boolean {
+  return /^https?:\/\/[^\s/]+\.[^\s/]+/.test(value.trim());
+}
+
+/** Typing settles before the link is checked (one detect per pause, never per keystroke). */
+const DETECT_SETTLE_MS = 400;
+
+function RegistryAddForm(
+  props: Readonly<{
+    kind: RegistryKindV1;
+    pushed: boolean;
+    onCancel: () => void;
+    onAdded: (sourceId: string) => void;
+    testID: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const mutations = useRegistrySourceMutations();
+  const [link, setLink] = React.useState('');
+  const [name, setName] = React.useState('');
+  const [nameTouched, setNameTouched] = React.useState(false);
+  const [detection, setDetection] = React.useState<
+    | Readonly<{ state: 'idle' }>
+    | Readonly<{ state: 'checking'; url: string }>
+    | Readonly<{ state: 'done'; url: string; detected: Detected }>
+    | Readonly<{ state: 'failed'; url: string }>
+  >({ state: 'idle' });
+  const [adding, setAdding] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const url = link.trim();
+    if (!looksLikeLink(url)) {
+      setDetection({ state: 'idle' });
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => {
+      setDetection({ state: 'checking', url });
+      mutations
+        .detect({ url })
+        .then((result) => {
+          if (!current) return;
+          setDetection({ state: 'done', url, detected: result.detected });
+          if ('title' in result.detected && !nameTouched)
+            setName(result.detected.title);
+        })
+        .catch(() => {
+          if (current) setDetection({ state: 'failed', url });
+        });
+    }, DETECT_SETTLE_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+    // The name follows detection until the person types one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link, mutations.detect]);
+
+  const detected = detection.state === 'done' ? detection.detected : null;
+  const supported =
+    detected !== null &&
+    'format' in detected &&
+    detected.kinds.includes(props.kind)
+      ? detected
+      : null;
+  const fieldError =
+    detection.state === 'failed'
+      ? t('capabilities.registries.add.unreachable')
+      : detected !== null && 'unsupported' in detected
+        ? unsupportedCopy(detected.unsupported)
+        : detected !== null && supported === null
+          ? t('capabilities.registries.add.unknownFormat')
+          : null;
+
+  const submit = React.useCallback(async () => {
+    if (supported === null) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const result = await mutations.create({
+        url: link.trim(),
+        ...(name.trim() ? { title: name.trim() } : {}),
+        kinds: [props.kind],
+      });
+      props.onAdded(result.source.id);
+    } catch {
+      setError(t('capabilities.registries.add.failed'));
+    } finally {
+      setAdding(false);
+    }
+  }, [link, mutations, name, props, supported]);
+
+  return (
+    <DetailFrame
+      pushed={props.pushed}
+      footer={
+        <View style={styles.formFooter}>
+          {error ? (
+            <Text
+              variant="meta"
+              style={[styles.footerStart, { color: theme.colors.status.error }]}
+            >
+              {error}
+            </Text>
+          ) : (
+            <View style={styles.footerStart} />
+          )}
+          <RoundButton
+            size="normal"
+            display="inverted"
+            title={t('capabilities.registries.add.cancel')}
+            onPress={props.onCancel}
+            testID={`${props.testID}:cancel`}
+          />
+          <RoundButton
+            size="normal"
+            title={t('capabilities.registries.add.submit')}
+            loading={adding}
+            disabled={supported === null}
+            onPress={() => void submit()}
+            testID={`${props.testID}:submit`}
+          />
+        </View>
+      }
+    >
+      <View style={styles.formHead}>
+        <Text variant="title" emphasis="strong">
+          {t('capabilities.registries.add.title')}
+        </Text>
+        <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
+          {t('capabilities.registries.add.purpose', { kind: props.kind })}
+        </Text>
+      </View>
+      <ItemGroup>
+        <Item
+          title={t('capabilities.registries.add.link')}
+          accessoryLayout="stacked"
+          rightElement={
+            <View style={styles.stack}>
+              <FieldTextInput
+                testID={`${props.testID}:link`}
+                value={link}
+                onChangeText={setLink}
+                placeholder={t('capabilities.registries.add.linkPlaceholder')}
+                accessibilityLabel={t('capabilities.registries.add.link')}
+                autoCapitalize="none"
+                autoFocus
+                monospace
+                inputMode="url"
+                error={fieldError}
+              />
+              {detection.state === 'checking' ? (
+                <Text
+                  variant="meta"
+                  style={{ color: theme.colors.text.secondary }}
+                  testID={`${props.testID}:checking`}
+                >
+                  {t('capabilities.registries.add.checking')}
+                </Text>
+              ) : null}
+            </View>
+          }
+        />
+        {supported !== null ? (
+          <Item
+            testID={`${props.testID}:detected`}
+            icon={
+              <Icon
+                name={registryFormatIcon({ id: '', format: supported.format })}
+                size={ICON_SIZE.md}
+                color={theme.colors.text.secondary}
+              />
+            }
+            title={supported.title}
+            subtitle={[
+              registryFormatLabel(supported.format),
+              supported.itemCount === undefined
+                ? t('capabilities.registries.add.foundNoCount')
+                : t('capabilities.registries.add.found', {
+                    kind: props.kind,
+                    count: supported.itemCount,
+                  }),
+            ].join(' · ')}
+            rightElement={
+              <Icon
+                name="check"
+                size={ICON_SIZE.sm}
+                color={theme.colors.text.primary}
+              />
+            }
+          />
+        ) : null}
+      </ItemGroup>
+      {supported !== null ? (
+        <ItemGroup>
+          <Item
+            title={t('capabilities.registries.add.name')}
+            accessoryLayout="stacked"
+            rightElement={
+              <FieldTextInput
+                testID={`${props.testID}:name`}
+                value={name}
+                onChangeText={(next) => {
+                  setNameTouched(true);
+                  setName(next);
+                }}
+                accessibilityLabel={t('capabilities.registries.add.name')}
+              />
+            }
+          />
+        </ItemGroup>
+      ) : (
+        <ItemGroup title={t('capabilities.registries.add.whatYouCanAdd')}>
+          {addableFormats(props.kind).map((format) => {
+            const option = formatOption(format, props.kind);
+            return (
+              <Item
+                key={format}
+                icon={
+                  <Icon
+                    name={registryFormatIcon({ id: '', format })}
+                    size={ICON_SIZE.md}
+                    color={theme.colors.text.secondary}
+                  />
+                }
+                title={option.title}
+                subtitle={option.body}
+              />
+            );
+          })}
+        </ItemGroup>
+      )}
+    </DetailFrame>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  fill: { flex: 1, minHeight: 0 },
+  tokenActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  body: {
+    paddingHorizontal: theme.space.s32,
+    paddingTop: theme.space.s24,
+    paddingBottom: theme.space.s24,
+    gap: theme.space.s8,
+  },
+  bodyPushed: {
+    paddingHorizontal: theme.space.s20,
+    paddingTop: theme.space.s8,
+  },
+  footer: {
+    paddingHorizontal: theme.space.s24,
+    paddingVertical: theme.space.s12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  formFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+  },
+  footerStart: { flex: 1, minWidth: 0 },
+  formHead: { gap: theme.space.s8, paddingBottom: theme.space.s8 },
+  stack: { gap: theme.space.s8, alignSelf: 'stretch' },
+  mono: { ...Typography.mono() },
+}));
+
+/** A built-in whose link is its name ("skills.sh") gets no second line repeating it. */
+function locationUnlessTitle(source: RegistrySourceDescriptorV1): string | null {
+  const location = registrySourceLocation(source);
+  return location === source.title ? null : location;
+}

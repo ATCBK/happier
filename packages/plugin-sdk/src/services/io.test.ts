@@ -84,6 +84,7 @@ describe('SVC08 public exec contract', () => {
             }>>();
         expectTypeOf<Awaited<ReturnType<SystemToolsService['resolve']>>>()
             .toEqualTypeOf<Readonly<{
+                providerExitOwnership?: 'direct';
                 executable: import('@happier-dev/protocol').ManagedExecutableRef;
                 executablePath: string;
                 diagnostics?: readonly Readonly<{

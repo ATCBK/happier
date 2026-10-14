@@ -1,26 +1,26 @@
 import * as React from 'react';
-import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useMachineDaemonReadIdentities } from '../useMachineDaemonReadTarget';
 import { machineResourceStore } from './machineResourceStore';
 import type { MachineResourceKey, MachineVitalsView } from './machineRpc';
 
 /** Mounted visible surfaces own demand; passive row readers never start an RPC. */
 export function useMachineResourceLiveDemand(machineKeys: readonly MachineResourceKey[], options: Readonly<{ detail: MachineVitalsView; enabled?: boolean }>): void {
-    const viewed = useHostActivelyViewed();
-    const enabled = options.enabled ?? true;
-    const byKey = new Map(machineKeys.map(input => [JSON.stringify([input.serverId ?? null, input.machineId]), input]));
-    const targetKey = JSON.stringify([...byKey.keys()].sort());
-    const targets = React.useMemo(() => [...byKey.values()], [targetKey]);
-    const latestKeys = React.useRef(machineKeys);
-    latestKeys.current = machineKeys;
-    const versionsKey = JSON.stringify(machineKeys.map(input => [input.serverId ?? null, input.machineId, input.daemonStateVersion ?? null]));
+    const identities = useMachineDaemonReadIdentities(machineKeys.map(input => ({ ...input, enabled: options.enabled })));
+    const versionsKey = JSON.stringify(machineKeys.map(input => input.daemonStateVersion ?? null));
 
     React.useEffect(() => {
-        for (const input of latestKeys.current) machineResourceStore.daemonStateChanged(input, input.daemonStateVersion);
-    }, [versionsKey]);
+        const versions = JSON.parse(versionsKey) as Array<number | null>;
+        identities.forEach((target, index) => {
+            if (target.key.expectedAccountId) machineResourceStore.daemonStateChanged(target.key, versions[index]);
+        });
+    }, [identities, versionsKey]);
 
     React.useEffect(() => {
-        if (!viewed || !enabled) return;
-        const releases = targets.map(input => machineResourceStore.demand({ ...input, view: options.detail }));
+        const releases = identities.filter(target => target.enabled).map(target => {
+            const release = machineResourceStore.demand({ ...target.key, view: options.detail });
+            const retirement = target.accountBinding!.onRetire(release);
+            return () => { retirement.dispose(); release(); };
+        });
         return () => { for (const release of releases) release(); };
-    }, [enabled, options.detail, targets, viewed]);
+    }, [identities, options.detail]);
 }

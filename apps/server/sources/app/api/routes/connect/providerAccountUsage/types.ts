@@ -1,14 +1,9 @@
-import type {
-    ConnectedServiceQuotaSnapshotV1,
-    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
-    ConnectedServiceUsageSourceV1,
-    ProviderAccountUsageRecordId,
-    ProviderAccountUsageRecordKeyV1,
-    ProviderAccountUsageSnapshotV1,
-    ProviderAccountSubscriptionV1,
-    SealedConnectedServiceQuotaSnapshotV1,
-    SealedProviderAccountUsageSnapshotV1,
-} from "@happier-dev/protocol";
+import type { ConnectedServiceQuotaSnapshotV1, ConnectedServiceQuotaRecoveryCreditDetailsByIdV1, ConnectedServiceUsageSourceV1, SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ProviderAccountUsageRecordId, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
+import type { SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
+import type { z } from 'zod';
+import type { StoredProviderAccountUsagePageProjectionV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 
 export type ProviderAccountUsagePayloadMode = "plain_json_v1" | "sealed_account_scoped_v1";
 export type ProviderAccountUsageStatus = "ok" | "unavailable" | "estimated" | "error" | "refresh_requested";
@@ -21,6 +16,7 @@ export type LegacyQuotaCompatibilityProjection = Readonly<{
     sealed: SealedConnectedServiceQuotaSnapshotV1;
 }>;
 export type ProviderAccountUsageRecordMetadata = Readonly<{
+    pageProjection?: z.infer<typeof StoredProviderAccountUsagePageProjectionV1Schema>;
     materialFingerprint?: string;
     subscription?: ProviderAccountSubscriptionV1;
     recoveryCreditDetails?: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;

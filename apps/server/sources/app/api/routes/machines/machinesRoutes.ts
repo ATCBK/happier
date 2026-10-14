@@ -33,11 +33,7 @@ import {
     type MachineSerializationRow,
 } from "@/app/machines/machineSerialization";
 import type { FastifyRequest } from "fastify";
-import {
-    isPlainMachineDataKeyMarker,
-    machineStoredContentMatchesAccountMode,
-    machineUpdateMatchesStoredMode,
-} from "@happier-dev/protocol";
+import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode, machineUpdateMatchesStoredMode } from '@happier-dev/protocol/machines/machineStoredContent';
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -50,7 +46,7 @@ import { registerMachineAdmissionRoutes } from "./registerMachineAdmissionRoutes
 import { registerMachinePoolRoutes } from "./pools/registerMachinePoolRoutes";
 import { registerMachinePresetRoutes } from "./managed/registerMachinePresetRoutes";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
-import { ManagedEnrollmentCorrelationV1Schema } from "@happier-dev/protocol";
+import { ManagedEnrollmentCorrelationV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { registerManagedMachineRoutes } from "@/app/machines/managed/managedRoutes";
 import { requireManagedMachineRegistrationInTx, linkManagedEnrollmentInTx } from "@/app/machines/managed/managedMutations";
 import { ManagedMachineError, readMachineDevcontainerChildInTx } from "@/app/machines/managed/managedRows";
@@ -420,11 +416,11 @@ export function machinesRoutes(app: Fastify) {
                         );
                         return reply.code(400).send({ error: "invalid-params", reason: "content_public_key_invalid" });
                     }
-                    const admission = await admitAccountContentKey(db, {
+                    const admission = await inTx(tx => admitAccountContentKey(tx, {
                         accountId: userId,
                         contentPublicKey: decoded,
                         contentPublicKeySignature: decodedSignature,
-                    });
+                    }));
                     if (admission.status === "key_mismatch") {
                         log(
                             { module: "machines", machineId: id, userId, reason: "content_public_key_mismatch" },

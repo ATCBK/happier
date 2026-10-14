@@ -269,6 +269,7 @@ describe('createExecutionRunPendingInputConsumer', () => {
             status: 'outcome_unknown',
             issue: 'provider_acknowledgement_missing',
         }));
+        const refusals: SessionProviderInputOutcome[] = [];
         const consumer = createExecutionRunPendingInputConsumer({
             recipient: { kind: 'execution_run', runId: 'run-a' },
             sidechainId: 'chain-a',
@@ -276,11 +277,13 @@ describe('createExecutionRunPendingInputConsumer', () => {
             readRuntimeActivity: () => ({ turnInFlight: false, supportsSteer: true }),
             isCurrent: () => true,
             delivery: delivery.delivery,
+            onInputRejectedBeforeEffect: async (outcome) => { refusals.push(outcome); },
         });
 
         await settleMicrotasks();
         expect(fake.settlements).toEqual([]);
         expect(fake.inFlightCustody).toEqual(['input-1']);
+        expect(refusals).toEqual([]);
         const pendingAnchor = consumer.awaitAcceptedUserAnchor('input-1');
         await consumer.dispose();
         await expect(pendingAnchor).resolves.toBe('unknown');
@@ -294,6 +297,7 @@ describe('createExecutionRunPendingInputConsumer', () => {
             diagnostic: { code: 'steering_unavailable', message: 'This run cannot steer.', severity: 'error' },
             retryable: false,
         }));
+        const refusalAcceptance: DurableProviderInputAcceptanceV1[] = [];
         const consumer = createExecutionRunPendingInputConsumer({
             recipient: { kind: 'execution_run', runId: 'run-a' },
             sidechainId: 'chain-a',
@@ -301,6 +305,9 @@ describe('createExecutionRunPendingInputConsumer', () => {
             readRuntimeActivity: () => ({ turnInFlight: true, supportsSteer: false }),
             isCurrent: () => true,
             delivery: delivery.delivery,
+            onInputRejectedBeforeEffect: async (outcome) => {
+                refusalAcceptance.push(await fake.port.readDurableProviderInputAcceptanceV1(outcome.localId));
+            },
         });
 
         await settleMicrotasks();
@@ -308,7 +315,51 @@ describe('createExecutionRunPendingInputConsumer', () => {
             { kind: 'rejected_before_effect', localId: 'input-1', reason: 'steering_unavailable' },
         ]);
         await expect(consumer.awaitAcceptedUserAnchor('input-1')).resolves.toBe('not_accepted');
+        expect(refusalAcceptance).toEqual(['not_accepted']);
         await consumer.dispose();
+    });
+
+    it.each(['replacement', 'cancel'] as const)('does not attribute a late refusal after occurrence %s', async retirement => {
+        const fake = createPortFake([{ localId: 'input-1', text: 'first' }]);
+        let releaseDelivery!: (outcome: Awaited<ReturnType<ExecutionRunPendingInputDelivery['deliver']>>) => void;
+        const delivery = new Promise<Awaited<ReturnType<ExecutionRunPendingInputDelivery['deliver']>>>(resolve => { releaseDelivery = resolve; });
+        const refusals: SessionProviderInputOutcome[] = [];
+        let current = true;
+        const consumer = createExecutionRunPendingInputConsumer({
+            recipient: { kind: 'execution_run', runId: 'run-a' }, sidechainId: 'chain-a', bindPendingInput: binding => fake.bind(binding),
+            readRuntimeActivity: () => ({ turnInFlight: false, supportsSteer: false }), isCurrent: () => current,
+            delivery: { deliver: async () => await delivery },
+            onInputRejectedBeforeEffect: async outcome => { refusals.push(outcome); },
+        });
+        await settleMicrotasks();
+        expect(fake.inFlightCustody).toEqual(['input-1']);
+        if (retirement === 'cancel') await consumer.dispose();
+        else current = false;
+        releaseDelivery({ status: 'rejected_before_effect', reason: 'provider_unavailable_before_acceptance',
+            diagnostic: { code: 'generation_retired', severity: 'error' }, retryable: true });
+        await settleMicrotasks();
+        expect(fake.settlements).toEqual([]);
+        expect(refusals).toEqual([]);
+        await consumer.dispose();
+    });
+
+    it('retains the proven refusal when its Pending settlement transport is unavailable', async () => {
+        const fake = createPortFake([{ localId: 'input-1', text: 'first' }]);
+        vi.spyOn(fake.port, 'observeProviderInputSettlement').mockRejectedValue(new Error('Pending transport unavailable'));
+        const refusals: SessionProviderInputOutcome[] = [];
+        const consumer = createExecutionRunPendingInputConsumer({
+            recipient: { kind: 'execution_run', runId: 'run-a' }, sidechainId: 'chain-a', bindPendingInput: binding => fake.bind(binding),
+            readRuntimeActivity: () => ({ turnInFlight: false, supportsSteer: false }), isCurrent: () => true,
+            delivery: { deliver: async () => ({ status: 'rejected_before_effect', reason: 'provider_unavailable_before_acceptance',
+                diagnostic: { code: 'generation_retired', severity: 'error' }, retryable: true }) },
+            onInputRejectedBeforeEffect: async outcome => { refusals.push(outcome); },
+        });
+        await settleMicrotasks();
+        expect(refusals).toMatchObject([{ localId: 'input-1', kind: 'rejected_before_effect' }]);
+        expect(fake.inFlightCustody).toEqual(['input-1']);
+        const anchor = consumer.awaitAcceptedUserAnchor('input-1');
+        await consumer.dispose();
+        await expect(anchor).resolves.toBe('unknown');
     });
 
     it('reports target-local foreground state from this run, never the parent Session', () => {

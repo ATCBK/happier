@@ -1,11 +1,6 @@
 import { inTx, type Tx } from "@/storage/inTx";
-import {
-    QUIET_SESSION_PERSONAL_ATTENTION_V1,
-    projectViewerReadStateV1,
-    resolveSessionPersonalAttentionV1,
-    type SessionPersonalAttentionProjectionV1,
-    type ViewerReadStateV1,
-} from "@happier-dev/protocol";
+import { QUIET_SESSION_PERSONAL_ATTENTION_V1, resolveSessionPersonalAttentionV1, type SessionPersonalAttentionProjectionV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { projectViewerReadStateV1, type ViewerReadStateV1 } from '@happier-dev/protocol/sessions';
 
 import {
     resolveEffectiveSessionAccessWhere,

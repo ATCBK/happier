@@ -9,6 +9,7 @@ import { runConversationCheckpointedPollForInvocation, runConversationIngressRet
 import { runConversationOutwardDeliveryCycle } from '../outwardDeliverySupervisor.js';
 import { channelsTargetedContributionServices } from './operationOnlyTargetedContributionsFixture.js';
 import { MemoryCollection } from './memoryCollection.js';
+import type { ComposerAttachmentResolveRequestV1 } from '@happier-dev/plugin-sdk';
 
 /**
  * Public-SDK composition of the actual Channels activation and cycle owners.
@@ -38,6 +39,14 @@ export async function createChannelsJourneyFixture(input: Readonly<{
   let attempt = 0;
   const pollResults: ConversationCheckpointedPollRunResult[] = [];
   const driver = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+    'journey/resolve-attachments': { title: 'Resolve through the activated attachment runtime', scopes: ['session'], surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'], inputSchema: { type: 'object' }, resultSchema: { type: 'object' },
+      async run(request, context) {
+        const runtime = kit.registration('composerAttachments', 'channel-file');
+        if (!runtime?.resolveForDispatch) throw new Error('Missing activated attachment runtime');
+        // The fixture caller constructs the canonical typed request; this is the external host callback boundary.
+        return await runtime.resolveForDispatch(request as unknown as ComposerAttachmentResolveRequestV1, context);
+      } },
     'journey/poll': { title: 'Run the production ingress cycle', surfaces: ['plugin'], dangerLevel: 'safe',
       hostAccess: ['account-storage', 'bound-session'],
       inputSchema: { type: 'object' }, resultSchema: { type: 'null' },
@@ -110,5 +119,8 @@ export async function createChannelsJourneyFixture(input: Readonly<{
     pollResults, outward: () => invoke('journey/outward', {}),
     retention: () => invoke('journey/retention', {}),
     ingest: (value: JsonValue) => invoke('journey/ingest', value),
+    resolveAttachments: (request: ComposerAttachmentResolveRequestV1) => kit.invokeAction('journey/resolve-attachments', request, {
+      surface: 'plugin', sessionId: request.sessionId, services: channelsTargetedContributionServices(kit),
+    }),
     dispose: () => kit.dispose() };
 }

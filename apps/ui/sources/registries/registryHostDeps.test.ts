@@ -29,6 +29,11 @@ describe('UI registry HTTP boundary', () => {
             status: { state: 'rate_limited', retryAt: 121_000 } });
         expect(await createUiRegistryHttpV1(async () => new Response('', { status: 403 })).getText('https://example.com'))
             .toEqual({ ok: false, status: { state: 'auth_failed' } });
+        expect(await createUiRegistryHttpV1(async () => new Response('', { status: 403,
+            headers: { 'x-ratelimit-remaining': '0' } })).getJson('https://api.github.com/index'))
+            .toEqual({ ok: false, status: { state: 'rate_limited' } });
+        expect(await createUiRegistryHttpV1(async () => new Response('', { status: 404 })).getJson('https://example.com/plugin.json'))
+            .toEqual({ ok: false, status: { state: 'invalid_source' } });
     });
 
     it('never materializes a source token in the UI', async () => {

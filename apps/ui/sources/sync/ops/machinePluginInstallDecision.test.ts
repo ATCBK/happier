@@ -37,6 +37,7 @@ describe('machinePluginInstallDecision', () => {
         const { machinePluginInstallDecision } = await import('./machinePluginInstallDecision');
 
         await expect(machinePluginInstallDecision('machine-1', {
+            serverId: 'server-a',
             isAuthorityCurrent: () => true,
             decision: {
                 pendingChangeId: 'pending-1',
@@ -49,6 +50,8 @@ describe('machinePluginInstallDecision', () => {
         });
 
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-1',
+            serverId: 'server-a',
             method: 'daemon.plugins.install.review.decide',
             payload: {
                 v: 1,
@@ -56,6 +59,38 @@ describe('machinePluginInstallDecision', () => {
                 decision: 'installAndTrust',
                 optionalSelections: [{ accessId: 'workspace', selected: false }],
             },
+        }));
+    });
+
+    it('preserves a failed exact-machine transport reason for the visible caller', async () => {
+        machineRpcWithServerScopeMock.mockRejectedValueOnce(Object.assign(
+            new Error('Machine RPC direct HTTP response failed'),
+            { code: 'MACHINE_RPC_DIRECT_HTTP_FAILED' },
+        ));
+        const { machinePluginInstallDecision } = await import('./machinePluginInstallDecision');
+
+        await expect(machinePluginInstallDecision('machine-1', {
+            serverId: 'server-a',
+            isAuthorityCurrent: () => true,
+            decision: {
+                pendingChangeId: 'pending-1',
+                decision: 'installAndTrust',
+                confirmPresentUser: async () => [],
+            },
+        })).resolves.toEqual({
+            supported: false,
+            reason: 'error',
+            detail: 'Machine RPC direct HTTP response failed',
+        });
+
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-1',
+            serverId: 'server-a',
+            method: 'daemon.plugins.install.review.decide',
+            payload: expect.objectContaining({
+                pendingChangeId: 'pending-1',
+                decision: 'installAndTrust',
+            }),
         }));
     });
 
@@ -103,7 +138,11 @@ describe('machinePluginInstallDecision', () => {
         authorityCurrent = false;
         resolveConfirmation([]);
 
-        await expect(resultPromise).resolves.toEqual({ supported: false, reason: 'error' });
+        await expect(resultPromise).resolves.toEqual({
+            supported: false,
+            reason: 'error',
+            detail: 'Authenticated plugin install authority changed during present-user confirmation',
+        });
         expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
     });
 });

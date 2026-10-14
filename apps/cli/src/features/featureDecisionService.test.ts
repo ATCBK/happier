@@ -126,6 +126,24 @@ describe('resolveCliFeatureDecision', () => {
     expect(decision.blockerCode).toBe('dependency_disabled');
   });
 
+  it.each([true, false])('resolves default Machine speech against the Home Voice bit %s', (enabled) => {
+    const serverSnapshot: CliServerFeaturesSnapshot = {
+      status: 'ready',
+      features: FeaturesResponseSchema.parse({ features: { voice: { enabled } } }),
+    };
+    expect(resolveCliFeatureDecision({
+      featureId: 'voice.daemonInference', env: {}, serverSnapshot,
+    })).toMatchObject({
+      state: enabled ? 'enabled' : 'disabled',
+      blockedBy: enabled ? null : 'dependency',
+    });
+  });
+
+  it('keeps default Machine speech closed without the Home Voice observation', () => {
+    expect(resolveCliFeatureDecision({ featureId: 'voice.daemonInference', env: {} }))
+      .toMatchObject({ state: 'unknown', blockedBy: 'dependency' });
+  });
+
   it('treats server-represented local service inventory as fail-closed without a server snapshot', () => {
     // localServices(.inventory) is now server-represented: with no server snapshot the decision
     // is fail-closed (unknown / probe_failed), and the server bit is what enables it.

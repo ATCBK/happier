@@ -1,4 +1,4 @@
-import type { ConnectedServiceCredentialHealthV1 } from "@happier-dev/protocol";
+import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { inTx, type Tx } from "@/storage/inTx";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

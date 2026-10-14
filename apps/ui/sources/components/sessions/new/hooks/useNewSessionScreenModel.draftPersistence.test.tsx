@@ -198,7 +198,6 @@ const tryShowDaemonUnavailableAlertForRpcErrorMock = vi.hoisted(() => vi.fn((_ar
 const routerPushMock = vi.hoisted(() => vi.fn());
 const routerSetParamsMock = vi.hoisted(() => vi.fn());
 const featureFlags = vi.hoisted(() => ({
-    mcpServersEnabled: false,
     automationsEnabled: false,
     externalSessionsEnabled: false,
     providersEnabled: false,
@@ -264,38 +263,6 @@ const searchParamsState = vi.hoisted(() => ({
 const tempSessionDataState = vi.hoisted(() => ({
     value: null as null | Record<string, unknown>,
 }));
-const machineMcpServersPreviewMock = vi.hoisted(() => vi.fn(async (_machineId: string, _request: unknown, _options?: unknown) => ({
-    ok: true,
-    builtIn: [{
-        key: 'built-in:happier',
-        name: 'happier',
-        title: 'Happier',
-        transport: 'stdio',
-        authMode: 'none',
-        selected: true,
-        selectable: false,
-        availability: 'active',
-        sourceKind: 'builtIn',
-        scopeKind: 'builtIn',
-    }],
-    managed: [{
-        key: 'managed:playwright',
-        serverId: 'server-portable',
-        name: 'playwright',
-        title: 'Playwright',
-        transport: 'stdio',
-        authMode: 'none',
-        selected: true,
-        selectable: true,
-        availability: 'active',
-        sourceKind: 'managed',
-        scopeKind: 'allMachines',
-        reasonCode: 'forced_included',
-        portability: 'portable',
-        defaultSelected: false,
-    }],
-    detected: [],
-})));
 const workspaceGraphState = vi.hoisted(() => ({
     workspacesByServerId: {
         'server-a': [
@@ -989,7 +956,6 @@ vi.mock('@/hooks/server/useAutomationsSupport', () => ({
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => {
-        if (featureId === 'mcp.servers') return featureFlags.mcpServersEnabled;
         if (featureId === 'sessions.direct') return featureFlags.externalSessionsEnabled;
         if (featureId === 'providers') return featureFlags.providersEnabled;
         return false;
@@ -999,10 +965,6 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 vi.mock('@/providers/rpc/client', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/providers/rpc/client')>(),
     describeProviderModels: (...args: unknown[]) => describeProviderModelsMock(...args),
-}));
-
-vi.mock('@/sync/ops/machineMcpServers', () => ({
-    machineMcpServersPreview: (...args: [string, unknown, unknown?]) => machineMcpServersPreviewMock(...args),
 }));
 
 vi.mock('@/components/sessions/new/modules/automationFeatureGate', () => ({
@@ -1152,7 +1114,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         builtInProfileMockState.profilesById.clear();
         routerPushMock.mockClear();
         routerSetParamsMock.mockClear();
-        featureFlags.mcpServersEnabled = false;
         featureFlags.automationsEnabled = false;
         featureFlags.externalSessionsEnabled = false;
         featureFlags.providersEnabled = false;
@@ -1178,7 +1139,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         readCachedWorktreesEnrichmentMock.mockReturnValue(null);
         fetchWorktreesEnrichmentMock.mockReset();
         fetchWorktreesEnrichmentMock.mockImplementation(async () => []);
-        machineMcpServersPreviewMock.mockClear();
         searchParamsState.value = {};
         tempSessionDataState.value = null;
         targetServerState.allowedTargetServerIds = [];
@@ -2670,10 +2630,8 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         }));
     });
 
-    it('hydrates capabilitySelection into the MCP chip flow and persists it with the draft', async () => {
-        featureFlags.mcpServersEnabled = true;
+    it('hydrates capabilitySelection into the capabilities chip flow and persists it with the draft', async () => {
         saveNewSessionDraftMock.mockClear();
-        machineMcpServersPreviewMock.mockClear();
         persistDraftNowRef.current = null;
 
         const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
@@ -2686,22 +2644,11 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
 
         await renderScreen(React.createElement(Probe));
 
-        expect(machineMcpServersPreviewMock).toHaveBeenCalledWith(
-            'machine-2',
-            expect.objectContaining({
-                agentId: 'claude',
-                directory: '/repo/custom',
-                selection: expect.objectContaining({
-                    managedServersEnabled: false,
-                    forceIncludeServerIds: ['server-portable'],
-                    forceExcludeServerIds: ['server-disabled'],
-                }),
-            }),
-            expect.anything(),
-        );
         expect(Array.isArray(model?.simpleProps?.agentInputExtraActionChips)).toBe(true);
-        expect(model?.simpleProps?.agentInputExtraActionChips.some((chip: any) => chip?.key === 'new-session-mcp')).toBe(true);
-        expect(model?.simpleProps?.agentInputExtraActionChips.find((chip: any) => chip?.key === 'new-session-mcp')?.controlId).toBe('mcp');
+        expect(model?.simpleProps?.agentInputExtraActionChips).toContainEqual(expect.objectContaining({
+            key: 'session-capabilities',
+            controlId: 'capabilities',
+        }));
 
         await act(async () => {
             persistDraftNowRef.current?.();
@@ -2717,7 +2664,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             } },
         }));
 
-        featureFlags.mcpServersEnabled = false;
     });
 
     it('persists canonical inferred workspace selection in autosaved drafts', async () => {

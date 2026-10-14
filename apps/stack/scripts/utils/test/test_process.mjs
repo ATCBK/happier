@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 import { sanitizeDefinedEnv } from './test_env.mjs';
 import { runManagedChildCommand } from '../../../../../scripts/testing/process/managedChildLifecycle.mjs';
+import { resolveWorkspaceBuildAdmissionInvocation } from '../proc/workspace_build_admission.mjs';
 
 export function buildNodeTestArgs(testFiles, { serial = false } = {}) {
   const args = ['--test'];
@@ -42,10 +43,14 @@ export async function runNodeTestFiles(testFiles, {
   env = process.env,
   serial = false,
   stdio = 'inherit',
+  admission,
 } = {}) {
+  const payload = { command: process.execPath, args: buildNodeTestArgs(testFiles, { serial }) };
+  const invocation = admission
+    ? resolveWorkspaceBuildAdmissionInvocation({ ...admission, ...payload, env })
+    : payload;
   return await runManagedChildCommand({
-    command: process.execPath,
-    args: buildNodeTestArgs(testFiles, { serial }),
+    ...invocation,
     // Remain in the test lane's group so remote custody can also cover abrupt
     // controller death. The managed child owner handles ordinary cancellation.
     spawnOptions: { cwd, env: sanitizeDefinedEnv(env), stdio, detached: false },

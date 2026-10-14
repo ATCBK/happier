@@ -2,7 +2,6 @@ import * as React from 'react';
 
 import type {
     DaemonPluginUiTargetedSurfaceMountV1,
-    PluginMachineExecutionOriginV1,
     PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol';
 import {
@@ -20,6 +19,7 @@ import {
     derivePluginUiTargetedSurfaceMountInstanceKeyV1,
     PluginUiTargetedContributionSurfaceV1Schema,
 } from '@happier-dev/protocol/plugins/ui/targetedContributions';
+import { getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import type { PreparedDaemonPluginUiTargetedSurfaceMountV1 } from './mountedTargetedContributions';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
@@ -67,7 +67,7 @@ export type TargetedPluginSurfacePhysicalMountFacts = Readonly<{
     surfaceId: string;
     mountInstanceKey: PluginUiInstanceKeyV1;
     launchInput: PluginUiJsonValueV1;
-    executionOrigin: PluginMachineExecutionOriginV1;
+    executionOrigin: DaemonPluginUiTargetedSurfaceMountV1['executionOrigin'];
     resourceCapability: PluginUiResourceBindingCapabilityV1;
     targetedContributions: DaemonPluginUiTargetedSurfaceMountV1['contributorTargetedContributions'];
 }>;
@@ -284,7 +284,7 @@ export function createTargetedPluginSurfaceBoundFacts(input: Readonly<{
         platform: input.platform,
         channel: input.channel,
         resourceScope: EMPTY_TARGETED_SURFACE_RESOURCE_SCOPE,
-        machineId: physical.executionOrigin.materializationRef.machineId,
+        machineId: getPluginMachineExecutionOriginRef(physical.executionOrigin).machineId,
         serverId: input.serverId,
         projectionGeneration: input.projectionGeneration,
         occurrenceId: physical.targetedContributions.target.occurrenceId,

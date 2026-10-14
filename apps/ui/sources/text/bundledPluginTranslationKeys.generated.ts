@@ -2644,6 +2644,7 @@ export const BUNDLED_PLUGIN_TRANSLATION_KEYS: readonly BundledPluginTranslationK
   "plugins.triage.surface.session.deliveryFailed",
   "plugins.triage.surface.session.deliveryUnknown",
   "plugins.triage.surface.session.dispatchFailed",
+  "plugins.triage.surface.session.explainPr",
   "plugins.triage.surface.session.fix",
   "plugins.triage.surface.session.instructionMissing",
   "plugins.triage.surface.session.linkPending",

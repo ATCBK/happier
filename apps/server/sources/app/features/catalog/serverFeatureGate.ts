@@ -1,5 +1,7 @@
 import type { FeaturesResponse } from "@/app/features/types";
-import { readServerEnabledBit, type FeatureId, type ServerConfigEnv } from "@happier-dev/protocol";
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
+import { type FeatureId } from '@happier-dev/protocol/features/catalog';
+import { type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { resolveServerFeatureGate, resolveServerFeaturePayload } from "./resolveServerFeaturePayload";
 import { serverFeatureRegistry } from "./serverFeatureRegistry";

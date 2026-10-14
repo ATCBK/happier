@@ -1,18 +1,7 @@
-import {
-    maskEmailForNativeAuthPreview,
-    NATIVE_AUTH_EMAIL_VERIFY_REQUEST_PATH_V1,
-    NATIVE_AUTH_EMAIL_VERIFY_PREVIEW_PATH_V1,
-    NATIVE_AUTH_PASSWORD_RESET_REQUEST_PATH_V1,
-    NATIVE_AUTH_PASSWORD_RESET_PREVIEW_PATH_V1,
-    NativeAuthEmailAcceptedResponseV1Schema,
-    NativeAuthBearerPreviewRequestV1Schema,
-    NativeEmailVerifyRequestV1Schema,
-    NativeEmailVerifyPreviewResponseV1Schema,
-    NativePasswordResetRequestV1Schema,
-    NativePasswordResetPreviewResponseV1Schema,
-    normalizeVerifiedEmail,
-    parseAccountPasswordCredentialV1,
-} from "@happier-dev/protocol";
+import { maskEmailForNativeAuthPreview } from '@happier-dev/protocol/auth/nativeAuthOneTimeOperation';
+import { NATIVE_AUTH_EMAIL_VERIFY_REQUEST_PATH_V1, NATIVE_AUTH_EMAIL_VERIFY_PREVIEW_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_REQUEST_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_PREVIEW_PATH_V1, NativeAuthEmailAcceptedResponseV1Schema, NativeAuthBearerPreviewRequestV1Schema, NativeEmailVerifyRequestV1Schema, NativeEmailVerifyPreviewResponseV1Schema, NativePasswordResetRequestV1Schema, NativePasswordResetPreviewResponseV1Schema } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
+import { parseAccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 
 import { inTx } from "@/storage/inTx";
 import { readNativeAuthOneTimeOperation } from "@/app/auth/email/nativeAuthOneTimeOperations";

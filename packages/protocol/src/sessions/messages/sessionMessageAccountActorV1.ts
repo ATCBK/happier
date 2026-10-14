@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountDisplayProfileV1Schema } from '../../account/accountDisplayProfileV1.js';
 import { SessionMessageRoleSchema } from './sessionMessageRole.js';
@@ -19,11 +19,11 @@ import { SessionInputAdmissionReceiptV1Schema } from './sessionInputAdmission.js
  * `profile: null` is the expected shape after Home Account deletion: the
  * immutable receipt still proves who authored the message.
  */
-export const SessionMessageAccountActorV1Schema = lazyZodSchema(() => z.object({
+export const SessionMessageAccountActorV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  accountId: z.string().trim().min(1).max(191),
-  profile: AccountDisplayProfileV1Schema.nullable(),
-}).strict());
+  accountId: z.string().check(z.trim(), z.minLength(1), z.maxLength(191)),
+  profile: z.nullable(AccountDisplayProfileV1Schema),
+}));
 
 export type SessionMessageAccountActorV1 = z.infer<typeof SessionMessageAccountActorV1Schema>;
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ActionInputHintsSchema } from './metadata.js';
 import { ActionInputPathSchema } from './actionInputPredicates.js';
@@ -14,37 +14,35 @@ import type { ActionId } from './actionIds.js';
  * canonical JSON schema plus input hints that a third-party generator needs.
  */
 const ActionCliCommandSegmentSchema = lazyZodSchema(() => z
-  .string()
-  .regex(/^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/, 'Command segments are lowercase kebab-case or snake_case'));
+  .string().check(z.regex(/^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/, 'Command segments are lowercase kebab-case or snake_case')));
 
 const ActionCliFlagNameSchema = lazyZodSchema(() => z
-  .string()
-  .regex(/^(?:--[a-z][a-z0-9]*(?:-[a-z0-9]+)*|-[a-z])$/, 'Flags are lowercase kebab-case starting with -- or one lowercase short alias'));
+  .string().check(z.regex(/^(?:--[a-z][a-z0-9]*(?:-[a-z0-9]+)*|-[a-z])$/, 'Flags are lowercase kebab-case starting with -- or one lowercase short alias')));
 
-export const ActionCliCommandBindingSchema = lazyZodSchema(() => z.object({
-  path: z.array(ActionCliCommandSegmentSchema).min(1),
+export const ActionCliCommandBindingSchema = lazyZodSchema(() => z.strictObject({
+  path: z.array(ActionCliCommandSegmentSchema).check(z.minLength(1)),
   /** Passive observation uses the same Action and its owner's change source. */
-  observation: z.enum(['condition', 'changes']).optional(),
+  observation: z.optional(z.enum(['condition', 'changes'])),
   /**
    * Caller-input paths supplied positionally, in argv order. They name fields of
    * the *effective CLI caller* schema — the `inputSchema` below when the Action
    * declares one, otherwise the canonical Action input.
    */
-  positionals: z.array(ActionInputPathSchema).optional(),
+  positionals: z.optional(z.array(ActionInputPathSchema)),
   /** Caller fields inserted immediately before the last literal command segment. */
-  positionalsBeforeLastSegment: z.array(ActionInputPathSchema).optional(),
+  positionalsBeforeLastSegment: z.optional(z.array(ActionInputPathSchema)),
   /**
    * One final caller field that receives every remaining positional word.
    * This preserves established commands such as `actions search query words`
    * without teaching the CLI host a command-specific argv parser.
    */
-  variadicPositional: ActionInputPathSchema.optional(),
-  visibility: z.enum(['canonical', 'alias', 'hidden']).default('canonical'),
-  deprecated: z.object({
-    replacement: z.string().min(1),
-    removalCondition: z.string().min(1),
-  }).strict().optional(),
-}).strict());
+  variadicPositional: z.optional(ActionInputPathSchema),
+  visibility: z._default(z.enum(['canonical', 'alias', 'hidden']), 'canonical'),
+  deprecated: z.optional(z.strictObject({
+    replacement: z.string().check(z.minLength(1)),
+    removalCondition: z.string().check(z.minLength(1)),
+  })),
+}));
 export type ActionCliCommandBinding = z.infer<typeof ActionCliCommandBindingSchema>;
 
 export type ActionCliBindContext = Readonly<{
@@ -99,48 +97,48 @@ const ActionCliBindInputSchema = lazyZodSchema(() => z.custom<ActionCliBindInput
   { message: 'Expected an Action CLI input binder' },
 ));
 
-const ZodSchemaLike = lazyZodSchema(() => z.custom<z.ZodTypeAny>((value) => {
+const ZodSchemaLike = lazyZodSchema(() => z.custom<z.ZodMiniType>((value) => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as { safeParse?: unknown; parse?: unknown };
   return typeof candidate.safeParse === 'function' && typeof candidate.parse === 'function';
 }, { message: 'Expected a Zod schema' }));
 
-export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
+export const ActionCliProjectionSchema = lazyZodSchema(() => z.strictObject({
   // Generic `actions invoke <id>` may own CLI policy without a friendly path.
   commands: z.array(ActionCliCommandBindingSchema),
   /** Friendly spellings of the same CLI-only exact Machine transport selector. */
-  transportMachineIdAliases: z.array(ActionCliFlagNameSchema).optional(),
+  transportMachineIdAliases: z.optional(z.array(ActionCliFlagNameSchema)),
   /** Accept the established CLI-only `--server-id` exact-Home selector. */
-  acceptsServerId: z.literal(true).optional(),
+  acceptsServerId: z.optional(z.literal(true)),
   /** Refuse ambient active-Home selection; the caller must name an exact saved Home. */
-  requiresServerId: z.literal(true).optional(),
+  requiresServerId: z.optional(z.literal(true)),
   /** Apply an existing CLI request lifetime without making it Action input. */
-  requestTimeout: z.enum(['session_control']).optional(),
+  requestTimeout: z.optional(z.enum(['session_control'])),
   /** Caller schema when the friendly syntax differs from canonical Action input. */
-  inputSchema: ZodSchemaLike.optional(),
+  inputSchema: z.optional(ZodSchemaLike),
   /**
    * Whole-object schema for `--input-json`. This is normally the canonical
    * Action input, but public CLI surfaces may deliberately expose a strict
    * subset while retaining canonical fields that have no friendly shorthand.
    */
-  wholeInputSchema: ZodSchemaLike.optional(),
-  inputHints: ActionInputHintsSchema.optional(),
-  flagAliases: z.array(z.object({
+  wholeInputSchema: z.optional(ZodSchemaLike),
+  inputHints: z.optional(ActionInputHintsSchema),
+  flagAliases: z.optional(z.array(z.strictObject({
     path: ActionInputPathSchema,
-    aliases: z.array(ActionCliFlagNameSchema).min(1),
-  }).strict()).optional(),
-  bindInput: ActionCliBindInputSchema.optional(),
-}).strict().superRefine((value, ctx) => {
+    aliases: z.array(ActionCliFlagNameSchema).check(z.minLength(1)),
+  }))),
+  bindInput: z.optional(ActionCliBindInputSchema),
+}).check(z.superRefine((value, ctx) => {
   if (value.requiresServerId && !value.acceptsServerId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'cli.requiresServerId requires cli.acceptsServerId',
       path: ['requiresServerId'],
     });
   }
   if (value.bindInput && !value.inputSchema) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'cli.bindInput requires a caller input schema',
       path: ['inputSchema'],
     });
@@ -150,7 +148,7 @@ export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
     const key = command.path.join(' ');
     if (seenPaths.has(key)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `cli.commands declares the path "${key}" twice`,
         path: ['commands', index, 'path'],
       });
@@ -160,7 +158,7 @@ export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
     for (const [positionalIndex, positional] of (command.positionals ?? []).entries()) {
       if (seenPositionals.has(positional)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: `cli.commands positional "${positional}" is supplied twice`,
           path: ['commands', index, 'positionals', positionalIndex],
         });
@@ -169,7 +167,7 @@ export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
     }
     if (command.variadicPositional && seenPositionals.has(command.variadicPositional)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `cli variadic positional "${command.variadicPositional}" is also a fixed positional`,
         path: ['commands', index, 'variadicPositional'],
       });
@@ -180,7 +178,7 @@ export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
     for (const [aliasIndex, alias] of entry.aliases.entries()) {
       if (seenAliases.has(alias)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: `cli.flagAliases declares ${alias} twice`,
           path: ['flagAliases', index, 'aliases', aliasIndex],
         });
@@ -188,7 +186,7 @@ export const ActionCliProjectionSchema = lazyZodSchema(() => z.object({
       seenAliases.add(alias);
     }
   }
-}));
+})));
 export type ActionCliProjection = z.infer<typeof ActionCliProjectionSchema>;
 
 /**
@@ -198,7 +196,7 @@ export type ActionCliProjection = z.infer<typeof ActionCliProjectionSchema>;
  * the bound input, so declaration validation stays silent rather than guessing.
  */
 export function readActionSchemaTopLevelFieldNames(
-  schema: z.ZodTypeAny,
+  schema: z.ZodMiniType,
 ): ReadonlySet<string> | null {
   const shape = (schema as { shape?: unknown }).shape;
   if (!shape || typeof shape !== 'object') return null;

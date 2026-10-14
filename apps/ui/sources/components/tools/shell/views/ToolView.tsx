@@ -627,7 +627,7 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         backgroundColor: theme.colors.surface.inset,
         borderRadius: theme.parts.toolCard.radius,
-        marginVertical: 4,
+        marginVertical: theme.space.s4,
         overflow: 'hidden'
     },
     containerEmbedded: {
@@ -640,23 +640,23 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: 12,
+        padding: theme.space.s12,
         backgroundColor: theme.colors.surface.elevated,
     },
     headerCompact: {
-        paddingHorizontal: 10,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s10,
     },
     headerMain: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         flex: 1,
     },
     headerRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerError: {
         flexDirection: 'row',
@@ -694,7 +694,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
     },
     elapsedContainer: {
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
     elapsedText: {
         fontSize: 13,
@@ -702,29 +702,25 @@ const styles = StyleSheet.create((theme) => ({
         fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
     },
     toolName: {
-        fontSize: 13,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     status: {
-        fontWeight: '400',
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     toolDescription: {
-        fontSize: 13,
-        fontWeight: '400',
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     compactSubtitle: {
-        fontSize: 13,
-        fontWeight: '400',
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     content: {
-        paddingHorizontal: 12,
-        paddingTop: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s8,
         overflow: 'visible'
     },
 }));

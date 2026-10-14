@@ -7,6 +7,7 @@ import {
 } from '../install/trustIdentity';
 import { ensurePluginStoreDirectories, PLUGIN_MANIFEST_RELATIVE_PATH } from '../paths';
 import { PluginStateFileV1Schema, PluginStateRecordSchema } from '../state';
+import { resolveLocalPathPluginSource } from '@/plugins/discovery/sources/localPath';
 import {
   readPluginRegistryCommitRecord,
   replacePluginRegistryCommitRecord,
@@ -14,6 +15,7 @@ import {
 import { createPluginRegistryStateStore } from './currentState';
 import {
   createImmutablePluginGenerationRecordFromSource,
+  createDefaultPluginInstallationAvailabilityProjection,
   persistInstallationStateRevision,
   prepareImmutablePluginGeneration,
   readInstallationStateRevision,
@@ -59,6 +61,7 @@ export async function seedCurrentLocalPathPluginFixture(input: Readonly<{
   pluginId: string;
   manifestVersion: string;
   devWatch?: boolean;
+  includeAvailability?: boolean;
 }>): Promise<void> {
   const paths = await ensurePluginStoreDirectories({ happyHomeDir: input.happyHomeDir });
   const store = createPluginRegistryStateStore({ happyHomeDir: input.happyHomeDir });
@@ -76,6 +79,10 @@ export async function seedCurrentLocalPathPluginFixture(input: Readonly<{
 
   const createdAtMs = Date.now();
   const distribution = await createLocalPathPluginDistributionIdentity(input.pluginRoot);
+  const developmentSource = input.devWatch
+    ? await resolveLocalPathPluginSource({ locator: input.pluginRoot })
+    : null;
+  if (developmentSource && !developmentSource.ok) throw new Error('Development fixture manifest is invalid');
   const trust = createPluginTrustRecord({
     pluginId: input.pluginId,
     distribution,
@@ -141,6 +148,8 @@ export async function seedCurrentLocalPathPluginFixture(input: Readonly<{
       [input.pluginId]: {
         enabled: true,
         materializationId: `materialization-${randomUUID()}`,
+        ...(input.includeAvailability ? { availability: createDefaultPluginInstallationAvailabilityProjection(distribution) } : {}),
+        ...(developmentSource?.ok ? { approvedAuthorityManifest: developmentSource.manifest } : {}),
         trust,
         source: {
           distribution,

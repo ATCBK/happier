@@ -52,6 +52,18 @@ describe('widget setup model', () => {
         expect(row(['claude', 'codex'])).toMatchObject({ kind: 'pinned', label: 'Claude · Codex' });
         expect(row([])).toMatchObject({ kind: 'pinned', label: 'All agents' });
     });
+    it('names a pinned Usage Session by its title, also when an older save kept it as a list', () => {
+        const entry = { field: field('session', 'Session', { widget: 'select',
+            inputType: { hostType: 'usageQuery', field: 'session' } }) };
+        const options = [{ value: 'orchard', label: 'Orchard and meadow' }];
+        const row = (value: string | string[]) => describeWidgetSetupRow({ entry, options, resolution: ready,
+            draft: { bindings: { session: { kind: 'value', value } } } });
+        expect(row('orchard')).toMatchObject({ kind: 'pinned', label: 'Orchard and meadow' });
+        expect(row(['orchard'])).toMatchObject({ kind: 'pinned', label: 'Orchard and meadow' });
+        expect(describeWidgetSetupRow({ entry, options: [], pickedOptions: options, resolution: ready,
+            draft: { bindings: { session: { kind: 'value', value: ['orchard'] } } } }))
+            .toMatchObject({ kind: 'pinned', value: null, label: 'Orchard and meadow' });
+    });
     it('starts a copy following one surface value, per viewer for connections, and the likeliest of a few', () => {
         expect(proposeWidgetSetupDraft([sessionFollows, account, checkout, { field: field('label', 'Label') }])).toEqual({
             bindings: {

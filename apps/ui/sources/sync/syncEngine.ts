@@ -143,6 +143,7 @@ import {
     type HostedSystemSessionEnsureResult,
 } from '@/sync/domains/session/hostedSystemSession';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
+import { isHydratedSessionCurrentForListState } from '@/sync/engine/sessions/sessionSnapshot';
 import {
     emitSyncPerformanceSummaryToConsole,
     installSyncPerformanceTelemetryGlobal,
@@ -195,7 +196,6 @@ import {
     NormalizedMessage,
     normalizeRawMessage,
     RawRecord,
-    RawRecordSchema,
 } from '@happier-dev/session-core/raw';
 import {
     applySettings,
@@ -234,6 +234,7 @@ import {
 } from './domains/state/sessionViewportPersistence';
 import { sessionViewportStorageKey } from './domains/state/sessionLocalStateKeys';
 import { machineProcessesStore } from './domains/machines/processes/machineProcessesStore';
+import { machineResourceStore } from './domains/machines/resources/machineResourceStore';
 import {
     captureActiveServerAccountScopeCurrentness,
     captureActiveServerAccountScopeLifetime,
@@ -359,6 +360,7 @@ import { UserProfile } from './domains/social/friendTypes';
 import {
     buildLocalOutboundPendingUserMessage,
     buildOutgoingUserTextRecord,
+    OutgoingUserTextRecordSchema,
 } from './domains/messages/outgoingUserMessage';
 import { HappyError } from '@/utils/errors/errors';
 import {
@@ -1142,7 +1144,7 @@ type PendingQueueOwnerOptions = Readonly<{
 }>;
 
 function sanitizePendingMessageMetaForExplicitSubmit(rawRecord: unknown): Record<string, unknown> | undefined {
-    const parsed = RawRecordSchema.safeParse(rawRecord);
+    const parsed = OutgoingUserTextRecordSchema.safeParse(rawRecord);
     if (!parsed.success) {
         return undefined;
     }
@@ -2848,6 +2850,16 @@ class Sync {
         storage.getState().restoreSessionListQueryMemberships(serverId, accountId);
     }
 
+    /** Read only the already-bound exact-Home projection; this never acquires transport. */
+    public readSessionSystemRecordObservation = (address: SessionAddress) => {
+        for (const repository of this.sessionSystemRecordRepositories.values()) {
+            if (!areServerProfileIdentifiersEquivalent(repository.scope.serverId, address.serverId)) continue;
+            const authority = repository.readObservationAuthority(address);
+            if (authority) return { ...authority, scope: repository.scope, session: address, repository };
+        }
+        return null;
+    };
+
     /** Execute under one explicit Home/Account lease; no callback may retain request. */
     public withSessionSystemRecordRuntime = async <T>(
         address: SessionAddress,
@@ -2875,7 +2887,8 @@ class Sync {
         try {
             if (!isCurrent() || !areServerProfileIdentifiersEquivalent(authority.scope.serverId, sessionAddress.serverId)) return { status: 'forbidden' };
             if (!authority.context.credentials) return { status: 'forbidden' };
-            let readSessionEncryption = () => authority.context.encryption?.getSessionEncryption(sessionAddress.sessionId) ?? null;
+            const sessionEncryption = authority.context.encryption;
+            let readSessionEncryption = () => sessionEncryption?.getSessionEncryption(sessionAddress.sessionId) ?? null;
             // Reuse the canonical exact-Session hydration and its in-flight
             // coalescer. Several record observers must not each perform another
             // full Session read merely to obtain mode/access/key context.
@@ -2926,6 +2939,11 @@ class Sync {
                 };
             };
             const contentContext = readContentContext();
+            repository.retainObservationAuthority(sessionAddress, {
+                readCapabilities: () => readSession()?.access?.capabilities ?? null,
+                readContentContext,
+                isCurrent,
+            });
             const value = await operation({
                 scope: authority.scope,
                 request: async (path, init, options) => {
@@ -2957,6 +2975,12 @@ class Sync {
         if (!scope || credentials.token !== this.credentials?.token) {
             throw new Error('Session draft repository scope is unavailable');
         }
+        const appliedTarget = this.getAppliedTransportTarget();
+        const appliedTransportIsCurrent = appliedTarget
+            ? this.createAppliedTransportScopeGuard(appliedTarget)
+            : () => false;
+        const isDraftScopeCurrent = () => appliedTransportIsCurrent()
+            && areServerAccountScopesEqual(getActiveServerAccountScope(), scope);
         configureSessionDraftRepository({
             scope,
             transport: this.sessionDraftSyncEnabled
@@ -2972,14 +2996,29 @@ class Sync {
                 accountCryptoMaterial: isTokenOnlyAuthCredentials(credentials)
                     ? null
                     : resolveAccountScopedCryptoMaterialFromCredentials(credentials),
-                getSessionContext: (sessionId) => {
-                    const session = storage.getState().sessions[sessionId] ?? null;
-                    if (!session) return null;
-                    if (session.encryptionMode === 'plain') return { mode: 'plain' };
-                    return {
-                        mode: 'e2ee',
-                        encryption: this.encryption?.getSessionEncryption(sessionId) ?? null,
+                getSessionContext: async (sessionId) => {
+                    const readContext = () => {
+                        if (!isDraftScopeCurrent()) return null;
+                        const session = storage.getState().sessions[sessionId] ?? null;
+                        if (!session) return null;
+                        if (session.encryptionMode === 'plain') return { mode: 'plain' as const };
+                        return {
+                            mode: 'e2ee' as const,
+                            encryption: this.encryption?.getSessionEncryption(sessionId) ?? null,
+                        };
                     };
+                    const context = readContext();
+                    if (context && (context.mode === 'plain' || context.encryption)) return context;
+                    if (appliedTarget && isDraftScopeCurrent()) {
+                        // List membership and its cipher do not materialize the full Session
+                        // shell. Reuse exact hydration without loading the transcript.
+                        await this.ensureSessionVisibleForMessageRoute(sessionId, {
+                            serverId: appliedTarget.serverId,
+                            scopeCurrentness: isDraftScopeCurrent,
+                            hydrateMessages: false,
+                        });
+                    }
+                    return readContext();
                 },
                 randomBytes: getRandomBytes,
             }),
@@ -3141,6 +3180,7 @@ class Sync {
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
         machineProcessesStore.reset();
+        machineResourceStore.reset();
         // Session System Record repositories are qualified by their captured
         // Home/Account credential, not by whichever Home owns the focused
         // socket. Credential mutation retires the exact Home above; switching
@@ -4659,7 +4699,7 @@ class Sync {
             }
 
             const sessionEncryptionMode: 'e2ee' | 'plain' = session.encryptionMode === 'plain' ? 'plain' : 'e2ee';
-            const parsed = RawRecordSchema.safeParse(pending.rawRecord);
+            const parsed = OutgoingUserTextRecordSchema.safeParse(pending.rawRecord);
             const rawRecord: RawRecord = parsed.success
                 ? parsed.data
                 : {
@@ -6730,6 +6770,55 @@ class Sync {
             ...(options?.requiredHydrationSessionIds ?? []),
             ...organizationPinnedSessionIds,
         ]));
+        const hydrateRequiredSession = async (
+            sessionId: string,
+            accountCurrentness: Awaited<ReturnType<typeof fetchAccountEncryptionCurrentness>> | undefined,
+        ): Promise<void> => {
+            const stagedSessionDataKeys = new Map(this.sessionDataKeys);
+            const stagedSessionDataKeyEnvelopes = new Map(this.sessionDataKeyEnvelopes);
+            const exactResult = await fetchSessionByIdWithServerScope({
+                sessionId,
+                serverId: activeServerId,
+                activeCredentials: credentials,
+                activeEncryption: this.encryption,
+                sessionDataKeys: stagedSessionDataKeys,
+                sessionDataKeyEnvelopes: stagedSessionDataKeyEnvelopes,
+                activeRequest: sessionRequest,
+                accountCurrentness,
+                getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
+                applySessions: (sessions) => {
+                    if (!shouldContinue()) return;
+                    this.applySessions(sessions.filter((session) => {
+                        const currentRenderable = activeServerId
+                            ? storage.getState().sessionListRowsByServerId[activeServerId]?.[session.id]
+                            : null;
+                        return !currentRenderable
+                            || isHydratedSessionCurrentForListState(session, () => currentRenderable);
+                    }));
+                },
+                log,
+                includeTurnsProjection: false,
+            });
+            if (!shouldContinue()) return;
+            if (!exactResult.ok) {
+                if (exactResult.errorCode === 'not_found') {
+                    stagedSessionDataKeys.delete(sessionId);
+                    stagedSessionDataKeyEnvelopes.delete(sessionId);
+                    // Exact absence retires this Home's row and fences older snapshots.
+                    this.retireLocalSession(sessionId, activeServerId);
+                } else {
+                    throw new Error(
+                        `Required session shell hydration failed for ${sessionId}: ${exactResult.errorCode ?? 'unknown'}`,
+                    );
+                }
+            }
+            const stagedKey = stagedSessionDataKeys.get(sessionId);
+            if (stagedKey) this.sessionDataKeys.set(sessionId, stagedKey);
+            else this.sessionDataKeys.delete(sessionId);
+            const stagedEnvelope = stagedSessionDataKeyEnvelopes.get(sessionId);
+            if (typeof stagedEnvelope === 'string') this.sessionDataKeyEnvelopes.set(sessionId, stagedEnvelope);
+            else this.sessionDataKeyEnvelopes.delete(sessionId);
+        };
         const result = await fetchAndApplySessions({
             clientEncryptionRequirement: resolveUiClientEncryptionRequirement({
                 syncedSettings: storage.getState().settings,
@@ -6779,6 +6868,7 @@ class Sync {
             prioritizeSessionIds: prioritizedHydrationIds,
             activeSessionIds: activeHydrationSessionIds,
             requiredHydrationSessionIds,
+            hydrateRequiredSession,
             awaitSessionListHydration: options?.awaitSessionListHydration,
             sessionListEagerHydrationCount: isAppend
                 ? this.syncTuning.sessionListAppendEagerHydrationCount
@@ -6814,60 +6904,8 @@ class Sync {
         const missingRequiredHydrationSessionIds = settledRequiredHydrationSessionIds.filter(
             (sessionId) => result.isSessionCurrent?.(sessionId) !== false && !fetchedSessionIdSet.has(sessionId),
         );
-        const activeCredentials = this.credentials;
-        const activeEncryption = this.encryption;
-        if (!activeCredentials) return;
         await runTasksWithLimit(
-            missingRequiredHydrationSessionIds.map((sessionId) => async () => {
-                const stagedSessionDataKeys = new Map(this.sessionDataKeys);
-                const stagedSessionDataKeyEnvelopes = new Map(this.sessionDataKeyEnvelopes);
-                const exactResult = await fetchSessionByIdWithServerScope({
-                    sessionId,
-                    serverId: activeServerId,
-                    activeCredentials,
-                    activeEncryption,
-                    sessionDataKeys: stagedSessionDataKeys,
-                    sessionDataKeyEnvelopes: stagedSessionDataKeyEnvelopes,
-                    activeRequest: sessionRequest,
-                    accountCurrentness: result.accountCurrentness,
-                    getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
-                    applySessions: (sessions) => {
-                        if (!shouldContinue()) return;
-                        this.applySessions(sessions);
-                    },
-                    log,
-                    includeTurnsProjection: false,
-                });
-                if (!shouldContinue()) return;
-                if (!exactResult.ok) {
-                    if (exactResult.errorCode === 'not_found') {
-                        stagedSessionDataKeys.delete(sessionId);
-                        stagedSessionDataKeyEnvelopes.delete(sessionId);
-                        // Exact hydration has authoritative absence evidence. Reuse
-                        // the canonical local deletion owner so it fences any
-                        // older session-list snapshot as well as transcript and
-                        // socket work. The evidence is this Home's alone: a same-id
-                        // Session on another Home keeps its row and its carrier.
-                        this.retireLocalSession(sessionId, activeServerId);
-                    } else {
-                        throw new Error(
-                            `Required session shell hydration failed for ${sessionId}: ${exactResult.errorCode ?? 'unknown'}`,
-                        );
-                    }
-                }
-                const stagedKey = stagedSessionDataKeys.get(sessionId);
-                if (stagedKey) {
-                    this.sessionDataKeys.set(sessionId, stagedKey);
-                } else {
-                    this.sessionDataKeys.delete(sessionId);
-                }
-                const stagedEnvelope = stagedSessionDataKeyEnvelopes.get(sessionId);
-                if (typeof stagedEnvelope === 'string') {
-                    this.sessionDataKeyEnvelopes.set(sessionId, stagedEnvelope);
-                } else {
-                    this.sessionDataKeyEnvelopes.delete(sessionId);
-                }
-            }),
+            missingRequiredHydrationSessionIds.map((sessionId) => () => hydrateRequiredSession(sessionId, result.accountCurrentness)),
             this.syncTuning.sessionListHydrationConcurrencyLimit,
         );
         if (!shouldContinue()) return;

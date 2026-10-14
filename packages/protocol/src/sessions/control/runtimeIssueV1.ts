@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { isUnsafeTelemetryDataKey } from '../../common/sensitiveKeys.js';
 import {
@@ -55,16 +55,14 @@ export function readAgentStartupFailureCode(value: unknown): AgentStartupFailure
     : null;
 }
 
-const SessionRuntimeAgentProcessExitAfterSwitchDetailsV1Schema = lazyZodSchema(() => z
-  .object({
-    exitCode: z.number().int().nullable(),
-    signal: z.string().trim().min(1).max(128).nullable(),
-    lastStderrLine: z.string().trim().min(1).max(2_000).nullable(),
-    vendorResumeId: NonBlankOpaqueIdentifierSchema.max(512).nullable(),
-    materializationRoot: z.string().trim().min(1).max(2_000).nullable(),
-    effectiveStateMode: z.enum(['shared', 'isolated']).nullable(),
-  })
-  .strict());
+const SessionRuntimeAgentProcessExitAfterSwitchDetailsV1Schema = lazyZodSchema(() => z.strictObject({
+    exitCode: z.nullable(z.number().check(z.int())),
+    signal: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+    lastStderrLine: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+    vendorResumeId: z.nullable(NonBlankOpaqueIdentifierSchema.check(z.maxLength(512))),
+    materializationRoot: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+    effectiveStateMode: z.nullable(z.enum(['shared', 'isolated'])),
+  }));
 
 const LEGACY_RUNTIME_ISSUE_SOURCE_BY_VALUE = {
   provider_status_error: 'agent_status_error',
@@ -120,78 +118,63 @@ function normalizeLegacyRuntimeIssueV1(value: unknown): unknown {
 }
 
 const SessionRuntimeUsageLimitActionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('open_url'),
-    labelKey: z.string().trim().min(1).optional(),
-    url: z.string().url(),
-  }).strict(),
-  z.object({
+    labelKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    url: z.string().check(z.url()),
+  }),
+  z.strictObject({
     kind: z.literal('settings'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('none'),
-  }).strict(),
+  }),
 ]));
 
-const SessionRuntimeQuotaSnapshotRefV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionRuntimeQuotaSnapshotRefV1Schema = lazyZodSchema(() => z.strictObject({
     serviceId: ConnectedAccountServiceKeyIngressSchema,
-    profileId: ConnectedServiceProfileIdSchema.optional(),
-    groupId: ConnectedServiceAuthGroupIdSchema.optional(),
-    fetchedAtMs: z.number().int().nonnegative().optional(),
-  })
-  .strict());
+    profileId: z.optional(ConnectedServiceProfileIdSchema),
+    groupId: z.optional(ConnectedServiceAuthGroupIdSchema),
+    fetchedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 
-const SessionRuntimeUsageLimitWindowV1Schema = lazyZodSchema(() => z
-  .object({
-    meterId: z.string().trim().min(1),
-    scope: z.string().trim().min(1).optional(),
-    remainingPct: z.number().finite().min(0).max(100).optional(),
-    resetAtMs: z.number().int().nonnegative().optional(),
-    status: z.string().trim().min(1).optional(),
-  })
-  .strict());
+const SessionRuntimeUsageLimitWindowV1Schema = lazyZodSchema(() => z.strictObject({
+    meterId: z.string().check(z.trim(), z.minLength(1)),
+    scope: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    remainingPct: z.optional(z.number().check(z.minimum(0), z.maximum(100))),
+    resetAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    status: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }));
 
-export const SessionRuntimeUsageLimitDetailsV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionRuntimeUsageLimitDetailsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    resetAtMs: z.number().int().nonnegative().nullable(),
-    retryAfterMs: z.number().int().nonnegative().nullable(),
+    resetAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    retryAfterMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
     quotaScope: z.enum(['account', 'workspace', 'organization', 'model', 'provider', 'unknown']),
     recoverability: z.enum(['wait', 'switch_account', 'manual', 'unknown']),
-    providerLimitId: z.string().trim().min(1).optional(),
-    planType: z.string().trim().min(1).nullable().optional(),
-    utilization: z.number().finite().min(0).max(100).nullable().optional(),
-    limitCategory: ConnectedServiceLimitCategoryV1Schema.optional(),
-    quotaSnapshotRef: SessionRuntimeQuotaSnapshotRefV1Schema.optional(),
-    effectiveMeterId: z.string().trim().min(1).optional(),
-    effectiveRemainingPct: z.number().finite().min(0).max(100).optional(),
-    allWindows: z.array(SessionRuntimeUsageLimitWindowV1Schema).optional(),
-    recoveryDecision: z
-      .enum(['switching', 'waiting_for_reset', 'manual_intervention', 'not_recoverable'])
-      .optional(),
-    overage: z
-      .object({
+    providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    planType: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    utilization: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+    limitCategory: z.optional(ConnectedServiceLimitCategoryV1Schema),
+    quotaSnapshotRef: z.optional(SessionRuntimeQuotaSnapshotRefV1Schema),
+    effectiveMeterId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    effectiveRemainingPct: z.optional(z.number().check(z.minimum(0), z.maximum(100))),
+    allWindows: z.optional(z.array(SessionRuntimeUsageLimitWindowV1Schema)),
+    recoveryDecision: z.optional(z
+      .enum(['switching', 'waiting_for_reset', 'manual_intervention', 'not_recoverable'])),
+    overage: z.optional(z.nullable(z.strictObject({
         status: z.enum(['allowed', 'allowed_warning', 'rejected', 'unknown']),
-        resetAtMs: z.number().int().nonnegative().nullable(),
-        disabledReason: z.string().trim().min(1).nullable().optional(),
-      })
-      .strict()
-      .nullable()
-      .optional(),
-    action: SessionRuntimeUsageLimitActionV1Schema.nullable().optional(),
-    connectedService: z
-      .object({
+        resetAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+        disabledReason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+      }))),
+    action: z.optional(z.nullable(SessionRuntimeUsageLimitActionV1Schema)),
+    connectedService: z.optional(z.nullable(z.strictObject({
         serviceId: ConnectedAccountServiceKeyIngressSchema,
-        profileId: ConnectedServiceProfileIdSchema.nullable(),
-        groupId: ConnectedServiceAuthGroupIdSchema.nullable(),
-        groupExhausted: z.boolean().optional(),
-      })
-      .strict()
-      .nullable()
-      .optional(),
-  })
-  .strict());
+        profileId: z.nullable(ConnectedServiceProfileIdSchema),
+        groupId: z.nullable(ConnectedServiceAuthGroupIdSchema),
+        groupExhausted: z.optional(z.boolean()),
+      }))),
+  }));
 
 export type SessionRuntimeUsageLimitDetailsV1 = z.infer<typeof SessionRuntimeUsageLimitDetailsV1Schema>;
 
@@ -201,48 +184,41 @@ export type SessionRuntimeUsageLimitDetailsV1 = z.infer<typeof SessionRuntimeUsa
  * ceiling, the metric and reset needed to recover. Limit identity, audience
  * and other members' use stay manager-private.
  */
-export const SessionRuntimeTeamCredentialDenialDetailsV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionRuntimeTeamCredentialDenialDetailsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    resourceId: z.string().trim().min(1).max(256),
+    resourceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     reasonCode: ProviderBrokerAdmissionFailureCodeV1Schema,
-    usageLimit: TeamCredentialUsageLimitDenialV1Schema.optional(),
-  })
-  .strict());
+    usageLimit: z.optional(TeamCredentialUsageLimitDenialV1Schema),
+  }));
 
 export type SessionRuntimeTeamCredentialDenialDetailsV1 =
   z.infer<typeof SessionRuntimeTeamCredentialDenialDetailsV1Schema>;
 
-export const SessionRuntimeTemporaryThrottleDetailsV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionRuntimeTemporaryThrottleDetailsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    retryAfterMs: z.number().int().nonnegative().nullable(),
+    retryAfterMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
     recoverability: z.enum(['retry', 'manual', 'wait', 'unknown']),
-  })
-  .strict());
+  }));
 
 export type SessionRuntimeTemporaryThrottleDetailsV1 =
   z.infer<typeof SessionRuntimeTemporaryThrottleDetailsV1Schema>;
 
-export const SessionRuntimeIssueV1Schema = lazyZodSchema(() => z.preprocess(
-  normalizeLegacyRuntimeIssueV1,
-  z.object({
+export const SessionRuntimeIssueV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyRuntimeIssueV1), z.readonly(z.object({
     v: z.literal(1),
     scope: z.literal('primary_session'),
     status: z.literal('failed'),
-    code: z.string().trim().min(1).max(256),
+    code: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     source: SessionRuntimeIssueSourceV1Schema,
-    occurredAt: z.number().int().nonnegative(),
-    sessionSeq: z.number().int().nonnegative().optional(),
-    agentId: AgentIdV1Schema.optional(),
-    agentTurnId: z.string().trim().min(1).max(256).optional(),
-    sanitizedPreview: z.string().trim().min(1).max(2_000).optional(),
-    usageLimit: SessionRuntimeUsageLimitDetailsV1Schema.optional(),
-    teamCredential: SessionRuntimeTeamCredentialDenialDetailsV1Schema.optional(),
-    temporaryThrottle: SessionRuntimeTemporaryThrottleDetailsV1Schema.optional(),
-    agentProcessExitAfterSwitch: SessionRuntimeAgentProcessExitAfterSwitchDetailsV1Schema.optional(),
-  }).readonly(),
-));
+    occurredAt: z.number().check(z.int(), z.nonnegative()),
+    sessionSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+    agentId: z.optional(AgentIdV1Schema),
+    agentTurnId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    sanitizedPreview: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+    usageLimit: z.optional(SessionRuntimeUsageLimitDetailsV1Schema),
+    teamCredential: z.optional(SessionRuntimeTeamCredentialDenialDetailsV1Schema),
+    temporaryThrottle: z.optional(SessionRuntimeTemporaryThrottleDetailsV1Schema),
+    agentProcessExitAfterSwitch: z.optional(SessionRuntimeAgentProcessExitAfterSwitchDetailsV1Schema),
+  }))));
 export type SessionRuntimeIssueV1 = z.infer<typeof SessionRuntimeIssueV1Schema>;
 
 export type SessionRuntimeIssueSignInRecovery = Readonly<{

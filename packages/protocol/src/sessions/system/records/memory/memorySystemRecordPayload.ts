@@ -1,23 +1,19 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionSummaryShardV1Schema } from '../../../../messages/structured/sessionSummaryShardV1.js';
 import { SessionSynopsisV1Schema } from '../../../../messages/structured/sessionSynopsisV1.js';
 import { MemorySessionSystemRecordKindSchema } from './memorySystemRecordKinds.js';
 
-export const MemorySummaryShardSystemRecordPayloadSchema = z
-  .object({
+export const MemorySummaryShardSystemRecordPayloadSchema = z.looseObject({
     kind: z.literal('summary_shard.v1'),
     payload: SessionSummaryShardV1Schema,
-  })
-  .passthrough();
+  });
 export type MemorySummaryShardSystemRecordPayload = z.infer<typeof MemorySummaryShardSystemRecordPayloadSchema>;
 
-export const MemorySynopsisSystemRecordPayloadSchema = z
-  .object({
+export const MemorySynopsisSystemRecordPayloadSchema = z.looseObject({
     kind: z.literal('synopsis.v1'),
     payload: SessionSynopsisV1Schema,
-  })
-  .passthrough();
+  });
 export type MemorySynopsisSystemRecordPayload = z.infer<typeof MemorySynopsisSystemRecordPayloadSchema>;
 
 export const MemorySessionSystemRecordPayloadSchema = z.discriminatedUnion('kind', [

@@ -18,7 +18,8 @@ import { t } from '@/text';
 import { ProviderErrorItems } from '../ProviderErrorItems';
 import { ProviderFieldRow } from './ProviderFieldRow';
 import { ProviderKeyEntryItem } from './ProviderKeyEntryItem';
-import { ProviderApprovalPendingBanner, ProviderProbeResult } from '../ProviderPageParts';
+import { ProviderProbeResult } from '../ProviderPageParts';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 
 export type CustomProviderAuthoringViewModel = Readonly<{
     machineId: string | null;
@@ -143,10 +144,11 @@ export function CustomProviderAuthoringView(props: Readonly<{
             />
 
             {model.pendingApproval ? (
-                <ProviderApprovalPendingBanner
-                    testID="settings-provider-authoring-approval"
-                    providerName={draft.name.trim() || t('settingsProvidersCollection.newTitle')}
-                    onOpen={model.pendingApproval.onOpen}
+                <ActionApprovalPendingNotice presentation="banner" testID="settings-provider-authoring-approval"
+                    message={t('settingsProvidersCollection.approvalPendingTitle')}
+                    description={t('settingsProvidersCollection.approvalPendingDescription', { provider: draft.name.trim() || t('settingsProvidersCollection.newTitle') })}
+                    openLabel={t('settingsProvidersCollection.openApproval')}
+                    onOpenApproval={model.pendingApproval.onOpen}
                 />
             ) : null}
 

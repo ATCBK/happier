@@ -1,15 +1,11 @@
 import type { Prisma } from '@prisma/client';
 import { readCurrentSessionIdsInTx } from '@/app/session/access/sessionReadAdmission';
-import {
-    isProjectedSessionStalledV1,
-    parseSessionRuntimeActivityProjectionFields,
-    projectSessionAwarenessOperationalV1,
-    projectSessionAwarenessRuntimeV1,
-    readSessionAwarenessWorkStatusV1,
-    resolveSessionAwarenessLifecycleV1,
-    type SessionReportsV1,
-    type V2SessionRecord,
-} from '@happier-dev/protocol';
+import { isProjectedSessionStalledV1, projectSessionAwarenessRuntimeV1, resolveSessionAwarenessLifecycleV1 } from '@happier-dev/protocol/sessions/awareness/runtime';
+import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { projectSessionAwarenessOperationalV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
+import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { type SessionReportsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
 import type { Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import {

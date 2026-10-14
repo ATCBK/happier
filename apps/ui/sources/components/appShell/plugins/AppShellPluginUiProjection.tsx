@@ -6,10 +6,13 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import {
     applyInstalledAppShellPluginUiReactNativeExecutableAuthorityInvalidation,
+    createInstalledPluginUiReactNativeRuntimeProjectionSource,
+    type PluginUiReactNativeRuntimeProjectionSource,
 } from '@/components/plugins/reactNative/projectionInvalidation';
 import { storage, useIsActiveMachineListSettled } from '@/sync/domains/state/storage';
 import { loadPluginUiProjectionWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
@@ -398,6 +401,22 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const currentAccountLifetimeKey = accountLifetimeScopeKey(accountLifetime);
     const availabilityReader = useActivePluginAccountAvailabilityReader();
+    const hostBundledUiEnabled = useFeatureEnabled('plugins.ui.reactNativeBundles', {
+        scopeKind: 'spawn', serverId: accountLifetime?.scope.serverId ?? activeServer.serverId,
+    });
+    const accountUiProjection = React.useMemo(() => hostBundledUiEnabled
+        ? availabilityReader?.readAccountUiProjection() ?? null : null, [availabilityReader, hostBundledUiEnabled]);
+    const accountArtifactProjectionSource = React.useRef<PluginUiReactNativeRuntimeProjectionSource | null>(null);
+    React.useLayoutEffect(() => {
+        const source = accountArtifactProjectionSource.current ?? createInstalledPluginUiReactNativeRuntimeProjectionSource();
+        accountArtifactProjectionSource.current = source;
+        source.update({ projection: accountUiProjection, accountLifetime,
+            isCurrent: () => accountLifetime?.isCurrent() === true });
+    }, [accountLifetime, accountUiProjection]);
+    React.useEffect(() => () => {
+        accountArtifactProjectionSource.current?.dispose();
+        accountArtifactProjectionSource.current = null;
+    }, []);
     // F7 has one release classifier: Account Availability. It is passed
     // directly into Administration's canonical exact-origin selection hook;
     // AppShell never infers release/content validity from a projection.
@@ -569,7 +588,14 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         unionMembers,
         selectedOriginsByPluginId,
     );
-    const { hasEstablishingMembers, interactionEnabled, phase, pluginUiProjection, unavailableReasonCode } = projectionUnion;
+    const hasEstablishingMembers = projectionUnion.hasEstablishingMembers;
+    const pluginUiProjection = React.useMemo(() => mergeInstalledPluginUiProjections(
+        accountUiProjection ? [accountUiProjection] : [], projectionUnion.pluginUiProjection,
+    ), [accountUiProjection, projectionUnion.pluginUiProjection]);
+    const hasCurrentAccountUi = accountUiProjection !== null && isCurrentAccountLifetime(accountLifetime);
+    const interactionEnabled = hasCurrentAccountUi || projectionUnion.interactionEnabled;
+    const phase = hasCurrentAccountUi ? 'current' : projectionUnion.phase;
+    const unavailableReasonCode = hasCurrentAccountUi ? undefined : projectionUnion.unavailableReasonCode;
     // A plugin the Account no longer has enabled takes its retained idle values (a Home widget's
     // warm list, for one) with it, instead of keeping them until the Account changes.
     React.useEffect(() => {
@@ -715,20 +741,22 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
                 byMachine.push(projection);
                 continue;
             }
-            // Consume Administration's existing admission facts for plugins
-            // with an execution origin; pending reports cannot invent a conflict.
-            const descriptors = projection.descriptors.filter((descriptor) => {
-                if (!descriptor.pluginId || !executionOriginPluginIds.includes(descriptor.pluginId)) return true;
+            // Keep static service identity independent from execution. The
+            // descriptor union consumes Administration's existing admission
+            // facts to prefer admitted variants and block descriptive-only ones.
+            const executionUnavailablePluginIds = projection.descriptors.flatMap((descriptor) => {
+                if (!descriptor.pluginId || !executionOriginPluginIds.includes(descriptor.pluginId)) return [];
                 const report = reportedOriginsByPluginId.get(descriptor.pluginId);
                 if (!report || report.accountLifetime !== accountLifetime || !isCurrentAccountLifetime(report.accountLifetime)) {
                     byMachine.push({ kind: 'loading' });
-                    return false;
+                    return [descriptor.pluginId];
                 }
-                return (selectableOriginsByMachineId.get(machineId) ?? []).some((origin) => (
+                const selectable = (selectableOriginsByMachineId.get(machineId) ?? []).some((origin) => (
                     getPluginMachineExecutionOriginRef(origin).pluginId === descriptor.pluginId
                 ));
+                return selectable ? [] : [descriptor.pluginId];
             });
-            byMachine.push({ kind: 'ready', descriptors });
+            byMachine.push({ kind: 'ready', descriptors: projection.descriptors, executionUnavailablePluginIds });
         }
         commitConnectedAccountProjection(
             accountLifetime,

@@ -1,6 +1,7 @@
 import type { InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { readWorkflowInvocationId } from '@/sync/domains/workflows/workflowRunRoute';
+import { createActivitySurfaceSessionRoute } from '@/activity/actions/activitySurfaceTargets';
+import { createWorkflowInvocationRoute, createWorkflowRunRoute, readWorkflowInvocationId } from '@/sync/domains/workflows/workflowRunRoute';
 
 /**
  * The Inbox route's one focus parameter (`session:<Home>:<id>`, `run:<Home>:<id>` or
@@ -22,6 +23,18 @@ export function createInboxItemRoute(focus: InboxItemFocus) {
         item: `${PREFIX[focus.kind]}${encodeURIComponent(focus.serverId)}:${encodeURIComponent(focus.id)}`,
         ...(focus.kind === 'workflow_run' && focus.invocationId ? { invocationId: focus.invocationId } : {}),
     } } as const;
+}
+
+/** The selected item's own page, which "open" leaves for: the same place a phone pushes. */
+export function resolveInboxItemPageRoute(focus: InboxItemFocus): string {
+    switch (focus.kind) {
+        case 'session':
+            return createActivitySurfaceSessionRoute(focus.id, focus.serverId);
+        case 'workflow_run':
+            return focus.invocationId ? createWorkflowInvocationRoute(focus.id, focus.invocationId) : createWorkflowRunRoute(focus.id);
+        case 'approval':
+            return `/inbox/approvals/${encodeURIComponent(focus.id)}${focus.serverId ? `?serverId=${encodeURIComponent(focus.serverId)}` : ''}`;
+    }
 }
 
 export function readInboxItemFocus(raw: string | string[] | undefined, rawInvocationId?: string | string[]): InboxItemFocus | null {

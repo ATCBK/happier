@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 import { inspectProvisionedPosixDevTarget, provisionPosixDevTarget, prepareDevTargetHost } from './provision.mjs';
 
@@ -76,12 +77,14 @@ test('QA provisioning refreshes the worker catalog before importing its installe
   await writeFile(join(packageDir, 'build.mjs'), buildScript);
   await writeFile(join(packageDir, 'dist/index.js'), "throw new Error('catalog-budget=402653184');\n");
   await writeFile(join(packageDir, 'src/index.js'), "throw new Error('catalog-budget=536870912');\n");
+  // This workspace is independent of the admitted public runner. Redirect
+  // only its native process/OS boundary; build, leases and imports stay real.
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
   const moduleUrl = pathToFileURL(join(directory, 'provision.mjs')).href;
-  await assert.rejects(promisify(execFile)(process.execPath, ['--input-type=module', '-e',
-    `const {provisionQaHostDependencies}=await import(${JSON.stringify(moduleUrl)}); await provisionQaHostDependencies();`],
-  { cwd: root, env: { ...process.env, HAPPIER_HOME_DIR: join(root, 'qa-home') } }), error => {
-    assert.match(error.stderr, /catalog-budget=536870912/);
-    assert.doesNotMatch(error.stderr, /catalog-budget=402653184/);
+  const { provisionQaHostDependencies } = await import(moduleUrl);
+  await assert.rejects(provisionQaHostDependencies({ ...native.env, HAPPIER_HOME_DIR: join(root, 'qa-home') }), error => {
+    assert.match(error.message, /catalog-budget=536870912/);
+    assert.doesNotMatch(error.message, /catalog-budget=402653184/);
     return true;
   });
 });

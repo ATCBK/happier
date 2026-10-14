@@ -67,7 +67,7 @@ describe('glass material Account owner', () => {
         type Tint = 'subtle' | 'medium' | 'strong';
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
         const sky: [number, number, number] = [193, 146, 143];
-        const render = (theme: typeof darkTheme, group: 'card' | 'floating', preset: 'auto' | 'everywhere' | 'clear', atmosphereBehind: 'none' | 'band' | 'wallpaper', backdrop: [number, number, number], tint: Tint) => {
+        const render = (theme: typeof darkTheme | typeof lightTheme, group: 'card' | 'floating', preset: 'auto' | 'everywhere' | 'clear', atmosphereBehind: 'none' | 'band' | 'wallpaper', backdrop: [number, number, number], tint: Tint) => {
             const settings = { glassSurfaceMaterials: glassPresetMaterials(preset), glassTintIntensity: tint };
             const environment = { atmosphereBehind };
             const solid = group === 'card' ? theme.colors.edge.cardFill : theme.colors.edge.floatingFill;

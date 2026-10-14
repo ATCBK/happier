@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SpawnConfigOptionValueSchema } from '../../actions/sessionSpawnConfigOptions.js';
 
@@ -35,7 +35,7 @@ import { SpawnConfigOptionValueSchema } from '../../actions/sessionSpawnConfigOp
  * sets in the wire schema would create a second decision-maker for them.
  */
 
-const AgentUiIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const AgentUiIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const AgentUiIdArraySchema = lazyZodSchema(() => z.array(AgentUiIdSchema));
 const AgentUiStringRecordSchema = lazyZodSchema(() => z.record(z.string(), z.string()));
 
@@ -45,15 +45,15 @@ const AgentUiStringRecordSchema = lazyZodSchema(() => z.record(z.string(), z.str
  * declaring plugin's scoped Settings contributions. Bare local IDs are not a
  * supported compatibility form.
  */
-const AgentUiSettingReferenceSchema = lazyZodSchema(() => z.object({
+const AgentUiSettingReferenceSchema = lazyZodSchema(() => z.strictObject({
   scope: z.enum(['host', 'account', 'daemon']),
   localId: AgentUiIdSchema,
-}).strict());
+}));
 export type AgentUiSettingReferenceV1 = z.infer<typeof AgentUiSettingReferenceSchema>;
-const AgentUiMutablePluginSettingReferenceSchema = lazyZodSchema(() => z.object({
+const AgentUiMutablePluginSettingReferenceSchema = lazyZodSchema(() => z.strictObject({
   scope: z.enum(['account', 'daemon']),
   localId: AgentUiIdSchema,
-}).strict());
+}));
 /** A translation key resolved by the host's own catalogue. */
 const AgentUiTranslationKeySchema = AgentUiIdSchema;
 
@@ -65,34 +65,33 @@ export type AgentUiConditionV1 =
   | { any: AgentUiConditionV1[] };
 
 /** When a declared capability applies, evaluated against host account settings. */
-export const AgentUiConditionV1Schema: z.ZodType<AgentUiConditionV1, AgentUiConditionV1> = z.lazy(() => z.union([
-  z.object({ kind: z.literal('experimentsEnabled') }).strict(),
-  z.object({
+export const AgentUiConditionV1Schema: z.ZodMiniType<AgentUiConditionV1, AgentUiConditionV1> = z.lazy(() => z.union([
+  z.strictObject({ kind: z.literal('experimentsEnabled') }),
+  z.strictObject({
     kind: z.literal('settingEquals'),
     settingKey: AgentUiSettingReferenceSchema,
     value: z.string(),
-    aliases: AgentUiStringRecordSchema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('settingTrue'), settingKey: AgentUiSettingReferenceSchema }).strict(),
-  z.object({ all: z.array(AgentUiConditionV1Schema) }).strict(),
-  z.object({ any: z.array(AgentUiConditionV1Schema) }).strict(),
+    aliases: z.optional(AgentUiStringRecordSchema),
+  }),
+  z.strictObject({ kind: z.literal('settingTrue'), settingKey: AgentUiSettingReferenceSchema }),
+  z.strictObject({ all: z.array(AgentUiConditionV1Schema) }),
+  z.strictObject({ any: z.array(AgentUiConditionV1Schema) }),
 ]));
 
 const AgentUiTranscriptStorageModeSchema = lazyZodSchema(() => z.enum(['persisted', 'direct']));
 
-const AgentUiExternalSessionsSourceSchema = lazyZodSchema(() => z.object({ kind: AgentUiIdSchema })
-  .catchall(z.unknown()));
+const AgentUiExternalSessionsSourceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.object({ kind: AgentUiIdSchema })));
 
 /* -------------------------------------------------------------------------- */
 /* behavior                                                                    */
 /* -------------------------------------------------------------------------- */
 
-const AgentUiPermissionFooterSchema = lazyZodSchema(() => z.object({
-  usePermissionUpdates: z.boolean().optional(),
-  forceReadOnlyAfterStop: z.boolean().optional(),
-  supportsExecPolicyAmendment: z.boolean().optional(),
-  stopHandling: z.enum(['denyOnly', 'denyAndAbortRun']).optional(),
-}).strict());
+const AgentUiPermissionFooterSchema = lazyZodSchema(() => z.strictObject({
+  usePermissionUpdates: z.optional(z.boolean()),
+  forceReadOnlyAfterStop: z.optional(z.boolean()),
+  supportsExecPolicyAmendment: z.optional(z.boolean()),
+  stopHandling: z.optional(z.enum(['denyOnly', 'denyAndAbortRun'])),
+}));
 
 /**
  * Which permission-prompt conversation this Agent speaks.
@@ -105,26 +104,26 @@ const AgentUiPermissionFooterSchema = lazyZodSchema(() => z.object({
  */
 const AgentUiPermissionPromptProtocolSchema = lazyZodSchema(() => z.enum(['claude', 'codexDecision']));
 
-const AgentUiEditableGoalsSchema = lazyZodSchema(() => z.object({
-  capabilityDriven: z.boolean().optional(),
-  activeWhenNoPersistedMode: z.boolean().optional(),
-  persistedGoalSnapshot: z.object({
-    path: AgentUiIdArraySchema.optional(),
-    itemKind: AgentUiIdSchema.optional(),
-    providerFields: AgentUiIdArraySchema.optional(),
-  }).strict().optional(),
-}).strict());
+const AgentUiEditableGoalsSchema = lazyZodSchema(() => z.strictObject({
+  capabilityDriven: z.optional(z.boolean()),
+  activeWhenNoPersistedMode: z.optional(z.boolean()),
+  persistedGoalSnapshot: z.optional(z.strictObject({
+    path: z.optional(AgentUiIdArraySchema),
+    itemKind: z.optional(AgentUiIdSchema),
+    providerFields: z.optional(AgentUiIdArraySchema),
+  })),
+}));
 
-const AgentUiContextWindowSchema = lazyZodSchema(() => z.object({
-  defaultTokens: z.number().int().positive().optional(),
-  modelRules: z.array(z.object({
-    idSuffix: AgentUiIdSchema.optional(),
-    descriptionIncludesAny: AgentUiIdArraySchema.optional(),
-    tokens: z.number().int().positive().optional(),
-  }).strict()).optional(),
-  observedUsageBumpTokens: z.array(z.number().int().positive()).optional(),
-  trustObservedUsageBeyondKnown: z.boolean().optional(),
-}).strict());
+const AgentUiContextWindowSchema = lazyZodSchema(() => z.strictObject({
+  defaultTokens: z.optional(z.number().check(z.int(), z.positive())),
+  modelRules: z.optional(z.array(z.strictObject({
+    idSuffix: z.optional(AgentUiIdSchema),
+    descriptionIncludesAny: z.optional(AgentUiIdArraySchema),
+    tokens: z.optional(z.number().check(z.int(), z.positive())),
+  }))),
+  observedUsageBumpTokens: z.optional(z.array(z.number().check(z.int(), z.positive()))),
+  trustObservedUsageBeyondKnown: z.optional(z.boolean()),
+}));
 
 /**
  * Composer-owned new-session option state an Agent understands. The host owns
@@ -132,269 +131,260 @@ const AgentUiContextWindowSchema = lazyZodSchema(() => z.object({
  * Agent declares which keys exist and which travel to the daemon as session
  * config options.
  */
-const AgentUiNewSessionOptionSchema = lazyZodSchema(() => z.object({
+const AgentUiNewSessionOptionSchema = lazyZodSchema(() => z.strictObject({
   key: AgentUiIdSchema,
   kind: z.literal('boolean'),
-  spawnConfigOption: z.boolean().optional(),
-}).strict());
+  spawnConfigOption: z.optional(z.boolean()),
+}));
 
-const AgentUiNewSessionSchema = lazyZodSchema(() => z.object({
-  relevantInstallableDepKeys: AgentUiIdArraySchema.optional(),
-  relevantInstallableDeps: z.array(z.object({
-    keys: AgentUiIdArraySchema.optional(),
-    when: AgentUiConditionV1Schema.optional(),
-  }).strict()).optional(),
-  transcriptStorageModes: z.array(AgentUiTranscriptStorageModeSchema).optional(),
-  transcriptStorageModesByBackendMode: z.record(
+const AgentUiNewSessionSchema = lazyZodSchema(() => z.strictObject({
+  relevantInstallableDepKeys: z.optional(AgentUiIdArraySchema),
+  relevantInstallableDeps: z.optional(z.array(z.strictObject({
+    keys: z.optional(AgentUiIdArraySchema),
+    when: z.optional(AgentUiConditionV1Schema),
+  }))),
+  transcriptStorageModes: z.optional(z.array(AgentUiTranscriptStorageModeSchema)),
+  transcriptStorageModesByBackendMode: z.optional(z.record(
     z.string(),
     z.array(AgentUiTranscriptStorageModeSchema),
-  ).optional(),
-  canSelectWithoutDetectedCli: z.boolean().optional(),
-  agentOptions: z.array(AgentUiNewSessionOptionSchema).optional(),
-}).strict());
+  )),
+  canSelectWithoutDetectedCli: z.optional(z.boolean()),
+  agentOptions: z.optional(z.array(AgentUiNewSessionOptionSchema)),
+}));
 
-const AgentUiEnvironmentVariablesSchema = lazyZodSchema(() => z.object({
-  backendMode: z.object({
+const AgentUiEnvironmentVariablesSchema = lazyZodSchema(() => z.strictObject({
+  backendMode: z.strictObject({
     envKey: AgentUiIdSchema,
     settingKey: AgentUiSettingReferenceSchema,
     defaultValue: AgentUiIdSchema,
-    values: AgentUiIdArraySchema.min(1),
-  }).strict(),
-  serverBaseUrl: z.object({
+    values: AgentUiIdArraySchema.check(z.minLength(1)),
+  }),
+  serverBaseUrl: z.optional(z.strictObject({
     envKey: AgentUiIdSchema,
     explicitEnvKey: AgentUiIdSchema,
     settingKey: AgentUiSettingReferenceSchema,
     byServerIdSettingKey: AgentUiSettingReferenceSchema,
-    allowedProtocols: AgentUiIdArraySchema.optional(),
-    rejectCredentials: z.boolean().optional(),
-    originOnly: z.boolean().optional(),
-  }).strict().optional(),
-}).strict());
+    allowedProtocols: z.optional(AgentUiIdArraySchema),
+    rejectCredentials: z.optional(z.boolean()),
+    originOnly: z.optional(z.boolean()),
+  })),
+}));
 
-const AgentUiPayloadSchema = lazyZodSchema(() => z.object({
+const AgentUiPayloadSchema = lazyZodSchema(() => z.strictObject({
   /**
    * A fixed spawn envelope contribution. The compiled-adapter form
    * (`{ kind: 'adapter' }`) is deliberately not part of the public grammar.
    */
-  spawnSessionExtras: z.object({
+  spawnSessionExtras: z.optional(z.strictObject({
     kind: z.literal('static'),
     value: z.record(z.string(), SpawnConfigOptionValueSchema),
-  }).strict().optional(),
+  })),
   /** A setting-backed session configuration option contributed on create. */
-  sessionExtras: z.object({
+  sessionExtras: z.optional(z.strictObject({
     outputKey: AgentUiIdSchema,
-    values: AgentUiIdArraySchema.min(1),
-    settingKey: AgentUiSettingReferenceSchema.optional(),
-    aliases: AgentUiStringRecordSchema.optional(),
-    defaultValue: AgentUiIdSchema.optional(),
-  }).strict().optional(),
-  environmentVariables: AgentUiEnvironmentVariablesSchema.optional(),
-}).strict());
+    values: AgentUiIdArraySchema.check(z.minLength(1)),
+    settingKey: z.optional(AgentUiSettingReferenceSchema),
+    aliases: z.optional(AgentUiStringRecordSchema),
+    defaultValue: z.optional(AgentUiIdSchema),
+  })),
+  environmentVariables: z.optional(AgentUiEnvironmentVariablesSchema),
+}));
 
-const AgentUiExternalSessionsBrowseSchema = lazyZodSchema(() => z.object({
-  order: z.number().int().optional(),
-  sourceOptions: z.array(z.object({
+const AgentUiExternalSessionsBrowseSchema = lazyZodSchema(() => z.strictObject({
+  order: z.optional(z.number().check(z.int())),
+  sourceOptions: z.optional(z.array(z.strictObject({
     key: AgentUiIdSchema,
     labelKey: AgentUiTranslationKeySchema,
-    labelParams: AgentUiStringRecordSchema.optional(),
-    detail: AgentUiIdSchema.optional(),
+    labelParams: z.optional(AgentUiStringRecordSchema),
+    detail: z.optional(AgentUiIdSchema),
     source: AgentUiExternalSessionsSourceSchema,
-  }).strict()).optional(),
-  connectedServiceProfileSources: z.array(z.object({
+  }))),
+  connectedServiceProfileSources: z.optional(z.array(z.strictObject({
     serviceId: AgentUiIdSchema,
     keyPrefix: AgentUiIdSchema,
     labelKey: AgentUiTranslationKeySchema,
-    labelParams: AgentUiStringRecordSchema.optional(),
-    detailSettingsKey: AgentUiSettingReferenceSchema.optional(),
+    labelParams: z.optional(AgentUiStringRecordSchema),
+    detailSettingsKey: z.optional(AgentUiSettingReferenceSchema),
     source: AgentUiExternalSessionsSourceSchema,
     serviceIdField: AgentUiIdSchema,
     profileIdField: AgentUiIdSchema,
-  }).strict()).optional(),
-  lockedConnectedServiceSource: z.object({
+  }))),
+  lockedConnectedServiceSource: z.optional(z.strictObject({
     serviceId: AgentUiIdSchema,
     keyPrefix: AgentUiIdSchema,
     source: AgentUiExternalSessionsSourceSchema,
     serviceIdField: AgentUiIdSchema,
     profileIdField: AgentUiIdSchema,
     groupIdField: AgentUiIdSchema,
-  }).strict().optional(),
-  compatibleSource: z.object({
+  })),
+  compatibleSource: z.optional(z.strictObject({
     sourceKind: AgentUiIdSchema,
     optionalFields: AgentUiIdArraySchema,
-  }).strict().optional(),
-  linkEnsureRequestExtras: z.object({
-    sourceFromCandidate: z.object({
+  })),
+  linkEnsureRequestExtras: z.optional(z.strictObject({
+    sourceFromCandidate: z.optional(z.strictObject({
       sourceKind: AgentUiIdSchema,
       optionalFields: AgentUiIdArraySchema,
-    }).strict().optional(),
-  }).strict().optional(),
-}).strict());
+    })),
+  })),
+}));
 
-const AgentUiExternalSessionsSchema = lazyZodSchema(() => z.object({
-  browse: AgentUiExternalSessionsBrowseSchema.optional(),
-  sessionHandoff: z.object({
-    clearMetadataKeys: AgentUiIdArraySchema.optional(),
-  }).strict().optional(),
-}).strict());
+const AgentUiExternalSessionsSchema = lazyZodSchema(() => z.strictObject({
+  browse: z.optional(AgentUiExternalSessionsBrowseSchema),
+  sessionHandoff: z.optional(z.strictObject({
+    clearMetadataKeys: z.optional(AgentUiIdArraySchema),
+  })),
+}));
 
 /**
  * One declared AskUserQuestion dialog can opt into a narrowly host-owned
  * setting mutation and/or attached-terminal presentation. The declaration is
  * data only: it never supplies a callback, a route, or a generic action.
  */
-const AgentUiAskUserQuestionDialogSchema = lazyZodSchema(() => z.object({
+const AgentUiAskUserQuestionDialogSchema = lazyZodSchema(() => z.strictObject({
   dialogId: AgentUiIdSchema,
-  settingMutation: z.object({
+  settingMutation: z.optional(z.strictObject({
     settingId: AgentUiMutablePluginSettingReferenceSchema,
-    allowedValues: AgentUiIdArraySchema.min(1),
-  }).strict().optional(),
-  terminalNotice: z.object({
+    allowedValues: AgentUiIdArraySchema.check(z.minLength(1)),
+  })),
+  terminalNotice: z.optional(z.strictObject({
     headerKey: AgentUiTranslationKeySchema,
     questionKey: AgentUiTranslationKeySchema,
-  }).strict().optional(),
-  terminalSecondaryAction: z.object({
+  })),
+  terminalSecondaryAction: z.optional(z.strictObject({
     kind: z.literal('openAttachedTerminal'),
     labelKey: AgentUiTranslationKeySchema,
     descriptionKey: AgentUiTranslationKeySchema,
-  }).strict().optional(),
-}).strict().refine(
-  (dialog) => dialog.settingMutation !== undefined
+  })),
+}).check(z.refine((dialog) => dialog.settingMutation !== undefined
     || dialog.terminalNotice !== undefined
-    || dialog.terminalSecondaryAction !== undefined,
-  { message: 'AskUserQuestion dialogs require a declared host-owned behavior.' },
-));
+    || dialog.terminalSecondaryAction !== undefined, { message: 'AskUserQuestion dialogs require a declared host-owned behavior.' })));
 
-const AgentUiAskUserQuestionSchema = lazyZodSchema(() => z.object({
-  dialogs: z.array(AgentUiAskUserQuestionDialogSchema).min(1),
-}).strict().refine(
-  (declaration) => new Set(declaration.dialogs.map((dialog) => dialog.dialogId)).size === declaration.dialogs.length,
-  { message: 'AskUserQuestion dialog ids must be unique.' },
-));
+const AgentUiAskUserQuestionSchema = lazyZodSchema(() => z.strictObject({
+  dialogs: z.array(AgentUiAskUserQuestionDialogSchema).check(z.minLength(1)),
+}).check(z.refine((declaration) => new Set(declaration.dialogs.map((dialog) => dialog.dialogId)).size === declaration.dialogs.length, { message: 'AskUserQuestion dialog ids must be unique.' })));
 
-export const AgentUiBehaviorDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const AgentUiBehaviorDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   /** Author-owned identity for this declaration, surfaced in diagnostics. */
-  descriptorId: AgentUiIdSchema.optional(),
-  attachedSessionTerminal: z.object({ supported: z.boolean().optional() }).strict().optional(),
-  pendingDelivery: z.object({
-    custodyLabelKey: AgentUiTranslationKeySchema.optional(),
-    interruptAndRun: z.boolean().optional(),
-  }).strict().optional(),
-  guidance: z.object({
-    includeInSessionGettingStartedCliExamples: z.boolean().optional(),
-  }).strict().optional(),
-  permissions: z.object({
-    promptProtocol: AgentUiPermissionPromptProtocolSchema.optional(),
-    footer: AgentUiPermissionFooterSchema.optional(),
-  }).strict().optional(),
-  workState: z.object({ editableGoals: AgentUiEditableGoalsSchema.optional() }).strict().optional(),
-  resume: z.object({
-    experimentSwitches: z.array(z.object({
+  descriptorId: z.optional(AgentUiIdSchema),
+  attachedSessionTerminal: z.optional(z.strictObject({ supported: z.optional(z.boolean()) })),
+  pendingDelivery: z.optional(z.strictObject({
+    custodyLabelKey: z.optional(AgentUiTranslationKeySchema),
+    interruptAndRun: z.optional(z.boolean()),
+  })),
+  guidance: z.optional(z.strictObject({
+    includeInSessionGettingStartedCliExamples: z.optional(z.boolean()),
+  })),
+  permissions: z.optional(z.strictObject({
+    promptProtocol: z.optional(AgentUiPermissionPromptProtocolSchema),
+    footer: z.optional(AgentUiPermissionFooterSchema),
+  })),
+  workState: z.optional(z.strictObject({ editableGoals: z.optional(AgentUiEditableGoalsSchema) })),
+  resume: z.optional(z.strictObject({
+    experimentSwitches: z.optional(z.array(z.strictObject({
       id: AgentUiIdSchema,
-      settingKey: AgentUiSettingReferenceSchema.optional(),
-      when: AgentUiConditionV1Schema.optional(),
-    }).strict()).optional(),
-  }).strict().optional(),
-  sessionComposer: z.object({
-    nonSteerableWhileBusy: z.object({
-      reason: z.literal('provider_config_change_refused').optional(),
-      metaKeys: AgentUiIdArraySchema.optional(),
-      sessionConfigOptionIds: AgentUiIdArraySchema.optional(),
-      freshModelOverride: z.boolean().optional(),
-    }).strict().optional(),
-  }).strict().optional(),
-  contextWindow: AgentUiContextWindowSchema.optional(),
-  newSession: AgentUiNewSessionSchema.optional(),
-  payload: AgentUiPayloadSchema.optional(),
-  askUserQuestion: AgentUiAskUserQuestionSchema.optional(),
-  externalSessions: AgentUiExternalSessionsSchema.optional(),
-}).strict());
+      settingKey: z.optional(AgentUiSettingReferenceSchema),
+      when: z.optional(AgentUiConditionV1Schema),
+    }))),
+  })),
+  sessionComposer: z.optional(z.strictObject({
+    nonSteerableWhileBusy: z.optional(z.strictObject({
+      reason: z.optional(z.literal('provider_config_change_refused')),
+      metaKeys: z.optional(AgentUiIdArraySchema),
+      sessionConfigOptionIds: z.optional(AgentUiIdArraySchema),
+      freshModelOverride: z.optional(z.boolean()),
+    })),
+  })),
+  contextWindow: z.optional(AgentUiContextWindowSchema),
+  newSession: z.optional(AgentUiNewSessionSchema),
+  payload: z.optional(AgentUiPayloadSchema),
+  askUserQuestion: z.optional(AgentUiAskUserQuestionSchema),
+  externalSessions: z.optional(AgentUiExternalSessionsSchema),
+}));
 export type AgentUiBehaviorDeclarationV1 = z.infer<typeof AgentUiBehaviorDeclarationV1Schema>;
 
 /* -------------------------------------------------------------------------- */
 /* message                                                                     */
 /* -------------------------------------------------------------------------- */
 
-export const AgentUiMessageDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const AgentUiMessageDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   /**
    * Outbound message metadata this Agent derives from a session config option
    * the user chose. `metaDescriptorIds` — the compiled-adapter form — is not
    * part of the public grammar.
    */
-  metaOverrides: z.array(z.object({
+  metaOverrides: z.optional(z.array(z.strictObject({
     id: AgentUiIdSchema,
     targetKey: AgentUiIdSchema,
-    value: z.object({
+    value: z.strictObject({
       kind: z.literal('sessionConfigOptionOverride'),
       key: AgentUiIdSchema,
-      aliases: AgentUiIdArraySchema.optional(),
-    }).strict(),
-    normalize: z.literal('trimLowercase').optional(),
-  }).strict()).optional(),
-}).strict());
+      aliases: z.optional(AgentUiIdArraySchema),
+    }),
+    normalize: z.optional(z.literal('trimLowercase')),
+  }))),
+}));
 export type AgentUiMessageDeclarationV1 = z.infer<typeof AgentUiMessageDeclarationV1Schema>;
 
 /* -------------------------------------------------------------------------- */
 /* session                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const AgentUiAgentTeamBehaviorSchema = lazyZodSchema(() => z.object({
+const AgentUiAgentTeamBehaviorSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session.agentTeamBehavior.v1'),
   snapshotKey: AgentUiIdSchema,
   providerLabel: AgentUiIdSchema,
-  flavorAliases: AgentUiIdArraySchema.min(1),
-  tools: z.object({
-    teamCreate: AgentUiIdArraySchema.min(1),
-    teamDelete: AgentUiIdArraySchema.min(1),
-    teamSendMessage: AgentUiIdArraySchema.min(1),
-    subagentSpawn: AgentUiIdArraySchema.min(1),
-    activeTeamFallbackSubagentSpawn: AgentUiIdArraySchema.optional(),
-    configMutation: AgentUiIdArraySchema.optional(),
-  }).strict(),
-  configTeamPath: z.object({
+  flavorAliases: AgentUiIdArraySchema.check(z.minLength(1)),
+  tools: z.strictObject({
+    teamCreate: AgentUiIdArraySchema.check(z.minLength(1)),
+    teamDelete: AgentUiIdArraySchema.check(z.minLength(1)),
+    teamSendMessage: AgentUiIdArraySchema.check(z.minLength(1)),
+    subagentSpawn: AgentUiIdArraySchema.check(z.minLength(1)),
+    activeTeamFallbackSubagentSpawn: z.optional(AgentUiIdArraySchema),
+    configMutation: z.optional(AgentUiIdArraySchema),
+  }),
+  configTeamPath: z.optional(z.strictObject({
     rootDirectory: AgentUiIdSchema,
     teamsDirectory: AgentUiIdSchema,
     filename: AgentUiIdSchema,
-  }).strict().optional(),
-  lifecycleEvents: z.object({
-    ignoreActivityPreview: AgentUiIdArraySchema.optional(),
-    shutdownApproved: AgentUiIdSchema.optional(),
-  }).strict().optional(),
-}).strict());
+  })),
+  lifecycleEvents: z.optional(z.strictObject({
+    ignoreActivityPreview: z.optional(AgentUiIdArraySchema),
+    shutdownApproved: z.optional(AgentUiIdSchema),
+  })),
+}));
 
-const AgentUiSessionProviderBehaviorSchema = lazyZodSchema(() => z.object({
+const AgentUiSessionProviderBehaviorSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session.providerBehavior.v1'),
-  agentTeam: AgentUiAgentTeamBehaviorSchema.optional(),
-  participants: z.object({
-    sidechainIds: z.object({
+  agentTeam: z.optional(AgentUiAgentTeamBehaviorSchema),
+  participants: z.optional(z.strictObject({
+    sidechainIds: z.optional(z.strictObject({
       kind: z.literal('toolCallInputString'),
-      toolNames: AgentUiIdArraySchema.min(1),
+      toolNames: AgentUiIdArraySchema.check(z.minLength(1)),
       inputKey: AgentUiIdSchema,
-    }).strict().optional(),
-  }).strict().optional(),
-  subagents: z.object({
-    ignoreActivityPreviewText: z.object({
+    })),
+  })),
+  subagents: z.optional(z.strictObject({
+    ignoreActivityPreviewText: z.optional(z.strictObject({
       kind: z.literal('jsonEventType'),
-      recipientKinds: AgentUiIdArraySchema.min(1),
-      eventTypes: AgentUiIdArraySchema.min(1),
-    }).strict().optional(),
-  }).strict().optional(),
-}).strict());
+      recipientKinds: AgentUiIdArraySchema.check(z.minLength(1)),
+      eventTypes: AgentUiIdArraySchema.check(z.minLength(1)),
+    })),
+  })),
+}));
 
-const AgentUiSessionVisibleMessagesSchema = lazyZodSchema(() => z.object({
+const AgentUiSessionVisibleMessagesSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session.visibleMessages.v1'),
-  subagentKinds: AgentUiIdArraySchema.min(1),
-  fallbackToolNames: AgentUiIdArraySchema.optional(),
-  excludeJsonEventTypes: AgentUiIdArraySchema.min(1),
-}).strict());
+  subagentKinds: AgentUiIdArraySchema.check(z.minLength(1)),
+  fallbackToolNames: z.optional(AgentUiIdArraySchema),
+  excludeJsonEventTypes: AgentUiIdArraySchema.check(z.minLength(1)),
+}));
 
 /** Data-only Session behavior interpreted by the same host owner for every Agent. */
-export const AgentUiSessionDeclarationV1Schema = lazyZodSchema(() => z.object({
-  providerBehavior: AgentUiSessionProviderBehaviorSchema.optional(),
-  visibleMessages: AgentUiSessionVisibleMessagesSchema.optional(),
-}).strict().refine(
-  (value) => value.providerBehavior !== undefined || value.visibleMessages !== undefined,
-  'At least one Agent Session UI declaration is required.',
-));
+export const AgentUiSessionDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
+  providerBehavior: z.optional(AgentUiSessionProviderBehaviorSchema),
+  visibleMessages: z.optional(AgentUiSessionVisibleMessagesSchema),
+}).check(z.refine((value) => value.providerBehavior !== undefined || value.visibleMessages !== undefined, 'At least one Agent Session UI declaration is required.')));
 export type AgentUiSessionDeclarationV1 = z.infer<typeof AgentUiSessionDeclarationV1Schema>;
 
 /* -------------------------------------------------------------------------- */
@@ -415,42 +405,42 @@ export type AgentUiSessionDeclarationV1 = z.infer<typeof AgentUiSessionDeclarati
  * UI view. `componentId` remains absent because it names code compiled into the
  * app rather than a public plugin contribution.
  */
-const AgentUiBooleanOptionComponentSlotSchema = lazyZodSchema(() => z.object({
+const AgentUiBooleanOptionComponentSlotSchema = lazyZodSchema(() => z.strictObject({
   id: AgentUiIdSchema,
   slot: AgentUiIdSchema,
-  chip: z.object({
+  chip: z.strictObject({
     kind: z.literal('booleanOption'),
     optionStateKey: AgentUiIdSchema,
     iconName: AgentUiIdSchema,
     onLabelKey: AgentUiTranslationKeySchema,
     offLabelKey: AgentUiTranslationKeySchema,
-  }).strict(),
-}).strict());
+  }),
+}));
 
-const AgentUiSubagentLaunchComponentSlotSchema = lazyZodSchema(() => z.object({
+const AgentUiSubagentLaunchComponentSlotSchema = lazyZodSchema(() => z.strictObject({
   id: AgentUiIdSchema,
   slot: z.literal('sessionSubagents.launchCards'),
   surfaceId: AgentUiIdSchema,
-  props: z.object({
-    teamIds: z.object({
+  props: z.optional(z.strictObject({
+    teamIds: z.optional(z.strictObject({
       kind: z.literal('subagentGroupKeys'),
-      subagentKinds: AgentUiIdArraySchema.optional(),
-    }).strict().optional(),
-  }).strict().optional(),
-}).strict());
+      subagentKinds: z.optional(AgentUiIdArraySchema),
+    })),
+  })),
+}));
 
-const AgentUiSubagentDetailsComponentSlotSchema = lazyZodSchema(() => z.object({
+const AgentUiSubagentDetailsComponentSlotSchema = lazyZodSchema(() => z.strictObject({
   id: AgentUiIdSchema,
   slot: z.literal('sessionSubagents.teammateDetailsTab'),
   surfaceId: AgentUiIdSchema,
   resourceKind: AgentUiIdSchema,
   iconName: AgentUiIdSchema,
-  tab: z.object({
+  tab: z.strictObject({
     keyPrefix: AgentUiIdSchema,
     titleKey: AgentUiTranslationKeySchema,
-    subtitleKey: AgentUiTranslationKeySchema.optional(),
-  }).strict(),
-}).strict());
+    subtitleKey: z.optional(AgentUiTranslationKeySchema),
+  }),
+}));
 
 const AgentUiComponentSlotSchema = lazyZodSchema(() => z.union([
   AgentUiBooleanOptionComponentSlotSchema,
@@ -458,9 +448,9 @@ const AgentUiComponentSlotSchema = lazyZodSchema(() => z.union([
   AgentUiSubagentDetailsComponentSlotSchema,
 ]));
 
-export const AgentUiComponentsDeclarationV1Schema = lazyZodSchema(() => z.object({
-  slots: z.array(AgentUiComponentSlotSchema).optional(),
-}).strict());
+export const AgentUiComponentsDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
+  slots: z.optional(z.array(AgentUiComponentSlotSchema)),
+}));
 export type AgentUiComponentsDeclarationV1 = z.infer<typeof AgentUiComponentsDeclarationV1Schema>;
 
 /* -------------------------------------------------------------------------- */
@@ -468,10 +458,10 @@ export type AgentUiComponentsDeclarationV1 = z.infer<typeof AgentUiComponentsDec
 /* -------------------------------------------------------------------------- */
 
 /** Optional display-only hue; it never identifies or routes an Agent. */
-export const AgentUiIdentityColorV1Schema = lazyZodSchema(() => z.object({
-  light: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  dark: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-}).strict());
+export const AgentUiIdentityColorV1Schema = lazyZodSchema(() => z.strictObject({
+  light: z.string().check(z.regex(/^#[0-9a-fA-F]{6}$/)),
+  dark: z.string().check(z.regex(/^#[0-9a-fA-F]{6}$/)),
+}));
 
 /**
  * The SAME declaration slots as they travel in the daemon contribution
@@ -486,11 +476,11 @@ export const AgentUiIdentityColorV1Schema = lazyZodSchema(() => z.object({
  * unreadable field with a per-field diagnostic and the neutral default, which
  * is the correct blast radius. This is transport, not a second grammar owner.
  */
-export const AgentUiProjectedDeclarationV1Schema = lazyZodSchema(() => z.object({
-  identityColor: z.record(z.string(), z.unknown()).optional(),
-  behavior: z.record(z.string(), z.unknown()).optional(),
-  session: z.record(z.string(), z.unknown()).optional(),
-  message: z.record(z.string(), z.unknown()).optional(),
-  components: z.record(z.string(), z.unknown()).optional(),
-}).strict());
+export const AgentUiProjectedDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
+  identityColor: z.optional(z.record(z.string(), z.unknown())),
+  behavior: z.optional(z.record(z.string(), z.unknown())),
+  session: z.optional(z.record(z.string(), z.unknown())),
+  message: z.optional(z.record(z.string(), z.unknown())),
+  components: z.optional(z.record(z.string(), z.unknown())),
+}));
 export type AgentUiProjectedDeclarationV1 = z.infer<typeof AgentUiProjectedDeclarationV1Schema>;

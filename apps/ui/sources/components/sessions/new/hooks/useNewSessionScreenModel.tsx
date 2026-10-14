@@ -101,6 +101,7 @@ import { resolveNewSessionCapabilityServerId } from '@/components/sessions/new/m
 import { composeConnectedServiceTeamCredentialBindingIntents } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
 import type { NewSessionTranscriptStorage } from '@/components/sessions/new/modules/newSessionTranscriptStorage';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
+import type { AgentInput } from '@/components/sessions/agentInput/AgentInput';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useHomeViewSelectionSettings } from '@/hooks/server/useHomeViewSelectionSettings';
@@ -133,7 +134,7 @@ import type {
     TeamCredentialResourceCatalogEntryV1,
 } from '@happier-dev/protocol/teams';
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
-import { useNewSessionMcpSelection } from '@/components/sessions/new/hooks/useNewSessionMcpSelection';
+import { useNewSessionCapabilitiesChip } from '@/components/sessions/capabilities/useSessionCapabilitiesChip';
 import { resolveEffectiveWindowsRemoteSessionLaunchMode } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode';
 import { useNewSessionAvailabilityState } from '@/components/sessions/new/hooks/screenModel/useNewSessionAvailabilityState';
 import { useNewSessionMachineRefreshState } from '@/components/sessions/new/hooks/screenModel/useNewSessionMachineRefreshState';
@@ -1859,6 +1860,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         getCompatibleProfileBackendEntries,
         profileAvailabilityById,
         selectedMachineIsWindows,
+        selectedMachineOnline,
         selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
     } = useNewSessionAvailabilityState({
@@ -2045,6 +2047,23 @@ export function useNewSessionScreenModel(input?: Readonly<{
         modelOptionsProbeState, modelSelection, providerModelProjection.data, providerModelProjection.error,
         providerModelProjection.refresh, providerModelProjection.refreshFailures, providerModelProjection.status,
         selectCreationModel, selectedBackendTargetKey, selectedUiAgentType]);
+
+    const modelPickerPresentation = React.useMemo<React.ComponentProps<typeof AgentInput>['modelPickerPresentation']>(() => {
+        if (!modelSelection?.ref.providerConnectionId) return undefined;
+        const picker = creationModelPickerProps;
+        return {
+            agentTargetKey: selectedBackendTargetKey,
+            nativeModels: picker?.nativeModels ?? modelOptions,
+            providerGroups: picker?.providerGroups ?? providerModelProjection.data?.groups ?? [],
+            hiddenNativeModelKeys,
+            providerProjectionAuthoritative: picker?.providerProjectionAuthoritative ?? providerModelProjection.status === 'success',
+            selected: modelSelection.ref,
+            currentSelectionRecovery: picker?.currentSelectionRecovery ?? providerModelProjection.data?.currentSelectionRecovery,
+            fallbackLabel: t('agentInput.model.unavailable'),
+            fieldLabel: t('newSession.selectModelTitle'),
+        };
+    }, [creationModelPickerProps, hiddenNativeModelKeys, modelOptions, modelSelection, providerModelProjection.data,
+        providerModelProjection.status, selectedBackendTargetKey]);
 
     const allProfilesRequirementNames = React.useMemo(() => {
         const names = new Set<string>();
@@ -2266,21 +2285,19 @@ export function useNewSessionScreenModel(input?: Readonly<{
             sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
         }).mode;
     }, [selectedMachine?.metadata, settings, windowsRemoteSessionLaunchModeOverride]);
-    const handleOpenMcpSettings = React.useCallback(() => {
-        // `router.push` expects the public route (group segments like `/(app)` are not valid here on web).
-        router.push('/settings/mcp' as any);
-    }, [router]);
-    const { mcpChip } = useNewSessionMcpSelection({
-        selectedMachineId,
-        selectedPath,
-        selectedMachineName: selectedMachineDisplayName,
-        portableOnly: executionTarget?.kind === 'temporary_computer',
-        agentType: selectedUiAgentType,
-        agentAcceptsUserMcp: selectedAgentMcpContext?.agentAcceptsUserMcp,
-        targetServerId,
-        capabilitySelection,
-        setCapabilitySelection,
-        onOpenSettings: handleOpenMcpSettings,
+    const { chip: capabilitiesChip } = useNewSessionCapabilitiesChip({
+        draft: {
+            machineId: selectedMachineId,
+            directory: selectedPath,
+            agentId: selectedUiAgentType,
+            targetServerId,
+            portableOnly: executionTarget?.kind === 'temporary_computer',
+            agentAcceptsUserMcp: selectedAgentMcpContext?.agentAcceptsUserMcp,
+            selection: capabilitySelection,
+            setSelection: setCapabilitySelection,
+        },
+        machineName: selectedMachineDisplayName ?? '',
+        machineOnline: selectedMachineOnline,
     });
 
     const {
@@ -3966,7 +3983,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         showServerPickerChip,
         targetServerId,
         targetServerName,
-        mcpChip,
+        capabilitiesChip,
         externalSessionsFeatureEnabled,
         supportsDirectTranscriptStorage,
         transcriptStorage,
@@ -4148,6 +4165,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             selectedBackendEntry,
             modelOptions,
             modelOptionsProbeState,
+            modelPickerPresentation,
             favoriteModelSelections,
             setFavoriteModelSelections,
             acpSessionModeOptions,
@@ -4315,6 +4333,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             modelOptions,
             modelOptionsProbeState,
             modelPickerProps: creationModelPickerProps,
+            modelPickerPresentation,
         },
         acp: {
             acpSessionModeOptions,

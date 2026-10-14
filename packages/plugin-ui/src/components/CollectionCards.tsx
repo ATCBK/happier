@@ -604,7 +604,10 @@ function GridCardView<Item>(props: Readonly<{
   const cardContent = anatomy.cardContent;
   // Without a preview band the mark leads the card, and the title, description and status share
   // the title's left edge; a card with a preview band reads top-down, so its text keeps the inset.
-  const textColumnInset = geometry.previewHeight === 0 ? CARD.markSize + Number(cardLayout.lineStyle.gap ?? 0) : 0;
+  // A kind with no mark (skills) draws no mark column: the title, description and status share the card's edge.
+  const glyph = anatomy.glyph(item);
+  const hasMark = glyph !== null && glyph !== undefined && glyph !== false;
+  const textColumnInset = geometry.previewHeight === 0 && hasMark ? CARD.markSize + Number(cardLayout.lineStyle.gap ?? 0) : 0;
   const row: ReactElement<ItemProps> = cardContent !== undefined ? (
     // The domain body fills the card's one target edge to edge; the footer's place stays reserved below it.
     <List.Item {...actions} showDivider={false} density="compact" accessoryOutsidePressable
@@ -629,7 +632,7 @@ function GridCardView<Item>(props: Readonly<{
         {geometry.compact ? (
         // A compact tile: one row, the quiet `where` at its end (a version, a reach).
         <View style={[cardLayout.lineStyle, { alignItems: 'center' }, titleLineEnd]}>
-          <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{anatomy.glyph(item)}</View>
+          {hasMark ? <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{glyph}</View> : null}
           <View style={shrinkStyle}>
             <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleStyle}>{anatomy.title(item)}</HappierText>
           </View>
@@ -637,7 +640,7 @@ function GridCardView<Item>(props: Readonly<{
         </View>
         ) : (
         <View style={[cardLayout.lineStyle, { alignItems: 'flex-start' }, titleLineEnd]}>
-          <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{anatomy.glyph(item)}</View>
+          {hasMark ? <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{glyph}</View> : null}
           <View style={shrinkStyle}>
             <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleStyle}>{anatomy.title(item)}</HappierText>
             <Slot value={where} />

@@ -119,17 +119,6 @@ export type PromptLibraryActionInputById = {
             parentId?: string | null | undefined;
         } | undefined;
     };
-    readonly "prompt_asset.export": {
-        [x: string]: unknown;
-        artifactId: string;
-        machineId: string;
-        assetTypeId: string;
-        scope: 'user' | 'project';
-        directory?: string | undefined;
-        targetPath?: string | undefined;
-        targetName?: string | undefined;
-        installMode?: 'copy' | 'symlink' | undefined;
-    };
     readonly "prompt_registry.install": {
         machineId: string;
         sourceId: string;
@@ -214,12 +203,7 @@ export type PromptLibraryActionResultById = {
             bodyVersion: number;
         } | undefined;
     };
-    readonly "prompt_asset.export": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "prompt_registry.install": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "prompt_registry.install": JsonValue;
     readonly "prompts.invocation.create": {
         status: 'updated';
         invocationId: string;

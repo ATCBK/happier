@@ -131,7 +131,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: 'srv',
             targetServerName: 'Server A',
-            mcpChip: null,
+            capabilitiesChip: null,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',
@@ -180,7 +180,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             return { key: 'new-session-mcp', render: () => null,
                 collapsedContentPopover: { title: 'MCP', renderContent: () => capturedLabel } };
         };
-        let mcpChip = makeMcpChip();
+        let capabilitiesChip = makeMcpChip();
         const initialParams: Parameters<typeof useNewSessionAgentInputPresentation>[0] = {
             theme: {
                 colors: {
@@ -256,7 +256,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: 'srv',
             targetServerName: 'Server A',
-            mcpChip,
+            capabilitiesChip,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',
@@ -269,7 +269,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         };
         const renderPresentation = () => useNewSessionAgentInputPresentation({ ...initialParams,
             selectedMachine: initialParams.selectedMachine ? { ...initialParams.selectedMachine, activeAt, updatedAt: activeAt } : null,
-            mcpChip });
+            capabilitiesChip });
 
         const hook = await renderHook(renderPresentation, {
             flushOptions: { cycles: 1, turns: 4 },
@@ -284,7 +284,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         expect(hook.getCurrent().connectionStatus).toBe(firstConnectionStatus);
         expect(hook.getCurrent().agentInputExtraActionChips).toBe(firstChips);
         contentLabel = 'Second account';
-        mcpChip = makeMcpChip();
+        capabilitiesChip = makeMcpChip();
         await hook.rerender();
         const updatedChip = hook.getCurrent().agentInputExtraActionChips.find(chip => chip.key === 'new-session-mcp');
         const renderContent = updatedChip?.collapsedContentPopover?.renderContent;
@@ -366,7 +366,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: null,
             targetServerName: 'Server A',
-            mcpChip: null,
+            capabilitiesChip: null,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',
@@ -466,7 +466,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: 'srv',
             targetServerName: 'Server A',
-            mcpChip: null,
+            capabilitiesChip: null,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',
@@ -608,7 +608,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: 'srv',
             targetServerName: 'Server A',
-            mcpChip: null,
+            capabilitiesChip: null,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',

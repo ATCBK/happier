@@ -177,7 +177,8 @@ function findValue(values: readonly WidgetSetupValue[], value: JsonValue | undef
 function plainLabel(value: JsonValue | undefined, field: InputFieldHint, options: readonly WidgetSetupValue[] = []): string | null {
     const choiceLabel = describeBuiltinInputOptionValue(field.optionsSourceId, value);
     if (choiceLabel !== null) return choiceLabel;
-    if (field.widget === 'multiselect' && Array.isArray(value)) {
+    // A list names its choices; a one-choice field an older save kept as a list ([id]) names it too, not "1 selected".
+    if (Array.isArray(value) && (field.widget === 'multiselect' || (value.length > 0 && value.every(selected => findValue(options, selected) !== null)))) {
         if (!value.length) return field.placeholder ?? null;
         return value.map(selected => findValue(options, selected)?.label ?? plainLabel(selected, field)).filter(Boolean).join(' · ');
     }
@@ -197,12 +198,15 @@ export function describeWidgetSetupRow(input: Readonly<{
     draft: WidgetSetupDraft;
     resolution: WidgetBindingResolutionV1;
     options: readonly WidgetSetupValue[];
+    /** Names captured from the person's pick; presentation only, never option admission. */
+    pickedOptions?: readonly WidgetSetupValue[];
 }>): WidgetSetupRow {
     const { entry, draft, resolution } = input;
     const path = entry.field.path;
     const binding = draft.bindings[path];
     const issue = issueFor(resolution, path);
     const offered = entry.follow?.values ?? [];
+    const summaryOptions = [...input.options, ...(input.pickedOptions ?? [])];
 
     if (binding?.kind === 'viewer') {
         if (issue && issue.status !== 'selection_required') return { kind: 'invalid', label: null, issue };
@@ -214,14 +218,14 @@ export function describeWidgetSetupRow(input: Readonly<{
     }
     if (binding?.kind === 'value') {
         if (issue && issue.status !== 'selection_required') {
-            return { kind: 'invalid', label: findValue([...offered, ...input.options], binding.value)?.label ?? plainLabel(binding.value, entry.field, input.options), issue };
+            return { kind: 'invalid', label: findValue([...offered, ...summaryOptions], binding.value)?.label ?? plainLabel(binding.value, entry.field, summaryOptions), issue };
         }
         if (offered.length > 1) {
             const selectedIndex = offered.findIndex((candidate) => sameStrictJsonValue(candidate.value, binding.value));
             if (selectedIndex >= 0 && offered.length <= AMBIGUOUS_INLINE_LIMIT) return { kind: 'choices', choices: offered, selectedIndex };
         }
         const value = findValue([...offered, ...input.options], binding.value);
-        return { kind: 'pinned', value, label: value?.label ?? plainLabel(binding.value, entry.field, input.options) ?? '' };
+        return { kind: 'pinned', value, label: value?.label ?? findValue(summaryOptions, binding.value)?.label ?? plainLabel(binding.value, entry.field, summaryOptions) ?? '' };
     }
     return { kind: 'needed' };
 }

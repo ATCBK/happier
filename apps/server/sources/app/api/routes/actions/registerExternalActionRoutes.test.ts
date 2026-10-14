@@ -14,6 +14,7 @@ import {
     prepareExternalActionResponseV2,
     sealExternalActionRequestV2,
     createExternalActionDaemonDispatchResponse,
+    ExternalActionExecutionAuthorizationV1Schema,
 } from "@happier-dev/protocol/actions";
 import { createExternalActionDaemonDispatcher } from "@/app/api/socket/externalActionDispatcher";
 import { Server } from "socket.io";
@@ -172,10 +173,11 @@ describe("registerExternalActionRoutes", () => {
         const dispatch = createExternalActionDaemonDispatcher({ io,
             resolveMachine: async () => "available",
             getServerIdentityId: async () => binding.serverIdentityId,
-            mintExecutionAuthorization: async (authorizationBinding) => ({
+            mintExecutionAuthorization: async (authorizationBinding) => ExternalActionExecutionAuthorizationV1Schema.parse({
                 v: 1,
                 token: "unit-test-execution-authorization",
-                binding: authorizationBinding,
+                binding: { ...authorizationBinding, custodianAccountId: authorizationBinding.accountId,
+                    installationId: 'installation-1' },
             }),
             // Network boundary only: real route/dispatcher/framing owners remain composed.
             forwardRpc: async (call) => {

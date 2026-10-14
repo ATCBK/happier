@@ -15,7 +15,7 @@ import {
 } from './ReleasePreview.js';
 
 const host: HappierReleasePreviewHost = {
-  Text: (props) => <span data-testid={props.testID} data-weight={String(props.style.fontWeight ?? '')}>{props.children}</span>,
+  Text: (props) => <span data-testid={props.testID} data-weight={String(props.style.fontWeight ?? '')} data-lines={String(props.numberOfLines ?? '')}>{props.children}</span>,
   renderGlyph: (glyph) => <i data-glyph={glyph} />,
 };
 
@@ -167,6 +167,19 @@ describe('HappierReleaseOutcomePill', () => {
       />,
     );
     expect(mounted.container.textContent).toBe('Upload hereTo happier/docs');
+    mounted.unmount();
+  });
+
+  it('wraps a long destination to two lines at most, never three', () => {
+    const mounted = mountThroughReactNativeWeb(
+      <HappierReleaseOutcomePill
+        outcome={{ tone: 'allowed', title: 'Move before qa-live-final-permission-and-continuation-with-a-long-name-for-ended-caption' }}
+        colors={colors}
+        host={host}
+        reducedMotion
+      />,
+    );
+    expect(mounted.container.querySelector<HTMLElement>('[data-lines]')!.dataset.lines).toBe('2');
     mounted.unmount();
   });
 });

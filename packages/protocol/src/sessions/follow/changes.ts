@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Follow configuration reuses the existing `account` AccountChange kind. A new
@@ -14,12 +14,10 @@ export const ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID = 'session-follows';
  * Session-id list no reader narrows by. A targeted hint belongs here only with a
  * measured consumer landed in the same change.
  */
-export const SessionFollowChangeHintV1Schema = z
-  .object({
+export const SessionFollowChangeHintV1Schema = z.strictObject({
     sessionFollows: z.literal(true),
     full: z.literal(true),
-  })
-  .strict();
+  });
 export type SessionFollowChangeHintV1 = z.infer<typeof SessionFollowChangeHintV1Schema>;
 
 export function buildSessionFollowChangeHintV1(): SessionFollowChangeHintV1 {

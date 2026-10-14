@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
-import {
-    ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS,
-    computeAccountEncryptionMigrateKeyFingerprintV1,
-    decodeBase64,
-    encodeBase64,
-    parseAccountPasswordCredentialV1,
-    pluginJsonValuesEqual,
-    type AccountPasswordCredentialV1,
-    type AccountEncryptionMigrateCollectionInventoryItem,
-    type AccountEncryptionMigrateCollectionStageItem,
-    type AccountEncryptionMigrateTransitionPrepareRequest,
-    type AccountEncryptionMigrateTransitionPrepareResponse,
-    type PluginCollectionContentEnvelopeV1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS, type AccountEncryptionMigrateCollectionInventoryItem, type AccountEncryptionMigrateCollectionStageItem, type AccountEncryptionMigrateTransitionPrepareRequest, type AccountEncryptionMigrateTransitionPrepareResponse } from '@happier-dev/protocol/account/encryptionMigrate';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { parseAccountPasswordCredentialV1, type AccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { type PluginCollectionContentEnvelopeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { assertAccountActive } from "@/app/auth/accountStatus";

@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-    TeamInvitationPostAuthContinuationV1Schema,
-    type TeamInvitationAcceptResultV1,
-    type TeamInvitationPostAuthContinuationV1,
-} from "@happier-dev/protocol/teams";
+import { TeamInvitationPostAuthContinuationV1Schema, type TeamInvitationAcceptResultV1, type TeamInvitationPostAuthContinuationV1 } from '@happier-dev/protocol/teams/invitation';
 
 import type { Tx } from "@/storage/inTx";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";

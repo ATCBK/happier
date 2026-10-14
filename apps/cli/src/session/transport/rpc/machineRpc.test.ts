@@ -85,6 +85,8 @@ import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/p
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 import { callExactMachineRpc, callMachineRpc, readMachineRpcRequestDisposition } from './machineRpc';
+import { createSpawnedSession } from '@/session/services/createSpawnedSession';
+import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { io } from 'socket.io-client';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
@@ -1857,6 +1859,35 @@ describe('callMachineRpc', () => {
 
     const credentials = { token: 'plain-token', encryption: null };
 
+    it.each([false, true])('keeps explicit creation and recovery on the selected machine (resumeOnly=%s)', async resumeOnly => {
+      // HTTP and Socket.IO are the boundaries; the creator, codecs, replacement
+      // lookup and nonce settlement remain real.
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'account-one' }), { status: 200 })));
+      mockServerReads([{ id: 'machine-old', replacedByMachineId: 'machine-new' }, { id: 'machine-new' }]);
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, callback) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (payload.method.startsWith('machine-old:')) return callback(unreachable());
+        callback({ ok: true, result: {
+          ...(resumeOnly ? { status: 'error' } : { type: 'error' }),
+          errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+          errorMessage: 'An unselected successor received the attempt',
+        } });
+      });
+      try {
+        await expect(createSpawnedSession({
+          credentials, directory: '/remote-only/repo', machineId: 'machine-old',
+          backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+          spawnNonce: 'selected-machine-attempt', resumeOnly,
+        })).rejects.toMatchObject({
+          code: resumeOnly ? SPAWN_SESSION_ERROR_CODES.UNEXPECTED : SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+        });
+        expect(methods).toEqual([`machine-old:${resumeOnly
+          ? RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE : RPC_METHODS.SPAWN_HAPPY_SESSION}`]);
+      } finally { vi.unstubAllGlobals(); }
+    });
+
     it('reaches the successor when the addressed machine was replaced', async () => {
       mockServerReads([
         { storageMode: 'plain', id: 'machine-old', replacedByMachineId: 'machine-mid' },
@@ -1937,7 +1968,7 @@ describe('callMachineRpc', () => {
         message: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
         rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
       });
-      expect(readMachineRpcRequestDisposition(error)).toBe('outcomeUnknown');
+      expect(readMachineRpcRequestDisposition(error)).toBe('notSent');
       expect(socket.emit).toHaveBeenCalledTimes(1);
     });
 
@@ -1987,28 +2018,38 @@ describe('callMachineRpc', () => {
     });
 
     it('never re-addresses a call whose outcome is unknown', async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
       mockServerReads([
         { id: 'machine-old', replacedByMachineId: 'machine-new' },
         { id: 'machine-new', replacedByMachineId: null },
       ]);
       socket.emit.mockImplementation(() => undefined);
-
-      await expect(callMachineRpc({
-        credentials,
-        machineId: 'machine-old',
-        method: 'status',
-        request: { ping: true },
-        timeoutMs: 10,
-      })).rejects.toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
-
-      // The total deadline cancels its submitted request, never a successor
-      // request. Observe event identities rather than conflating cancellation
-      // with replay.
-      expect(socket.emit.mock.calls.map(([event]) => event)).toEqual([SOCKET_RPC_EVENTS.CALL, SOCKET_RPC_EVENTS.CANCEL]);
-      const request = socket.emit.mock.calls[0][1];
-      expect(request.method).toBe('machine-old:status');
-      expect(socket.emit.mock.calls[1][1]).toEqual({ requestId: request.requestId });
-      expect(axiosGet).toHaveBeenCalledTimes(1);
+      const outcome = callMachineRpc({
+        credentials, machineId: 'machine-old', method: 'status', request: { ping: true },
+        timeoutMs: 10, signal: controller.signal,
+      }).catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        const calls = socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL);
+        expect(calls).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(10);
+        const error = await outcome;
+        expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        expect(readMachineRpcRequestDisposition(error)).toBe('outcomeUnknown');
+        expect(calls[0][1].method).toBe('machine-old:status');
+        // Ack expiry and caller cancellation can settle in either order. Any
+        // cancellation addresses the original request; neither path replays it.
+        for (const [, cancellation] of socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CANCEL)) {
+          expect(cancellation).toEqual({ requestId: calls[0][1].requestId });
+        }
+        expect(socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
+        expect(axiosGet).toHaveBeenCalledTimes(1);
+      } finally {
+        controller.abort();
+        await outcome;
+        vi.useRealTimers();
+      }
     });
   });
 });

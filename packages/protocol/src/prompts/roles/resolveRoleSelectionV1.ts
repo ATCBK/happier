@@ -19,7 +19,7 @@ export type ResolveRoleSelectionV1Input = Readonly<{
   availableAgentTargetKeys?: readonly string[];
   availableProfileIds?: readonly string[];
 }>;
-export type RoleSelectionRefusalV1 = Readonly<{ code: 'role_target_unavailable' | 'role_source_incomplete' | 'target_unavailable'; roleId: string; agentTargetKey?: string }>;
+export type RoleSelectionRefusalV1 = Readonly<{ code: 'role_target_unavailable' | 'role_source_incomplete' | 'target_unavailable'; roleId: string; agentTargetKey?: string; reason?: 'engine_unavailable' }>;
 export type ResolveRoleSelectionV1Result = Readonly<{ ok: true; selection: ResolvedRoleV1 }> | Readonly<{ ok: false; refusal: RoleSelectionRefusalV1 }>;
 
 /** Complete spawn inventory, resolved by the same per-field owner as live roles. */
@@ -112,7 +112,7 @@ export function resolveRoleSelectionV1(input: ResolveRoleSelectionV1Input): Reso
   }
   const role = parsed.data;
   if (input.availableAgentTargetKeys && (!role.engine || !input.availableAgentTargetKeys.includes(role.engine.agentTargetKey))) {
-    return { ok: false, refusal: { code: 'target_unavailable', roleId: input.roleId, ...(role.engine ? { agentTargetKey: role.engine.agentTargetKey } : {}) } };
+    return { ok: false, refusal: { code: 'target_unavailable', reason: 'engine_unavailable', roleId: input.roleId, ...(role.engine ? { agentTargetKey: role.engine.agentTargetKey } : {}) } };
   }
   if (role.profileId && input.availableProfileIds && !input.availableProfileIds.includes(role.profileId)) role.profileUnavailable = true;
   return { ok: true, selection: role };

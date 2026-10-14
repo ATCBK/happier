@@ -1,8 +1,6 @@
 import { z } from "zod";
-import {
-    SessionMetadataInactiveModelIntentOwnerPatchV1Schema,
-} from "@happier-dev/protocol";
-import { SessionTeamCredentialBindingIntentsV1Schema } from "@happier-dev/protocol/teams";
+import { SessionMetadataInactiveModelIntentOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
@@ -14,7 +12,7 @@ import {
 } from "@/app/session/agentTransition/applySessionAgentTransitionCutover";
 import { publishSessionCurrentViewUpdates } from "@/app/session/metadata/publishSessionCurrentViewUpdates";
 import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
-import { SessionStoredMessageContentSchema } from "@happier-dev/protocol";
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { type Fastify } from "../../types";
 

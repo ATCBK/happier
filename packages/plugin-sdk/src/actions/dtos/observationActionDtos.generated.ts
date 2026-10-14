@@ -83,8 +83,6 @@ export type ObservationActionResultById = {
             condition: string;
         };
         disposition: 'matched' | 'observation_timeout' | 'cancelled' | 'target_unavailable' | 'permission_denied' | 'unsupported_condition' | 'disconnected' | 'outcome_uncertain';
-        snapshot?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        snapshot?: JsonValue | undefined;
     };
 };

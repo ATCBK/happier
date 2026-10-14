@@ -1,4 +1,4 @@
-import { vi } from 'vitest';
+import { vi, type Mock } from 'vitest';
 import {
     AccountSettingsStoredContentEnvelopeSchema,
     AccountSettingsV2UpdateResponseSchema,
@@ -18,6 +18,9 @@ import {
     type SavedSecretResourceMaterialV1,
 } from '@happier-dev/protocol';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { Encryption } from '@/sync/encryption/encryption';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,7 +28,7 @@ import { encodeBase64 } from '@/encryption/base64';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
-import { normalizeAccountSettingsForServerStorage, openAccountSettingsStoredContent } from '@/sync/domains/settings/accountSettingsNormalization';
+import { normalizeAccountSettingsForServerStorage, openAccountSettingsStoredContent, type OpenedAccountSettingsStoredContent } from '@/sync/domains/settings/accountSettingsNormalization';
 import { normalizeVoiceSettingsServerDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { encryptDataKeyForRecipientV0 } from '@/sync/encryption/directShareEncryption';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -34,11 +37,39 @@ import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happie
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
-import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createConnectedPurposeCatalogHttpBoundary, type ConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { AccountSettingsV2HistoryListResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+
+export type SecretSettingsTestHarness = {
+    credentials: AuthCredentials;
+    encryption: Encryption | null;
+    scope: ServerAccountScope;
+    request: Mock<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>;
+    resources: SavedSecretResourceMaterialV1[];
+    recipients: SavedSecretResourceEnvelopeCensusRecipientV1[];
+    updates: Array<ReturnType<typeof SharedSavedSecretUpdateInputV1Schema.parse>>;
+    creations: Array<ReturnType<typeof SharedSavedSecretCreateInputV1Schema.parse>>;
+    deletes: Array<ReturnType<typeof SharedSavedSecretDeleteInputV1Schema.parse>>;
+    repairs: Array<ReturnType<typeof SavedSecretResourceEnvelopeRepairInputV1Schema.parse>>;
+    settingsWrites: unknown[];
+    promotions: Array<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>>;
+    catalogRows: Map<string, unknown>;
+    artifacts: ArtifactStoreBoundary;
+    purposes: ConnectedPurposeCatalogHttpBoundary | null;
+    setRejectSettingsWrites(next: boolean): void;
+    setLosePromotionResponse(next: boolean): void;
+    replaceSettings(next: Settings, options?: Readonly<{ version?: number; publish?: boolean }>): void;
+    readonly persistedSettings: Settings;
+    readonly persistedRawSettings: OpenedAccountSettingsStoredContent['raw'];
+    addOwnerResource(resourceMode?: 'plain' | 'e2ee'): Promise<{
+        entry: ReturnType<typeof SavedSecretCatalogEntryV1Schema.parse>;
+        resourceDataKey: Uint8Array;
+    }>;
+    dispose: Awaited<ReturnType<typeof restoreServerAccountForTest>>['dispose'];
+};
 
 /** Real Home/Account/catalog/Action/crypto owners, with only HTTP and credential storage synthetic. */
 export async function createSecretSettingsTestHarness(options: Readonly<{
@@ -53,7 +84,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     approvalRequired?: boolean;
     connectedPurposes?: ConnectedPurposeCatalogV1;
     voiceEnabled?: boolean;
-}> = {}) {
+}> = {}): Promise<SecretSettingsTestHarness> {
     await loadSyncSingletonForTests();
     const mode = options.mode ?? 'plain';
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;

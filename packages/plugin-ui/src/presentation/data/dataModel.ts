@@ -19,11 +19,15 @@ export type HappierDataColumn = Readonly<{
   proportion?: boolean;
 }>;
 
-/** A number in the reader's locale with grouping ("1,284"); strings and booleans as they are. */
+/**
+ * A number in the reader's locale with grouping ("1,284"); strings and booleans as they are. Fifteen
+ * significant digits is what a double holds exactly, so binary noise ("0.30000000000000004") reads as the
+ * value it stands for ("0.3") while every meaningful digit the source sent stays.
+ */
 export function formatHappierDataValue(value: HappierDataValue, locale?: string): string {
   if (typeof value !== 'number') return String(value);
   try {
-    return new Intl.NumberFormat(locale === undefined ? undefined : [locale], { maximumSignificantDigits: 21 }).format(value);
+    return new Intl.NumberFormat(locale === undefined ? undefined : [locale], { maximumSignificantDigits: 15 }).format(value);
   } catch {
     return String(value);
   }
@@ -94,6 +98,11 @@ const PRIORITY_RANK: Readonly<Record<HappierDataColumnPriority | 'default', numb
  * truncate in place rather than pushing every other column off the card.
  */
 const READABLE_COLUMN_CHARACTERS = 24;
+/**
+ * The header is drawn at the label role's medium weight, which advances wider than the body cells the
+ * character width is taken from; measured live at 14px/500 the label ran about 7% wider.
+ */
+const HEADER_WEIGHT_ALLOWANCE = 1.15;
 
 type HappierDataTableInput = Readonly<{
   columns: readonly HappierDataColumn[];
@@ -109,7 +118,7 @@ type HappierDataTableInput = Readonly<{
  */
 export function estimateHappierDataColumnWidths(input: HappierDataTableInput): readonly number[] {
   return input.columns.map((column, index) => {
-    let longest = column.label.length;
+    let longest = column.label.length * HEADER_WEIGHT_ALLOWANCE;
     for (const row of input.rows) {
       const cell = row[index];
       if (cell !== undefined) longest = Math.max(longest, formatHappierDataValue(cell, input.locale).length);
@@ -251,14 +260,27 @@ export function resolveHappierSeriesGeometry(series: readonly HappierSeries[], o
   return { buckets, min, max, yAt, xAt, hitRangeAt };
 }
 
-/** Never round the accessible numerical fact, even when the caller abbreviates visible ink. */
-export function describeHappierSeriesCoordinate(bucket: HappierSeriesBucket): string {
-  return typeof bucket.x === 'number' && Number.isFinite(bucket.x) && bucket.label !== String(bucket.x)
-    ? `${bucket.label} · ${formatHappierDataValue(bucket.x)}` : bucket.label;
+/**
+ * How exact values read a numeric coordinate. `formatCoordinate` is the caller's own reading of its x
+ * (a time bucket in its calendar and unit, read as a date): a chart's coordinates are the caller's
+ * encoding, so only the caller can say them in words.
+ */
+export type HappierSeriesReadingOptions = Readonly<{ formatCoordinate?: (x: number) => string; locale?: string }>;
+
+/**
+ * Never round the accessible numerical fact, even when the caller abbreviates visible ink: a label that
+ * shortens its coordinate ("Tue", "Noon") is followed by the exact one, in the caller's reading when it
+ * gives one, so a timestamp reads as a date and never as an epoch number.
+ */
+export function describeHappierSeriesCoordinate(bucket: HappierSeriesBucket, options: HappierSeriesReadingOptions = {}): string {
+  if (typeof bucket.x !== 'number' || !Number.isFinite(bucket.x)) return bucket.label;
+  if (bucket.label === String(bucket.x)) return options.formatCoordinate ? options.formatCoordinate(bucket.x) : bucket.label;
+  const exact = options.formatCoordinate ? options.formatCoordinate(bucket.x) : formatHappierDataValue(bucket.x, options.locale);
+  return exact === bucket.label ? bucket.label : `${bucket.label} · ${exact}`;
 }
 
-export function describeHappierSeriesBucket(bucket: HappierSeriesBucket, unknownLabel: string): string {
-  return `${describeHappierSeriesCoordinate(bucket)}${bucket.annotation ? ` · ${bucket.annotation}` : ''}: ${bucket.values.map((entry) => `${entry.label} ${entry.value === null ? unknownLabel : formatHappierDataValue(entry.value)}`).join(', ')}`;
+export function describeHappierSeriesBucket(bucket: HappierSeriesBucket, unknownLabel: string, options: HappierSeriesReadingOptions = {}): string {
+  return `${describeHappierSeriesCoordinate(bucket, options)}${bucket.annotation ? ` · ${bucket.annotation}` : ''}: ${bucket.values.map((entry) => `${entry.label} ${entry.value === null ? unknownLabel : formatHappierDataValue(entry.value, options.locale)}`).join(', ')}`;
 }
 
 export function buildHappierSeriesPath(points: readonly Readonly<{ x: number; y: number }>[], smoothing = 0): string {
@@ -291,6 +313,20 @@ export function resolveHappierDataDomainFraction(value: number | null, min: numb
  * strictly decreasing, still-legible amounts. Eight steps, so eight categories never wrap.
  */
 export const HAPPIER_SERIES_RAMP_ALPHAS = [1, 0.82, 0.68, 0.56, 0.46, 0.37, 0.29, 0.22] as const;
+
+/** The ramp's legible span: steps up to here stay readable as a thin line on either paper. */
+const HAPPIER_SERIES_RAMP_LEGIBLE_SPAN = 4;
+
+/**
+ * The ramp step for series `index` of `count` uncoloured series. A few series spread across the
+ * legible span, so two lines never sit one barely-different step apart; more series take every
+ * step in order, never wrapping.
+ */
+export function resolveHappierSeriesRampStep(index: number, count: number): number {
+  if (count <= 1) return 0;
+  const span = Math.min(HAPPIER_SERIES_RAMP_ALPHAS.length - 1, Math.max(HAPPIER_SERIES_RAMP_LEGIBLE_SPAN, count - 1));
+  return Math.round(index * span / (count - 1));
+}
 
 const HAPPIER_HEX6 = /^#([0-9a-fA-F]{6})$/;
 

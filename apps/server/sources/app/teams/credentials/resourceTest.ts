@@ -1,7 +1,4 @@
-import {
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialSourceBindingV1,
-} from "@happier-dev/protocol/teams";
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import type { Tx } from "@/storage/inTx";

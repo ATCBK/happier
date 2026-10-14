@@ -14,7 +14,7 @@ const markdown = '---\nname: sample\n---\nInstructions';
 const initial = '1'.repeat(40), latest = '2'.repeat(40);
 const bytes = (text: string) => new TextEncoder().encode(text);
 const files = (text: string) => [{ path: 'SKILL.md', unixMode: 0o644 as const, bytes: bytes(text) }];
-function fixture(linkUrl?: string) {
+function fixture(linkUrl?: string, written = false) {
   let writes = 0;
   let artifact: PromptLibraryStoredArtifact = {
     id: 'sample', revision: { headerVersion: 1, bodyVersion: 1 }, owned: true,
@@ -28,6 +28,7 @@ function fixture(linkUrl?: string) {
   const initialBody = PromptBundleBodyV1Schema.parse(JSON.parse(artifact.body!));
   const lock = readSkillLockV1(artifact.header);
   artifact = { ...artifact, header: { ...artifact.header, skillLock: { ...lock,
+    ...(written ? { provenance: { kind: 'written' as const } } : {}),
     ...(linkUrl && lock.provenance.kind === 'registry' ? { provenance: { kind: 'link' as const, url: linkUrl,
       ref: lock.provenance.registry.ref } } : {}), importedDigest: computePromptBundleDigestV1(initialBody) } } };
   const store: PromptLibraryArtifactStore = {
@@ -54,7 +55,8 @@ function fixture(linkUrl?: string) {
   const execute = createSkillActionExecuteV1({ store, randomId: () => 'rule', nowMs: () => 2,
     skillRules: { serverId: 'home', assertCurrent: () => {}, listSkills: async () => [{ id: 'sample', name: 'sample' }],
       ruleWriteContext: () => ({ nowMs: 2, newId: () => 'rule' }),
-      readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'skill-rules', value: { v: 1, rules: [] } } }], tombstones: [], diagnostics: [] } }),
+      readCatalog: async () => { if (written) throw new Error('Display catalogs are unavailable during an upstream-only check');
+        return { catalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'skill-rules', value: { v: 1, rules: [] } } }], tombstones: [], diagnostics: [] } }; },
       writeRecord: async () => { throw new Error('No reach writes during update observation'); } },
     includeInSession: async () => { throw new Error('No Session writes during update observation'); },
     readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
@@ -64,6 +66,13 @@ function fixture(linkUrl?: string) {
     latest: { kind: 'gitTree' as const, repo: 'https://github.com/a/b', path: '', commit: latest, treeSha: computeGitTreeShaV1(files(markdown + '\nNew')) } } };
 }
 describe('skill update observations through the existing operation owner', () => {
+  it('completes a written-only library check without display-catalog or upstream admission', async () => {
+    const h = fixture(undefined, true);
+    const check = createRegistryUpdateCheck({ trackers: [createSkillsUpdateTracker({ execute: h.execute })], ctx: { http: h.http },
+      readSources: async () => { throw new Error('No installed upstream requires source admission'); } });
+    expect(await check.checkNow({ kind: 'skill' })).toMatchObject({ results: [] });
+    expect(h.writes()).toBe(0);
+  });
   it('checks a linked GitHub skill against its admitted branch rather than repository HEAD', async () => {
     const h = fixture('https://github.com/a/b/tree/develop'), tracker = createSkillsUpdateTracker({ execute: h.execute });
     const check = createRegistryUpdateCheck({ trackers: [tracker], ctx: { http: h.http }, readSources: async () => [] });

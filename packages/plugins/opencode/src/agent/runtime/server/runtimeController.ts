@@ -19,6 +19,7 @@ import type { OpenCodeServerClient } from './openCodeServerClient.js';
 import { isOpenCodeServerAuthFailure, OpenCodeServerUnsupportedOperationError } from './openCodeServerClient.js';
 import { OpenCodeSkillIdentityError } from './openCodeV2Wire.js';
 import type { OpenCodeMcpRegistrationResult, OpenCodeSessionMcpProjection } from './mcpRegistration.js';
+import { resolveOpenCodeProjectedMcpToolName } from './mcpRegistration.js';
 import { asRecord, normalizeString, readNonBlankOpaqueIdentifier } from './openCodeParsing.js';
 import { formatOpenCodeServerPromptErrorMessage } from './formatOpenCodeServerPromptErrorMessage.js';
 import type { OpenCodeToolPart } from './foregroundToolTracker.js';
@@ -707,7 +708,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         if (!toolPart) continue;
         foregroundToolTracker.observeToolPart({ part: toolPart });
         observeCurrentTurnToolPart(toolPart);
-        publishOpenCodeToolPartRuntimeEvents({
+        await publishOpenCodeToolPartRuntimeEvents({
           part: toolPart,
           state,
           scope: params.scope,
@@ -1496,7 +1497,8 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       : null;
     try {
       try {
-        const approvalRequest = buildOpenCodePermissionApprovalRequest(ask, params.mcpProjection, params.mcpToolPolicy);
+        const approvalRequest = buildOpenCodePermissionApprovalRequest(ask, params.mcpProjection, params.mcpToolPolicy,
+          await resolveOpenCodeProjectedMcpToolName(ask.permission, params.mcpProjection, params.mcpToolPolicy));
         const decision = await params.ctx.sessions.current.permissions.requestDecision(
           approvalRequest,
           {
@@ -1925,7 +1927,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         foregroundToolTracker.observeToolPart({ part });
         observeCurrentTurnToolPart(part);
       }
-      publishOpenCodeToolPartRuntimeEvents({
+      await publishOpenCodeToolPartRuntimeEvents({
         part,
         state,
         scope: params.scope,

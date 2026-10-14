@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { RelayAccessConfigV1Schema } from '../../system/tasks/relayAccessConfigV1.js';
 import { SystemTaskResultSchema } from '../../system/tasks/spec.js';
@@ -7,40 +7,40 @@ import { HomeOwnerClaimAccountIdV1Schema } from '../governance/claim.js';
 import type { HomeRuntimeActionIdV1 } from './actionIdsV1.js';
 export { HOME_RUNTIME_ACTION_IDS_V1, isHomeRuntimeActionIdV1, type HomeRuntimeActionIdV1 } from './actionIdsV1.js';
 
-const Id = lazyZodSchema(() => z.string().trim().min(1));
-const Empty = lazyZodSchema(() => z.object({}).strict());
-const RuntimeTarget = lazyZodSchema(() => z.object({
+const Id = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const Empty = lazyZodSchema(() => z.strictObject({}));
+const RuntimeTarget = lazyZodSchema(() => z.strictObject({
   channel: z.enum(['stable', 'preview', 'dev']), mode: z.enum(['user', 'system']),
-}).strict());
-const PersonalHomePurpose = lazyZodSchema(() => z.object({
-  kind: z.literal('personal-home'), canonicalServerUrl: z.string().trim().url(),
-}).strict());
-const RuntimeInput = lazyZodSchema(() => z.object({
-  runtimeTarget: RuntimeTarget.optional(), purpose: PersonalHomePurpose.optional(),
-  anonymousSignupEnabled: z.boolean().optional(),
-  expectedPersonalHomeState: z.object({
-    installed: z.boolean(), canonicalServerUrl: z.string().nullable(), dataPresent: z.boolean(),
-  }).strict().optional(),
-}).strict());
-const PersonalHomeInput = lazyZodSchema(() => z.object({
-  runtimeTarget: RuntimeTarget.optional(), purpose: PersonalHomePurpose,
-}).strict());
-const Unavailable = lazyZodSchema(() => z.object({ status: z.literal('unavailable'), reason: Id }).strict());
+}));
+const PersonalHomePurpose = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('personal-home'), canonicalServerUrl: z.string().check(z.trim(), z.url()),
+}));
+const RuntimeInput = lazyZodSchema(() => z.strictObject({
+  runtimeTarget: z.optional(RuntimeTarget), purpose: z.optional(PersonalHomePurpose),
+  anonymousSignupEnabled: z.optional(z.boolean()),
+  expectedPersonalHomeState: z.optional(z.strictObject({
+    installed: z.boolean(), canonicalServerUrl: z.nullable(z.string()), dataPresent: z.boolean(),
+  })),
+}));
+const PersonalHomeInput = lazyZodSchema(() => z.strictObject({
+  runtimeTarget: z.optional(RuntimeTarget), purpose: PersonalHomePurpose,
+}));
+const Unavailable = lazyZodSchema(() => z.strictObject({ status: z.literal('unavailable'), reason: Id }));
 const Started = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('task_started'), taskId: Id }).strict(),
-  z.object({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }).strict(),
-  z.object({ status: z.literal('outcome_unknown'), taskId: Id.optional() }).strict(), Unavailable,
+  z.strictObject({ status: z.literal('task_started'), taskId: Id }),
+  z.strictObject({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }),
+  z.strictObject({ status: z.literal('outcome_unknown'), taskId: z.optional(Id) }), Unavailable,
 ]));
 const Completed = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('completed') }).strict(), Unavailable,
+  z.strictObject({ status: z.literal('completed') }), Unavailable,
 ]));
-const Picked = lazyZodSchema(() => z.union([z.object({ path: Id.nullable() }).strict(), Unavailable]));
-export const HomeRuntimeRestartInputV1Schema = lazyZodSchema(() => z.object({
-  machineId: Id, channel: z.enum(['stable', 'preview', 'dev']).optional(), mode: z.enum(['user', 'system']).optional(),
-}).strict());
+const Picked = lazyZodSchema(() => z.union([z.strictObject({ path: z.nullable(Id) }), Unavailable]));
+export const HomeRuntimeRestartInputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: Id, channel: z.optional(z.enum(['stable', 'preview', 'dev'])), mode: z.optional(z.enum(['user', 'system'])),
+}));
 export const HomeRuntimeRestartOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }).strict(),
-  z.object({ status: z.literal('outcome_unknown'), taskId: Id.optional() }).strict(), Unavailable,
+  z.strictObject({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }),
+  z.strictObject({ status: z.literal('outcome_unknown'), taskId: z.optional(Id) }), Unavailable,
 ]));
 export type HomeRuntimeRestartInputV1 = z.output<typeof HomeRuntimeRestartInputV1Schema>;
 export type HomeRuntimeRestartOutputV1 = z.output<typeof HomeRuntimeRestartOutputV1Schema>;
@@ -48,10 +48,10 @@ export type HomeRuntimeRestartOutputV1 = z.output<typeof HomeRuntimeRestartOutpu
 /** Closed Action inputs adapt existing local task options; SSH credentials never enter this family. */
 export const HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1 = {
   'relay.access.status': Empty,
-  'relay.access.configure': lazyZodSchema(() => z.object({
+  'relay.access.configure': lazyZodSchema(() => z.strictObject({
     providerId: z.enum(['localOnly', 'lan', 'tailscaleServe', 'tailscaleFunnel', 'cloudflareNamed']),
-    config: RelayAccessConfigV1Schema, upstreamUrl: z.string().trim().min(1).nullable().optional(),
-  }).strict().refine(input => input.providerId === input.config.providerId, { path: ['providerId'], message: 'Relay provider must match configuration' })),
+    config: RelayAccessConfigV1Schema, upstreamUrl: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  }).check(z.refine(input => input.providerId === input.config.providerId, { path: ['providerId'], message: 'Relay provider must match configuration' }))),
   'relay.access.disable': Empty,
   'relay.runtime.status': RuntimeInput,
   'relay.runtime.install_or_update': RuntimeInput,
@@ -60,31 +60,31 @@ export const HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1 = {
   'relay.runtime.restart': RuntimeInput,
   'relay.runtime.uninstall': RuntimeInput,
   'relay.runtime.personal_home.inspect': PersonalHomeInput,
-  'relay.runtime.personal_home.backup': lazyZodSchema(() => PersonalHomeInput.extend({
-    personalHomeOperation: z.object({ outputPath: Id.optional() }).strict().optional(),
-  }).strict()),
-  'relay.runtime.personal_home.verify_backup': lazyZodSchema(() => PersonalHomeInput.extend({
-    personalHomeOperation: z.object({ archivePath: Id }).strict(),
-  }).strict()),
-  'relay.runtime.personal_home.restore': lazyZodSchema(() => PersonalHomeInput.extend({
-    personalHomeOperation: z.object({ archivePath: Id, confirmOverwrite: z.literal(true).optional(), expectedHomeServerIdentityId: Id.optional() }).strict(),
-  }).strict()),
+  'relay.runtime.personal_home.backup': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PersonalHomeInput, {
+    personalHomeOperation: z.optional(z.strictObject({ outputPath: z.optional(Id) })),
+  }))),
+  'relay.runtime.personal_home.verify_backup': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PersonalHomeInput, {
+    personalHomeOperation: z.strictObject({ archivePath: Id }),
+  }))),
+  'relay.runtime.personal_home.restore': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PersonalHomeInput, {
+    personalHomeOperation: z.strictObject({ archivePath: Id, confirmOverwrite: z.optional(z.literal(true)), expectedHomeServerIdentityId: z.optional(Id) }),
+  }))),
   'relay.runtime.personal_home.recover_restore': PersonalHomeInput,
   'relay.runtime.personal_home.erase': PersonalHomeInput,
-  'relay.runtime.personal_home.claim': lazyZodSchema(() => PersonalHomeInput.extend({
-    personalHomeOperation: z.object({ accountId: HomeOwnerClaimAccountIdV1Schema }).strict(),
-  }).strict()),
-  'relay.runtime.personal_home.relocate': lazyZodSchema(() => z.object({
-    hostId: Id, expectedRevision: z.union([z.number().int().nonnegative(), z.literal('absent')]),
-    sourceServerId: Id, operationId: Id, sourceDescriptorRevision: z.number().int().positive(),
-    recoveryAction: z.enum(['finish_move', 'return_to_source']).optional(),
-  }).strict()),
+  'relay.runtime.personal_home.claim': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PersonalHomeInput, {
+    personalHomeOperation: z.strictObject({ accountId: HomeOwnerClaimAccountIdV1Schema }),
+  }))),
+  'relay.runtime.personal_home.relocate': lazyZodSchema(() => z.strictObject({
+    hostId: Id, expectedRevision: z.union([z.number().check(z.int(), z.nonnegative()), z.literal('absent')]),
+    sourceServerId: Id, operationId: Id, sourceDescriptorRevision: z.number().check(z.int(), z.positive()),
+    recoveryAction: z.optional(z.enum(['finish_move', 'return_to_source'])),
+  })),
   'relay.runtime.personal_home.choose_archive': Empty,
   'relay.runtime.personal_home.choose_backup_destination': Empty,
-  'relay.runtime.open_path': lazyZodSchema(() => z.object({ path: Id }).strict()),
-  'relay.runtime.reveal_output': lazyZodSchema(() => z.object({ path: Id }).strict()),
-  'relay.runtime.task.cancel': lazyZodSchema(() => z.object({ taskId: Id }).strict()),
-  'home.runtime.get': lazyZodSchema(() => z.object({ force: z.boolean().optional() }).strict()),
+  'relay.runtime.open_path': lazyZodSchema(() => z.strictObject({ path: Id })),
+  'relay.runtime.reveal_output': lazyZodSchema(() => z.strictObject({ path: Id })),
+  'relay.runtime.task.cancel': lazyZodSchema(() => z.strictObject({ taskId: Id })),
+  'home.runtime.get': lazyZodSchema(() => z.strictObject({ force: z.optional(z.boolean()) })),
   'home.runtime.restart': HomeRuntimeRestartInputV1Schema,
 } as const;
 export const HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1 = {
@@ -98,14 +98,14 @@ export const HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1 = {
   'relay.runtime.personal_home.choose_archive': Picked, 'relay.runtime.personal_home.choose_backup_destination': Picked,
   'relay.runtime.open_path': Completed, 'relay.runtime.reveal_output': Completed,
   'relay.runtime.task.cancel': lazyZodSchema(() => z.union([
-    z.object({ status: z.enum(['cancellation_requested', 'already_settled']), taskId: Id }).strict(),
-    z.object({ status: z.literal('outcome_unknown'), taskId: Id }).strict(), Unavailable,
+    z.strictObject({ status: z.enum(['cancellation_requested', 'already_settled']), taskId: Id }),
+    z.strictObject({ status: z.literal('outcome_unknown'), taskId: Id }), Unavailable,
   ])),
   'home.runtime.get': lazyZodSchema(() => z.union([
-    z.object({ status: z.literal('ready'), serverRelease: ServerReleaseCapabilitiesSchema.nullable(),
+    z.strictObject({ status: z.literal('ready'), serverRelease: z.nullable(ServerReleaseCapabilitiesSchema),
       // Older answering clients omit this diagnostic; omission never means ready.
-      searchReadiness: z.enum(['ready', 'indexing', 'unavailable', 'unknown']).optional(),
-    }).strict(), Unavailable,
+      searchReadiness: z.optional(z.enum(['ready', 'indexing', 'unavailable', 'unknown'])),
+    }), Unavailable,
   ])),
   'home.runtime.restart': HomeRuntimeRestartOutputV1Schema,
 } as const;

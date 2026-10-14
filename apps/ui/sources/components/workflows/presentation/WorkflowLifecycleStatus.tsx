@@ -62,7 +62,7 @@ export function WorkflowLifecycleStatus(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const presentation = describeWorkflowInvocationLifecycle(props.lifecycle, { ...props.context, blockKind: props.blockKind });
-    if (props.markerOnly === true) {
+    if (props.markerOnly === true || presentation.inheritsRunStop) {
         return (
             <View
                 {...(props.testID === undefined ? {} : { testID: props.testID })}

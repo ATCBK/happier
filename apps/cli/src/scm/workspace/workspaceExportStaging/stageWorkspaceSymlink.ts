@@ -2,6 +2,8 @@ import { access, lstat, mkdir, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { resolveWorkspaceRelativePath } from '../workspaceExportPackaging/resolveWorkspaceRelativePath';
+import { resolveContainedWorkspaceMaterializationPath } from '../workspaceMaterializationSafety';
+import { resolveNativeFilesystemPathForAuthorization } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 
 import { resolveWorkspaceStagingMarkerFilePath, type WorkspaceStagingRoot } from './createWorkspaceStagingRoot';
 
@@ -38,6 +40,13 @@ export async function stageWorkspaceSymlink(params: Readonly<{
     }
 
     const filePath = join(params.stagingRoot.workspaceDirectory, resolvedPath.relativePath);
+    // Previously staged links must not redirect installation outside this root.
+    resolveContainedWorkspaceMaterializationPath({
+        workspaceRoot: resolveNativeFilesystemPathForAuthorization(params.stagingRoot.workspaceDirectory),
+        candidatePath: resolveNativeFilesystemPathForAuthorization(filePath),
+        errorMessage: 'Workspace staging symlink path escapes its native root',
+        pathRepresentation: 'native_literal',
+    });
 
     try {
         await lstat(filePath);

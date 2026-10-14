@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * One Account's private view frontier for one Session (Lane 09B, L09B-I1/I2).
@@ -10,15 +10,13 @@ import { z } from 'zod';
  * consumer to re-decide what `null` meant, and they disagreed.
  */
 export const ViewerReadStateV1Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
-  z.object({ state: z.literal('not_started') }).strict(),
-  z
-    .object({
+  z.strictObject({ state: z.literal('not_started') }),
+  z.strictObject({
       state: z.literal('tracking'),
-      lastViewedSessionSeq: z.number().int().nonnegative(),
+      lastViewedSessionSeq: z.number().check(z.int(), z.nonnegative()),
       /** Stable unread-entry instant (ms). Null while caught up. */
-      unreadSince: z.number().int().nonnegative().nullable(),
-    })
-    .strict(),
+      unreadSince: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    }),
 ]));
 export type ViewerReadStateV1 = z.infer<typeof ViewerReadStateV1Schema>;
 

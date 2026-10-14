@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '../actions/anchoredListOrderV1.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { QualifiedConnectedAccountRefSchema } from './qualifiedConnectedAccountPersistence.js';
@@ -30,87 +30,87 @@ export { CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_ID_BY_OPERATION } from './confi
 export const ConnectedServiceConfigurationActionIdV1Schema = lazyZodSchema(() => z.enum(CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1));
 export type ConnectedServiceConfigurationActionIdV1 = z.infer<typeof ConnectedServiceConfigurationActionIdV1Schema>;
 
-const Success = z.object({ applied: z.literal(true) }).strict();
-const MetadataCleanupSuccess = Success.extend({ metadataCleanup: z.optional(ConnectedMetadataCleanupV1Schema) });
+const Success = z.strictObject({ applied: z.literal(true) });
+const MetadataCleanupSuccess = z.extend(Success, { metadataCleanup: z.optional(ConnectedMetadataCleanupV1Schema) });
 const RevokeActionResponse = lazyZodSchema(() => z.union([
   ConnectedAccountRevokeResponseV1Schema,
-  ConnectedAccountRevokedResponseV1Schema.extend({ metadataCleanup: z.optional(ConnectedMetadataCleanupV1Schema) }),
+  z.extend(ConnectedAccountRevokedResponseV1Schema, { metadataCleanup: z.optional(ConnectedMetadataCleanupV1Schema) }),
 ]));
-const ConfigurationTarget = ConnectedAccountServiceConfigurationEntryV1Schema.pick({ service: true, modeId: true });
-const MachineConfigurationTarget = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
-  target: z.union([ConnectedAccountControlTargetSchema.options[1], ConnectedAccountControlTargetSchema.options[2]]),
-}).strict());
-const ConfigurationReplacement = z.object({ expectedRevision: z.string().min(1).max(256).nullable(),
+const ConfigurationTarget = lazyZodSchema(() => z.pick(ConnectedAccountServiceConfigurationEntryV1Schema, { service: true, modeId: true }));
+const MachineConfigurationTarget = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  target: z.union([ConnectedAccountControlTargetSchema._zod.def.options[1], ConnectedAccountControlTargetSchema._zod.def.options[2]]),
+}));
+const ConfigurationReplacement = z.object({ expectedRevision: z.nullable(z.string().check(z.minLength(1), z.maxLength(256))),
   values: ConnectedAccountServiceConfigurationEntryV1Schema.shape.values,
-  secretValues: z.record(z.string(), z.string().min(1).max(64 * 1024)) });
-const ConfigurationView = z.object({ status: z.enum(['ready', 'configurationRequired']), revision: z.string().nullable(),
+  secretValues: z.record(z.string(), z.string().check(z.minLength(1), z.maxLength(64 * 1024))) });
+const ConfigurationView = z.strictObject({ status: z.enum(['ready', 'configurationRequired']), revision: z.nullable(z.string()),
   values: ConnectedAccountServiceConfigurationEntryV1Schema.shape.values, configuredSecretFieldIds: z.array(z.string()),
-  missingFieldIds: z.array(z.string()) }).strict();
+  missingFieldIds: z.array(z.string()) });
 export const CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 = {
   ...CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_INPUT_SCHEMAS,
   'connectedServices.configuration.get': lazyZodSchema(() => z.union([ConfigurationTarget, MachineConfigurationTarget])),
   'connectedServices.configuration.replace': lazyZodSchema(() => z.union([
-    ConfigurationTarget.extend(ConfigurationReplacement.shape).strict(),
-    MachineConfigurationTarget.extend(ConfigurationReplacement.shape).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ConfigurationTarget, ConfigurationReplacement.shape)),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineConfigurationTarget, ConfigurationReplacement.shape)),
   ])),
-  'connectedServices.billing.open': z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), machineId: z.string().trim().min(1) }).strict(),
-  'connectedServices.subscription.price.set': z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), price: ProviderAccountSubscriptionMonthlyPriceV1Schema.omit({ enteredAtMs: true }).nullable() }).strict(),
-  'connectedServices.accounts.rename': z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), label: z.string().nullable() }).strict(),
-  'connectedServices.accounts.revoke': ConnectedAccountRevokeCommandV1Schema.omit({ operation: true }).extend({ machineId: z.string().trim().min(1) }),
-  'connectedServices.accounts.default.set': z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), agentId: z.string().trim().min(1), makeDefault: z.boolean(), machineId: z.string().trim().min(1).optional() }).strict(),
-  'connectedServices.accounts.purposeDefault.set': z.object({
-    agentId: z.string().trim().min(1), service: QualifiedConnectedAccountGroupRefSchema.shape.service,
-    purpose: QualifiedConnectedAccountPurposeV1Schema.shape.purpose.optional(),
-    selection: ConnectedServiceBindingSelectionV2Schema, teamId: z.string().trim().min(1).optional(),
-    machineId: z.string().trim().min(1).optional(), onlyIfUnset: z.boolean().optional(),
-  }).strict().superRefine((input, context) => {
+  'connectedServices.billing.open': z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), machineId: z.string().check(z.trim(), z.minLength(1)) }),
+  'connectedServices.subscription.price.set': z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), price: lazyZodSchema(() => z.nullable(z.omit(ProviderAccountSubscriptionMonthlyPriceV1Schema, { enteredAtMs: true }))) }),
+  'connectedServices.accounts.rename': z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), label: z.nullable(z.string()) }),
+  'connectedServices.accounts.revoke': lazyZodSchema(() => z.extend(z.omit(ConnectedAccountRevokeCommandV1Schema, { operation: true }), { machineId: z.string().check(z.trim(), z.minLength(1)) })),
+  'connectedServices.accounts.default.set': z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), agentId: z.string().check(z.trim(), z.minLength(1)), makeDefault: z.boolean(), machineId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
+  'connectedServices.accounts.purposeDefault.set': z.strictObject({
+    agentId: z.string().check(z.trim(), z.minLength(1)), service: QualifiedConnectedAccountGroupRefSchema.shape.service,
+    purpose: z.optional(QualifiedConnectedAccountPurposeV1Schema.shape.purpose),
+    selection: ConnectedServiceBindingSelectionV2Schema, teamId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    machineId: z.optional(z.string().check(z.trim(), z.minLength(1))), onlyIfUnset: z.optional(z.boolean()),
+  }).check(z.superRefine((input, context) => {
     if (input.selection.source === 'team_resource' && !input.teamId) {
       context.addIssue({ code: 'custom', path: ['teamId'], message: 'Shared-resource defaults require their Team' });
     }
     if (input.selection.source !== 'team_resource' && input.teamId !== undefined) {
       context.addIssue({ code: 'custom', path: ['teamId'], message: 'Team belongs only to a shared-resource default' });
     }
-  }),
-  'connectedServices.purposes.default.set': z.object({
-    machineId: z.string().trim().min(1), purpose: QualifiedConnectedAccountPurposeV1Schema,
+  })),
+  'connectedServices.purposes.default.set': z.strictObject({
+    machineId: z.string().check(z.trim(), z.minLength(1)), purpose: QualifiedConnectedAccountPurposeV1Schema,
     target: QualifiedConnectedAccountPurposeBindingTargetV1Schema,
-  }).strict(),
-  'connectedServices.pools.create': QualifiedConnectedAccountGroupCreateV4Schema.extend({ group: QualifiedConnectedAccountGroupCreateV4Schema.shape.group.omit({ state: true }) }),
-  'connectedServices.pools.patch': QualifiedConnectedAccountGroupPatchV4Schema.omit({ state: true, overrideRuntimeCooldown: true }),
+  }),
+  'connectedServices.pools.create': lazyZodSchema(() => z.extend(QualifiedConnectedAccountGroupCreateV4Schema, { group: z.omit(QualifiedConnectedAccountGroupCreateV4Schema.shape.group, { state: true }) })),
+  'connectedServices.pools.patch': lazyZodSchema(() => z.omit(QualifiedConnectedAccountGroupPatchV4Schema, { state: true, overrideRuntimeCooldown: true })),
   'connectedServices.pools.delete': QualifiedConnectedAccountGroupDeleteV4Schema,
-  'connectedServices.pools.members.add': QualifiedConnectedAccountGroupMemberMutationV4Schema.omit({ state: true }),
-  'connectedServices.pools.members.patch': QualifiedConnectedAccountGroupMemberMutationV4Schema.omit({ state: true }),
+  'connectedServices.pools.members.add': lazyZodSchema(() => z.omit(QualifiedConnectedAccountGroupMemberMutationV4Schema, { state: true })),
+  'connectedServices.pools.members.patch': lazyZodSchema(() => z.omit(QualifiedConnectedAccountGroupMemberMutationV4Schema, { state: true })),
   'connectedServices.pools.members.remove': QualifiedConnectedAccountGroupMemberDeleteV4Schema,
   'connectedServices.pools.switchNow': QualifiedConnectedAccountGroupActiveAccountV4Schema,
   'connectedServices.pools.reorder': z.union([
-    z.object({ group: QualifiedConnectedAccountGroupRefSchema, accountIds: z.array(z.string().min(1)) }).strict(),
-    z.object({ group: QualifiedConnectedAccountGroupRefSchema, move: z.object({ accountId: z.string().trim().min(1), position: AnchoredListPositionV1Schema }).strict() }).strict(),
+    z.strictObject({ group: QualifiedConnectedAccountGroupRefSchema, accountIds: z.array(z.string().check(z.minLength(1))) }),
+    z.strictObject({ group: QualifiedConnectedAccountGroupRefSchema, move: z.strictObject({ accountId: z.string().check(z.trim(), z.minLength(1)), position: AnchoredListPositionV1Schema }) }),
   ]),
-  'connectedServices.pools.default.set': z.object({ group: QualifiedConnectedAccountGroupRefSchema, agentId: z.string().trim().min(1), makeDefault: z.boolean(), machineId: z.string().trim().min(1).optional() }).strict(),
-  'connectedServices.quota.reset': z.object({ machineId: z.string().trim().min(1), serviceId: ConnectedServiceIdSchema, profileId: ConnectedServiceProfileIdSchema, providerCreditId: z.string().trim().min(1).optional(), sourceSnapshotFetchedAtMs: z.number().int().nonnegative().nullable().optional() }).strict(),
-  'connectedServices.quota.refresh': z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), machineId: z.string().trim().min(1) }).strict(),
+  'connectedServices.pools.default.set': z.strictObject({ group: QualifiedConnectedAccountGroupRefSchema, agentId: z.string().check(z.trim(), z.minLength(1)), makeDefault: z.boolean(), machineId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
+  'connectedServices.quota.reset': z.strictObject({ machineId: z.string().check(z.trim(), z.minLength(1)), serviceId: ConnectedServiceIdSchema, profileId: ConnectedServiceProfileIdSchema, providerCreditId: z.optional(z.string().check(z.trim(), z.minLength(1))), sourceSnapshotFetchedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))) }),
+  'connectedServices.quota.refresh': z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), machineId: z.string().check(z.trim(), z.minLength(1)) }),
   'connectedServices.quota.get': ConnectedServiceQuotaGetInputV1Schema,
   'connectedServices.pools.selection.get': ConnectedServicePoolSelectionGetRequestV1Schema,
-  'connectedServices.identityPrivacy.set': z.object({ hidden: z.boolean() }).strict(),
-  'connectedServices.acknowledgements.set': z.object({ subject: QualifiedAcknowledgementSubjectSchema, acknowledged: z.boolean() }).strict(),
-  'connectedServices.labels.set': z.object({ subject: QualifiedConnectedEntityRefSchema, label: z.string() }).strict(),
-  'connectedServices.labels.reset': z.object({ subject: QualifiedConnectedEntityRefSchema }).strict(),
-  'connectedServices.acknowledgements.reset': z.object({ subject: QualifiedAcknowledgementSubjectSchema }).strict(),
-  'connectedServices.disclosure.set': z.object({ subject: QualifiedConnectedDisclosureSubjectSchema, collapsed: z.boolean() }).strict(),
-  'connectedServices.disclosure.reset': z.object({ subject: QualifiedConnectedDisclosureSubjectSchema }).strict(),
+  'connectedServices.identityPrivacy.set': z.strictObject({ hidden: z.boolean() }),
+  'connectedServices.acknowledgements.set': z.strictObject({ subject: QualifiedAcknowledgementSubjectSchema, acknowledged: z.boolean() }),
+  'connectedServices.labels.set': z.strictObject({ subject: QualifiedConnectedEntityRefSchema, label: z.string() }),
+  'connectedServices.labels.reset': z.strictObject({ subject: QualifiedConnectedEntityRefSchema }),
+  'connectedServices.acknowledgements.reset': z.strictObject({ subject: QualifiedAcknowledgementSubjectSchema }),
+  'connectedServices.disclosure.set': z.strictObject({ subject: QualifiedConnectedDisclosureSubjectSchema, collapsed: z.boolean() }),
+  'connectedServices.disclosure.reset': z.strictObject({ subject: QualifiedConnectedDisclosureSubjectSchema }),
 } as const;
 export const CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 = {
   ...CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_OUTPUT_SCHEMAS,
-  'connectedServices.configuration.get': z.object({ target: ConnectedAccountConfigurationTargetSchema,
-    mode: PluginConnectedAccountAuthenticationModeV2Schema, configuration: ConfigurationView }).strict(),
-  'connectedServices.configuration.replace': Success.extend({ revision: z.string().min(1).max(256) }),
-  'connectedServices.billing.open': z.object({ opened: z.literal(true) }).strict(),
+  'connectedServices.configuration.get': z.strictObject({ target: ConnectedAccountConfigurationTargetSchema,
+    mode: PluginConnectedAccountAuthenticationModeV2Schema, configuration: ConfigurationView }),
+  'connectedServices.configuration.replace': z.extend(Success, { revision: z.string().check(z.minLength(1), z.maxLength(256)) }),
+  'connectedServices.billing.open': z.strictObject({ opened: z.literal(true) }),
   'connectedServices.subscription.price.set': Success,
   'connectedServices.accounts.rename': Success,
   'connectedServices.accounts.revoke': RevokeActionResponse,
   'connectedServices.accounts.default.set': Success,
-  'connectedServices.accounts.purposeDefault.set': Success.extend({ changed: z.literal(false).optional() }),
+  'connectedServices.accounts.purposeDefault.set': z.extend(Success, { changed: z.optional(z.literal(false)) }),
   'connectedServices.purposes.default.set': Success,
   'connectedServices.pools.create': QualifiedConnectedAccountGroupResponseV4Schema,
   'connectedServices.pools.patch': QualifiedConnectedAccountGroupResponseV4Schema,

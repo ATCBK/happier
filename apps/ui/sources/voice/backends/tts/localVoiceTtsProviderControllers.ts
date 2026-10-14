@@ -195,7 +195,7 @@ async function speakWithLocalNeuralTts(ctx: LocalVoiceTtsRequest): Promise<void>
             }
             const value = selected.providerConfig;
             selectedVoiceId = value && typeof value === 'object' && !Array.isArray(value)
-                && typeof value.voiceId === 'string' ? value.voiceId : null;
+                && 'voiceId' in value && typeof value.voiceId === 'string' ? value.voiceId : null;
             selectedName = selected.inUseVoice?.displayName ?? selectedVoiceId;
         } catch (error) {
             reportTtsFailure(ctx, error);
@@ -232,7 +232,9 @@ export function prepareLocalVoiceTtsRequest(ctx: LocalVoiceTtsRequest): BundledS
     const binding = resolveBinding();
     const target = binding?.targetSessionAddress ?? null;
     const metadata = target ? readVoiceSessionOwnerMetadataFromState(storage.getState(), target, { activeServerId: serverId }) : null;
-    const preference = readSessionVoicePreferenceV1(metadata?.work?.voicePreference);
+    const work = metadata?.work;
+    const preference = readSessionVoicePreferenceV1(work && typeof work === 'object' && 'voicePreference' in work
+        ? work.voicePreference : undefined);
     const isCurrent = () => {
         if (!accountLifetime.isCurrent() || getVoiceSessionAttemptId() !== attemptId
             || !areServerProfileIdentifiersEquivalent(serverId, getAppliedActiveServerSnapshot().serverId)) return false;

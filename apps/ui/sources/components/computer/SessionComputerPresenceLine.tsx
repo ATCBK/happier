@@ -33,7 +33,7 @@ function MountedSessionComputerPresenceLine(props: Readonly<{
     const agent = React.useMemo(() => ({ agentId: identity.agentId, name: identity.name }), [identity.agentId, identity.name]);
     const compact = useDeviceType() === 'phone';
     if (!control.selection?.sourceId) return null;
-    const target = control.appName ?? control.targetTitle ?? t('computerUse.viewer.tabFallback');
+    const target = control.appName ?? control.targetTitle ?? t('computerUse.presentation.tabFallback');
     const machine = control.machineName;
     return (
         <View style={styles.frame}>
@@ -48,7 +48,7 @@ function MountedSessionComputerPresenceLine(props: Readonly<{
                     agentTitle={control.agentActing
                         ? t('computerUse.strip.using', { target })
                         : t((control.selection.access ?? control.selection.approvalDisplay.access) === 'see'
-                            ? 'computerUse.viewer.agentCanSee' : 'computerUse.viewer.agentCanUse', { agent: agent.name, target })}
+                            ? 'computerUse.presentation.agentCanSee' : 'computerUse.presentation.agentCanUse', { agent: agent.name, target })}
                     agentDetail={machine ? t('computerUse.strip.on', { machine }) : undefined}
                     humanTitle={t('computerUse.strip.paused', { agent: agent.name })}
                     humanDetail={t('computerUse.strip.pausedDetail', { target })}

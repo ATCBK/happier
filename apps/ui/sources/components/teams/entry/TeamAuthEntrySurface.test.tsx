@@ -257,6 +257,7 @@ describe('TeamAuthEntrySurface', () => {
             action: expect.objectContaining({ methodId: 'team-oidc', origin: 'team' }),
             teamId: 'team-1',
             teamName: 'A very long Team name that remains fully available to assistive technology',
+            teamLogo: expect.objectContaining({ url: 'https://home.example.test/v1/teams/team-1/logo' }),
             target,
         });
         expect(onSelectAction.mock.calls[0]?.[0].target).toBe(target);
@@ -309,6 +310,51 @@ describe('TeamAuthEntrySurface', () => {
 
         expect(actionIconNames(screen, 'team-auth-entry-action:team-oidc')).toContain('sign-in');
         expect(actionIconNames(screen, 'team-auth-entry-action:home-password')).toContain('sign-in');
+    });
+
+    it('offers each Home sign-in and sign-up journey once, named by what it does, leading with New here', async () => {
+        // A Home publishes `login` and `provision` per native method. Both are
+        // genuinely different journeys; naming both "Continue with <method>"
+        // made one invitation page show every method twice.
+        entryScope = 'invitation';
+        const homeAction = (methodId: string, action: string, mode: string, displayName: string) => ({
+            kind: 'authenticate', methodId, action, mode, origin: 'home', presentation: { displayName },
+        });
+        const actions = [
+            homeAction('key_challenge', 'login', 'keyed', 'Device key'),
+            homeAction('key_challenge', 'provision', 'keyed', 'Device key'),
+            homeAction('email_password', 'login', 'keyless', 'Email and password'),
+            homeAction('email_password', 'provision', 'keyless', 'Email and password'),
+        ];
+        endpointFetch.mockImplementation(async (path: string) => (
+            String(path).includes('/team-invitations/preview')
+                ? new Response(JSON.stringify(previewResult), { status: 200 })
+                : readyResponse('invitation', undefined, undefined, 'Acme Home', actions)
+        ));
+        const screen = await renderScreen(
+            <TeamAuthEntrySurface
+                invitation={{ token: 'D'.repeat(43) }}
+                target={target}
+                onSelectAction={vi.fn()}
+                onAdmissionComplete={() => {}}
+            />,
+        );
+        await waitForTestId(screen, 'team-auth-entry-ready');
+
+        const cards = screen.tree.root.findAll(
+            (node) => typeof (node.props as { testID?: unknown }).testID === 'string'
+                && String((node.props as { testID: string }).testID).startsWith('team-auth-entry-action:')
+                && typeof (node.props as { title?: unknown }).title === 'string',
+            { deep: true },
+        ).map((node) => node.props as { testID: string; title: string; primary?: boolean });
+        const unique = cards.filter((card, index) => cards.findIndex((other) => other.testID === card.testID) === index);
+        expect(unique.map((card) => card.title)).toEqual([
+            t('welcome.welcomePrimaryButton'),
+            t('welcome.continueWithKey'),
+            t('settingsAccount.nativePassword.title'),
+            t('settingsAccount.nativePassword.createAccount'),
+        ]);
+        expect(unique.map((card) => card.primary === true)).toEqual([true, false, false, false]);
     });
 
     it('renders the provider icon hint the Home projected for a Team action', async () => {

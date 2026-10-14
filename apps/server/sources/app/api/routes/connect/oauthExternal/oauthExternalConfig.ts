@@ -1,4 +1,4 @@
-import { isLoopbackHostname } from "@happier-dev/protocol";
+import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { resolveUiConfig } from "@/app/api/uiConfig";
 import { DEFAULT_WEBAPP_URL, resolveEffectiveWebappBaseUrl } from "../../../../serverUrls/effectiveServerUrls";

@@ -2,9 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { logger } from '@/ui/logger';
+import { registerSessionHandlers } from './registerSessionHandlers';
 
 const runRipgrepMock = vi.hoisted(() => vi.fn());
 
@@ -32,6 +38,7 @@ describe('registerWorkspaceFileListHandler', () => {
     let deniedDirectory: string | undefined;
     beforeEach(() => runRipgrepMock.mockReset());
     afterEach(async () => {
+        vi.unstubAllGlobals();
         if (deniedDirectory) await chmod(deniedDirectory, 0o700);
         if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });
         deniedDirectory = undefined;
@@ -54,6 +61,38 @@ describe('registerWorkspaceFileListHandler', () => {
         });
     });
 
+    it.skipIf(process.platform === 'win32')('retains sparse native output while an ignore-file read stalls traversal', async () => {
+        fixtureRoot = await mkdtemp(join(tmpdir(), 'workspace-file-list-'));
+        await writeFile(join(fixtureRoot, 'needle.txt'), 'fixture');
+        const slow = join(fixtureRoot, 'needle-slow');
+        await mkdir(slow);
+        // A pipe at the native ignore-file boundary makes traversal stay pending
+        // after its readable sibling, without mocking internal search logic.
+        await promisify(execFile)('mkfifo', [join(slow, '.ignore')]);
+        const { run } = await vi.importActual<typeof import('@/integrations/ripgrep/index')>('@/integrations/ripgrep/index');
+        const native = await run(['--files', '--line-buffered', '--threads', '1', join(fixtureRoot, 'needle.txt'), slow], {
+            deadlineAtMs: Date.now() + 1_000,
+        });
+        expect(native.stdout).toContain(join(fixtureRoot, 'needle.txt'));
+        runRipgrepMock.mockImplementation(run);
+        // Assert the consumed filename operation, not a particular native output
+        // mode: a framing correction can fix the owner without changing
+        // upstream --null buffering. Registration and strict consumer stay real.
+        const rpc = new RpcHandlerManager({ scopePrefix: 'fixture', encryptionMode: 'plain' });
+        const registration = registerSessionHandlers(rpc, fixtureRoot);
+        try {
+            const response = await rpc.handleRequest({
+                method: `fixture:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`,
+                params: { rootPath: fixtureRoot, query: 'needle', budgetMs: 1_000 },
+            });
+            expect(DaemonWorkspaceFileListResponseSchema.parse(response)).toEqual({
+                ok: true, paths: ['needle.txt'], truncated: true,
+            });
+        } finally {
+            await registration.dispose();
+        }
+    });
+
     it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
         'retains readable real-ripgrep matches when a sibling directory denies traversal', async () => {
             fixtureRoot = await mkdtemp(join(tmpdir(), 'workspace-file-list-'));
@@ -69,12 +108,32 @@ describe('registerWorkspaceFileListHandler', () => {
             expect(observed.stdout).toBe('needle.txt\0');
             runRipgrepMock.mockImplementation(run);
 
-            await expect(createHandler()({ rootPath: fixtureRoot, query: 'needle' })).resolves.toEqual({
-                ok: true, paths: ['needle.txt'], truncated: true,
-            });
-            await expect(createHandler()({ rootPath: fixtureRoot, query: 'absent' })).resolves.toEqual({
-                ok: false, errorCode: 'ripgrep_failed', exitCode: 2,
-            });
+            const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+            const rpc = new RpcHandlerManager({ scopePrefix: 'fixture', encryptionMode: 'plain' });
+            const registration = registerSessionHandlers(rpc, fixtureRoot);
+            try {
+                const readableResponse = await rpc.handleRequest({
+                    method: `fixture:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`,
+                    params: { rootPath: fixtureRoot, query: 'needle' },
+                });
+                expect(DaemonWorkspaceFileListResponseSchema.parse(readableResponse)).toEqual({
+                    ok: true, paths: ['needle.txt'], truncated: true,
+                });
+                const response = await rpc.handleRequest({
+                    method: `fixture:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`,
+                    params: { rootPath: fixtureRoot, query: 'absent' },
+                });
+                expect(DaemonWorkspaceFileListResponseSchema.parse(response)).toEqual({
+                    ok: true, paths: [], truncated: true,
+                });
+                expect(diagnostics.mock.calls).toContainEqual(['[WORKSPACE FILE LIST] Traversal incomplete', {
+                    exitCode: 2, osErrorCodes: [13],
+                }]);
+                expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(fixtureRoot);
+            } finally {
+                await registration.dispose();
+                diagnostics.mockRestore();
+            }
         },
     );
 
@@ -95,7 +154,7 @@ describe('registerWorkspaceFileListHandler', () => {
     it('builds the file-search argv at the daemon and forwards cancellation', async () => {
         const handler = createHandler();
         const controller = new AbortController();
-        runRipgrepMock.mockResolvedValue({ exitCode: 0, stdout: 'src/a.ts\0', stderr: '' });
+        runRipgrepMock.mockResolvedValue({ exitCode: 0, stdout: 'src/a.ts\n', stderr: '' });
 
         await expect(handler(
             { rootPath: '/repo', query: 'a', includeHidden: true, limit: 50 },
@@ -106,7 +165,7 @@ describe('registerWorkspaceFileListHandler', () => {
                 '--no-config',
                 '--files',
                 '--hidden',
-                '--null',
+                '--line-buffered',
                 '--iglob',
                 '*a*',
                 '--iglob',
@@ -153,19 +212,28 @@ describe('registerWorkspaceFileListHandler', () => {
         });
     });
 
-    it('returns bounded complete paths and explicit truncation', async () => {
+    it.each([false, true])('returns only complete paths even when stdoutTruncated is %s', async (stdoutTruncated) => {
         const handler = createHandler();
         runRipgrepMock.mockResolvedValue({
             exitCode: 0,
-            stdout: 'first.ts\0second-incomplete',
+            stdout: 'first.ts\nsecond-incomplete',
             stderr: '',
-            stdoutTruncated: true,
+            stdoutTruncated,
         });
 
         await expect(handler({ rootPath: '/repo' })).resolves.toEqual({
             ok: true,
             paths: ['first.ts'],
             truncated: true,
+        });
+    });
+
+    it.each(['win32', 'linux'])('handles CRLF framing on %s without stripping a POSIX filename character', async (platform) => {
+        vi.stubGlobal('process', { ...process, platform });
+        runRipgrepMock.mockResolvedValue({ exitCode: 0, stdout: 'src/a.ts\r\n', stderr: '' });
+
+        await expect(createHandler()({ rootPath: '/repo' })).resolves.toEqual({
+            ok: true, paths: [platform === 'win32' ? 'src/a.ts' : 'src/a.ts\r'], truncated: false,
         });
     });
 });

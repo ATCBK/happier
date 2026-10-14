@@ -8,6 +8,7 @@ import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolv
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 import { getVendorResumeSupport } from './catalogHooks';
+import { resolveCapabilityApplyAgentFacts } from './capabilityApplyFacts';
 
 describe('session resume through the applied plugin runtime', () => {
   it('demands the Codex resume hook and fences it after its runtime retires', async () => {
@@ -26,6 +27,23 @@ describe('session resume through the applied plugin runtime', () => {
       });
       expect(unownedRegistry.contributes.catalogEntriesById.codex?.getVendorResumeSupport)
         .toBeUndefined();
+      const appServer = {
+        runtimeDescriptorV1: {
+          v: 1 as const,
+          agentId: 'codex',
+          agent: { backendMode: 'appServer' },
+        },
+      };
+      // An incumbent Session holds its registry; another global catalog must
+      // neither replace its declared support nor supply its lazy predicate.
+      const capturedSupportsResume = await getVendorResumeSupport('codex', unownedRegistry);
+      expect(capturedSupportsResume(appServer)).toBe(true);
+      await expect(resolveCapabilityApplyAgentFacts({ agentId: 'codex', metadata: appServer,
+        sessionRunning: true, registry: unownedRegistry })).resolves.toMatchObject({ vendorResume: 'experimental' });
+      await expect(resolveCapabilityApplyAgentFacts({ agentId: 'codex', metadata: {},
+        sessionRunning: true, registry: unownedRegistry })).resolves.toMatchObject({ vendorResume: 'unsupported' });
+      await expect(resolveCapabilityApplyAgentFacts({ agentId: 'missing-agent', metadata: appServer,
+        sessionRunning: true, registry: unownedRegistry })).resolves.toEqual({ vendorResume: 'unsupported', skillsLiveReload: 'unsupported' });
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: ['happier.agent.codex'],
@@ -38,19 +56,13 @@ describe('session resume through the applied plugin runtime', () => {
       // The daemon's ordinary resume check must demand its Agent-owned hook;
       // no earlier preflight or external-session request is required to warm it.
       const supportsResume = await getVendorResumeSupport('codex');
-      const appServer = {
-        runtimeDescriptorV1: {
-          v: 1 as const,
-          agentId: 'codex',
-          agent: { backendMode: 'appServer' },
-        },
-      };
       expect(supportsResume(appServer)).toBe(true);
       expect(supportsResume({})).toBe(false);
 
       await pluginReloadController.shutdown({ timeoutMs: 5_000 });
       adopted = false;
       expect(supportsResume(appServer)).toBe(false);
+      expect(capturedSupportsResume(appServer)).toBe(false);
     } finally {
       if (adopted) await pluginReloadController.shutdown({ timeoutMs: 5_000 });
       await unownedRegistry?.dispose();

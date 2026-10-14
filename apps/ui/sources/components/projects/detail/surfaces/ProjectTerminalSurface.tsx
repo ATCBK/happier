@@ -21,10 +21,10 @@ import { useMachineListForServer, useWorkspaceRefs } from '@/sync/domains/state/
 import { useDeviceType } from '@/utils/platform/responsive';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
-import { Modal } from '@/modal';
+import { presentTerminalActionFailure } from '@/components/sessions/terminal/terminalActionFailure';
 import { t } from '@/text';
 import { buildProjectTerminalKey, resolveProjectTerminalScope } from '../projectTerminalScope';
-import { MachineShareTrustDisclosure } from '@/components/sharing/machines/MachineShareTrustDisclosure';
+import { SessionTerminalTrustNotice } from '@/components/sessions/terminal/strip/SessionTerminalTrustNotice';
 
 /** Project host of the same terminal workspace; the accepted checkout, not a Session, is its target. */
 export const ProjectTerminalSurface = React.memo((props: Readonly<{
@@ -83,7 +83,7 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
         const selectedInput = target && typeof target === 'object' && 'kind' in target && target.kind === 'workspace_shell'
             ? { ...input, target: { ...target, workspace: authority.workspace } } : input;
         const result = await execute(actionId, selectedInput);
-        if (!result.ok) Modal.alert(t('terminalWorkspace.actionFailed'));
+        if (!result.ok) presentTerminalActionFailure(result);
         return result;
     }, [authority, execute, retired]);
     const tabMenu = useSessionTerminalTabMenu({ scopeId: props.scopeId, workspace, tabs, run });
@@ -108,21 +108,23 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
     }, [authority, props.scopeId]);
     if (!authority || retired) return <SurfaceStateCard kind="unavailable" iconName="terminal" title={t('machines.terminals.denied')} />;
     const terminalMachine = context.sessionMachineName ?? props.machineId;
-    const disclosure = <MachineShareTrustDisclosure lead={t('machines.terminals.sharedOsLead', { machine: terminalMachine })}
-        detail={t('machines.terminals.sharedOsDetail', { machine: terminalMachine })} notes={[]} idPrefix="project-terminal-" />;
+    const notice = { lead: t('machines.terminals.sharedOsLead', { machine: terminalMachine }),
+        detail: t('machines.terminals.sharedOsDetail', { machine: terminalMachine }) };
+    // The desktop pane carries the line in its own strip; a page without a strip carries it as one quiet row.
+    const noticeRow = <View style={{ paddingHorizontal: 12, paddingVertical: 6 }}><SessionTerminalTrustNotice notice={notice} /></View>;
     if (props.terminalInstanceId) {
         const member = workspace.tabs.flatMap(tab => tab.terminals).find(candidate => candidate.id === props.terminalInstanceId);
         const descriptor = tabs.flatMap(tab => tab.members).find(candidate => candidate.terminalId === member?.id) ?? null;
-        return member ? <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>{disclosure}{renderLeaf(member, { focused: true, descriptor })}</View>
+        return member ? <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>{noticeRow}{renderLeaf(member, { focused: true, descriptor })}</View>
             : <SurfaceStateCard kind="unavailable" iconName="terminal" title={t('machines.terminals.unavailable')} />;
     }
     return <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-        {disclosure}
+        {deviceType === 'phone' ? noticeRow : null}
         {deviceType === 'phone' ? <SessionTerminalPageView workspace={workspace} tabs={tabs} context={context}
             onAction={(actionId, input) => { void run(actionId, input); }} tabMenu={tabMenu}
             renderTerminal={(member, descriptor) => renderLeaf(member, { focused: true, descriptor })}
             testIdPrefix="project-terminal-workspace" /> : <SessionTerminalWorkspaceView
-                scopeId={props.scopeId} workspace={workspace} tabs={tabs} renderLeaf={renderLeaf}
+                scopeId={props.scopeId} workspace={workspace} tabs={tabs} renderLeaf={renderLeaf} notice={notice}
                 minimumTerminalWidthPx={PANE_SIZING_DEFAULTS.mainMinPx} onFocusTerminal={focus} onResize={dispatchResize}
                 onActivateTab={id => { const tab = workspace.tabs.find(candidate => candidate.id === id); if (tab) focus(tab.focusedTerminalId); }}
                 onCloseTab={tabId => { void run('session.terminals.close_tab', { tabId }); }}

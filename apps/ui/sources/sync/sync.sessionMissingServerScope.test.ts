@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createSessionFixture } from '@/dev/testkit';
+import { Encryption } from '@/sync/encryption/encryption';
+import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { ServerReachabilityWaitTimeoutError } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 import tweetnacl from 'tweetnacl';
 import { IDBFactory } from 'fake-indexeddb';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -45,12 +59,6 @@ vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-// The Sync owner runs unchanged; only packaged Expo asset bytes are absent.
-vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', async () => {
-    const { emptyBundledPluginUiAssetsModule } = await import('@/dev/testkit/mocks/bundledPluginUiAssets');
-    return emptyBundledPluginUiAssetsModule;
-});
-
 const requestMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
@@ -82,6 +90,8 @@ vi.mock('@/sync/ops/machineExternalSessions', async (importOriginal) => ({
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
         request: requestMock,
+        createRequestForPreparedTarget: () => requestMock,
+        getMachineRequestScope: () => getActiveServerAccountScope(),
         emitWithAck: vi.fn(),
         send: vi.fn(),
         onMessage: vi.fn(),
@@ -182,9 +192,10 @@ import { createVoiceHistoryConsumer } from '@/voice/history/voiceHistoryConsumer
 import type { ServerAccountRequestAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { socketTranscriptStreamSegmentAssembler } from './engine/socket/socketTranscriptStreamSegmentAssembler';
 const { applyTranscriptStreamSegmentDelta, isTranscriptStreamSegmentAssemblyReady, noteTranscriptStreamSegmentSnapshot } = socketTranscriptStreamSegmentAssembler;
-import { handleUpdateContainer } from './engine/socket/socket';
+import { handleUpdateContainer, parseEphemeralUpdate } from './engine/socket/socket';
 
 const initialStorageState = storage.getState();
+let testEncryption: Encryption;
 
 function currentPendingInputFeaturesResponse(protocolVersion = 1): Response {
     return Response.json({
@@ -228,8 +239,10 @@ function currentE2eeAccountEncryptionCurrentnessResponse(
 
 function createSession(sessionId: string): Session {
     const now = Date.now();
-    return {
+    return createSessionFixture({
         id: sessionId,
+        serverId: getActiveServerSnapshot().serverId,
+        encryptionMode: 'e2ee',
         seq: 0,
         createdAt: now,
         updatedAt: now,
@@ -243,7 +256,26 @@ function createSession(sessionId: string): Session {
         thinkingAt: 0,
         presence: 'online',
         optimisticThinkingAt: null,
-    };
+    });
+}
+
+function installAppliedAccountScope(sync: object, accountId = 'scope-test-account'): void {
+    const snapshot = getActiveServerSnapshot();
+    storage.getState().activateProfileScope({ serverId: snapshot.serverId, accountId });
+    publishAppliedActiveServerSnapshot(snapshot);
+    Reflect.set(sync, 'appliedServerTarget', snapshot);
+    Reflect.set(sync, 'serverID', accountId);
+}
+
+function pendingActionAcknowledgement(init?: RequestInit): Response {
+    const body: unknown = JSON.parse(String(init?.body ?? 'null'));
+    if (!body || typeof body !== 'object' || !('requestedAction' in body)) {
+        throw new Error('Expected a Pending Action request');
+    }
+    return Response.json(PendingResetStartSetResultV1Schema.parse({
+        didUpdate: true,
+        requestedAction: body.requestedAction,
+    }));
 }
 
 function createStreamSegmentRecord(text: string): RawRecord {
@@ -287,10 +319,7 @@ function createPlainNewMessageUpdate(params: Readonly<{
 }
 
 type SyncRetirementEncryptionTestAccess = {
-    encryption: {
-        getSessionEncryption: (sessionId: string) => null;
-        removeSessionEncryption: (sessionId: string) => void;
-    };
+    encryption: Encryption;
 };
 
 type SyncRetirementTestAccess = {
@@ -301,14 +330,10 @@ type SyncRetirementTestAccess = {
     markSessionMaterializedMaxSeq: (sessionId: string, seq: number) => void;
 };
 
-// Sync's encryption service is an external boundary. Retirement invokes both
-// methods, so this minimal fixture mirrors the real surface it crosses.
+// Keep Session key eviction and Account generation on the real encryption owner.
 function installPlainRetirementEncryption(sync: unknown): void {
     const syncWithEncryption = sync as SyncRetirementEncryptionTestAccess;
-    syncWithEncryption.encryption = {
-        getSessionEncryption: () => null,
-        removeSessionEncryption: () => {},
-    };
+    syncWithEncryption.encryption = testEncryption;
 }
 
 // The Home's exact-session answer for a Session that is deleted or no longer visible
@@ -367,6 +392,7 @@ function createExternalSession(sessionId: string): Session {
     const now = Date.now();
     return {
         ...createSession(sessionId),
+        encryptionMode: 'plain',
         currentStorageState: 'machine_only',
         createdAt: now,
         updatedAt: now,
@@ -476,10 +502,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         actionOperationStore.reset();
         resolvePreferredServerIdForSessionIdMock.mockReturnValue(undefined);
         resetSessionSurfaceVisibilityForTests();
+        testEncryption = await Encryption.create(new Uint8Array(32).fill(9));
         // `sync` is a module singleton the suite reaches into; without this the
         // applied transport Home a case sets leaks into every later case and
         // silently changes which Home the scope owners address.
-        Reflect.set((await import('./syncEngine')).sync, 'appliedServerTarget', null);
+        const { sync } = await import('./syncEngine');
+        installAppliedAccountScope(sync);
+        Reflect.set(sync, 'encryption', testEncryption);
     });
 
     afterEach(() => {
@@ -541,9 +570,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().applySessions([createSession(sessionId)]);
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -626,9 +653,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
     it('does not recreate a transcript entry for a deleted session missing from the snapshot', async () => {
         const sessionId = 'deleted_session_id';
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -758,13 +783,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         await handleUpdateContainer({
-            encryption: {
-                getSessionEncryption: () => null,
-                getMachineEncryption: () => null,
-                removeSessionEncryption: () => {},
-                decryptEncryptionKey: async () => null,
-                initializeMachines: async () => {},
-            } as unknown as Parameters<typeof handleUpdateContainer>[0]['encryption'],
+            encryption: testEncryption,
             artifactDataKeys: new Map(),
             applySessions,
             fetchSessions: vi.fn(),
@@ -809,6 +828,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             name: 'Voice History currentness',
         });
         await setActiveServerId(server.id, { scope: 'device' });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         storage.getState().activateProfileScope({ serverId: server.id, accountId });
         storage.getState().applySessions([{
             ...createSession(sessionId),
@@ -1010,8 +1030,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         await setActiveServerId(server.id, { scope: 'device' });
         const scope = createAccountSettingsScope(server.id, 'account-settings-user');
         expect(scope).not.toBeNull();
-        saveAccountSettings(scope!, { ...settingsDefaults, viewInline: true }, 7);
-        savePendingAccountSettings(scope!, { viewInline: false });
+        saveAccountSettings(scope!, { ...settingsDefaults, showLineNumbers: true }, 7);
+        savePendingAccountSettings(scope!, { showLineNumbers: false });
 
         const { sync } = await import('./sync');
         const credentials = {
@@ -1019,13 +1039,14 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             secret: encodeBase64(new Uint8Array(32).fill(3), 'base64url'),
         };
 
+        installAppliedAccountScope(sync, 'account-settings-user');
         await (sync as any).activateAccountSettingsScopeForCredentials(credentials);
 
         expect(storage.getState().settingsScope).toEqual(scope);
         expect(storage.getState().settingsVersion).toBe(7);
-        expect(storage.getState().settings.viewInline).toBe(true);
+        expect(storage.getState().settings.showLineNumbers).toBe(true);
         expect((sync as any).pendingSettingsScope).toEqual(scope);
-        expect((sync as any).pendingSettings).toEqual({ viewInline: false });
+        expect((sync as any).pendingSettings).toEqual({ showLineNumbers: false });
     });
 
     it('clears the account settings scope when credentials contain a malformed token', async () => {
@@ -1033,14 +1054,15 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         await setActiveServerId(server.id, { scope: 'device' });
         const scope = createAccountSettingsScope(server.id, 'account-settings-user');
         expect(scope).not.toBeNull();
-        saveAccountSettings(scope!, { ...settingsDefaults, viewInline: true }, 7);
-        savePendingAccountSettings(scope!, { viewInline: false });
+        saveAccountSettings(scope!, { ...settingsDefaults, showLineNumbers: true }, 7);
+        savePendingAccountSettings(scope!, { showLineNumbers: false });
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const previousDebugFlag = process.env.EXPO_PUBLIC_HAPPIER_DEBUG_SETTINGS_SYNC;
 
         try {
             const { sync } = await import('./syncEngine');
+            installAppliedAccountScope(sync, 'account-settings-user');
             await (sync as any).activateAccountSettingsScopeForCredentials({
                 token: buildTokenWithSub('account-settings-user'),
                 secret: encodeBase64(new Uint8Array(32).fill(3), 'base64url'),
@@ -1054,7 +1076,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
             expect(storage.getState().settingsScope).toBeNull();
             expect(storage.getState().settingsVersion).toBeNull();
-            expect(storage.getState().settings.viewInline).toBe(settingsDefaults.viewInline);
+            expect(storage.getState().settings.showLineNumbers).toBe(settingsDefaults.showLineNumbers);
             expect((sync as any).pendingSettingsScope).toBeNull();
             expect((sync as any).pendingSettings).toEqual({});
             expect(warnSpy).toHaveBeenCalledWith(
@@ -1076,14 +1098,15 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         await setActiveServerId(server.id, { scope: 'device' });
         const scope = createAccountSettingsScope(server.id, 'account-settings-user');
         expect(scope).not.toBeNull();
-        saveAccountSettings(scope!, { ...settingsDefaults, viewInline: true }, 7);
-        savePendingAccountSettings(scope!, { viewInline: false });
+        saveAccountSettings(scope!, { ...settingsDefaults, showLineNumbers: true }, 7);
+        savePendingAccountSettings(scope!, { showLineNumbers: false });
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const previousDebugFlag = process.env.EXPO_PUBLIC_HAPPIER_DEBUG_SETTINGS_SYNC;
 
         try {
             const { sync } = await import('./sync');
+            installAppliedAccountScope(sync, 'account-settings-user');
             await (sync as any).activateAccountSettingsScopeForCredentials({
                 token: buildTokenWithSub('account-settings-user'),
                 secret: encodeBase64(new Uint8Array(32).fill(3), 'base64url'),
@@ -1093,11 +1116,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             await expect(sync.create({
                 token: buildTokenWithSub(''),
                 secret: encodeBase64(new Uint8Array(32).fill(4), 'base64url'),
-            }, {
-                anonID: 'anon-empty-sub',
-                initializeSessions: async () => undefined,
-                getContentPrivateKey: () => new Uint8Array(32).fill(5),
-            } as any)).rejects.toThrow('Invalid auth token');
+            }, testEncryption)).rejects.toThrow('Invalid auth token');
 
             expect(storage.getState().settingsScope).toBeNull();
             expect(storage.getState().settingsVersion).toBeNull();
@@ -1122,9 +1141,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().applySessions([createSession(sessionId)]);
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = false;
 
@@ -1138,9 +1155,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().applySessions([createSession(sessionId)]);
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
 
         await expect((sync as any).fetchMessages(sessionId)).rejects.toThrow(
@@ -1200,12 +1215,11 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 { status: 200, headers: { 'Content-Type': 'application/json' } },
             ),
         );
-        const getSessionEncryption = vi.fn(() => null);
+        const getSessionEncryption = vi.spyOn(testEncryption, 'getSessionEncryption');
+        onTestFinished(() => getSessionEncryption.mockRestore());
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1219,10 +1233,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
     it('retries a first transcript read after a transient reachability timeout', async () => {
         const sessionId = 'plain_transient_first_read';
         storage.getState().applySessions([{ ...createSession(sessionId), encryptionMode: 'plain' } as Session]);
-        const timeout = Object.assign(new Error('Timed out waiting for server reachability'), {
-            name: 'ServerFetchConnectivityTimeoutError',
-            retryable: false,
-        });
+        const timeout = new ServerReachabilityWaitTimeoutError();
         requestMock
             .mockRejectedValueOnce(timeout)
             .mockResolvedValueOnce(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
@@ -1242,9 +1253,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
     it('treats sessions applied after the initial snapshot as known on the active server', async () => {
         const sessionId = 'new_after_snapshot';
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         // Snapshot already fetched, but the set does not yet include this newly applied session.
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
@@ -1284,9 +1293,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1327,7 +1334,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
         machineExternalSessionTranscriptReadAfterMock.mockResolvedValueOnce({ ok: true, items: [], nextCursor: 'tail', truncated: false });
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1377,9 +1384,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1510,9 +1515,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         }));
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1823,9 +1826,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -1834,11 +1835,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.setState((state) => ({
             ...state,
             sessions: { ...state.sessions, [sessionId]: partial },
-            machines: {
-                ...state.machines,
-                'machine-1': { ...createMachine('machine-1'), revokedAt: 1 },
-            },
         }));
+        storage.getState().applyMachines([{ ...createMachine('machine-1'), revokedAt: 1 }], false);
         let releaseStaleServerPage!: (response: Response) => void;
         const staleServerPage = new Promise<Response>((resolve) => {
             releaseStaleServerPage = resolve;
@@ -1854,13 +1852,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const staleServerFetch = (sync as any).fetchMessages(sessionId);
         await staleServerReadStarted;
-        storage.setState((state) => ({
-            ...state,
-            machines: {
-                ...state.machines,
-                'machine-1': createMachine('machine-1'),
-            },
-        }));
+        storage.getState().applyMachines([createMachine('machine-1')], false);
         releaseStaleServerPage(serverPage());
         await staleServerFetch;
 
@@ -1872,17 +1864,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             .map((message) => message.text);
         expect(readTexts()).toEqual(['live before switch']);
 
-        storage.setState((state) => ({
-            ...state,
-            machines: {
-                ...state.machines,
-                'machine-1': { ...createMachine('machine-1'), revokedAt: 1 },
-            },
-        }));
+        storage.getState().applyMachines([{ ...createMachine('machine-1'), revokedAt: 1 }], false);
         requestMock.mockResolvedValueOnce(serverPage());
         const serverReplacementSnapshots: Array<{ texts: string[]; isLoaded: boolean }> = [];
         const unsubscribeServerReplacement = storage.subscribe((state, previousState) => {
             if (state.sessionMessages[sessionId] === previousState.sessionMessages[sessionId]) return;
+            if (state.sessionMessages[sessionId]?.messagesById === previousState.sessionMessages[sessionId]?.messagesById
+                && state.sessionMessages[sessionId]?.isLoaded === previousState.sessionMessages[sessionId]?.isLoaded) return;
             const transcript = state.sessionMessages[sessionId];
             serverReplacementSnapshots.push({
                 texts: Object.values(transcript?.messagesById ?? {})
@@ -1905,16 +1893,12 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 || ('localId' in message && message.localId === stagedLocalId),
         )).toBe(false);
 
-        storage.setState((state) => ({
-            ...state,
-            machines: {
-                ...state.machines,
-                'machine-1': createMachine('machine-1'),
-            },
-        }));
+        storage.getState().applyMachines([createMachine('machine-1')], false);
         const liveReplacementSnapshots: Array<{ texts: string[]; isLoaded: boolean }> = [];
         const unsubscribeLiveReplacement = storage.subscribe((state, previousState) => {
             if (state.sessionMessages[sessionId] === previousState.sessionMessages[sessionId]) return;
+            if (state.sessionMessages[sessionId]?.messagesById === previousState.sessionMessages[sessionId]?.messagesById
+                && state.sessionMessages[sessionId]?.isLoaded === previousState.sessionMessages[sessionId]?.isLoaded) return;
             const transcript = state.sessionMessages[sessionId];
             liveReplacementSnapshots.push({
                 texts: Object.values(transcript?.messagesById ?? {})
@@ -1948,9 +1932,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().applySessions([createExternalSession(sessionId)]);
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -2073,7 +2055,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -2105,7 +2087,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -2153,7 +2135,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -2571,7 +2553,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             fetchMessages: (id: string) => Promise<void>; encryption: unknown; isForeground: boolean;
             activeServerSessionIds: Set<string>; hasFetchedSessionsSnapshotForActiveServer: boolean;
         };
-        internals.encryption = { getSessionEncryption: () => null };
+        internals.encryption = testEncryption;
         internals.isForeground = true;
         internals.activeServerSessionIds = new Set([sessionId]);
         internals.hasFetchedSessionsSnapshotForActiveServer = true;
@@ -2609,9 +2591,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -2722,7 +2702,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
         await (sync as any).fetchMessages(sessionId);
@@ -2905,9 +2885,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         ]));
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -3062,6 +3040,11 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
     it('fetches persisted session messages through the preferred owner server when the owner is not active', async () => {
         const sessionId = 'persisted_session_remote_messages';
+        await testEncryption.initializeSessions(new Map([[sessionId, null]]));
+        const sessionEncryption = testEncryption.getSessionEncryption(sessionId)!;
+        const ciphertext = await sessionEncryption.encryptRawRecord({
+            role: 'user', content: { type: 'text', text: 'hello scoped' },
+        });
         const activeServer = await upsertServerProfile({ serverUrl: 'https://active.example', name: 'Active' });
         const ownerServer = await upsertServerProfile({ serverUrl: 'https://owner.example', name: 'Owner' });
         await setActiveServerId(activeServer.id, { scope: 'device' });
@@ -3081,7 +3064,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                             seq: 1,
                             localId: null,
                             sidechainId: null,
-                            content: { t: 'encrypted', c: 'ciphertext-1' },
+                            content: { t: 'encrypted', c: ciphertext },
                             createdAt: 1_001,
                             updatedAt: 1_001,
                         },
@@ -3094,27 +3077,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         );
 
         const { sync } = await import('./sync');
-        // The real `Encryption.getSessionEncryption` returns a cached per-session
-        // instance; the page pipeline fences on that identity to drop a response
-        // whose encryption owner was replaced mid-read. A stub that allocates a
-        // fresh object per call trips that fence on every page.
-        const sessionEncryption = {
-            decryptMessages: async () => [
-                {
-                    id: 'm1',
-                    seq: 1,
-                    localId: null,
-                    createdAt: 1_001,
-                    content: {
-                        role: 'user',
-                        content: { type: 'text', text: 'hello scoped' },
-                    },
-                },
-            ],
-        };
-        (sync as any).encryption = {
-            getSessionEncryption: () => sessionEncryption,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -3135,6 +3098,14 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
     it('pages older persisted session messages through the preferred owner server when the owner is not active', async () => {
         const sessionId = 'persisted_session_remote_older';
+        await testEncryption.initializeSessions(new Map([[sessionId, null]]));
+        const sessionEncryption = testEncryption.getSessionEncryption(sessionId)!;
+        const latestCiphertext = await sessionEncryption.encryptRawRecord({
+            role: 'user', content: { type: 'text', text: 'latest' },
+        });
+        const olderCiphertext = await sessionEncryption.encryptRawRecord({
+            role: 'user', content: { type: 'text', text: 'older' },
+        });
         const activeServer = await upsertServerProfile({ serverUrl: 'https://active.example', name: 'Active' });
         const ownerServer = await upsertServerProfile({ serverUrl: 'https://owner.example', name: 'Owner' });
         await setActiveServerId(activeServer.id, { scope: 'device' });
@@ -3155,7 +3126,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                                 seq: 2,
                                 localId: null,
                                 sidechainId: null,
-                                content: { t: 'encrypted', c: 'ciphertext-2' },
+                                content: { t: 'encrypted', c: latestCiphertext },
                                 createdAt: 1_002,
                                 updatedAt: 1_002,
                             },
@@ -3175,7 +3146,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                                 seq: 1,
                                 localId: null,
                                 sidechainId: null,
-                                content: { t: 'encrypted', c: 'ciphertext-1' },
+                                content: { t: 'encrypted', c: olderCiphertext },
                                 createdAt: 1_001,
                                 updatedAt: 1_001,
                             },
@@ -3188,23 +3159,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             );
 
         const { sync } = await import('./sync');
-        // Stable per-session instance: see the note on the sibling case above.
-        const sessionEncryption = {
-            decryptMessages: async (messages: Array<{ id: string; seq: number; createdAt: number }>) =>
-                messages.map((message) => ({
-                    id: message.id,
-                    seq: message.seq,
-                    localId: null,
-                    createdAt: message.createdAt,
-                    content: {
-                        role: 'user',
-                        content: { type: 'text', text: message.id === 'm2' ? 'latest' : 'older' },
-                    },
-                })),
-        };
-        (sync as any).encryption = {
-            getSessionEncryption: () => sessionEncryption,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>();
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -3321,12 +3276,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 }));
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-            // `sendPendingMessageNow` asks the same Encryption owner whether the
-            // target machine can be woken, so the stub mirrors both accessors.
-            getMachineEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
 
         const enqueueResult = await (sync as any).enqueuePendingMessage(
             sessionId,
@@ -3407,7 +3357,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                         authorAccountId: null,
                     }] });
                 }
-                return Response.json({ didUpdate: true, recipient });
+                return pendingActionAcknowledgement(_init);
             });
             // Without a local echo, the Run-scoped row the composer acts on is the
             // owner Home's authoritative snapshot — the same one the sibling
@@ -3713,7 +3663,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const mountedToken = buildTokenWithSub('account-b');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: mountedToken, secret: 'home-b-secret' });
         createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
-        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);
             if (url.endsWith('/v1/features')) return currentPendingInputFeaturesResponse();
             if (url.endsWith('/v1/account/encryption/currentness')) return currentPlainAccountEncryptionCurrentnessResponse();
@@ -3736,7 +3686,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                     pendingVersion: 1,
                 } });
             }
-            if (url.endsWith(`/pending/home-b-send-now/action`)) return Response.json({ didUpdate: true });
+            if (url.endsWith(`/pending/home-b-send-now/action`)) return pendingActionAcknowledgement(init);
             return new Response(null, { status: 404 });
         });
 
@@ -3991,6 +3941,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         };
         Reflect.set(sync, 'appliedServerTarget', appliedServerSnapshotOverride.current);
         Reflect.set(sync, 'serverID', 'captured-account');
+        storage.getState().applySessions([{ ...createSession(sessionId), encryptionMode: 'plain' }]);
+        publishAppliedActiveServerSnapshot(appliedSnapshot);
         requestMock.mockImplementation(async () => {
             storage.getState().activateProfileScope({ serverId: server.id, accountId: 'switched-account' });
             return Response.json({});
@@ -4034,6 +3986,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         };
         Reflect.set(sync, 'appliedServerTarget', appliedServerSnapshotOverride.current);
         Reflect.set(sync, 'serverID', 'captured-account');
+        storage.getState().applySessions([{ ...createSession(sessionId), encryptionMode: 'plain' }]);
+        publishAppliedActiveServerSnapshot(appliedSnapshot);
         getCredentialsForServerUrlMock.mockResolvedValue({
             token: buildTokenWithSub('captured-account'),
             secret: 'captured-secret',
@@ -4217,12 +4171,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const { sync } = await import('./sync');
         Reflect.set(sync, 'appliedServerTarget', getActiveServerSnapshot());
         Reflect.set(sync, 'serverID', 'account-a');
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         (sync as any).credentials = { token: 'active-token', secret: 'active-secret' };
-        (sync as any).encryption = {
-            decryptEncryptionKey: async () => null,
-            initializeSessions: async () => {},
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(sync.updatePendingRequestedAction(
             sessionId,
@@ -4262,6 +4213,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
     it('migrates a cached linked layout-0 owner through the scoped tuple writer', async () => {
         const sessionId = 'plain_metadata_session';
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue(getActiveServerSnapshot().serverId);
         const sourceMetadata = {
             path: '/tmp/repo',
             host: 'test-host',
@@ -4327,11 +4279,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 ),
             },
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(
             sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({
@@ -4369,6 +4317,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
     it('routes layout-1 title updates as strict shared-editor tuple patches', async () => {
         const sessionId = 'plain_shared_metadata_session';
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue(getActiveServerSnapshot().serverId);
         const initialSharedMetadata = {
             v: 1,
             summary: { text: 'Before', updatedAt: 100 },
@@ -4421,11 +4370,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 ),
             },
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(
             sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({
@@ -4532,11 +4477,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const { sync } = await import('./sync');
         (sync as any).credentials = credentials;
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(
             sync.patchSessionMetadataWithRetry(
@@ -4679,11 +4620,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 ),
             },
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(
             sync.patchSessionMetadataWithRetry(
@@ -4850,11 +4787,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(
             sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({
@@ -4942,11 +4875,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
 
         await expect(sync.migrateSessionMetadataOwnerLayout(sessionId)).resolves.toBeUndefined();
 
@@ -5006,9 +4935,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5086,9 +5013,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5181,7 +5106,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5233,9 +5158,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5296,7 +5219,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).messagesSync.clear();
         let redrive!: Promise<void>;
         const invalidateOpen = vi.fn(() => {
@@ -5327,11 +5250,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(machineExternalSessionTranscriptPageMock).toHaveBeenCalledTimes(1);
 
         invalidateOpen.mockImplementation(() => undefined);
-        // Age the accepted heartbeat; an older inactive event is correctly ignored.
-        const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120_000);
-        onTestFinished(() => clock.mockRestore());
+        const acceptedHeartbeat = storage.getState().machines['machine-1']!.activeAt;
         (sync as any).flushMachineActivityUpdates(new Map([
-            ['machine-1', { id: 'machine-1', active: true, activeAt: Date.now() }],
+            ['machine-1', { id: 'machine-1', active: false, activeAt: acceptedHeartbeat - 1 }],
         ]));
         expect(invalidateOpen).toHaveBeenCalledTimes(1);
         expect(storage.getState().machines['machine-1']?.active).toBe(true);
@@ -5369,9 +5290,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5449,9 +5368,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5580,9 +5497,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5722,9 +5637,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -5791,11 +5704,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(sessionId, { cursor: initialCursor, recoveryRequired: false });
 
         (sync as any).handleEphemeralUpdate(invalidation, { serverId: sourceServer.id } as never);
@@ -5872,11 +5781,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(sessionId, { cursor: initialCursor, recoveryRequired: false });
 
         await (sync as any).handleExternalSessionTranscriptEphemeralUpdate(
@@ -5952,11 +5857,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(
             sessionId,
             { cursor: 'happier_external_cursor_v1:Y3Vyc29yLTE', recoveryRequired: false },
@@ -6017,11 +5918,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(
             sessionId,
             { cursor: 'happier_external_cursor_v1:Y3Vyc29yLTE', recoveryRequired: false },
@@ -6071,11 +5968,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(
             sessionId,
             { cursor: 'happier_external_cursor_v1:Y3Vyc29yLTE', recoveryRequired: false },
@@ -6272,11 +6165,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).externalSessionTailStateBySessionId.set(sessionId, { cursor: initialCursor, recoveryRequired: false });
         const applyItemsSpy = vi.spyOn(
             sync as any,
@@ -6376,9 +6265,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6468,9 +6355,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         );
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
         await (sync as any).fetchMessages(sessionId);
@@ -6592,11 +6477,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: 'active-token',
             secret: encodeBase64(new Uint8Array(32).fill(9), 'base64'),
         };
-        (sync as any).encryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeSessions: vi.fn(async () => undefined),
-            getSessionEncryption: vi.fn(() => null),
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6678,7 +6559,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = { getSessionEncryption: () => null };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6766,9 +6647,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6866,9 +6745,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6933,9 +6810,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-        };
+        (sync as any).encryption = testEncryption;
         (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
 
@@ -6999,45 +6874,68 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
         await setActiveServerId(appliedServer.id, { scope: 'device' });
         const appliedSnapshot = getActiveServerSnapshot();
-        appliedServerSnapshotOverride.current = {
-            serverId: appliedSnapshot.serverId,
-            serverUrl: appliedSnapshot.serverUrl,
-            generation: appliedSnapshot.generation,
-        };
-        storage.getState().activateProfileScope({ serverId: appliedServer.id, accountId: 'account-a' });
-
-        const snapshot = (accountId: string, operationId: string) => ({
-            version: 1,
-            operationId,
-            revision: 1,
-            actionId: 'session.spawn_new',
-            state: 'accepted',
-            scope: { accountId, machineId: 'machine-1' },
-            title: 'Create session',
-            createdAt: 1,
+        appliedServerSnapshotOverride.current = appliedSnapshot;
+        const { sync } = await import('./sync');
+        installAppliedAccountScope(sync, 'account-a');
+        const credentialsFor = (accountId: string) => ({ token: buildTokenWithSub(accountId) });
+        Reflect.set(sync, 'credentials', credentialsFor('account-a'));
+        getCredentialsForServerUrlMock.mockImplementation(async (url: string) =>
+            credentialsFor(new URL(url).origin === appliedServer.serverUrl ? 'account-a' : 'account-b'));
+        createEncryptionFromAuthCredentialsMock.mockResolvedValue(null);
+        requestMock.mockImplementation(async (path: string) => {
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return currentPlainAccountEncryptionCurrentnessResponse();
+            throw new Error(`Unexpected applied Home request: ${path}`);
+        });
+        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/account/encryption/currentness') return currentPlainAccountEncryptionCurrentnessResponse();
+            if (url.pathname === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({
+                id: 'machine-1',
+                accountId: url.origin === appliedServer.serverUrl ? 'account-a' : 'account-b',
+            }) });
+            return new Response(null, { status: 404 });
+        });
+        const snapshot = (accountId: string, operationId: string) => ActionOperationSnapshotV1Schema.parse({
+            version: 1, operationId, revision: 1, actionId: 'session.spawn_new', state: 'accepted',
+            scope: { accountId, machineId: 'machine-1' }, title: 'Create session', createdAt: 1,
             cancellation: 'unsupported',
         });
-        // Assigned only inside the executor callback, so a `let` narrows to `never` at the call
-        // site below; the resolver lives in a holder instead.
-        const delayedSnapshotResolver: { current: ((value: unknown) => void) | null } = { current: null };
-        const delayedSnapshot = new Promise<unknown>((resolve) => { delayedSnapshotResolver.current = resolve; });
-        const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            getSessionEncryption: () => null,
-            openActionOperationSnapshotRaw: vi.fn((ciphertext: string) => (
-                ciphertext === 'delayed' ? delayedSnapshot : JSON.parse(ciphertext)
-            )),
-        };
-        const dispatch = (serverId: string, ciphertext: string) => {
-            (sync as any).handleEphemeralUpdate({
-                type: 'action-operation-snapshot',
-                machineId: 'machine-1',
-                ciphertext,
-            }, { serverId } as never);
+        let rpcSnapshot = snapshot('account-a', 'operation-a');
+        const heldRead = createDeferred<ReturnType<typeof snapshot>>();
+        const readStarted = createDeferred<void>();
+        let holdRead = false;
+        const socketBoundary = installDisconnectedServerSocketBoundary(socket => {
+            socket.connected = true;
+            socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
+                if (event !== SOCKET_RPC_EVENTS.CALL || request.method !== `machine-1:${ACTION_OPERATION_RPC_METHODS_V2.get}`) {
+                    throw new Error(`Unexpected operation socket request: ${event}`);
+                }
+                if (holdRead) {
+                    readStarted.resolve();
+                    return { ok: true, result: { kind: 'found', operation: await heldRead.promise } };
+                }
+                return { ok: true, result: { kind: 'found', operation: rpcSnapshot } };
+            });
+        });
+        onTestFinished(() => {
+            socketBoundary.dispose();
+            installDisconnectedServerSocketBoundary();
+        });
+        const dispatch = (serverId: string, operation: ReturnType<typeof snapshot>) => {
+            const update = {
+                type: 'action-operation-updated', machineId: 'machine-1',
+                content: { t: 'plain', v: operation },
+            };
+            expect(parseEphemeralUpdate(update)).not.toBeNull();
+            (sync as any).handleEphemeralUpdate(update, { serverId } as never);
         };
 
         await setActiveServerId(stagedServer.id, { scope: 'device' });
-        dispatch(appliedServer.id, JSON.stringify(snapshot('account-a', 'operation-a')));
+        expect(getActiveServerAccountScope()).toEqual({ serverId: appliedServer.id, accountId: 'account-a' });
+        expect(Reflect.get(sync, 'appliedServerTarget')).toEqual(appliedSnapshot);
+        dispatch(appliedServer.id, rpcSnapshot);
         await vi.waitFor(() => {
             expect([...actionOperationStore.getSnapshot().operationsByKey.values()]).toEqual([
                 expect.objectContaining({ serverId: appliedServer.id }),
@@ -7045,19 +6943,18 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
 
         appliedRuntimeAvailableOverride.current = false;
-        dispatch(appliedServer.id, JSON.stringify(snapshot('account-a', 'operation-unavailable')));
+        publishAppliedActiveServerRuntimeAvailability(false);
+        dispatch(appliedServer.id, snapshot('account-a', 'operation-unavailable'));
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(actionOperationStore.getSnapshot().operationsByKey.size).toBe(1);
 
         const stagedSnapshot = getActiveServerSnapshot();
-        appliedServerSnapshotOverride.current = {
-            serverId: stagedSnapshot.serverId,
-            serverUrl: stagedSnapshot.serverUrl,
-            generation: stagedSnapshot.generation,
-        };
+        appliedServerSnapshotOverride.current = stagedSnapshot;
         appliedRuntimeAvailableOverride.current = true;
-        storage.getState().activateProfileScope({ serverId: stagedServer.id, accountId: 'account-b' });
-        dispatch(stagedServer.id, JSON.stringify(snapshot('account-b', 'operation-b')));
+        installAppliedAccountScope(sync, 'account-b');
+        Reflect.set(sync, 'credentials', credentialsFor('account-b'));
+        rpcSnapshot = snapshot('account-b', 'operation-b');
+        dispatch(stagedServer.id, rpcSnapshot);
         await vi.waitFor(() => {
             expect([...actionOperationStore.getSnapshot().operationsByKey.values()]).toEqual(expect.arrayContaining([
                 expect.objectContaining({ serverId: appliedServer.id }),
@@ -7067,12 +6964,12 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const capturedGeneration = Reflect.get(sync, 'serverScopeGeneration') as number;
         try {
-            dispatch(stagedServer.id, 'delayed');
-            await vi.waitFor(() => {
-                expect((sync as any).encryption.openActionOperationSnapshotRaw).toHaveBeenCalledWith('delayed');
-            });
+            holdRead = true;
+            rpcSnapshot = snapshot('account-b', 'operation-stale-generation');
+            dispatch(stagedServer.id, rpcSnapshot);
+            await readStarted.promise;
             Reflect.set(sync, 'serverScopeGeneration', capturedGeneration + 1);
-            delayedSnapshotResolver.current?.(snapshot('account-b', 'operation-stale-generation'));
+            heldRead.resolve(rpcSnapshot);
             await new Promise((resolve) => setTimeout(resolve, 0));
             expect(actionOperationStore.getSnapshot().operationsByKey.size).toBe(2);
         } finally {
@@ -7089,57 +6986,45 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 transcriptStreamingCoalesceEnabled: false,
             },
         }));
-        storage.getState().applySessions([{ ...createSession(sessionId), encryptionMode: 'plain' } as Session]);
+        storage.getState().applySessions([createSession(sessionId)]);
         markSessionSurfaceVisible(sessionId);
 
         const { sync } = await import('./sync');
-        (sync as any).encryption = {
-            sessionEncryptions: new Map([
-                [sessionId, { decryptMessage: vi.fn(async () => null) }],
-            ]),
-            getSessionEncryption(sessionId: string) {
-                return this.sessionEncryptions.get(sessionId) ?? null;
+        await testEncryption.initializeSessions(new Map([[sessionId, null]]));
+        (sync as any).encryption = testEncryption;
+        const sessionEncryption = testEncryption.getSessionEncryption(sessionId)!;
+        const ciphertext = await sessionEncryption.encryptRawRecord({
+            role: 'agent',
+            content: { type: 'acp', agentId: 'codex', data: { type: 'text', text: 'Hello there' } },
+            meta: {
+                happierStreamSegmentV1: {
+                    v: 1, segmentKind: 'assistant', segmentLocalId: 'segment-1',
+                    segmentState: 'streaming', startedAtMs: 1_000, updatedAtMs: 1_025,
+                },
             },
-        };
+        });
 
         expect(() => (sync as any).handleEphemeralUpdate({
             type: 'transcript-stream-segment',
             sessionId,
             message: {
                 localId: 'segment-1',
-                content: {
-                    t: 'plain',
-                    v: {
-                        role: 'agent',
-                        content: {
-                            type: 'text',
-                            text: 'Hello there',
-                        },
-                        meta: {
-                            happierStreamSegmentV1: {
-                                v: 1,
-                                segmentKind: 'assistant',
-                                segmentLocalId: 'segment-1',
-                                segmentState: 'streaming',
-                                startedAtMs: 1_000,
-                                updatedAtMs: 1_025,
-                            },
-                        },
-                    },
-                },
+                content: { t: 'encrypted', c: ciphertext },
                 createdAt: 1_000,
                 updatedAt: 1_025,
             },
         }, { serverId: getActiveServerSnapshot().serverId } as never)).not.toThrow();
 
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        const sessionMessages = storage.getState().sessionMessages[sessionId];
-        expect(sessionMessages?.messageIdsOldestFirst).toHaveLength(1);
-        const appliedMessageId = sessionMessages?.messageIdsOldestFirst[0];
-        expect(appliedMessageId).toBeTruthy();
-        expect(sessionMessages?.messagesById[appliedMessageId as string]).toMatchObject({
-            localId: 'segment-1',
+        await vi.waitFor(() => {
+            const sessionMessages = storage.getState().sessionMessages[sessionId];
+            expect(sessionMessages?.messageIdsOldestFirst).toHaveLength(1);
+            const appliedMessageId = sessionMessages?.messageIdsOldestFirst[0];
+            expect(appliedMessageId).toBeTruthy();
+            expect(sessionMessages?.messagesById[appliedMessageId as string]).toMatchObject({
+                localId: 'segment-1',
+                kind: 'agent-text',
+                text: 'Hello there',
+            });
         });
     });
     // The on-open catch-up, the deferred-newer drain and the stale-region repair each
@@ -7231,7 +7116,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().applyMessages(params.sessionId, history);
         storage.getState().applyMessagesLoaded(params.sessionId);
         const syncInternals = sync as any;
-        syncInternals.encryption = { getSessionEncryption: () => null };
+        syncInternals.encryption = testEncryption;
         syncInternals.activeServerSessionIds = new Set<string>([params.sessionId]);
         syncInternals.hasFetchedSessionsSnapshotForActiveServer = true;
         syncInternals.isForeground = true;

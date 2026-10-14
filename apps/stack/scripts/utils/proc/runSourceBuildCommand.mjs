@@ -9,7 +9,7 @@ import { runWorkspaceBuildAdmission } from './workspace_build_admission.mjs';
  * runtime bundle callers select source-bundle.
  */
 export async function runSourceBuildCommand({ repoDir, scriptPath, command, cwd = repoDir, args = [], env = process.env,
-  signal, captureStdout = true, captureStderr = false, admissionClass = 'validation', stdoutStream = process.stdout }) {
+  signal, captureStdout = true, captureStderr = false, admissionClass = 'validation', stdoutStream = process.stdout, devStartup = false }) {
   const launcher = fileURLToPath(new URL('../../../bin/hstack-exec', import.meta.url));
   const payloadCommand = command ?? process.execPath;
   const payloadArgs = command ? args : [scriptPath, ...args];
@@ -28,7 +28,7 @@ export async function runSourceBuildCommand({ repoDir, scriptPath, command, cwd 
   const observeStdout = observe(), observeStderr = observe();
   const result = await runWorkspaceBuildAdmission({ repoDir, launcherPath: launcher,
     dependencyInstallDir: repoDir, command: payloadCommand, args: payloadArgs, cwd, env, signal,
-    admissionClass, stdio: ['ignore', 'pipe', 'pipe'], captureStdout, captureStderr,
+    admissionClass, devStartup, stdio: ['ignore', 'pipe', 'pipe'], captureStdout, captureStderr,
     onStdout: value => { observeStdout(value); if (!captureStdout) stdoutStream.write(value); },
     onStderr: value => { observeStderr(value); process.stderr.write(value); } });
   if (result.error) throw result.error;

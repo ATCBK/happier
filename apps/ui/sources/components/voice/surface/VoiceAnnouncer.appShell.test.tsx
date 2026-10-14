@@ -77,7 +77,7 @@ function MountedPresentations() {
 const initialStorageState = getStorage().getState();
 beforeEach(() => {
     getStorage().setState(initialStorageState, true);
-    getStorage().setState((state) => ({ localSettings: { ...state.localSettings, petsEnabledOverride: false } }));
+    getStorage().setState((state) => ({ localSettings: { ...state.localSettings, petsEnabledOverride: 'disabled' } }));
     setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'voice-session-1', status: 'connected', mode: 'listening', canStop: true, micMuted: false });
 });
 afterEach(() => {

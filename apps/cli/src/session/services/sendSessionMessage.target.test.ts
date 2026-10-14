@@ -16,6 +16,12 @@ import { sealSessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1Schema } from
 import { encodeBase64 } from '@/api/encryption';
 import { encryptSessionPayload, decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import * as installationIdentity from '@/daemon/identity/store';
+import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { UserMessageSchema, type UserMessage } from '@/api/types';
+import { ApiSessionClient } from '@/api/session/sessionClient';
+import { createPermissionModeQueueState } from '@/agent/runtime/createPermissionModeQueueState';
+import { resolveStartupPermissionModeFromSession } from '@/agent/runtime/permissions/startupSeed';
 
 // HTTP and fetch are the real process boundaries; authoring, crypto envelopes,
 // Session resolution, capability parsing and Pending transport stay real.
@@ -65,6 +71,95 @@ function mockRunReads(inputTurns: readonly unknown[]) {
 }
 
 describe('target Session input authoring through HTTP', () => {
+  it('keeps the owner baseline across external Send admission, turn intent and subsequent resume', async () => {
+    const pending: Array<{ localId: string; content: { t: 'plain'; v: unknown } }> = [];
+    const admitted: UserMessage[] = [];
+    const userSocket = createApiSessionSocketStub();
+    const runtimeSocket = createApiSessionSocketStub({ emitWithAck: (event) => {
+      if (event !== 'pending-materialize-next') return { ok: true };
+      const next = pending.shift();
+      return next ? { ok: true, didMaterialize: true, didWrite: true,
+        pendingCount: pending.length, pendingBlockedCount: 0, pendingVersion: admitted.length * 2 + 1,
+        deliveryState: { mode: 'provider', unresolved: true },
+        message: { id: `message-${next.localId}`, seq: admitted.length, localId: next.localId,
+          messageRole: 'user', content: next.content, providerAction: 'send',
+          requestedAction: { v: 1, kind: 'enqueue' }, createdAt: 42, updatedAt: 42 },
+      } : { ok: true, didMaterialize: false };
+    } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {}, capabilities: { session: {
+      pendingInput: { protocolVersion: 1 }, runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 },
+    } } }), { status: 200 })));
+    // Only HTTP and Socket.IO are substituted. The Session client's delivery,
+    // external ingress, Action executor, schemas and runtime queue stay real.
+    const session = new ApiSessionClient(credentials.token, createPlainSessionFixture({ id: sessionId,
+      pendingCount: 0, pendingVersion: 0,
+      metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 1 }),
+    }), {
+      localMachineId: 'machine-a', durableMutationDeliveryInitiallyActive: false,
+      metadataAuthority: { kind: 'owner', credentials },
+      transport: { serverId: 'fixture-home', serverUrl: 'http://fixture-home',
+        createAccountUpdatesSocket: () => userSocket,
+        createSessionSocketTransport: () => ({ socket: runtimeSocket, transport: createSocketTransportAdapter(runtimeSocket) }),
+      },
+    });
+    const state = createPermissionModeQueueState({ session,
+      agentTargetKey: 'agent:happier.agent.claude/claude', initialPermissionMode: 'default' });
+    const read = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (...args: unknown[]) => {
+      const result = await read(...args);
+      if (String(args[0]).includes(`/v2/sessions/${sessionId}`)) {
+        result.data.session.active = true;
+        result.data.session.pendingCount = pending.length;
+        result.data.session.pendingVersion = admitted.length * 2 + (pending.length === 0 ? 1 : 0);
+        result.data.session.metadata = JSON.stringify({ ...session.getMetadataSnapshot(), sessionCreationCorrespondenceV1: correspondence });
+      }
+      return result;
+    });
+    http.post.mockImplementation(async (_url: string, body: { localId: string; content: { t: string; v: unknown } }) => {
+      expect(body.content.t).toBe('plain');
+      if (!body.content.v || typeof body.content.v !== 'object') throw new Error('Expected a plain input record');
+      const parsed = UserMessageSchema.parse({ ...body.content.v, localId: body.localId, createdAt: 42 });
+      admitted.push(parsed);
+      pending.push({ localId: body.localId, content: { t: 'plain', v: body.content.v } });
+      userSocket.trigger('update', { id: `pending-${body.localId}`, seq: admitted.length, createdAt: 42,
+        body: { t: 'pending-changed', sid: sessionId, pendingCount: pending.length,
+          pendingBlockedCount: 0, pendingVersion: admitted.length * 2 } });
+      return { status: 200, data: { didWrite: true, terminal: false } };
+    });
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null });
+    const invoke = (localId: string, permissionModeOverride?: string) => executeExternalAction({
+      actionId: 'session.message.send', envelope: { v: 1, requestId: localId,
+        input: { sessionId, message: 'Read this turn', localId, wait: false,
+          requestedAction: { v: 1, kind: 'enqueue' }, ...(permissionModeOverride ? { permissionModeOverride } : {}) } },
+      principal: { authority: 'account_automation' }, currentMachineId: 'machine-a',
+      resolveTarget: async () => ({ kind: 'session', sessionId }),
+      executor: createActionExecutor({ ...deps, isActionApprovalRequired: () => false }),
+    });
+    try {
+      if (!Reflect.get(session, 'sessionSyncPendingInputServerContractResult')) {
+        await new Promise<void>(resolve => session.once('session-sync-server-contract', resolve));
+      }
+      expect(await invoke('external-mode', 'read_only')).toMatchObject({ kind: 'response', response: { execution: {
+        ok: true, result: { status: 'accepted', localId: 'external-mode' },
+      } } });
+      expect(await session.materializeNextPendingMessageSafely()).toMatchObject({ type: 'materialized', localId: 'external-mode' });
+      expect(state.messageQueue.size()).toBe(1);
+      const turn = await state.messageQueue.waitForMessagesAndGetAsString();
+      expect(turn?.mode.permissionMode).toBe('read-only');
+      expect(session.getMetadataSnapshot()).toMatchObject({ permissionMode: 'default', permissionModeUpdatedAt: 1 });
+      expect(state.getCurrentPermissionMode()).toBe('default');
+      const latest = admitted.at(-1)!;
+      expect(await resolveStartupPermissionModeFromSession({ sessionKind: 'resume', session: {
+        getMetadataSnapshot: () => session.getMetadataSnapshot(),
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: latest.meta!.permissionMode!, updatedAt: 42 }),
+      } })).toEqual({ mode: 'default', updatedAt: 1 });
+      expect(await invoke('external-default')).toMatchObject({ kind: 'response', response: { execution: { ok: true } } });
+      expect(await session.materializeNextPendingMessageSafely()).toMatchObject({ type: 'materialized', localId: 'external-default' });
+      expect(state.messageQueue.size()).toBe(1);
+      expect((await state.messageQueue.waitForMessagesAndGetAsString())?.mode.permissionMode).toBe('default');
+      expect(admitted.map(message => message.meta?.permissionMode)).toEqual(['read-only', 'default']);
+    } finally { await session.close(); }
+  });
   it('admits a signed external CLI Send through the current E2EE layout-one owner and Machine socket', async () => {
     const secret = credentials.encryption.secret;
     const machineKey = deriveAccountMachineKeyFromRecoverySecret(secret);

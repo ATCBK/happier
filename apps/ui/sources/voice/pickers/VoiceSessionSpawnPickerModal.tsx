@@ -32,6 +32,7 @@ import {
 import type { VoiceSessionSpawnPickerResult } from './openVoiceSessionSpawnPicker';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 
 type Props = CustomModalInjectedProps & Readonly<{
@@ -168,7 +169,7 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
       testID="voice-session-spawn-back"
       onPress={() => setStep('machine')}
       hitSlop={10}
-      style={({ pressed }) => ({ padding: 2, opacity: pressed ? motionTokens.press.opacity : 1 })}
+      style={({ pressed }) => ({ padding: theme.space.s2, opacity: pressed ? motionTokens.press.opacity : 1 })}
       accessibilityRole="button"
       accessibilityLabel={t('common.back')}
     >
@@ -181,7 +182,7 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
     leading: backToMachines,
     title: t('newSession.title'),
     subtitle: step === 'machine' ? t('newSession.selectMachineTitle') : t('newSession.selectWorkingDirectoryTitle'),
-    dimensions: { width: 520, maxHeightRatio: 0.92, size: 'md' as const },
+    dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' as const },
     footer,
   }), [backToMachines, footer, step]);
 

@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { ActionCompletionStateV1Schema } from '../actions/actionCompletion.js';
@@ -90,13 +91,13 @@ export type WorkflowControlV1 = z.infer<typeof WorkflowControlV1Schema>;
 export const WorkflowRunAutomationOriginV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('automation'),
   automationId: preservedBoundedNfcString(191, 'Automation ids'),
-  originSessionId: preservedBoundedNfcString(191, 'Session ids').optional(),
+  originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   /** Bounded immutable provenance; private occurrence content is never projected here. */
   cause: AutomationRunCauseSchema.optional(),
 }).strict());
 export const WorkflowRunDirectOriginV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('direct'),
-  originSessionId: preservedBoundedNfcString(191, 'Session ids').optional(),
+  originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
 }).strict());
 export const WorkflowRunOriginV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   WorkflowRunAutomationOriginV1Schema,
@@ -203,9 +204,11 @@ export const WorkflowRunSummaryV1Schema = lazyZodSchema(() => z.object({
   attentionRequired: z.boolean().optional(),
   sourceArtifactId: WorkflowDefinitionIdV1Schema.nullable(),
   ownerAccountId: preservedBoundedNfcString(191, 'Account ids'),
-  visibleTeamId: preservedBoundedNfcString(191, 'Team ids').nullable(),
+  visibleTeamId: zMini.nullable(preservedBoundedNfcString(191, 'Team ids')),
   id: WorkflowRunIdV1Schema,
   origin: WorkflowRunOriginV1Schema,
+  /** Retained Automation scope from the Run producer; null is Account scope, omission is unread. */
+  automationScopeSessionId: preservedBoundedNfcString(191, 'Session ids').nullable().optional(),
   state: WorkflowRunStateV1Schema,
   revision: z.number().int().nonnegative().safe(),
   machineId: WorkflowMachineIdV1Schema,
@@ -261,7 +264,7 @@ export type WorkflowInvocationPathV1 = z.infer<typeof WorkflowInvocationPathV1Sc
 
 const WorkflowExecutionCorrespondenceBaseV1Schema = lazyZodSchema(() => z.object({
   localInputId: preservedBoundedNfcString(191, 'Execution input local ids'),
-  turnId: preservedBoundedNfcString(191, 'Turn ids').optional(),
+  turnId: zMini.optional(preservedBoundedNfcString(191, 'Turn ids')),
 }));
 
 /**
@@ -841,11 +844,18 @@ export const WorkflowTargetUnavailableReasonV1Schema = lazyZodSchema(() => z.enu
   'machine_check_failed', 'session_unavailable', 'action_unavailable', 'selection_unavailable',
   'agent_probe_failed', 'agent_not_installed', 'platform_unsupported', 'dependency_not_installed',
   'session_creation_unavailable', 'detached_execution_unavailable', 'workspace_unavailable',
+  'requester_projection_unavailable', 'agent_start_context_unavailable', 'caller_session_unavailable',
+  'caller_run_unavailable', 'caller_witness_invalid', 'caller_depth_unavailable', 'caller_machine_unavailable',
+  'caller_workspace_unavailable', 'caller_agent_unavailable', 'caller_permission_unavailable',
+  'role_source_incomplete', 'role_overrides_unavailable', 'spawn_policy_invalid',
+  'materialization_owner_unavailable', 'run_admission_unavailable', 'target_binding_mismatch',
+  'publisher_machine_unavailable', 'requester_runtime_unavailable', 'credentialed_factory_failed',
+  'profile_unavailable', 'engine_unavailable',
 ]));
 export type WorkflowTargetUnavailableReasonV1 = z.infer<typeof WorkflowTargetUnavailableReasonV1Schema>;
 export const WorkflowTargetUnavailableDetailsV1Schema = lazyZodSchema(() => z.object({
   code: z.literal('target_unavailable'), reason: WorkflowTargetUnavailableReasonV1Schema,
-  blockId: WorkflowBlockIdSchema.optional(), agentId: z.string().min(1).optional(),
+  blockId: zMini.optional(WorkflowBlockIdSchema), agentId: z.string().min(1).optional(),
   errorCode: z.string().min(1).optional(),
   platformReason: z.enum(['os', 'arch']).optional(),
 }).strict());
@@ -859,7 +869,8 @@ export const WorkflowActionFailureV1Schema = lazyZodSchema(() => z.discriminated
   }).strict(),
   z.object({
     ok: z.literal(false), errorCode: z.literal('content_unavailable'), error: z.string().trim().min(1),
-    details: z.object({ reason: WorkflowDefinitionContentUnavailableReasonV1Schema }).strict().optional(),
+    details: z.object({ reason: z.union([WorkflowDefinitionContentUnavailableReasonV1Schema,
+      z.literal('account_role_overrides_unavailable')]) }).strict().optional(),
   }).strict(),
   z.object({
     ok: z.literal(false), errorCode: z.enum(AGENT_START_REFUSAL_CODES_V1.filter((code) => code !== 'target_unavailable')), error: z.string().trim().min(1),
@@ -874,7 +885,7 @@ export const WorkflowActionFailureV1Schema = lazyZodSchema(() => z.discriminated
   z.object({
     ok: z.literal(false), errorCode: z.literal('invalid_input'), error: z.string().trim().min(1),
     details: z.object({
-      code: z.literal('invalid_input').optional(), blockId: WorkflowBlockIdSchema.optional(),
+      code: z.literal('invalid_input').optional(), blockId: zMini.optional(WorkflowBlockIdSchema),
       issues: z.array(z.union([WorkflowValidationIssueV1Schema, z.object({
         code: z.enum(['unknown_block_id', 'invalid_target']), path: z.tuple([z.literal('ops'), z.number().int().nonnegative()]),
       }).strict()])).optional(),

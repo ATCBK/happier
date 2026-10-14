@@ -330,9 +330,9 @@ export function partitionProviderSessionArgs(
       continue;
     }
 
-    if (flag === '--permission-mode') {
-      const raw = equalsValue ?? readRequiredNext(input, i, '--permission-mode', SESSION_PERMISSION_INTENT_INPUTS.join('|'));
-      if (!equalsValue) i += 1;
+    if (flag === '--permission-mode' || arg === '--auto') {
+      const raw = arg === '--auto' ? 'auto' : equalsValue ?? readRequiredNext(input, i, '--permission-mode', SESSION_PERMISSION_INTENT_INPUTS.join('|'));
+      if (arg !== '--auto' && !equalsValue) i += 1;
       const parsed = parsePermissionModeAlias(raw);
       if (!parsed) {
         console.error(

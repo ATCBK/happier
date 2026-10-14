@@ -96,6 +96,7 @@ function createBoundAgentCliSystemToolService(params: Readonly<{
             });
             const exactResolved = Object.freeze({
                 ...resolved,
+                ...(launch.providerExitOwnership === 'direct' ? { providerExitOwnership: 'direct' as const } : {}),
                 launch: exactLaunch,
             });
             if (

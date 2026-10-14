@@ -18,6 +18,7 @@ import {
     SESSION_ACTION_UNARCHIVE_ID,
 } from './sessionActionIds';
 import { executeSessionAction } from './sessionActionExecution';
+import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
@@ -52,6 +53,18 @@ function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
 }
 
 describe('executeSessionAction', () => {
+    it.each([true, false] as const)('announces Stop success only after a confirmed outcome (%s)', async confirmed => {
+        retirePresentationNotice();
+        await executeSessionAction({ actionId: SESSION_ACTION_STOP_ID, target: createTarget({ active: true }),
+            context: { operations: {
+                stopSession: async () => confirmed ? { success: true } : {
+                    success: false, code: 'session_stop_requested', recovery: 'wait_for_inactive',
+                },
+            } },
+        });
+        expect(readPresentationNotice()?.severity ?? null).toBe(confirmed ? 'info' : null);
+        retirePresentationNotice();
+    });
     it('opens the existing Work pane for the captured Home without navigating unqualified or unreadable targets', async () => {
         const { router } = await import('expo-router');
         const push = vi.mocked(router.push);

@@ -28,6 +28,14 @@ export function describeYourWidgetSource(candidate: WidgetCandidate, projection:
  * is open, so a closed control reads nothing. Body reads belong to the demanded preview/mount.
  */
 export function useYourWidgetCandidates(account: Account | null, projection: PluginUiProjectionModel | null | undefined): readonly WidgetCandidate[] {
+    return useYourWidgetCandidatesState(account, projection).candidates;
+}
+
+/** The same candidates, with whether the Account's definitions have been read (a search can wait for them). */
+export function useYourWidgetCandidatesState(account: Account | null, projection: PluginUiProjectionModel | null | undefined): Readonly<{
+    candidates: readonly WidgetCandidate[];
+    loaded: boolean;
+}> {
     const [inventory, setInventory] = React.useState<Readonly<{ serverId: string; accountId: string;
         definitions: readonly WidgetDefinitionSummaryV1[] }> | null>(null);
     const serverId = account?.serverId;
@@ -44,11 +52,12 @@ export function useYourWidgetCandidates(account: Account | null, projection: Plu
         return () => controller.abort();
     }, [accountId, serverId]);
     return React.useMemo(() => {
-        if (!inventory || inventory.serverId !== serverId || inventory.accountId !== accountId) return [];
-        return inventory.definitions.map(summary => {
+        if (!inventory || inventory.serverId !== serverId || inventory.accountId !== accountId) return { candidates: [], loaded: !account };
+        const candidates = inventory.definitions.map(summary => {
             const installed = summary.sourceDefinition ? readWidgetDescriptor(projection, summary.sourceDefinition) : null;
             const candidate = describeWidgetDefinitionSummaryV1(summary, installed);
             return { ...candidate, pluginName: installed?.pluginName ?? describeYourWidgetSource(candidate, projection) };
         });
-    }, [inventory, serverId, accountId, projection]);
+        return { candidates, loaded: true };
+    }, [inventory, serverId, accountId, account, projection]);
 }

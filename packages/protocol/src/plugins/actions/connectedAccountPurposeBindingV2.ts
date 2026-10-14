@@ -1,13 +1,13 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { InputPathSchema } from '../../inputs/inputPredicates.js';
 import { ConnectedAccountPurposeIdSchema } from '../../connect/connectedAccountPurposeIdentity.js';
 
 /** An exact credential-ref field mapped to one declared Connected Account purpose. */
-export const PluginActionConnectedAccountPurposeBindingV2Schema = lazyZodSchema(() => z.object({
+export const PluginActionConnectedAccountPurposeBindingV2Schema = lazyZodSchema(() => z.strictObject({
   path: InputPathSchema,
   purpose: ConnectedAccountPurposeIdSchema,
   /** Companion path for a machine-native service selection instead of an account ref. */
-  nativeServicePath: InputPathSchema.optional(),
-}).strict());
+  nativeServicePath: z.optional(InputPathSchema),
+}));
 export type PluginActionConnectedAccountPurposeBindingV2 = z.infer<typeof PluginActionConnectedAccountPurposeBindingV2Schema>;

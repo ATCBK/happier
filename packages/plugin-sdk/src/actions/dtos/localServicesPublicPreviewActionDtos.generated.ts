@@ -53,6 +53,7 @@ export type LocalServicesPublicPreviewActionResultById = {
     readonly "localServices.publicPreview.create": {
         protocolVersion: 1;
         exposure: {
+            [x: string]: any;
             exposureId: string;
             previewId: string;
             machineId: string;
@@ -64,36 +65,6 @@ export type LocalServicesPublicPreviewActionResultById = {
             auditEventIds: string[];
             rateLimitProfileId: string;
             sessionId?: string | undefined;
-            serviceTarget?: {
-                machineId: string;
-                kind: 'managed_service';
-                managedServiceId: string;
-                cwd: string;
-                declaration: {
-                    workspaceRefId: string;
-                    selection: {
-                        kind: 'manifest';
-                        name: string;
-                    } | {
-                        kind: 'native';
-                        source: {
-                            kind: 'native';
-                            tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
-                            file: string;
-                            target: string;
-                        } | {
-                            kind: 'pluginNative';
-                            adapter: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                            file: string;
-                            target: string;
-                        };
-                    };
-                };
-                workspaceId?: string | undefined;
-            } | undefined;
             revokedAt?: number | undefined;
             policyDiagnostics?: Record<string, unknown> | undefined;
         };
@@ -112,6 +83,7 @@ export type LocalServicesPublicPreviewActionResultById = {
                 maxConcurrentExposures?: number | undefined;
             };
             exposures: {
+                [x: string]: any;
                 exposureId: string;
                 previewId: string;
                 machineId: string;
@@ -123,36 +95,6 @@ export type LocalServicesPublicPreviewActionResultById = {
                 auditEventIds: string[];
                 rateLimitProfileId: string;
                 sessionId?: string | undefined;
-                serviceTarget?: {
-                    machineId: string;
-                    kind: 'managed_service';
-                    managedServiceId: string;
-                    cwd: string;
-                    declaration: {
-                        workspaceRefId: string;
-                        selection: {
-                            kind: 'manifest';
-                            name: string;
-                        } | {
-                            kind: 'native';
-                            source: {
-                                kind: 'native';
-                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
-                                file: string;
-                                target: string;
-                            } | {
-                                kind: 'pluginNative';
-                                adapter: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                                file: string;
-                                target: string;
-                            };
-                        };
-                    };
-                    workspaceId?: string | undefined;
-                } | undefined;
                 revokedAt?: number | undefined;
                 policyDiagnostics?: Record<string, unknown> | undefined;
             }[];
@@ -185,6 +127,7 @@ export type LocalServicesPublicPreviewActionResultById = {
             maxConcurrentExposures?: number | undefined;
         };
         exposures: {
+            [x: string]: any;
             exposureId: string;
             previewId: string;
             machineId: string;
@@ -196,36 +139,6 @@ export type LocalServicesPublicPreviewActionResultById = {
             auditEventIds: string[];
             rateLimitProfileId: string;
             sessionId?: string | undefined;
-            serviceTarget?: {
-                machineId: string;
-                kind: 'managed_service';
-                managedServiceId: string;
-                cwd: string;
-                declaration: {
-                    workspaceRefId: string;
-                    selection: {
-                        kind: 'manifest';
-                        name: string;
-                    } | {
-                        kind: 'native';
-                        source: {
-                            kind: 'native';
-                            tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
-                            file: string;
-                            target: string;
-                        } | {
-                            kind: 'pluginNative';
-                            adapter: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                            file: string;
-                            target: string;
-                        };
-                    };
-                };
-                workspaceId?: string | undefined;
-            } | undefined;
             revokedAt?: number | undefined;
             policyDiagnostics?: Record<string, unknown> | undefined;
         }[];
@@ -261,6 +174,7 @@ export type LocalServicesPublicPreviewActionResultById = {
                 maxConcurrentExposures?: number | undefined;
             };
             exposures: {
+                [x: string]: any;
                 exposureId: string;
                 previewId: string;
                 machineId: string;
@@ -272,36 +186,6 @@ export type LocalServicesPublicPreviewActionResultById = {
                 auditEventIds: string[];
                 rateLimitProfileId: string;
                 sessionId?: string | undefined;
-                serviceTarget?: {
-                    machineId: string;
-                    kind: 'managed_service';
-                    managedServiceId: string;
-                    cwd: string;
-                    declaration: {
-                        workspaceRefId: string;
-                        selection: {
-                            kind: 'manifest';
-                            name: string;
-                        } | {
-                            kind: 'native';
-                            source: {
-                                kind: 'native';
-                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
-                                file: string;
-                                target: string;
-                            } | {
-                                kind: 'pluginNative';
-                                adapter: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                                file: string;
-                                target: string;
-                            };
-                        };
-                    };
-                    workspaceId?: string | undefined;
-                } | undefined;
                 revokedAt?: number | undefined;
                 policyDiagnostics?: Record<string, unknown> | undefined;
             }[];
@@ -320,41 +204,12 @@ export type LocalServicesPublicPreviewActionResultById = {
         };
     };
     readonly "localServices.publicPreview.copyUrl": {
+        [x: string]: any;
         protocolVersion: 1;
         machineId: string;
         previewId: string;
         exposureId: string;
         publicUrl: string;
         sessionId?: string | undefined;
-        serviceTarget?: {
-            machineId: string;
-            kind: 'managed_service';
-            managedServiceId: string;
-            cwd: string;
-            declaration: {
-                workspaceRefId: string;
-                selection: {
-                    kind: 'manifest';
-                    name: string;
-                } | {
-                    kind: 'native';
-                    source: {
-                        kind: 'native';
-                        tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
-                        file: string;
-                        target: string;
-                    } | {
-                        kind: 'pluginNative';
-                        adapter: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        file: string;
-                        target: string;
-                    };
-                };
-            };
-            workspaceId?: string | undefined;
-        } | undefined;
     };
 };

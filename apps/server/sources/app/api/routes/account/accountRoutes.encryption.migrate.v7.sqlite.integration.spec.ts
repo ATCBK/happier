@@ -42,7 +42,8 @@ import { buildWorkspaceExecutionConfigRowIdV1, buildWorkspaceExecutionConfigPhys
 import { openProfileRecordContentV1, sealProfileRecordContentV1, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { openProfileTransferContentV1, sealProfileTransferContentV1, type ProfileTransferControlV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
-    ProviderConnectionsCatalogV1Schema, openProviderConnectionsContentV1, sealProviderConnectionsContentV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+    ProviderConnectionsCatalogV1Schema, openProviderConnectionsContentV1, sealProviderConnectionsContentV1,
+    type ProviderConnectionsMigrationContentV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { buildProfilePhysicalKey, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY } from '@/app/kv/accountScopedKv';
 
@@ -806,7 +807,7 @@ describe("account encryption migration .7 SQLite matrix", () => {
                 role: 'default', displayName: 'Provider', displayNameMode: 'automatic', revision: 2, createdAt: 1, updatedAt: 2,
                 retainedDisplayNote: 'nested retained metadata' }] };
         const toMode = fromMode === 'plain' ? 'e2ee' as const : 'plain' as const;
-        const seal = (mode: 'plain' | 'e2ee') => mode === 'plain' ? { t: 'plain' as const, v: rawCatalog, retainedEnvelopeLabel: 'older-reader metadata' }
+        const seal = (mode: 'plain' | 'e2ee'): ProviderConnectionsMigrationContentV1 => mode === 'plain' ? { t: 'plain' as const, v: rawCatalog, retainedEnvelopeLabel: 'older-reader metadata' }
             : { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({ kind: 'account_provider_connections',
                 material: SESSION_OWNER_MATERIAL, payload: rawCatalog, randomBytes: length => new Uint8Array(length).fill(27) }), retainedEnvelopeLabel: 'older-reader metadata' };
         await db.userKVStore.create({ data: { accountId: account.id, key: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, version: 7,

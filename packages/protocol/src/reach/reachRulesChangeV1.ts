@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { ActionExecutorContext } from '../actions/actionExecutor.js';
 import { isAgentOrUnresolvedSurface } from '../actions/actionApprovalSurface.js';
@@ -7,13 +7,15 @@ import { ReachPlaceV1Schema, reachPlaceKeyV1 } from './reachPlaceV1.js';
 import { ReachRuleDraftV1Schema, type ReachRuleV1, type ReachRulesV1, type ReachRuleDraftV1 } from './reachRuleV1.js';
 import { compareReachRulesV1, resolveReachV1, type ReachContextV1 } from './resolveReachV1.js';
 
-export const ReachRuleWriteV1Schema = lazyZodSchema(() => z.object({ place: ReachPlaceV1Schema, agentId: z.string().min(1).optional(), state: z.enum(['on', 'off', 'inherit']) }).strict());
+export const ReachRuleWriteV1Schema = lazyZodSchema(() => z.strictObject({ place: ReachPlaceV1Schema, agentId: z.optional(z.string().check(z.minLength(1))), state: z.enum(['on', 'off', 'inherit']) }));
 export type ReachRuleWriteV1 = Readonly<z.infer<typeof ReachRuleWriteV1Schema>>;
 export const ReachRulesChangeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('write'), write: ReachRuleWriteV1Schema }).strict(),
-  z.object({ kind: z.literal('replace'), rules: z.array(ReachRuleDraftV1Schema) }).strict(),
+  z.strictObject({ kind: z.literal('write'), write: ReachRuleWriteV1Schema }),
+  z.strictObject({ kind: z.literal('replace'), rules: z.array(ReachRuleDraftV1Schema) }),
 ]));
 export type ReachRulesChangeV1 = Readonly<{ kind: 'write'; write: ReachRuleWriteV1 }> | Readonly<{ kind: 'replace'; rules: readonly ReachRuleDraftV1[] }>;
+/** New MCP servers and present-user Skills start Everywhere through this one default. */
+export const DEFAULT_CREATE_REACH_CHANGE_V1 = { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } as const satisfies ReachRulesChangeV1;
 export type ReachRulesWriteContextV1 = Readonly<{ nowMs: number; newId: () => string }>;
 export const MIGRATED_STACK_RULE_ID_PREFIX_V1 = 'migrated-stack:';
 export function isMigratedReachRuleIdV1(id: string): boolean { return id.startsWith(MIGRATED_STACK_RULE_ID_PREFIX_V1); }
@@ -62,7 +64,7 @@ export function resolveCreateReachV1(input: Readonly<{ kind: 'skill' | 'mcp_serv
     if (input.requested) return { ok: false, code: 'where_needs_rules_action' };
     return { ok: true, rules: [], includeInSessionId: input.caller.sessionId ?? null };
   }
-  return { ok: true, rules: applyReachRulesChangeV1([], input.requested ?? { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } }, input.ctx), includeInSessionId: null };
+  return { ok: true, rules: applyReachRulesChangeV1([], input.requested ?? DEFAULT_CREATE_REACH_CHANGE_V1, input.ctx), includeInSessionId: null };
 }
 
 function intersectionContext(left: ReachRuleV1, right: ReachRuleV1, platform: ReachContextV1['machinePlatform']): ReachContextV1 | null {

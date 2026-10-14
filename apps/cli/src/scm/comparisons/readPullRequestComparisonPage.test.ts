@@ -6,6 +6,33 @@ import { describe, expect, it } from 'vitest';
 import { readPullRequestComparison } from './readPullRequestComparisonPage';
 
 describe('hosted comparison unified evidence', () => {
+  it('uses a fork PR source inventory and exact endpoints instead of a stale local base', async () => {
+    const source = { kind: 'pullRequest' as const, locator: { providerId: 'github', repository: 'upstream/repo', number: 17,
+      baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40), sourceAction: {
+        action: { pluginId: 'happier.scm.forge.github', localId: 'triage/list-github-changed-files' },
+        input: { repository: 'upstream/repo', number: 17 },
+      } } };
+    const rows = Array.from({ length: 4 }, (_, index) => ({ path: `pr-${index}.ts`, status: 'modified',
+      diffAvailable: true, evidence: { state: 'available', patch: '@@ -1 +1 @@\n-old\n+new\n' } }));
+    const page = { kind: 'changedFiles', omittedRowCount: 0, projectionTruncated: false, rows,
+      comparison: { beforeOid: 'c'.repeat(40), baseOid: source.locator.baseOid, headOid: source.locator.headOid,
+        locator: { providerId: 'github', repository: 'upstream/repo', number: 17 }, totalFileCount: 4,
+        enumeratedFileCount: 4, freshness: 'current', inventory: 'complete', content: 'complete', reasons: [] } };
+    const captured = await readPullRequestComparison({ source, readPage: async () => page });
+    expect(captured).toMatchObject({ state: 'complete', before: 'c'.repeat(40), after: 'b'.repeat(40) });
+    expect(captured.files.map(file => file.path)).toEqual(rows.map(row => row.path));
+    // The source Action transport is the trust boundary. Reject a stale fork's
+    // repository or either pinned endpoint before admitting its unrelated files.
+    for (const comparison of [
+      { ...page.comparison, locator: { ...page.comparison.locator, repository: 'fork/repo' } },
+      { ...page.comparison, baseOid: 'd'.repeat(40) },
+      { ...page.comparison, headOid: 'd'.repeat(40) },
+    ]) {
+      const refused = await readPullRequestComparison({ source, readPage: async () => ({ ...page, comparison }) });
+      expect(refused.state).toBe('unavailable');
+      expect(refused.files).toEqual([]);
+    }
+  });
   it('uses the attested merge base as before while retaining the selected base-tip freshness witness', async () => {
     const comparison = await readPullRequestComparison({
       source: { kind: 'pullRequest', locator: { providerId: 'github', repository: 'owner/repo', number: 17,

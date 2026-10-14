@@ -1,9 +1,6 @@
 import { Expo } from "expo-server-sdk";
 
-import {
-    LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES,
-    type LiveActivityRemoteUpdateRequestV1,
-} from "@happier-dev/protocol";
+import { LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES, type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol/activity/live/remoteUpdates';
 
 export type SendExpoBackgroundWakeLiveActivityUpdateParams = Readonly<{
     expoPushToken: string;

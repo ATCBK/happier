@@ -96,7 +96,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingRight: PREVIEW_COLUMN_GUTTER_PX,
     },
     reconnect: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     // The page's closing review (lab C1): a hairline, then the summary with its notes and the one
@@ -126,11 +126,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     reviewNote: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     error: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.state.danger.foreground,
     },
     danger: {

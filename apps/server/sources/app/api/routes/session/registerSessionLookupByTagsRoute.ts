@@ -1,9 +1,5 @@
-import {
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2,
-    SessionLookupByTagsRequestV2Schema,
-    SessionLookupByTagsResponseV2Schema,
-} from "@happier-dev/protocol";
+import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2, SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol/sessions/control/contract';
 import { z } from "zod";
 
 import { inTx } from "@/storage/inTx";

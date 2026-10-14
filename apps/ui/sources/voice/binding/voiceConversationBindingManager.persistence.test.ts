@@ -78,7 +78,7 @@ beforeEach(async () => {
         if (init?.method === 'PATCH' && path === '/v2/sessions/' + rejectNextBindingFor) {
             const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
             const owner = patch.mode === 'owner_migration' ? patch.target.ownerMetadata : patch.mode === 'owner' ? patch.ownerMetadata : null;
-            if (owner?.t === 'plain' && owner.v.system.voiceConversationBindingV1) {
+            if (owner?.t === 'plain' && owner.v.system?.voiceConversationBindingV1) {
                 metadata.rejectNextPatch(rejectNextBindingFor!);
                 rejectNextBindingFor = null;
             }

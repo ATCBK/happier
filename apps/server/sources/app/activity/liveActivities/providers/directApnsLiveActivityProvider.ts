@@ -1,13 +1,7 @@
 import { createHash, createSign, randomUUID } from "node:crypto";
 
-import {
-    classifyLiveActivityApnsDeliveryResponse,
-    deriveLiveActivityApnsDeliveryFields,
-    LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES,
-    type LiveActivityApnsDeliveryClassification,
-    type LiveActivityApnsTemplate,
-    type LiveActivityRemoteUpdateRequestV1,
-} from "@happier-dev/protocol";
+import { classifyLiveActivityApnsDeliveryResponse, deriveLiveActivityApnsDeliveryFields, type LiveActivityApnsDeliveryClassification, type LiveActivityApnsTemplate } from '@happier-dev/protocol/activity/live/apnsDelivery';
+import { LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES, type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import type { AccountLiveActivityTarget } from "@prisma/client";
 
 import { decryptString, encryptString } from "@/modules/encrypt";

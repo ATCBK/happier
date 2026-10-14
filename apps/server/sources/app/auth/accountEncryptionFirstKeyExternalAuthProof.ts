@@ -1,7 +1,4 @@
-import type {
-    AccountEncryptionMigrateExternalAuthProof,
-    AccountEncryptionMigrateExternalAuthBindingDigestV1,
-} from "@happier-dev/protocol";
+import type { AccountEncryptionMigrateExternalAuthProof, AccountEncryptionMigrateExternalAuthBindingDigestV1 } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import type { Tx } from "@/storage/inTx";
 import {

@@ -91,7 +91,7 @@ export function VoiceMomentsSpecimen(props: Readonly<{ frame: string }>): React.
 
 const styles = StyleSheet.create((theme) => ({
     page: { flex: 1, backgroundColor: theme.colors.background.canvas },
-    content: { padding: 24 },
+    content: { padding: theme.space.s24 },
     column: { width: '100%', maxWidth: 340 },
     notice: { color: theme.colors.text.primary },
 }));

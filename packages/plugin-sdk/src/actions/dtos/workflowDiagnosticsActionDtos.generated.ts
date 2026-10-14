@@ -7,12 +7,12 @@ import type { PluginActionWorkflowBlockV1 } from './pluginActionDtoSupport.gener
 export type WorkflowDiagnosticsActionInputById = {
     readonly "workflow.trigger.test": {
         trigger: {
-            sourceInstanceId: string;
-            sourceContractVersion: number;
             eventRef: {
                 pluginId: string;
                 localId: string;
             };
+            sourceInstanceId: string;
+            sourceContractVersion: number;
             filter: {
                 v: 1;
                 all: ({
@@ -28,12 +28,12 @@ export type WorkflowDiagnosticsActionInputById = {
             maximumObservationAgeMs: number | null;
         } | null;
         observation: {
-            sourceInstanceId: string;
-            sourceContractVersion: number;
             eventRef: {
                 pluginId: string;
                 localId: string;
             };
+            sourceInstanceId: string;
+            sourceContractVersion: number;
             occurredAt: number;
             observationReceivedAt: number;
             payload: JsonValue;
@@ -65,9 +65,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -312,7 +310,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
                     } | undefined;
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
@@ -325,7 +323,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
                     };
                     engine?: {
                         agentTargetKey: string;
@@ -402,9 +400,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -649,7 +645,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
                     } | undefined;
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
@@ -662,7 +658,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
                     };
                     engine?: {
                         agentTargetKey: string;
@@ -859,6 +855,18 @@ export type WorkflowDiagnosticsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 import { decodeBase64, encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { parseSerializedJsonValue } from '../crypto/serializedJsonValue.js';
@@ -28,23 +28,23 @@ const WorkflowStoredBindingBaseV1Schema = lazyZodSchema(() => z.object({
   runId: WorkflowRunIdV1Schema,
 }));
 
-export const WorkflowAcceptedSnapshotStoredBindingV1Schema = lazyZodSchema(() => WorkflowStoredBindingBaseV1Schema.extend({
+export const WorkflowAcceptedSnapshotStoredBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStoredBindingBaseV1Schema, {
   purpose: z.literal('accepted_snapshot'),
-}).strict());
-export const WorkflowInvocationProgressStoredBindingV1Schema = lazyZodSchema(() => WorkflowStoredBindingBaseV1Schema.extend({
+})));
+export const WorkflowInvocationProgressStoredBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStoredBindingBaseV1Schema, {
   purpose: z.literal('invocation_progress'),
   recordId: WorkflowInvocationRecordIdSchema,
   sequence: WorkflowDecimalV1Schema,
-  parentRecordId: WorkflowInvocationRecordIdSchema.nullable(),
+  parentRecordId: z.nullable(WorkflowInvocationRecordIdSchema),
   memberOrdinal: WorkflowDecimalV1Schema,
   attempt: WorkflowDecimalV1Schema,
-}).strict());
-export const WorkflowCheckpointStoredBindingV1Schema = lazyZodSchema(() => WorkflowStoredBindingBaseV1Schema.extend({
+})));
+export const WorkflowCheckpointStoredBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStoredBindingBaseV1Schema, {
   purpose: z.literal('checkpoint'),
-}).strict());
-export const WorkflowFinalResultStoredBindingV1Schema = lazyZodSchema(() => WorkflowStoredBindingBaseV1Schema.extend({
+})));
+export const WorkflowFinalResultStoredBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStoredBindingBaseV1Schema, {
   purpose: z.literal('final_result'),
-}).strict());
+})));
 
 export const WorkflowStoredContentBindingV1Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
   WorkflowAcceptedSnapshotStoredBindingV1Schema,
@@ -58,22 +58,22 @@ export type WorkflowInvocationProgressStoredBindingV1 = z.infer<typeof WorkflowI
 export type WorkflowCheckpointStoredBindingV1 = z.infer<typeof WorkflowCheckpointStoredBindingV1Schema>;
 export type WorkflowFinalResultStoredBindingV1 = z.infer<typeof WorkflowFinalResultStoredBindingV1Schema>;
 
-const WorkflowAcceptedSnapshotStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+const WorkflowAcceptedSnapshotStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), binding: WorkflowAcceptedSnapshotStoredBindingV1Schema,
   content: WorkflowAcceptedSnapshotV1Schema,
-}).strict());
-const WorkflowInvocationProgressStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+}));
+const WorkflowInvocationProgressStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), binding: WorkflowInvocationProgressStoredBindingV1Schema,
   content: WorkflowProgressEnvelopeV1Schema,
-}).strict());
-const WorkflowCheckpointStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+}));
+const WorkflowCheckpointStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), binding: WorkflowCheckpointStoredBindingV1Schema,
   content: WorkflowCheckpointEnvelopeV1Schema,
-}).strict());
-const WorkflowFinalResultStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+}));
+const WorkflowFinalResultStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), binding: WorkflowFinalResultStoredBindingV1Schema,
   content: WorkflowFinalResultV1Schema,
-}).strict());
+}));
 
 export const WorkflowStoredContentEnvelopeV1Schema = AutomationStoredContentEnvelopeV1Schema;
 export type WorkflowStoredContentEnvelopeV1 = AutomationStoredContentEnvelopeV1;
@@ -219,7 +219,7 @@ function openWorkflowStoredEnvelopeV1(params: Readonly<{
 
 function narrowOpenedWorkflowContentV1<T>(
   opened: ReturnType<typeof openWorkflowStoredEnvelopeV1>,
-  schema: z.ZodType<T>,
+  schema: z.ZodMiniType<T>,
 ): Readonly<{ kind: 'available'; content: T }> | WorkflowStoredContentOpenFailureV1 {
   if (opened.kind !== 'available') return opened;
   const content = createStoredReadSchema(schema).safeParse(opened.content);

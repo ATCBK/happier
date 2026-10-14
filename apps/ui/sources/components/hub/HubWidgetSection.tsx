@@ -4,7 +4,7 @@ import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
-import { getWidgetSizeFootprintV1, type WidgetInputBindingsV1, type WidgetSizeV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { getWidgetSizeFootprintV1, resolveWidgetRowOwnerSizeV1, type WidgetInputBindingsV1, type WidgetSizeV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import {
@@ -41,6 +41,8 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     widget?: WidgetCandidate;
     instance: WidgetInstanceV1;
     size?: WidgetSizeV1;
+    /** Alone in its row of a two-up grid: it presents at its full-row size (same height), the saved size untouched. */
+    ownsRow?: boolean;
     menu: React.ReactNode;
     /** Card or plain: this section's override, else Home's Appearance default (resolved by the slot). */
     frameStyle: WidgetFrameStyle;
@@ -84,9 +86,10 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
             ? bodyCaption ?? undefined
             : widgetGroupFollowSource(props.followSource.value, props.followSource.wide || phone)
         : bodyCaption ?? bindingLabel ?? pluginName;
+    const savedSize = props.size ?? 'medium';
     // Carried, the card keeps its mark and says its source and the size it keeps (lab wgdnd 1).
     const carried = useWidgetCarriedIdentity({ kind: 'widget', mark: descriptor?.icon ?? 'squares-four',
-        source: typeof source === 'string' || source === undefined ? source : source.text, size: props.size ?? 'medium' });
+        source: typeof source === 'string' || source === undefined ? source : source.text, size: savedSize });
     const entityDrag = React.useMemo(() => props.entityDrag ? { ...props.entityDrag, ...carried } : null, [carried, props.entityDrag]);
     const drag = useSessionSurfaceEntityDrag(focused ? entityDrag : null);
     const carriedStyle = useSessionSurfaceCarriedStyle(drag);
@@ -96,7 +99,7 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     const near = useIsNearViewport(props.tracker, span);
     const [bodyHeight, setBodyHeight] = React.useState(0);
     const active = focused && near;
-    const size = props.size ?? 'medium';
+    const size = props.ownsRow ? resolveWidgetRowOwnerSizeV1('home', savedSize, descriptor?.sizeDeclaration) : savedSize;
     const widgetPresentation = React.useMemo(() => ({ size, footprint: getWidgetSizeFootprintV1('home', size)! }), [size]);
 
     const measure = React.useCallback(() => {

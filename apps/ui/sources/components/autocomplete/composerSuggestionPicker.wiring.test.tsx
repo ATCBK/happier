@@ -410,7 +410,7 @@ describe('composer suggestion picker — host wiring', () => {
         const search = vi.fn<ComposerAccountMentionSource['search']>(async () => ({
             candidates: [{
                 accountId: 'account-alice',
-                profile: { firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null },
+                profile: { firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null, name: 'Alice Ng' },
                 accessHint: 'view',
             }],
             hasMore: false,

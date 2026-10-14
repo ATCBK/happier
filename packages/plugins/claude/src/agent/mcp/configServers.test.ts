@@ -1,75 +1,42 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
-
 import { readClaudeMcpConfigServers } from './configServers.js';
 
 describe('readClaudeMcpConfigServers', () => {
-    it('reads Claude user and project MCP servers from the final plugin agent path', async () => {
-        const configRoot = await mkdtemp(join(tmpdir(), 'claude-mcp-config-'));
-        const projectRoot = await mkdtemp(join(tmpdir(), 'claude-mcp-project-'));
-        await mkdir(join(projectRoot, '.claude'), { recursive: true });
+    it.each([false, true])('reads native user, local and project scopes (config override: %s), preserving names but no values', async override => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-claude-native-'));
+        try {
+            const configRoot = join(home, 'alternate');
+            const project = join(home, 'project');
+            await mkdir(configRoot);
+            await mkdir(join(project, '.claude'), { recursive: true });
+            const path = join(override ? configRoot : home, '.claude.json');
+            await writeFile(path, JSON.stringify({
+                mcpServers: { user: { command: 'user-bridge', args: ['--stdio'], env: { API_KEY: 'private-native-value' } } },
+                projects: { [project]: { mcpServers: { local: { type: 'sse', url: 'https://example.test/sse', headers: { Authorization: 'private-native-value' } } }, disabledMcpServers: ['user'] },
+                    [join(home, 'another-project')]: { mcpServers: { unrelated: { command: 'unrelated' } } } },
+            }));
+            await writeFile(join(project, '.mcp.json'), JSON.stringify({ mcpServers: { shared: { type: 'http', url: 'https://example.test/mcp' } } }));
+            await writeFile(join(project, '.claude', 'settings.json'), JSON.stringify({ mcpServers: { decoy: { command: 'not-native' } } }));
+            const result = await readClaudeMcpConfigServers({ directory: project, env: { HOME: home, USERPROFILE: home, ...(override ? { CLAUDE_CONFIG_DIR: '~/alternate' } : {}) } });
+            expect(result.warnings).toEqual([]);
+            expect(result.servers).toEqual(expect.arrayContaining([
+                expect.objectContaining({ name: 'user', transport: 'stdio', enabled: false, stdio: { command: 'user-bridge', args: ['--stdio'] }, envKeys: ['API_KEY'], source: { kind: 'user', path } }),
+                expect.objectContaining({ name: 'local', transport: 'sse', remote: { url: 'https://example.test/sse', headers: ['Authorization'] }, source: { kind: 'project', path } }),
+                expect.objectContaining({ name: 'shared', transport: 'http', source: { kind: 'project', path: join(project, '.mcp.json') } }),
+            ]));
+            expect(result.servers).toHaveLength(3);
+            expect(JSON.stringify(result)).not.toContain('private-native-value');
+        } finally { await rm(home, { recursive: true, force: true }); }
+    });
 
-        await writeFile(
-            join(configRoot, 'settings.json'),
-            JSON.stringify({
-                mcpServers: {
-                    review: {
-                        command: 'review-mcp',
-                        args: ['--stdio'],
-                        env: {
-                            REVIEW_TOKEN: 'hidden',
-                        },
-                    },
-                },
-            }),
-            'utf8',
-        );
-        await writeFile(
-            join(projectRoot, '.claude', 'settings.local.json'),
-            JSON.stringify({
-                mcp_servers: {
-                    docs: {
-                        url: 'https://mcp.example.test',
-                        headers: {
-                            Authorization: 'hidden',
-                        },
-                    },
-                },
-            }),
-            'utf8',
-        );
-
-        const result = await readClaudeMcpConfigServers({
-            directory: projectRoot,
-            env: {
-                CLAUDE_CONFIG_DIR: configRoot,
-            },
-        });
-
-        expect(result.warnings).toEqual([]);
-        expect(result.servers).toEqual([
-            expect.objectContaining({
-                provider: 'claude',
-                name: 'review',
-                transport: 'stdio',
-                stdio: {
-                    command: 'review-mcp',
-                    args: ['--stdio'],
-                },
-                envKeys: ['REVIEW_TOKEN'],
-            }),
-            expect.objectContaining({
-                provider: 'claude',
-                name: 'docs',
-                transport: 'http',
-                remote: {
-                    url: 'https://mcp.example.test',
-                    headers: ['Authorization'],
-                },
-            }),
-        ]);
+    it('reports malformed native config instead of reporting a silently empty scan', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-claude-native-'));
+        try {
+            await writeFile(join(home, '.claude.json'), '{');
+            expect(await readClaudeMcpConfigServers({ directory: null, env: { HOME: home } })).toEqual({ servers: [], warnings: [{ provider: 'claude', code: 'parse_failed', path: join(home, '.claude.json') }] });
+        } finally { await rm(home, { recursive: true, force: true }); }
     });
 });

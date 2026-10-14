@@ -1,67 +1,71 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Metadata } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import { resolveStartupPermissionModeFromSession } from './startupSeed';
 
 describe('resolveStartupPermissionModeFromSession', () => {
-  it('prefers newer transcript inference over older metadata', async () => {
+  it('keeps the baseline when the last turn carried a newer permission override', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'default', permissionModeUpdatedAt: 10 } as any),
-        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo' as any, updatedAt: 20 }),
+        getMetadataSnapshot: () => createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 10 }),
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo', updatedAt: 20 }),
       },
     });
 
-    expect(res).toEqual({ mode: 'safe-yolo', updatedAt: 20 });
+    expect(res).toEqual({ mode: 'default', updatedAt: 10 });
   });
 
   it('prefers newer metadata over older user messages', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'yolo', permissionModeUpdatedAt: 30 } as any),
-        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'default' as any, updatedAt: 20 }),
+        getMetadataSnapshot: () => createTestMetadata({ permissionMode: 'yolo', permissionModeUpdatedAt: 30 }),
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'default', updatedAt: 20 }),
       },
     });
 
     expect(res).toEqual({ mode: 'yolo', updatedAt: 30 });
   });
 
-  it('falls back to transcript inference when metadata has no permission timestamp', async () => {
+  it('does not infer a baseline from a turn when metadata has no permission timestamp', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'yolo' } as any),
-        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo' as any, updatedAt: 20 }),
+        getMetadataSnapshot: () => createTestMetadata({ permissionMode: 'yolo' }),
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo', updatedAt: 20 }),
       },
     });
 
-    expect(res).toEqual({ mode: 'safe-yolo', updatedAt: 20 });
+    expect(res).toEqual({ mode: 'yolo', updatedAt: 0 });
   });
 
-  it('ignores metadata when permissionModeUpdatedAt is not a finite number', async () => {
+  it('uses canonical baseline timestamp handling without inferring a turn mode', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'yolo', permissionModeUpdatedAt: '999' } as any),
-        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo' as any, updatedAt: 20 }),
+        // Malformed persisted content is a genuine storage boundary fixture.
+        getMetadataSnapshot: () => ({ ...createTestMetadata({ permissionMode: 'yolo' }), permissionModeUpdatedAt: '999' }) as unknown as Metadata,
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo', updatedAt: 20 }),
       },
     });
 
-    expect(res).toEqual({ mode: 'safe-yolo', updatedAt: 20 });
+    expect(res).toEqual({ mode: 'yolo', updatedAt: 0 });
   });
 
-  it('falls back to transcript when metadata permissionMode is invalid', async () => {
+  it('does not infer a baseline from a turn when metadata permissionMode is invalid', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'not-a-real-mode', permissionModeUpdatedAt: 30 } as any),
-        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo' as any, updatedAt: 20 }),
+        // Malformed persisted content is a genuine storage boundary fixture.
+        getMetadataSnapshot: () => ({ ...createTestMetadata({ permissionModeUpdatedAt: 30 }), permissionMode: 'not-a-real-mode' }) as unknown as Metadata,
+        fetchLatestUserPermissionIntentFromTranscript: async () => ({ intent: 'safe-yolo', updatedAt: 20 }),
       },
     });
 
-    expect(res).toEqual({ mode: 'safe-yolo', updatedAt: 20 });
+    expect(res).toBeNull();
   });
 
   it('returns null when neither metadata nor messages specify a permission mode', async () => {
     const res = await resolveStartupPermissionModeFromSession({
       session: {
-        getMetadataSnapshot: () => ({ path: '/tmp' } as any),
+        getMetadataSnapshot: () => createTestMetadata(),
         fetchLatestUserPermissionIntentFromTranscript: async () => null,
       },
     });
@@ -77,7 +81,7 @@ describe('resolveStartupPermissionModeFromSession', () => {
     const res = await resolveStartupPermissionModeFromSession({
       sessionKind: 'fresh',
       session: {
-        getMetadataSnapshot: () => ({ permissionMode: 'yolo', permissionModeUpdatedAt: 30 } as any),
+        getMetadataSnapshot: () => createTestMetadata({ permissionMode: 'yolo', permissionModeUpdatedAt: 30 }),
         fetchLatestUserPermissionIntentFromTranscript,
       },
     });

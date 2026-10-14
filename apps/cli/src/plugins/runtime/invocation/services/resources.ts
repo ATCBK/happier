@@ -281,8 +281,13 @@ export type StablePluginResourcesOwner = Readonly<{
     retirePlugin(pluginId: string): void;
 }>;
 
-function fail(code: string, message: string): never {
-    throw new PluginError({ code, message });
+function fail(code: string, message: string, details?: Readonly<{ field: string; reason: string }>): never {
+    if (details) {
+        // Preparation deliberately sanitizes the cross-process failure. Keep
+        // its field diagnosis in the local file without declaration values.
+        logger.warnLocalFile(JSON.stringify({ kind: 'plugin_resource_admission_invalid', code, ...details }));
+    }
+    throw new PluginError({ code, message, ...(details ? { details } : {}) });
 }
 
 async function withStableResourceErrors<T>(operation: () => Promise<T>): Promise<T> {
@@ -296,22 +301,24 @@ async function withStableResourceErrors<T>(operation: () => Promise<T>): Promise
 
 function ownData(value: unknown, key: string): unknown {
     if (typeof value !== 'object' || value === null) {
-        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid');
+        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid', { field: key, reason: 'not_object' });
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid');
+        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid', { field: key, reason: 'prototype' });
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || !('value' in descriptor)) {
-        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid');
+        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid', { field: key, reason: descriptor ? 'accessor' : 'missing' });
     }
     return descriptor.value;
 }
 
-function boundedString(value: unknown, maxLength = 2_048): string {
-    if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value.length > maxLength) {
-        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid');
+function boundedString(value: unknown, maxLength: number | null = 2_048, field?: string): string {
+    if (typeof value !== 'string' || value.length === 0 || value.trim() !== value
+        || (maxLength !== null && value.length > maxLength)) {
+        return fail('plugin_resource_declaration_invalid', 'Resource declaration is invalid',
+            field ? { field, reason: 'invalid_string' } : undefined);
     }
     return value;
 }
@@ -532,7 +539,9 @@ function normalizeGeneration(raw: ResourceGeneration): Readonly<{
 }> {
     try {
         const pluginId = boundedString(ownData(raw, 'pluginId'), 256);
-        const immutableGenerationId = boundedString(ownData(raw, 'immutableGenerationId'), 160);
+        // This slot also carries attested retained-source identities containing
+        // runner/plugin paths. Managed-store id bounds belong to their producer.
+        const immutableGenerationId = boundedString(ownData(raw, 'immutableGenerationId'), null, 'immutableGenerationId');
         const rootPath = boundedString(ownData(raw, 'rootPath'), 4_096);
         const brandIconResourceIdDescriptor = Object.getOwnPropertyDescriptor(raw, 'brandIconResourceId');
         if (brandIconResourceIdDescriptor && !('value' in brandIconResourceIdDescriptor)) {
@@ -1020,11 +1029,17 @@ export async function createStableRetainedPluginResourcesOwner(
             declaration,
         });
         if (normalized.source === 'dynamic') continue;
-        const relativePath = normalized.path
+        const declaredPath = normalized.path
             ?? fail(
                 'plugin_resource_declaration_invalid',
                 'Resource declaration is invalid',
             );
+        // Inventory keys use the same canonical relative path as their reader,
+        // including declarations spelled './resources/prompt.md'.
+        const relativePath = resolvePluginResourcePath({
+            pluginRootPath: params.rootPath,
+            resourcePath: declaredPath,
+        })?.relativePath ?? fail('plugin_resource_path_denied', 'Resource path is denied');
         if (filesByPath.has(relativePath)) continue;
         const absolutePath = await resolveAdmittedPath(
             params.rootPath,
@@ -1335,7 +1350,7 @@ async function createStablePluginResourcesOwnerFromNormalized(
             const abortReason = isPluginError(error) && error.code === 'plugin_resource_producer_timed_out'
                 ? 'admission_timeout'
                 : 'producer_failure';
-            dynamic.admissionFailure = new PluginError({
+            dynamic.admissionFailure = isPluginError(error) ? error : new PluginError({
                 code: 'plugin_resource_admission_unavailable',
                 message: `Resource '${dynamic.pluginId}/${dynamic.id}' is unavailable after admission failure`,
             });

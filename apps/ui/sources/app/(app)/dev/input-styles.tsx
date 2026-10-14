@@ -386,7 +386,7 @@ export default function InputStylesDemo() {
                                 backgroundColor: '#5e6ad2',
                                 borderRadius: 6,
                             }}>
-                                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>
+                                <Text style={{ color: '#fff', ...Typography.variant('label', 'semiBold'),  }}>
                                     Comment
                                 </Text>
                             </Pressable>
@@ -549,7 +549,7 @@ export default function InputStylesDemo() {
                                 backgroundColor: '#2ea44f',
                                 borderRadius: 6,
                             }}>
-                                <Text style={{ fontSize: 14, color: '#fff', fontWeight: '600' }}>Comment</Text>
+                                <Text style={{ ...Typography.variant('label', 'semiBold'), color: '#fff',  }}>Comment</Text>
                             </Pressable>
                         </View>
                     </View>
@@ -979,7 +979,7 @@ export default function InputStylesDemo() {
                                 borderRadius: 6,
                                 marginLeft: 8,
                             }}>
-                                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>
+                                <Text style={{ color: '#fff', ...Typography.variant('label', 'semiBold'),  }}>
                                     Post
                                 </Text>
                             </Pressable>
@@ -1096,7 +1096,7 @@ export default function InputStylesDemo() {
                                         backgroundColor: '#1d9bf0',
                                         borderRadius: 18,
                                     }}>
-                                        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600' }}>
+                                        <Text style={{ color: '#fff', ...Typography.variant('heading'),  }}>
                                             Post
                                         </Text>
                                     </Pressable>
@@ -1410,7 +1410,7 @@ export default function InputStylesDemo() {
                                 borderRadius: 20,
                                 marginRight: 8,
                             }}>
-                                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>
+                                <Text style={{ color: '#fff', ...Typography.variant('label', 'semiBold'),  }}>
                                     Reply
                                 </Text>
                             </Pressable>
@@ -1668,7 +1668,7 @@ export default function InputStylesDemo() {
                             borderRadius: 20,
                             marginRight: 8,
                         }}>
-                            <Text style={{ color: '#000', fontSize: 14, fontWeight: '600' }}>
+                            <Text style={{ color: '#000', ...Typography.variant('label', 'semiBold'),  }}>
                                 Snap
                             </Text>
                         </Pressable>
@@ -1848,10 +1848,9 @@ export default function InputStylesDemo() {
                 <View style={{ paddingBottom: 8, paddingTop: 8 }}>
                     <Text style={{
                         textAlign: 'center',
-                        fontSize: 12,
+                        ...Typography.variant('meta'),
                         color: '#666',
                         marginBottom: 4,
-                        ...Typography.default(),
                     }}>
                         Active Style: {style.name}
                     </Text>

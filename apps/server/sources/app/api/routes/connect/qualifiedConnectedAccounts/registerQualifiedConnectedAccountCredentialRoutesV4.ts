@@ -1,46 +1,12 @@
 import { z } from "zod";
 import { QualifiedProviderAccountUsageHistoryRequestV4Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { ProviderAccountUsagePageProjectionReadV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 import { projectProviderAccountUsageRecordV4 } from '../providerAccountUsage/recordStorage';
-import {
-    QualifiedConnectedAccountCredentialDeleteResponseV4Schema,
-    ManagedResourceDispositionV1Schema,
-    QualifiedConnectedAccountConfigurationPatchV4Schema,
-    QualifiedConnectedAccountConfigurationSnapshotV4Schema,
-    QualifiedConnectedAccountConfigurationTargetV4Schema,
-    QualifiedConnectedAccountCredentialErrorV4Schema,
-    QualifiedConnectedAccountCredentialHealthPatchV4Schema,
-    QualifiedConnectedAccountCredentialDeleteV4Schema,
-    QualifiedConnectedAccountCredentialMutationSuccessV4Schema,
-    QualifiedConnectedAccountCredentialMutationV4Schema,
-    QualifiedConnectedAccountCredentialSnapshotV4Schema,
-    QualifiedConnectedAccountListResponseV4Schema,
-    QualifiedConnectedAccountRefSchema,
-    QualifiedConnectedAccountRefreshLeaseV4Schema,
-    QualifiedConnectedAccountRefreshLeaseResponseV4Schema,
-    QualifiedConnectedAccountQuotaQueryV4Schema,
-    QualifiedConnectedAccountQuotaResponseV4Schema,
-    QualifiedConnectedAccountGroupCreateV4Schema,
-    QualifiedConnectedAccountGroupPatchV4Schema,
-    QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema,
-    QualifiedConnectedAccountGroupMemberMutationV4Schema,
-    QualifiedConnectedAccountGroupMemberDeleteV4Schema,
-    QualifiedConnectedAccountGroupActiveAccountV4Schema,
-    QualifiedConnectedAccountGroupIncarnationV4Schema,
-    QualifiedConnectedAccountGroupRefSchema,
-    QualifiedConnectedAccountGroupListResponseV4Schema,
-    QualifiedConnectedAccountGroupResponseV4Schema,
-    QualifiedConnectedAccountSuccessV4Schema,
-    QualifiedConnectedServiceUsageSourceV4Schema,
-    QualifiedConnectedServiceUsageSourceResolutionV4Schema,
-    QualifiedProviderAccountUsageWriteV4Schema,
-    QualifiedProviderAccountUsageWriteSuccessV4Schema,
-    QualifiedProviderAccountUsageRecordQueryV4Schema,
-    QualifiedProviderAccountUsageReadErrorV4Schema,
-    QualifiedProviderAccountUsageRecordResponseV4Schema,
-    QualifiedConnectedAccountServiceRefSchema,
-    parseQualifiedConnectedAccountV4StructuredQueryValue,
-    type QualifiedConnectedAccountGroupV4,
-} from "@happier-dev/protocol";
+import { QualifiedConnectedAccountCredentialDeleteResponseV4Schema, QualifiedConnectedAccountConfigurationPatchV4Schema, QualifiedConnectedAccountCredentialErrorV4Schema, QualifiedConnectedAccountCredentialHealthPatchV4Schema, QualifiedConnectedAccountCredentialDeleteV4Schema, QualifiedConnectedAccountCredentialMutationSuccessV4Schema, QualifiedConnectedAccountCredentialMutationV4Schema, QualifiedConnectedAccountRefreshLeaseV4Schema, QualifiedConnectedAccountRefreshLeaseResponseV4Schema, QualifiedConnectedAccountQuotaQueryV4Schema, QualifiedConnectedAccountQuotaResponseV4Schema, QualifiedConnectedAccountSuccessV4Schema, QualifiedConnectedServiceUsageSourceResolutionV4Schema, QualifiedProviderAccountUsageWriteV4Schema, QualifiedProviderAccountUsageWriteSuccessV4Schema, QualifiedProviderAccountUsageRecordQueryV4Schema, QualifiedProviderAccountUsageReadErrorV4Schema, type QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ManagedResourceDispositionV1Schema } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { QualifiedConnectedAccountConfigurationSnapshotV4Schema, QualifiedConnectedAccountConfigurationTargetV4Schema, QualifiedConnectedAccountCredentialSnapshotV4Schema, QualifiedConnectedAccountListResponseV4Schema, QualifiedConnectedAccountGroupCreateV4Schema, QualifiedConnectedAccountGroupPatchV4Schema, QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema, QualifiedConnectedAccountGroupMemberMutationV4Schema, QualifiedConnectedAccountGroupMemberDeleteV4Schema, QualifiedConnectedAccountGroupActiveAccountV4Schema, QualifiedConnectedAccountGroupIncarnationV4Schema, QualifiedConnectedAccountGroupRefSchema, QualifiedConnectedAccountGroupListResponseV4Schema, QualifiedConnectedAccountGroupResponseV4Schema, QualifiedConnectedServiceUsageSourceV4Schema, QualifiedProviderAccountUsageRecordResponseV4Schema, QualifiedConnectedAccountServiceRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 
 import type { Fastify } from "../../../types";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
@@ -71,6 +37,7 @@ import {
     readExactQualifiedConnectedServiceUsageSource,
     readQualifiedProviderAccountUsageRecord,
     readQualifiedProviderAccountUsageHistory,
+    writeQualifiedProviderAccountUsagePageProjection,
     readQualifiedConnectedAccountQuota,
     requestQualifiedProviderAccountUsageRefresh,
     requestQualifiedConnectedAccountQuotaRefresh,
@@ -1407,7 +1374,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
 
     app.get('/v4/connect/qualified/provider-account-usage/history', {
         preHandler: app.authenticate,
-        schema: { querystring: z.object({ query: z.union([z.string(), z.array(z.string())]) }).strict(), response: { 200: QualifiedProviderAccountUsageHistoryResponseV4Schema, 400: z.object({ error: z.literal('invalid-params') }).strict(), 404: NotFoundResponseSchema, 409: QualifiedProviderAccountUsageReadErrorV4Schema } },
+        schema: { querystring: z.object({ query: z.union([z.string(), z.array(z.string())]) }).strict(), response: { 200: z.union([QualifiedProviderAccountUsageHistoryResponseV4Schema, ProviderAccountUsagePageProjectionReadV1Schema]), 400: z.object({ error: z.literal('invalid-params') }).strict(), 404: NotFoundResponseSchema, 409: QualifiedProviderAccountUsageReadErrorV4Schema } },
     }, async (request, reply) => {
         let query;
         try { query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema, request.query.query); }
@@ -1415,7 +1382,22 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
         const page = await readQualifiedProviderAccountUsageHistory({ accountId: request.userId, ...query });
         if (page.status === 'storage_mode_mismatch') return reply.code(409).send({ error: 'provider_account_usage_storage_mode_mismatch' });
         if (page.status === 'not_found') return reply.code(404).send({ error: 'provider_account_usage_not_found' });
+        if ('projection' in page) return reply.send({ projection: page.projection, complete: page.complete });
         return reply.send({ entries: page.entries.map(entry => ({ id: entry.id, observedAtMs: entry.observedAtMs, record: projectProviderAccountUsageRecordV4(entry.record, page.sources) })), nextCursor: page.nextCursor });
+    });
+
+    app.put('/v4/connect/qualified/provider-account-usage/history', {
+        preHandler: app.authenticate,
+        schema: { body: ProviderAccountUsagePageProjectionWriteV1Schema, response: {
+            200: z.object({ success: z.literal(true) }).strict(), 404: NotFoundResponseSchema,
+            409: z.union([QualifiedProviderAccountUsageReadErrorV4Schema, z.object({ error: z.literal('provider_account_usage_projection_conflict') }).strict()]),
+        } },
+    }, async (request, reply) => {
+        const result = await writeQualifiedProviderAccountUsagePageProjection({ accountId: request.userId, ...request.body });
+        if (result === 'not_found') return reply.code(404).send({ error: 'provider_account_usage_not_found' });
+        if (result === 'storage_mode_mismatch') return reply.code(409).send({ error: 'provider_account_usage_storage_mode_mismatch' });
+        if (result === 'projection_conflict') return reply.code(409).send({ error: 'provider_account_usage_projection_conflict' });
+        return reply.send({ success: true });
     });
 
     app.get(

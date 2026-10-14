@@ -9,11 +9,6 @@ import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValu
 
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import type { PermissionRequestOwner } from '@/agent/permissions/permissionRequestOwner';
-import {
-    mcpElicitationFormContent,
-    mcpElicitationFormQuestions,
-    parseMcpElicitationFormSchema,
-} from '@/plugins/runtime/invocation/services/mcpElicitationForm';
 import { readTrimmedString } from './readTrimmedString';
 
 type SessionMcpScope = Readonly<{
@@ -147,6 +142,8 @@ export function createSessionScopedMcpServices(
                     });
                 }
                 try {
+                    const { mcpElicitationFormContent, mcpElicitationFormQuestions, parseMcpElicitationFormSchema } = await import('@/plugins/runtime/invocation/services/mcpElicitationForm');
+                    throwIfAborted(options?.signal);
                     const schema = parseMcpElicitationFormSchema(request.schema);
                     const questions = mcpElicitationFormQuestions(schema);
                     const title = readTrimmedString(request.prompt) ?? toolName;

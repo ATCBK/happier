@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { createAbsolutePathSymlink } from '@happier-dev/plugin-sdk/fs';
 
@@ -117,7 +117,8 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
     };
     const materialize = async (item: SkillSessionDirItem): Promise<string> => {
         const body = { v: 1 as const, entries: item.files, createdAtMs: 0, updatedAtMs: 0 };
-        const valid = validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: 'skills.skill_md_v1', body });
+        const validate = platform === 'win32' ? validatePromptBundleBodyV1AgainstSchemaId : validateStoredPromptBundleBodyV1AgainstSchemaId;
+        const valid = validate({ bundleSchemaId: 'skills.skill_md_v1', body });
         if (!valid.ok) throw Object.assign(new Error(valid.message), { code: valid.errorCode });
         if (computePromptBundleDigestV1(body) !== item.digest) throw Object.assign(new Error('Digest mismatch'), { code: 'digest_mismatch' });
         const target = cacheDirectory(item.digest);

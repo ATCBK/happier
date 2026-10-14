@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -35,7 +36,7 @@ describe('LlmTaskRunnerConfigV1BackendModelPicker', () => {
     it('edits a custom model inline, cancels without saving, and saves an empty id as default', async () => {
         const onChange = vi.fn();
         const screen = await renderScreen(<LlmTaskRunnerConfigV1BackendModelPicker
-            value={{ v: 1, backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-backend' }, modelId: 'old-model', permissionMode: 'no_tools' }}
+            value={LlmTaskRunnerConfigV1Schema.parse({ v: 1, backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-backend' }, modelId: 'old-model', permissionMode: 'no_tools' })}
             onChange={onChange} modelTestID="runner-model"
         />);
         const modelMenu = () => screen.findAllByType(DropdownMenu)[1]!;
@@ -48,20 +49,20 @@ describe('LlmTaskRunnerConfigV1BackendModelPicker', () => {
         expect(screen.findByTestId('runner-model.custom')!.props.value).toBe('old-model');
         act(() => screen.changeTextByTestId('runner-model.custom', ' '));
         act(() => screen.pressByTestId('runner-model.custom.save'));
-        expect(onChange).toHaveBeenCalledWith({ v: 1, backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-backend' }, modelId: 'default', permissionMode: 'no_tools' });
+        expect(onChange).toHaveBeenCalledWith({ v: 1, modelSelection: { agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:custom-backend', providerConnectionId: null, modelId: 'default' }, permissionMode: 'no_tools' });
     });
 
-    it('writes the legacy task-runner backend contract from a selected current catalog entry', async () => {
+    it('writes the canonical task-runner model selection from a selected current catalog entry', async () => {
         const onChange = vi.fn();
         const screen = await renderScreen(<LlmTaskRunnerConfigV1BackendModelPicker value={null} onChange={onChange} />);
         const backendMenu = screen.findAllByType(DropdownMenu)[0]!;
         act(() => backendMenu.props.onSelect('agent:happier.agent.custom-acp/custom-acp:definition:custom-backend'));
-        expect(onChange).toHaveBeenCalledWith({ v: 1, backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-backend' }, modelId: 'default', permissionMode: 'no_tools' });
+        expect(onChange).toHaveBeenCalledWith({ v: 1, modelSelection: { agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:custom-backend', providerConnectionId: null, modelId: 'default' }, permissionMode: 'no_tools' });
     });
 
     it('does not emit raw period text nodes under non-Text parents on web', async () => {
         const screen = await renderScreen(<LlmTaskRunnerConfigV1BackendModelPicker
-            value={{ v: 1, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'default', permissionMode: 'no_tools' }}
+            value={LlmTaskRunnerConfigV1Schema.parse({ v: 1, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'default', permissionMode: 'no_tools' })}
             onChange={() => {}}
         />);
         const badNodes: Array<{ parent: string | null; value: string }> = [];

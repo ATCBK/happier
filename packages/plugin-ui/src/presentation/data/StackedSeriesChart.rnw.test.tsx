@@ -76,6 +76,20 @@ describe('neutral series dataset', () => {
       expect(find(clear.container, 'rain-scale-1')).toBeTruthy();
     } finally { clear.unmount(); }
   });
+  it('sits the peak figure on its bar, and keeps the first bucket\'s figure inside the plot', () => {
+    // Live (Usage daily): a 7M peak under a 10M scale floated far above its bar, and the first
+    // column's figure was cut at the card's left edge ("7M").
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Tokens" variant="bar" size="full" testID="peak"
+      width={300} viewportHeight={100} minimumMaximum={10} showPeakValue
+      series={[{ id: 'tokens', label: 'Tokens', points: [7, 1, 2, 1, 3, 1, 2, 1, 2, 1].map((y, x) => ({ id: String(x), x: `D${x}`, y })) }]} />);
+    try {
+      const label = find(mount.container, 'peak-peak');
+      // The bar's top is 70% up a 100px plot; the figure rests just above it, not at the plot's top.
+      expect(Number.parseFloat(label.style.bottom)).toBeGreaterThanOrEqual(70);
+      expect(Number.parseFloat(label.style.bottom)).toBeLessThan(80);
+      expect(label.style.alignSelf).toBe('flex-start');
+    } finally { mount.unmount(); }
+  });
   it('keeps the N=1 adapter on identical geometry and accessible values for bars and lines', () => {
     const points = [{ x: 'Mon', y: 0.00004 }, { x: 'Tue', y: 7 }, { x: 'Wed', y: 0 }];
     for (const variant of ['bar', 'line'] as const) {
@@ -485,6 +499,37 @@ describe('neutral series dataset', () => {
       ]);
       // The exact values are unchanged by ink.
       expect(find(mount.container, 'memory-bucket-2').getAttribute('aria-label')).toContain('Memory 6');
+    } finally { mount.unmount(); }
+  });
+});
+
+describe('uncoloured series ramp', () => {
+  it('draws two uncoloured lines far enough apart on the accent ramp to tell apart', async () => {
+    const { resolveHappierSeriesRampColor } = await import('./dataModel.js');
+    const input = [
+      { id: 'sonnet', label: 'Sonnet', points: [4, 6, 5].map((y, x) => ({ id: String(x), x, y })) },
+      { id: 'haiku', label: 'Haiku', points: [1, 2, 3].map((y, x) => ({ id: String(x), x, y })) },
+    ];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Tokens" series={input}
+      width={200} viewportHeight={100} variant="line" size="tile" testID="ramp" />);
+    try {
+      const strokes = [...mount.container.querySelectorAll('path')].map(path => path.getAttribute('stroke')).filter(Boolean);
+      expect(strokes).toContain(resolveHappierSeriesRampColor(theme.colors.accent, theme.colors.surface, 0));
+      expect(strokes).toContain(resolveHappierSeriesRampColor(theme.colors.accent, theme.colors.surface, 4));
+      expect(strokes).not.toContain(resolveHappierSeriesRampColor(theme.colors.accent, theme.colors.surface, 1));
+    } finally { mount.unmount(); }
+  });
+});
+
+describe('few-bucket bar columns', () => {
+  it('keeps a full chart column at its readable width however few buckets share the plot', async () => {
+    const { HAPPIER_DATA_METRICS } = await import('./dataText.js');
+    const input = [{ id: 'orders', label: 'Orders', points: [{ id: 'mon', x: 'Mon', y: 17 }, { id: 'tue', x: 'Tue', y: 19 }] }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={input}
+      width={600} viewportHeight={120} variant="bar" size="full" testID="few" />);
+    try {
+      const column = find(mount.container, 'few-bar-0-0').parentElement!;
+      expect(getComputedStyle(column).maxWidth).toBe(`${HAPPIER_DATA_METRICS.barMaxWidthPx}px`);
     } finally { mount.unmount(); }
   });
 });

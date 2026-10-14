@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -14,6 +15,6 @@ export function useAcpCatalogActionExecution(scope: ServerAccountScope | null | 
         if (registration.scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
     }, [router]);
     const execution = useMountedActionExecution(scope, { onApprovalPending });
-    const execute: (actionId: AcpAuthoringActionId, input: unknown) => Promise<ActionExecuteResult> = execution.execute;
+    const execute: (actionId: AcpAuthoringActionId, input: unknown, operation?: UiActionOperation) => Promise<ActionExecuteResult> = execution.execute;
     return { execute, ready: execution.ready, isCurrent: execution.isCurrent };
 }

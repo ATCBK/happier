@@ -1,11 +1,7 @@
-import {
-  SessionRuntimeActivitySnapshotSchema,
-  SessionPublisherGenerationV1Schema,
-  type SessionMetadataPublisherPreconditionV1,
-  type PrimaryTurnStatusV1,
-    type SessionRuntimeActivitySnapshot,
-    type SessionRuntimeIssueV1,
-} from "@happier-dev/protocol";
+import { SessionRuntimeActivitySnapshotSchema, type SessionRuntimeActivitySnapshot } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { SessionPublisherGenerationV1Schema } from '@happier-dev/protocol/sessions/control/machineSessionTerminalV1';
+import { type SessionMetadataPublisherPreconditionV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 import {
     didSessionActivityBadgeSignalChange,
@@ -22,6 +18,7 @@ import {
     writeSessionRuntimeActivityProjectionInTx,
     type SessionRuntimeActivityProjectionUpdate,
     type SessionRuntimeActivityProjectionInTxResult,
+    type TerminalTurnPendingRequestProjection,
     applyLatestSessionTurnEndInTx,
 } from "@/app/session/sessionWriteService";
 import {
@@ -78,6 +75,7 @@ export type CloseSessionPublisherResult =
         recipientCursors: readonly SessionRecipientCursor[];
         badgeAttentionChanged: boolean;
         projection?: SessionRuntimeActivityProjectionUpdate;
+        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
         turnProjection?: Readonly<{
             latestTurnId: string | null;
             latestTurnStatus: PrimaryTurnStatusV1 | null;
@@ -686,11 +684,15 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             status: "closed",
             activeAt: session.lastActiveAt,
             recipientCursors,
-            badgeAttentionChanged: didSessionActivityBadgeSignalChange(
-                session satisfies SessionActivityBadgeInputs,
-                { ...session, active: false },
-            ),
+            badgeAttentionChanged: (turnResult?.ok === true && turnResult.badgeAttentionChanged)
+                || didSessionActivityBadgeSignalChange(
+                    session satisfies SessionActivityBadgeInputs,
+                    { ...session, active: false },
+                ),
             ...(activity.status === "applied" ? { projection: activity.projection } : {}),
+            ...(turnResult?.ok && turnResult.pendingRequestProjection
+                ? { pendingRequestProjection: turnResult.pendingRequestProjection }
+                : {}),
             ...(turnResult?.ok && turnResult.didApply
                 ? {
                     turnProjection: {

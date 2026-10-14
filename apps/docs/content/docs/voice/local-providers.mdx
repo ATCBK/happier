@@ -383,6 +383,12 @@ which means it needs **Settings → Features → Voice daemon inference** — an
 toggle that is off by default — and a reachable machine. Without it, selecting the
 provider fails rather than falling back.
 
+In 0.3 development, the daemon permits Machine speech by default. An operator can
+disable it by setting `HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED=false` (or `0`)
+in the daemon environment. The client toggle above remains a separate opt-in.
+Starting the daemon does not download speech models or start an inference process;
+models are installed explicitly and loaded when used.
+
 You can configure:
 
 - **Execution** (daemon; device is not selectable on web)

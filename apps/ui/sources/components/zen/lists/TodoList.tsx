@@ -7,7 +7,7 @@ import { t } from '@/text';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { TodoView } from '@/components/zen/views/TodoView';
-import { EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, entityReorderRefused, executeEntityReorderAction, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
+import { EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, entityReorderRefused, useEntityReorderAction, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 
 export type TodoListProps = Readonly<{
     todos: readonly Readonly<{ id: string; title: string; done: boolean }>[];
@@ -22,6 +22,7 @@ export type TodoListProps = Readonly<{
 export const TodoList = React.memo<TodoListProps>(function TodoList(props) {
     const accountScope = useActiveServerAccountScope();
     const scope = props.reorderFixture?.scope ?? accountScope;
+    const executeReorder = useEntityReorderAction(scope);
     const todos = props.todos.filter(todo => !todo.done);
     const binding: EntityFlatReorderBinding = {
         scope, kind: 'todo', items: todos,
@@ -39,7 +40,7 @@ export const TodoList = React.memo<TodoListProps>(function TodoList(props) {
             } };
         },
         execute: effect => props.reorderFixture ? props.reorderFixture.execute(effect)
-            : scope ? executeEntityReorderAction(effect, scope) : Promise.resolve({ status: 'refused', reason: { code: 'todo_scope_unavailable', message: t('entityDragDrop.reasons.gone') } }),
+            : scope ? executeReorder(effect) : Promise.resolve({ status: 'refused', reason: { code: 'todo_scope_unavailable', message: t('entityDragDrop.reasons.gone') } }),
     };
     return <EntityFlatReorderList binding={binding} testID="zen.todos" scrollRef={props.scrollRef} scrollMetrics={props.scrollMetrics}>
         {todos.map(todo => <EntityFlatReorderRow key={todo.id} id={todo.id}>

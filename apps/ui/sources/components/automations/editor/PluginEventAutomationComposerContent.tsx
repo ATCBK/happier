@@ -16,7 +16,7 @@ import {
     type SelectionListOption,
     type SelectionListStep,
 } from '@/components/ui/selectionList';
-import { Typography } from '@/constants/Typography';
+import { EYEBROW_TYPOGRAPHY, Typography } from '@/constants/Typography';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { restoreFocusToBestTarget, type FocusReturnTarget } from '@/keyboard/focusReturn';
 import { t } from '@/text';
@@ -866,14 +866,14 @@ export function PluginEventAutomationComposerContent(props: Props) {
 
 const styles = StyleSheet.create((theme) => ({
     section: {
-        gap: 10,
+        gap: theme.space.s10,
         minWidth: 0,
         width: '100%',
     },
     targetRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     targetButton: {
         minHeight: minimumInteractiveTargetSize,
@@ -884,28 +884,28 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 11,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     targetButtonSelected: {
         borderColor: theme.colors.accent.blue,
         backgroundColor: theme.colors.surface.selected,
     },
     targetButtonText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     eventFields: {
         minWidth: 0,
-        gap: 8,
+        gap: theme.space.s8,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     fieldLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        paddingTop: 2,
+        paddingTop: theme.space.s2,
     },
     selectTrigger: {
         minWidth: minimumInteractiveTargetSize,
@@ -915,35 +915,35 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexDirection: 'row',
         justifyContent: 'space-between',
-        gap: 10,
+        gap: theme.space.s10,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.input.background,
-        paddingHorizontal: 12,
-        paddingVertical: 9,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
     },
     selectTriggerText: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         flexShrink: 1,
         minWidth: 0,
         color: theme.colors.text.primary,
     },
     optionList: {
-        gap: 2,
+        gap: theme.space.s2,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        padding: 4,
+        padding: theme.space.s4,
     },
     optionRow: {
         minHeight: minimumInteractiveTargetSize,
         minWidth: minimumInteractiveTargetSize,
-        gap: 2,
+        gap: theme.space.s2,
         borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     optionRowSelected: {
         backgroundColor: theme.colors.surface.selected,
@@ -951,55 +951,55 @@ const styles = StyleSheet.create((theme) => ({
     eventOptionHeader: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     eventOptionCopy: {
         flex: 1,
         gap: 1,
     },
     optionTitle: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     pluginTitle: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     optionDescription: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     eventIdentity: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.mono(),
         color: theme.colors.text.secondary,
     },
     availableText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.state.success.foreground,
     },
     payloadBrowser: {
-        gap: 6,
+        gap: theme.space.s6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        padding: 10,
+        padding: theme.space.s10,
     },
     webhookEndpoint: {
-        gap: 6,
+        gap: theme.space.s6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        padding: 10,
+        padding: theme.space.s10,
     },
     webhookEndpointTitle: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     webhookEndpointInstructions: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     webhookEndpointValue: {
@@ -1007,7 +1007,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     payloadSampleLabel: {
-        ...Typography.eyebrow(),
+        ...EYEBROW_TYPOGRAPHY,
         color: theme.colors.text.secondary,
     },
     payloadSample: {
@@ -1015,14 +1015,14 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     payloadFieldList: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     payloadField: {
         ...Typography.mono(),
         color: theme.colors.text.primary,
     },
     filterBuilder: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     filterAddButton: {
         minHeight: minimumInteractiveTargetSize,
@@ -1030,29 +1030,29 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         alignSelf: 'flex-start',
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 11,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     filterActionText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     filterClause: {
-        gap: 8,
+        gap: theme.space.s8,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.base,
-        padding: 8,
+        padding: theme.space.s8,
     },
     filterClauseControls: {
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
     },
     filterPicker: {
         minHeight: minimumInteractiveTargetSize,
@@ -1061,16 +1061,16 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         flexDirection: 'row',
         justifyContent: 'space-between',
-        gap: 6,
+        gap: theme.space.s6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 8,
         backgroundColor: theme.colors.input.background,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     filterPickerText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flexShrink: 1,
         color: theme.colors.text.primary,
     },
@@ -1085,23 +1085,23 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     filterOptionList: {
-        gap: 2,
+        gap: theme.space.s2,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.base,
-        padding: 4,
+        padding: theme.space.s4,
     },
     filterOption: {
         minHeight: minimumInteractiveTargetSize,
         minWidth: minimumInteractiveTargetSize,
         justifyContent: 'center',
         borderRadius: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     filterOptionText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     // The shared page field fills the width it is given; its touch floor is the field owner's.
@@ -1110,7 +1110,7 @@ const styles = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
     },
     unavailableText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     sourceRemediation: {
@@ -1119,12 +1119,12 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         alignSelf: 'flex-start',
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
         borderRadius: 8,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     sourceRemediationText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.accent.blue,
     },
     disabled: {

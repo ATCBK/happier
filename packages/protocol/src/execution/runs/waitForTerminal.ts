@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ExecutionRunStatusSchema } from './listRequest.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -11,7 +11,7 @@ import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
  * vocabulary five times, and the presentation adapter is typed against the
  * canonical enum. Deriving keeps the wire members and their order byte-identical.
  */
-export const ExecutionRunTerminalStatusSchema = lazyZodSchema(() => ExecutionRunStatusSchema.exclude(['running']));
+export const ExecutionRunTerminalStatusSchema = lazyZodSchema(() => z.enum(ExecutionRunStatusSchema.options.filter((value): value is Exclude<(typeof ExecutionRunStatusSchema.options)[number], 'running'> => !(['running'] as readonly string[]).includes(value))));
 export type ExecutionRunTerminalStatus = z.infer<typeof ExecutionRunTerminalStatusSchema>;
 
 export type ExecutionRunWaitFailure = Readonly<{

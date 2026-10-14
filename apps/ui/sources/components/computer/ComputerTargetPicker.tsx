@@ -33,30 +33,30 @@ const NOTICE_KEY: Readonly<Record<string, Parameters<typeof t>[0]>> = {
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     state: {
-        paddingVertical: 24,
+        paddingVertical: theme.space.s24,
     },
     notice: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 4,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
     },
     noticeText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flex: 1,
         color: theme.colors.state.warning.foreground,
     },
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 16,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s16,
     },
     grow: {
         flex: 1,
@@ -71,26 +71,26 @@ const stylesheet = StyleSheet.create((theme) => ({
     policy: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 4,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
     },
     policyText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flex: 1,
         color: theme.colors.text.secondary,
     },
     footnote: {
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
     },
     // Inside the group's own header box (its insets): the title, then the action at the trailing edge.
     groupHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     groupTitle: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flex: 1,
         color: theme.colors.text.secondary,
         textTransform: 'none',
@@ -101,18 +101,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     consentHeader: {
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 20,
-        paddingTop: 20,
-        paddingBottom: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s20,
+        paddingBottom: theme.space.s8,
     },
     consentTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         textAlign: 'center',
     },
     consentBody: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },
@@ -342,18 +342,18 @@ export function ComputerTargetPicker(props: Readonly<{
                     kind={noScreen || unsupported ? 'unavailable' : 'error'}
                     iconName={noScreen || unsupported ? 'desktop' : undefined}
                     title={repairDriver
-                        ? t(recovery?.cause === 'driver_missing' ? 'computerUse.viewer.driverMissing' : 'computerUse.viewer.driverInvalid')
+                        ? t(recovery?.cause === 'driver_missing' ? 'computerUse.presentation.driverMissing' : 'computerUse.presentation.driverInvalid')
                         : noScreen
                         ? t('computerUse.picker.noScreenTitle', { machine: machineName })
                         : unsupported
                             ? t('computerUse.picker.unsupportedTitle', { machine: machineName })
                             : t('computerUse.picker.failedTitle', { machine: machineName })}
-                    reason={repairDriver ? t('computerUse.viewer.driverRepairBody') : noScreen
+                    reason={repairDriver ? t('computerUse.presentation.driverRepairBody') : noScreen
                         ? t('computerUse.picker.noScreenBody')
                         : unsupported ? t('computerUse.picker.unsupportedBody') : t('computerUse.picker.failedBody')}
                     diagnosticCode={state.code}
                     action={noScreen || unsupported ? undefined : repairDriver
-                        ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
+                        ? props.onRepairDriver ? { label: t('computerUse.presentation.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
                         : { label: t('computerUse.picker.tryAgain'), onPress: props.onRetry }}
                 />
             </View>

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { useCodeSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeSyntaxHighlighting';
@@ -6,7 +7,7 @@ import { evaluateCodeHighlightingBudget } from '@/components/ui/code/highlightin
 import { CodeBlockViewFrame } from './CodeBlockViewFrame';
 import { SimpleSyntaxHighlighter } from '@/components/ui/media/SimpleSyntaxHighlighter';
 import { Text } from '@/components/ui/text/Text';
-import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
+import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 import { resolveCodeMonoFontFamily } from '../codeTypography';
 import { normalizeHappierCodeLanguage } from '@happier-dev/plugin-ui/presentation';
 
@@ -43,27 +44,50 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
         && Boolean(syntax.language)
         && budget.withinBudget;
 
-    const content = shouldHighlight ? (
-        <SimpleSyntaxHighlighter
-            code={code}
-            language={syntax.language}
-            selectable={selectable}
-            wrap={wrap}
-            findRanges={findRanges}
-        />
-    ) : (
-        <Text
-            selectable={selectable}
-            style={{
-                fontFamily: resolveCodeMonoFontFamily(),
-                fontSize: 14,
-                lineHeight: 20,
-                color: theme.colors.text.primary,
-                flexShrink: wrap ? undefined : 0,
-            }}
-        >
-            {findRanges?.length ? <FindHighlightedText text={code} ranges={findRanges} selectable={selectable} /> : code}
-        </Text>
+    const lines = React.useMemo(
+        () => budget.lines ?? budget.normalizedCode.split('\n'),
+        [budget],
+    );
+    let lineOffset = 0;
+
+    // A single native Text spanning a wide, long block can measure correctly but
+    // paint completely blank on iOS. Keep each line on its own text surface;
+    // the frame still owns scrolling and copying the complete original code.
+    const content = (
+        <View style={{ flexShrink: wrap ? undefined : 0 }}>
+            {lines.map((line, index) => {
+                const ranges = sliceFindRanges(findRanges, lineOffset, line.length);
+                // Find uses offsets in the original code, including CRLF separators.
+                const newline = code.indexOf('\n', lineOffset);
+                lineOffset = newline < 0 ? code.length : newline + 1;
+                return (
+                    <View key={index} style={{ minHeight: 20 }}>
+                        {shouldHighlight ? (
+                            <SimpleSyntaxHighlighter
+                                code={line}
+                                language={syntax.language}
+                                selectable={selectable}
+                                wrap={wrap}
+                                findRanges={ranges}
+                            />
+                        ) : (
+                            <Text
+                                selectable={selectable}
+                                style={{
+                                    fontFamily: resolveCodeMonoFontFamily(),
+                                    fontSize: 14,
+                                    lineHeight: 20,
+                                    color: theme.colors.text.primary,
+                                    flexShrink: wrap ? undefined : 0,
+                                }}
+                            >
+                                {ranges?.length ? <FindHighlightedText text={line} ranges={ranges} selectable={selectable} /> : line}
+                            </Text>
+                        )}
+                    </View>
+                );
+            })}
+        </View>
     );
 
     return (

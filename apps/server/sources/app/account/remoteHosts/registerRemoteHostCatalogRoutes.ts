@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { REMOTE_HOST_ROWS_ROUTE_V1, RemoteHostCatalogRowMutationV1Schema,
   RemoteHostCatalogRowReadResponseV1Schema, RemoteHostCatalogRowMutationResponseV1Schema,
   assertRemoteHostCatalogContentForModeV1, readRemoteHostCatalogRecordV1,
@@ -96,9 +96,9 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
   app.post(REMOTE_HOST_ROWS_ROUTE_V1, { preHandler: [app.authenticate, async (request, reply) => {
     if (request.body.savedSecretResources?.length) return requirePresentUser(request, reply);
   }], config,
-    schema: { body: z.object({ mutation: asServerProtocolZod(RemoteHostCatalogRowMutationV1Schema),
-      savedSecretResources: z.array(SharedSavedSecretCreateInputV1Schema).optional(),
-      referenceCensus: SavedSecretCatalogReferenceCensusV1Schema.optional() }).strict(),
+    schema: { body: z.strictObject({ mutation: asServerProtocolZod(RemoteHostCatalogRowMutationV1Schema),
+      savedSecretResources: z.optional(z.array(SharedSavedSecretCreateInputV1Schema)),
+      referenceCensus: z.optional(SavedSecretCatalogReferenceCensusV1Schema) }),
       response: { 200: asServerProtocolZod(RemoteHostCatalogRowMutationResponseV1Schema),
         403: AccountRouteAuthenticationForbiddenResponseSchema } },
   }, async (request, reply) => {

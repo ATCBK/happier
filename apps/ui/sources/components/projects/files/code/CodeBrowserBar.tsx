@@ -150,17 +150,17 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 6,
     },
     crumbLabel: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
     current: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         paddingHorizontal: 4,
         paddingVertical: 2,
     },
     separator: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.default('regular'),
         color: theme.colors.text.tertiary,
     },
@@ -178,7 +178,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         flexDirection: 'row',
         minWidth: 0,
-        paddingHorizontal: theme.margins.xs,
+        paddingHorizontal: theme.space.s4,
     },
     statusCompact: {
         flexDirection: 'row',
@@ -187,12 +187,12 @@ const styles = StyleSheet.create((theme) => ({
     tools: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     toolsCompact: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
         alignSelf: 'stretch',
     },
     goto: {

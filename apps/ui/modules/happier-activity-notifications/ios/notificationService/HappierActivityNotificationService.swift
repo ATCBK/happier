@@ -240,7 +240,8 @@ class HappierActivityNotificationService: UNNotificationServiceExtension {
     self.contentHandler = contentHandler
     self.deliverableContent = request.content
 
-    if let machine = MachineRemoteAlert(remoteUserInfo: request.content.userInfo), machine.phase == "offline",
+    if let machine = MachineRemoteAlert(remoteUserInfo: request.content.userInfo),
+       !request.content.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
        let content = request.content.mutableCopy() as? UNMutableNotificationContent {
       content.threadIdentifier = machine.threadIdentifier
       self.deliverableContent = content
@@ -257,9 +258,8 @@ class HappierActivityNotificationService: UNNotificationServiceExtension {
       }
       return
     }
-    // Recovery is submitted as content-available data, without an APNs alert;
-    // the existing app background task dismisses delivered notices. The NSE
-    // thread above groups offline notices but does not claim to replace them.
+    // Ordinary recovery has no APNs alert; the existing app background task
+    // dismisses offline notices. Requested return alerts use the same grouping.
 
     guard let alert = ActivityRemoteAlert(remoteUserInfo: request.content.userInfo),
           let content = request.content.mutableCopy() as? UNMutableNotificationContent else {

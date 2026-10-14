@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
-import { installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
 import { buildRemoteExecCommand } from './utils/dev_targets/remote_commands.mjs';
 import { withDependencyRefreshLock } from './utils/proc/dependency_refresh.mjs';
 
@@ -25,7 +25,7 @@ test('admission reclaims dead and incomplete owners even while capacity is unava
   }
   writeFakeBin({ root: fixture.root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "5242880 33554432\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission-check', '--class=validation', '--machine=worker'], {
-    env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin` }, encoding: 'utf8',
+    env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin` }, encoding: 'utf8',
   });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /memory-available/);
@@ -33,9 +33,10 @@ test('admission reclaims dead and incomplete owners even while capacity is unava
 });
 
 for (const entry of ['native', 'explicit', 'local']) {
-  test(`${entry} compilation bootstraps dependencies before admission so their lock holder can finish`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  test(entry === 'local' ? 'local compilation refuses an active dependency writer before admission and admits its ready tree after release'
+    : `${entry} compilation bootstraps dependencies before admission so their lock holder can finish`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
     const fixture = await createTempFixture(t, { prefix: 'hstack-preparation-admission-' });
-    const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+    const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root, prepareDependencies: true });
     await chmod(launcher, 0o755);
     const checkout = fixture.path('native-owner');
     const component = join(checkout, 'apps/ui');
@@ -43,19 +44,11 @@ for (const entry of ['native', 'explicit', 'local']) {
     const preparing = fixture.path('preparing');
     const compiled = fixture.path('compiled');
     await mkdir(component, { recursive: true });
-    const preparation = fixture.path('preparation.mjs');
-    // The compiler/preparation executable is a process boundary. Keep the
-    // real dependency lock, shell dispatch, admission and PID identity owners.
-    await writeFile(preparation, `
-import { writeFile } from 'node:fs/promises';
-import { withDependencyRefreshLock } from ${JSON.stringify(new URL('./utils/proc/dependency_refresh.mjs', import.meta.url).href)};
-await writeFile(process.env.PREPARING, 'waiting for dependency lock');
-await withDependencyRefreshLock({ installDir: process.env.INSTALL_DIR, env: process.env }, async () => {});
-`);
+    // Observe the preparation process entering its real readiness/lock owner;
+    // only the eventual compiler executable is replaced.
     writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
-case "$*" in
-  *remote_dependency_bootstrap.mjs*) exec '${process.execPath}' "$PREPARATION" ;;
-  *remote_validation_preparation.mjs*) exit 0 ;;
+case "$1" in
+  *remote_dependency_bootstrap.mjs*) printf preparing > "$PREPARING"; exec '${process.execPath}' "$@" ;;
   *runTypeScriptCli.mjs*)
     [ -n "$HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN" ] || exit 99
     printf compiled > "$COMPILED"; exit 0 ;;
@@ -69,12 +62,12 @@ case "$*" in
 esac
 ` });
     writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-    const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
       HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_PREFERRED_EXECUTION: '',
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
       HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
       HAPPIER_HSTACK_DISPATCH_CONTROL: '', HAPPIER_HSTACK_EXECUTION: '',
-      PREPARATION: preparation, PREPARING: preparing, COMPILED: compiled, INSTALL_DIR: checkout,
+      PREPARING: preparing, COMPILED: compiled,
     };
     const target = { name: 'worker', platform: 'posix', repoDir: checkout, cliHomeDir: home, remotePath: [fixture.path('bin'), '/usr/bin', '/bin'] };
     let args;
@@ -137,14 +130,24 @@ esac
         });
         assert.equal(installer.status, 0, `dependency lock holder must finish while compilation prepares: ${installer.stderr}`);
         await assert.rejects(access(compiled), { code: 'ENOENT' });
+        if (entry === 'local') {
+          const refused = await completed;
+          assert.equal(refused.code, 1, stderr);
+          assert.match(stderr, /HAPPIER_DEPENDENCIES_NEED_REFRESH/);
+        }
       });
     } finally {
       // Releasing the real dependency lock lets even the defective compile
       // drain, so RED never leaves a blocked fixture process behind.
       if (completed) {
         const result = await completed;
-        assert.equal(result.code, 0, `${result.signal ?? ''} ${stderr}`);
+        assert.equal(result.code, entry === 'local' ? 1 : 0, `${result.signal ?? ''} ${stderr}`);
+        if (entry === 'local') assert.match(stderr, /HAPPIER_DEPENDENCIES_NEED_REFRESH/);
       }
+    }
+    if (entry === 'local') {
+      const ready = spawnSync('/bin/sh', args, { cwd: component, env, encoding: 'utf8' });
+      assert.equal(ready.status, 0, ready.stderr);
     }
     assert.equal(await readFile(compiled, 'utf8'), 'compiled');
     assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
@@ -162,7 +165,7 @@ async function createPublisherPlacementFixture(t, capacityKiB = 19922944) {
     mkdir(join(checkout, 'packages/protocol'), { recursive: true })]);
   const config = join(stack, 'dev-targets.json');
   await writeFile(config, '{}\n');
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
     HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
     HAPPIER_PREFERRED_EXECUTION: '', HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev',
@@ -190,7 +193,6 @@ esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
 case "$1" in
-  *remote_dependency_bootstrap.mjs|*remote_validation_preparation.mjs) exit 0 ;;
   *buildTypeScriptPackageDist.mjs) printf dispatched > "$DISPATCHED" ;;
   *) exec '${process.execPath}' "$@" ;;
 esac

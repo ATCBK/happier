@@ -1,4 +1,4 @@
-import type { AccountPetCreateResponseV1, AccountPetDeleteResponseV1 } from "@happier-dev/protocol";
+import type { AccountPetCreateResponseV1, AccountPetDeleteResponseV1 } from '@happier-dev/protocol/pets/accountLibrary';
 
 import {
     deriveAccountEncryptionCurrentnessFromRow,

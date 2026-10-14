@@ -27,6 +27,17 @@ function connectedAccountServiceConfigurationsV1Entry(
 }
 
 describe('AccountSettingMutationV1', () => {
+  it('preserves a retained Replay budget below the writable floor during an unrelated preference change', () => {
+    // This value is retained by the real QA Account; new Replay writes must
+    // still meet the seed renderer's structural floor.
+    const raw = { sessionReplayMaxSeedChars: 1024, machineOfflineAlertsV1: { machineIds: ['peer'] } };
+    expect(applyAccountSettingMutationV1(raw, {
+      operations: [{ op: 'set', key: 'machineOfflineAlertsV1', value: { machineIds: ['peer', 'machine-one'] } }],
+    })).toEqual({ status: 'applied', raw: { ...raw, machineOfflineAlertsV1: { machineIds: ['peer', 'machine-one'] } } });
+    expect(applyAccountSettingMutationV1({}, {
+      operations: [{ op: 'set', key: 'sessionReplayMaxSeedChars', value: 1024 }],
+    })).toEqual({ status: 'invalid', reason: 'invalidValue' });
+  });
   it('persists machine offline enrollment through the Account preference owner', () => {
     const result = applyAccountSettingMutationV1({ showLineNumbers: false }, {
       operations: [{ op: 'set', key: 'machineOfflineAlertsV1', value: { machineIds: ['machine-one'] } }],

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { encodeBase64 } from '../crypto/base64.js';
@@ -18,24 +18,24 @@ import {
   RunnerSignatureSchema,
 } from './activation.js';
 
-export const RunnerClaimPayloadV1Schema = lazyZodSchema(() => z.object({
+export const RunnerClaimPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-session-runner.claim'),
   binding: RunnerActivationBindingV1Schema,
   runnerBoxPublicKey: RunnerBoxPublicKeySchema,
-  installation: z.object({
+  installation: z.strictObject({
     installationId: RunnerResourceIdSchema,
     publicKey: RunnerPublicKeySchema,
-    proof: MachineInstallationProofV1Schema.extend({ signature: RunnerSignatureSchema }).strict(),
-  }).strict(),
+    proof: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineInstallationProofV1Schema, { signature: RunnerSignatureSchema })),
+  }),
   protocolEpoch: z.literal(1),
-}).strict());
+}));
 export type RunnerClaimPayloadV1 = z.infer<typeof RunnerClaimPayloadV1Schema>;
 
-export const RunnerClaimV1Schema = lazyZodSchema(() => z.object({
+export const RunnerClaimV1Schema = lazyZodSchema(() => z.strictObject({
   payload: RunnerClaimPayloadV1Schema,
   signature: RunnerSignatureSchema,
-}).strict());
+}));
 export type RunnerClaimV1 = z.infer<typeof RunnerClaimV1Schema>;
 
 export function signRunnerClaimV1(params: Readonly<{
@@ -88,21 +88,20 @@ export function verifyRunnerClaimV1(params: Readonly<{
 // the signed envelope but never supplies replacement metadata.
 const RUNNER_ENDPOINT_HOST_MAX_LENGTH = 255;
 const RUNNER_ENDPOINT_CLI_VERSION_MAX_LENGTH = 191;
-export const RunnerEndpointMachineFactsV1Schema = lazyZodSchema(() => z.object({
-  host: z.string().min(1).max(RUNNER_ENDPOINT_HOST_MAX_LENGTH),
+export const RunnerEndpointMachineFactsV1Schema = lazyZodSchema(() => z.strictObject({
+  host: z.string().check(z.minLength(1), z.maxLength(RUNNER_ENDPOINT_HOST_MAX_LENGTH)),
   platform: z.enum(['darwin', 'linux', 'win32']),
-  happyCliVersion: z.string().min(1).max(RUNNER_ENDPOINT_CLI_VERSION_MAX_LENGTH)
-    .refine((value) => value.trim() === value),
+  happyCliVersion: z.string().check(z.minLength(1), z.maxLength(RUNNER_ENDPOINT_CLI_VERSION_MAX_LENGTH), z.refine((value) => value.trim() === value)),
   happyHomeDir: AbsoluteWorkspacePathSchema,
   homeDir: AbsoluteWorkspacePathSchema,
-}).strict());
+}));
 export type RunnerEndpointMachineFactsV1 = z.infer<typeof RunnerEndpointMachineFactsV1Schema>;
 
-export const RunnerEndpointFactsContentV1Schema = lazyZodSchema(() => z.object({
+export const RunnerEndpointFactsContentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   directory: AbsoluteWorkspacePathSchema,
   machine: RunnerEndpointMachineFactsV1Schema,
-}).strict());
+}));
 export type RunnerEndpointFactsContentV1 = z.infer<typeof RunnerEndpointFactsContentV1Schema>;
 
 // Encrypted facts contain compact UTF-8 JSON. A UTF-16 string unit needs at
@@ -120,30 +119,30 @@ const ENDPOINT_FACTS_MAX_JSON_BYTES = JSON.stringify({
 const ENDPOINT_FACTS_MAX_CIPHER_CHARACTERS = Math.ceil((ENDPOINT_FACTS_MAX_JSON_BYTES + BOX_BUNDLE_MIN_BYTES) * 8 / 6);
 
 export const RunnerEndpointFactsStoredContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  StoredJsonContentEnvelopeSchema.options[0].extend({ v: RunnerEndpointFactsContentV1Schema }).strict(),
-  StoredJsonContentEnvelopeSchema.options[1].extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(StoredJsonContentEnvelopeSchema._zod.def.options[0], { v: RunnerEndpointFactsContentV1Schema })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(StoredJsonContentEnvelopeSchema._zod.def.options[1], {
     // The pipe stops oversized input before base64 decoding and key validation.
-    c: z.string().max(ENDPOINT_FACTS_MAX_CIPHER_CHARACTERS).pipe(z.string().refine((value) => {
+    c: z.pipe(z.string().check(z.maxLength(ENDPOINT_FACTS_MAX_CIPHER_CHARACTERS)), z.string().check(z.refine((value) => {
       const bytes = decodeCanonicalBase64UrlFixedLength(value, Math.floor(value.length * 6 / 8));
       return bytes !== null && bytes.length > BOX_BUNDLE_MIN_BYTES
         && isValidBoxBundlePublicKey(bytes.subarray(0, BOX_BUNDLE_PUBLIC_KEY_BYTES));
-    }, 'Endpoint facts must use a canonical sealed box bundle')),
-  }).strict(),
+    }, 'Endpoint facts must use a canonical sealed box bundle'))),
+  })),
 ]));
 
-export const RunnerEndpointFactsPayloadV1Schema = lazyZodSchema(() => z.object({
+export const RunnerEndpointFactsPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-session-runner.endpoint-facts'),
   claim: RunnerClaimPayloadV1Schema,
   content: RunnerEndpointFactsStoredContentV1Schema,
-}).strict());
+}));
 export type RunnerEndpointFactsPayloadV1 = z.infer<typeof RunnerEndpointFactsPayloadV1Schema>;
 
-export const RunnerEndpointFactsV1Schema = lazyZodSchema(() => z.object({
+export const RunnerEndpointFactsV1Schema = lazyZodSchema(() => z.strictObject({
   payload: RunnerEndpointFactsPayloadV1Schema,
   activationSignature: RunnerSignatureSchema,
   installationSignature: RunnerSignatureSchema,
-}).strict());
+}));
 export type RunnerEndpointFactsV1 = z.infer<typeof RunnerEndpointFactsV1Schema>;
 
 export function signRunnerEndpointFactsV1(params: Readonly<{

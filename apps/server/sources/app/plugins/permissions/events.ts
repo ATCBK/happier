@@ -1,5 +1,5 @@
-import type { PluginPermissionGrantAuditEventV1 } from "@happier-dev/protocol";
-import { PluginPermissionGrantAuditEventV1Schema } from "@happier-dev/protocol";
+import type { PluginPermissionGrantAuditEventV1 } from '@happier-dev/protocol/plugins/permissions/grants';
+import { PluginPermissionGrantAuditEventV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
 import type { Tx } from "@/storage/inTx";
 import { prismaRuntime } from "@/storage/prisma";

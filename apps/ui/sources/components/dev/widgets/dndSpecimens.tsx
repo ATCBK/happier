@@ -316,12 +316,12 @@ export const DND_SPECIMEN_FRAMES: WidgetSpecimenFrames = {
 };
 
 const stylesheet = StyleSheet.create((theme) => ({
-  stack: { gap: 16 },
+  stack: { gap: theme.space.s16 },
   preview: { alignSelf: 'flex-start' },
   pane: {
     height: 360,
-    padding: 24,
-    gap: 12,
+    padding: theme.space.s24,
+    gap: theme.space.s12,
     backgroundColor: theme.colors.surface.base,
   },
   paneText: { color: theme.colors.text.primary },

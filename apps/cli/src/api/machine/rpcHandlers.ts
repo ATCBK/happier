@@ -78,7 +78,6 @@ import {
   registerMachineSessionHandoffRpcHandlers,
   type SessionHandoffDirectPeerTransferHandle,
 } from './sessionHandoff/handlers';
-import { registerMachinePromptAssetsRpcHandlers } from './rpcHandlers.promptAssets';
 import { registerMachineSkillsRpcHandlers } from './rpcHandlers.skills';
 import {
   registerMachinePromptAssetTransferRpcHandlers,
@@ -92,6 +91,7 @@ import {
 } from './rpcHandlers.registryTransfers';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
 import { registerMachineDirectTransferImportRpcHandlers } from './rpcHandlers.directTransferImports';
+import { registerMachinePreparedTransferRpcHandlers } from './rpcHandlers.preparedTransfers';
 import {
   registerMachineDirectTransferExportRpcHandlers,
   type DirectTransferExportPrepareRequest,
@@ -178,7 +178,6 @@ import { RestartAllSessionRunnersRequestV1Schema, RestartSessionRunnerRequestV1S
 import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import { SessionRunnerStatusGetRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from '@happier-dev/protocol/connect/sessionConnectedServiceAuthSwitch';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import {
@@ -285,6 +284,7 @@ export type MachineRpcHandlers = {
       filesystemScope?: PreparedFilesystemTransferScope | null,
     ) => Promise<void | Readonly<{ aborted: boolean }>>;
   }>;
+  preparedMachineTransfer?: Pick<Parameters<typeof registerMachinePreparedTransferRpcHandlers>[0], 'request'>;
   directTransferExport?: Readonly<{
     prepareExportSession: (input: DirectTransferExportPrepareRequest, filesystemScope?: PreparedFilesystemTransferScope, context?: RpcHandlerContext) => Promise<Readonly<{
       transferId: string;
@@ -296,11 +296,12 @@ export type MachineRpcHandlers = {
 };
 
 export type MachineRpcHandlerDeps = Readonly<{
+  mcpServers?: Parameters<typeof registerMachineMcpServersRpcHandlers>[0]['deps'];
   readSpawnFailureLimits?: MachineTerminalRpcHandlerDeps['readSpawnFailureLimits'];
   ownerRemainder?: MachineTerminalRpcHandlerDeps['ownerRemainder'];
   requesterSessionRuntime?: NonNullable<Parameters<typeof import('@/rpc/handlers/sessionLifecycle').registerSessionLifecycleRpcHandlers>[0]['requesterSessionRuntime']>;
   requesterBootstrapBoundary?: NonNullable<Parameters<typeof registerMachineSessionHandoffRpcHandlers>[0]['requesterBootstrapBoundary']>;
-  ownSessionRuntime?: MachineTerminalRpcHandlerDeps['ownSessionRuntime'];
+  accountReadRuntime?: MachineTerminalRpcHandlerDeps['accountReadRuntime'];
   managedActivity?: ManagedActivityRpcOwner;
   machineWorkSummary?: MachineWorkSummaryRpcOwner;
   nativeUsage?: Omit<NativeUsageDaemonRuntimeInput, 'observation' | 'budgetRegistry'>;
@@ -367,9 +368,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   runReplaySummaryForDialog?: typeof runReplaySummaryForDialog;
   resolveExecutionSurfaces?: SessionLifecycleMachineDeps['resolveExecutionSurfaces'];
   awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
-  promptAssetsHomedir?: () => string;
   createRegistryHost?: (signal?:AbortSignal,context?:RpcHandlerContext)=>ReturnType<typeof createCliRegistryHostV1>;
-  promptAssetsHappierHomeDir?: () => string;
   workingDirectory?: string;
   filesystemAccessPolicy?: FilesystemAccessPolicy;
   terminalRegistry?: TerminalProcessRegistry;
@@ -498,6 +497,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
   deps?: MachineRpcHandlerDeps;
 }>): MachineRpcLifecycleRegistration {
   const { rpcHandlerManager, handlers } = params;
+  if (handlers.preparedMachineTransfer) registerMachinePreparedTransferRpcHandlers({ rpcHandlerManager, ...handlers.preparedMachineTransfer });
   transferRelayV2DownloadResponderCleanupByManager.get(rpcHandlerManager)?.();
   transferRelayV2DownloadResponderCleanupByManager.delete(rpcHandlerManager);
   const { spawnSession, stopSession, requestShutdown } = handlers;
@@ -744,7 +744,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       workingDirectory: params.deps?.workingDirectory,
       accessPolicy: params.deps?.filesystemAccessPolicy,
       ...(params.deps?.managedActivity ? { admissionDrain: params.deps.managedActivity.admissionDrain } : {}),
-      ...(params.deps?.ownSessionRuntime ? { ownSessionRuntime: params.deps.ownSessionRuntime } : {}),
+      ...(params.deps?.accountReadRuntime ? { accountReadRuntime: params.deps.accountReadRuntime } : {}),
       ...(params.deps?.terminalRegistry ? { terminalRegistry: params.deps.terminalRegistry } : {}),
       ...(resolveProjectFiniteRuntime ? {
         projectFiniteRuntime: resolveProjectFiniteRuntime,
@@ -770,7 +770,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
     })();
     return finiteRetirement;
   };
-  registerMachineMcpServersRpcHandlers({ rpcHandlerManager });
+  registerMachineMcpServersRpcHandlers({ rpcHandlerManager, deps: params.deps?.mcpServers });
   if (params.deps?.providerRpc) {
     registerMachineProviderRpcHandlers({
       rpcHandlerManager,
@@ -786,24 +786,11 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       service: params.deps.npmRegistryProfiles.service,
     });
   }
-  const promptAssetAdapterRegistry = createPromptAssetAdapterRegistry({
-    homedir: params.deps?.promptAssetsHomedir,
-    happierHomeDir: params.deps?.promptAssetsHappierHomeDir,
-    readRegisteredAdapters: () => (
-      pluginReloadController.getState().activeRegistry?.promptAssetAdapters ?? new Map()
-    ),
-  });
-  registerMachinePromptAssetsRpcHandlers({
-    rpcHandlerManager,
-    adapterRegistry: promptAssetAdapterRegistry,
-    ...(externalAction ? { actionExecutor: externalAction.executor } : {}),
-  });
   registerMachineSkillsRpcHandlers({ rpcHandlerManager,
     ...(externalAction ? { actionExecutor: externalAction.executor } : {}),
   });
   const promptAssetTransfers = registerMachinePromptAssetTransferRpcHandlers({
     rpcHandlerManager,
-    adapterRegistry: promptAssetAdapterRegistry,
   });
   registerMachineRegistriesRpcHandlers({rpcHandlerManager,createHost:params.deps?.createRegistryHost});
   registerMachinePluginInstallDecisionRpcHandlers({ rpcHandlerManager });

@@ -6,7 +6,7 @@ import { readInstalledPluginCatalog } from '@/plugins/projection/catalog/install
 import { readInstalledPluginCatalogEntry } from '@/plugins/projection/catalog/installed';
 import { uninstallPluginFromCatalog } from '@/plugins/projection/catalog/installed';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
-import { controlDaemonPluginDevelopment, readDaemonPluginCatalog } from '@/daemon/controlClient';
+import { controlDaemonPluginDevelopment, listDaemonPluginChanges, readDaemonPluginCatalog } from '@/daemon/controlClient';
 import {
   readUserPluginChangeStatus,
   requestUserPluginChange,
@@ -426,6 +426,7 @@ export async function executePluginDevLoopAction(
       outcome: 'applied',
       alreadyInstalled: result.alreadyInstalled,
       plugin: summarizeCatalogEntry(result.entry),
+      change: result.change,
     };
   }
 
@@ -507,7 +508,10 @@ export async function executePluginDevLoopAction(
   }
 
   if (params.actionId === 'plugins.list') {
-    const catalog = await readDaemonPluginCatalog();
+    const [catalog, pendingChanges] = await Promise.all([
+      readDaemonPluginCatalog(),
+      listDaemonPluginChanges(),
+    ]);
     if (catalog.kind !== 'available') {
       return {
         ok: false,
@@ -525,6 +529,10 @@ export async function executePluginDevLoopAction(
       ok: true,
       kind: 'plugins_list',
       plugins: entries.map(summarizeCatalogEntry),
+      // The daemon is the only pending-decision owner. Project its exact
+      // listing beside installed inventory so an Agent can discover the id
+      // it must rejoin through plugins.change.status without recreating work.
+      pendingChanges: pendingChanges.changes,
     };
   }
 

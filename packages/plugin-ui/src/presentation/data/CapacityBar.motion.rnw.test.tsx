@@ -57,6 +57,10 @@ describe('an animated capacity meter (lab rv: 600 ms value ease, 320 ms tone cro
   });
 
   it('cross-fades its colour when the tone changes, and jumps both under reduced motion', async () => {
+    // An awaited React commit can cross the first real frame, changing a rounded
+    // RGB channel before the starting-colour assertion. Control only the clock;
+    // RNW's actual timing driver and colour interpolation still run.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'] });
     const errors = vi.spyOn(console, 'error');
     const normalize = (color: string) => { const probe = document.createElement('div'); probe.style.backgroundColor = color; return probe.style.backgroundColor; };
     const mount = mountThroughReactNativeWeb(bar(40, theme.colors.text));
@@ -65,13 +69,17 @@ describe('an animated capacity meter (lab rv: 600 ms value ease, 320 ms tone cro
       await mount.render(bar(40, theme.colors.warning));
       // The tone starts from the colour on screen…
       expect(normalize(fill(mount.container).style.backgroundColor)).toBe(calm);
-      await wait(450);
+      await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+      const midway = normalize(fill(mount.container).style.backgroundColor);
+      expect(midway).not.toBe(calm);
+      expect(midway).not.toBe(normalize(theme.colors.warning));
+      await act(async () => { await vi.advanceTimersByTimeAsync(290); });
       // …and has settled on the new one once the cross-fade is over.
       expect(normalize(fill(mount.container).style.backgroundColor)).toBe(normalize(theme.colors.warning));
       await mount.render(bar(90, theme.colors.danger, true));
       expect(widthOf(mount.container)).toBeCloseTo(90, 0);
       expect(normalize(fill(mount.container).style.backgroundColor)).toBe(normalize(theme.colors.danger));
       expect(errors.mock.calls.filter((args) => String(args[0]).includes('Cannot update a component'))).toEqual([]);
-    } finally { mount.unmount(); errors.mockRestore(); }
+    } finally { mount.unmount(); errors.mockRestore(); vi.useRealTimers(); }
   });
 });

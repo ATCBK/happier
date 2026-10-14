@@ -3,7 +3,7 @@ import { bundledUsageModelPriceCatalog, resolveUsageModelPrice, type ResolvedUsa
 import { resolveUsageTokenCategories } from './usageTokenCategories.js';
 import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { reprojectUsageLeaders } from './usageLeaderProjection.js';
-import { addUsageCostForMode, createEmptyUsageCost } from './usageAggregation.js';
+import { aggregateUsageContributionCosts } from './usageAggregation.js';
 
 import { resolveUsageCostBasis, resolveUsageCostFacts, type UsageCostMode } from './usageCostFacts.js';
 export * from './usageCostFacts.js';
@@ -43,7 +43,11 @@ export function repriceUsageObservationCost(rawCost: UsageObservationCost, model
   const { apiEquivalentUsd: _old, pricingSource: _source, effectiveUsd: _effective, ...raw } = rawCost;
   const source = estimate ? estimate.price.source === 'catalog' ? `litellm:${catalog.provenance.revision}`
     : `user:${estimate.price.source}:${modelId}` : undefined;
-  const priced = estimate ? { ...raw, apiEquivalentUsd: estimate.total, pricingSource: source } : raw;
+  // A money-only observation adds no token-tariff population. Its unknown model
+  // must not make otherwise fully priced tokens incomplete.
+  const noTokens = categories !== null && Object.values(categories).every(value => value === 0);
+  const priced = estimate ? { ...raw, apiEquivalentUsd: estimate.total, pricingSource: source }
+    : noTokens ? { ...raw, apiEquivalentUsd: 0, pricingSource: 'no_tokens' } : raw;
   const selected = resolveUsageCostBasis(priced, mode);
   return selected ? { ...priced, effectiveUsd: selected.amountUsd } : priced;
 }
@@ -77,12 +81,12 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
       pricingSource: rows.every(row => row.cost.pricingSource === rows[0]?.cost.pricingSource)
         ? rows[0]?.cost.pricingSource ?? `litellm:${catalog.provenance.revision}` : 'effective_model_prices',
     } : observed;
-    const selected = resolveUsageCostBasis(rows.reduce((total, row) => addUsageCostForMode(total, row.cost, mode), createEmptyUsageCost()), mode);
+    const selected = resolveUsageCostBasis(aggregateUsageContributionCosts(rows, mode), mode);
     return selected ? { ...updated, effectiveUsd: selected.amountUsd } : updated;
   };
   const ranking = reprojectUsageLeaders(value, contributions, mode, projectCost);
   const totals = { ...value.totals, cost: projectCost(value.totals.cost, contributions) };
-  const selected = resolveUsageCostBasis(contributions.reduce((total, row) => addUsageCostForMode(total, row.cost, mode), createEmptyUsageCost()), mode);
+  const selected = resolveUsageCostBasis(aggregateUsageContributionCosts(contributions, mode), mode);
   const costPresentation = selected ? { mode, effectiveUsd: selected.amountUsd, currency: selected.currency, source: selected.source } : undefined;
   const factGroups = new Map<string, UsageAnalyticsCostFact[]>();
   for (const fact of facts) {

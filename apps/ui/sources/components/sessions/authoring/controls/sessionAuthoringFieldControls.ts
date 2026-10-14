@@ -82,8 +82,6 @@ export type SessionAuthoringMcpContext = Readonly<{
     machineName: string | null;
     directory: string;
     serverId: string | null;
-    /** The canonical `mcp.servers` feature decision for this scope. */
-    enabled: boolean;
 }>;
 
 /**
@@ -252,7 +250,7 @@ export function resolveSessionAuthoringFieldTitle(
         case 'profileId': return t('agentInput.profile.sectionTitle');
         case 'sessionConfigOptionOverrides': return t('agentInput.actionMenu.settings');
         case 'transcriptStorage': return t('settingsSession.defaultStorage.title');
-        case 'capabilitySelection': return t('newSession.mcpChipLabel');
+        case 'capabilitySelection': return t('capabilities.session.sheet.title');
         case 'connectedServices': return t('connectedServices.authChip.label');
         case 'terminal': return t('profiles.tmux.spawnSessionsTitle');
         case 'runtimeDescriptorV1': return selectedAgentTarget?.runtimeBackendMode?.title
@@ -626,7 +624,6 @@ export function resolveSessionAuthoringFieldControl(params: Readonly<{
             // or that scope there is nothing truthful to offer.
             if (agentId === null) return unavailable(field, 'requires_agent_target');
             if (facts.mcp === undefined) return unavailable(field, 'owned_by_host');
-            if (!facts.mcp.enabled) return unavailable(field, 'feature_disabled');
             return { field, kind: 'mcp', agentId, context: facts.mcp };
         }
 

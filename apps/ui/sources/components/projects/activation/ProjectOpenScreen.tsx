@@ -822,6 +822,6 @@ const styles = StyleSheet.create(() => ({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   footerNoteRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
-  footerNote: { ...Typography.default(), flexShrink: 1 },
+  footerNote: { ...Typography.variant('meta'), flexShrink: 1 },
   address: { ...Typography.mono() },
 }));

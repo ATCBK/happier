@@ -1,9 +1,4 @@
-import {
-    HomeGovernanceErrorV1Schema,
-    HomeRetentionDryRunInputV1Schema,
-    HomeRetentionDryRunResultV1Schema,
-    homeGovernanceErrorHttpStatusV1,
-} from "@happier-dev/protocol";
+import { HomeGovernanceErrorV1Schema, HomeRetentionDryRunInputV1Schema, HomeRetentionDryRunResultV1Schema, homeGovernanceErrorHttpStatusV1 } from '@happier-dev/protocol/home/governance';
 
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";

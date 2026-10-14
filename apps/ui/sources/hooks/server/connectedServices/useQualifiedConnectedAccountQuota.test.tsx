@@ -121,6 +121,9 @@ describe('useQualifiedConnectedAccountQuota', () => {
         const failure = { code: 'quota_refresh_unavailable' };
         boundary.control.mockResolvedValue({ status: 'unavailable', code: failure.code });
         await act(async () => { await hook.getCurrent().refresh(); });
+        expect(boundary.controls).toEqual([{ machineId: 'machine-selected', command: {
+            operation: 'describeService', service: ref.service, requiredOperation: 'quota_refresh',
+        } }]);
         expect(hook.getCurrent()).toMatchObject({ snapshot, refreshing: false, error: resolveConnectedServiceSettingsErrorMessage(failure) });
         expect(boundary.refresh).not.toHaveBeenCalled();
     });

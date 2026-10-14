@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN } from './sessionWorkflowRunRecordRevision.js';
 
@@ -51,66 +51,60 @@ export const SessionWorkflowAgentStatusV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionWorkflowAgentStatusV1 = z.infer<typeof SessionWorkflowAgentStatusV1Schema>;
 
-export const SessionWorkflowPhaseSnapshotV1Schema = lazyZodSchema(() => z
-  .object({
-    id: z.string().trim().min(1),
-    title: z.string().trim().min(1).max(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX).optional(),
-    order: z.number().int().nonnegative().optional(),
-    agentIds: z.array(z.string().trim().min(1)),
-  })
-  .passthrough());
+export const SessionWorkflowPhaseSnapshotV1Schema = lazyZodSchema(() => z.looseObject({
+    id: z.string().check(z.trim(), z.minLength(1)),
+    title: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX))),
+    order: z.optional(z.number().check(z.int(), z.nonnegative())),
+    agentIds: z.array(z.string().check(z.trim(), z.minLength(1))),
+  }));
 export type SessionWorkflowPhaseSnapshotV1 = z.infer<typeof SessionWorkflowPhaseSnapshotV1Schema>;
 
-export const SessionWorkflowAgentSnapshotV1Schema = lazyZodSchema(() => z
-  .object({
-    id: z.string().trim().min(1),
-    title: z.string().trim().min(1).max(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX),
+export const SessionWorkflowAgentSnapshotV1Schema = lazyZodSchema(() => z.looseObject({
+    id: z.string().check(z.trim(), z.minLength(1)),
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX)),
     status: SessionWorkflowAgentStatusV1Schema,
-    vendorRef: z.string().trim().min(1).optional(),
-    parentId: z.string().trim().min(1).optional(),
-    phaseIndex: z.number().int().optional(),
-    phaseTitle: z.string().trim().min(1).max(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX).optional(),
-    model: z.string().trim().min(1).max(400).optional(),
-    summary: z.string().trim().max(SESSION_WORKFLOW_RUN_SNAPSHOT_SUMMARY_MAX).optional(),
-    resultPreview: z.string().trim().max(SESSION_WORKFLOW_RUN_SNAPSHOT_RESULT_PREVIEW_MAX).optional(),
-    tokensUsed: z.number().int().nonnegative().optional(),
-    toolCalls: z.number().int().nonnegative().optional(),
-    timeUsedSeconds: z.number().finite().nonnegative().optional(),
-    startedAt: z.number().int().nonnegative().optional(),
-    completedAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .passthrough());
+    vendorRef: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    parentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    phaseIndex: z.optional(z.number().check(z.int())),
+    phaseTitle: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX))),
+    model: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(400))),
+    summary: z.optional(z.string().check(z.trim(), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_SUMMARY_MAX))),
+    resultPreview: z.optional(z.string().check(z.trim(), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_RESULT_PREVIEW_MAX))),
+    tokensUsed: z.optional(z.number().check(z.int(), z.nonnegative())),
+    toolCalls: z.optional(z.number().check(z.int(), z.nonnegative())),
+    timeUsedSeconds: z.optional(z.number().check(z.nonnegative())),
+    startedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    completedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionWorkflowAgentSnapshotV1 = z.infer<typeof SessionWorkflowAgentSnapshotV1Schema>;
 
-export const SessionWorkflowRunSnapshotV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionWorkflowRunSnapshotV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
     projectionVersion: z.literal(SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION),
-    runId: z.string().trim().min(1),
-    backendId: z.string().trim().min(1),
-    agentId: z.string().trim().min(1).optional(),
-    title: z.string().trim().min(1).max(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    backendId: z.string().check(z.trim(), z.minLength(1)),
+    agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX)),
     status: SessionWorkflowRunStatusV1Schema,
-    statusReason: SessionWorkflowRunStatusReasonV1Schema.optional(),
-    vendorRef: z.string().trim().min(1).optional(),
-    workflowToolUseId: z.string().trim().min(1).optional(),
-    sourceSessionId: z.string().trim().min(1).optional(),
-    sourceRevision: z.string().trim().min(1).optional(),
-    recordRevision: z.string().trim().regex(SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN),
-    startedAt: z.number().int().nonnegative().optional(),
-    completedAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-    totalAgents: z.number().int().nonnegative(),
-    completedAgents: z.number().int().nonnegative(),
-    failedAgents: z.number().int().nonnegative().optional(),
-    blockedAgents: z.number().int().nonnegative().optional(),
-    cancelledAgents: z.number().int().nonnegative().optional(),
-    tokensUsed: z.number().int().nonnegative().optional(),
-    toolCalls: z.number().int().nonnegative().optional(),
-    timeUsedSeconds: z.number().finite().nonnegative().optional(),
+    statusReason: z.optional(SessionWorkflowRunStatusReasonV1Schema),
+    vendorRef: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    workflowToolUseId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    sourceSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    sourceRevision: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    recordRevision: z.string().check(z.trim(), z.regex(SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN)),
+    startedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    completedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    totalAgents: z.number().check(z.int(), z.nonnegative()),
+    completedAgents: z.number().check(z.int(), z.nonnegative()),
+    failedAgents: z.optional(z.number().check(z.int(), z.nonnegative())),
+    blockedAgents: z.optional(z.number().check(z.int(), z.nonnegative())),
+    cancelledAgents: z.optional(z.number().check(z.int(), z.nonnegative())),
+    tokensUsed: z.optional(z.number().check(z.int(), z.nonnegative())),
+    toolCalls: z.optional(z.number().check(z.int(), z.nonnegative())),
+    timeUsedSeconds: z.optional(z.number().check(z.nonnegative())),
     phases: z.array(SessionWorkflowPhaseSnapshotV1Schema),
     agents: z.array(SessionWorkflowAgentSnapshotV1Schema),
-  })
-  .passthrough());
+  }));
 export type SessionWorkflowRunSnapshotV1 = z.infer<typeof SessionWorkflowRunSnapshotV1Schema>;

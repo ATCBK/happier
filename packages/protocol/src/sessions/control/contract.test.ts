@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
 import * as protocol from '../../index.js';
@@ -34,16 +35,16 @@ describe('sessionControl contract exports', () => {
     }).ownerMetadata).toEqual({ t: 'encrypted', c: ciphertext });
   });
   it('preserves both JSON Schema dialects and fluent resource-access projection', () => {
-    const reference = z.object({
-      accountId: z.string().trim().min(1).max(256),
-      throughCursor: z.number().int().nonnegative(),
+    const reference = z.strictObject({
+      accountId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+      throughCursor: z.number().check(z.int(), z.nonnegative()),
       status: z.enum(['available', 'unavailable']),
-    }).strict();
+    });
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(zodSchemaToJsonSchemaObject(V2SessionResourceAccessResponseSchema, { target }))
         .toEqual(zodSchemaToJsonSchemaObject(reference, { target }));
-      expect(zodSchemaToJsonSchemaObject(V2SessionResourceAccessResponseSchema.pick({ status: true }), { target }))
-        .toEqual(zodSchemaToJsonSchemaObject(reference.pick({ status: true }), { target }));
+      expect(zodSchemaToJsonSchemaObject(lazyZodSchema(() => z.pick(V2SessionResourceAccessResponseSchema, { status: true })), { target }))
+        .toEqual(zodSchemaToJsonSchemaObject(z.pick(reference, { status: true }), { target }));
     }
   });
 
@@ -51,10 +52,10 @@ describe('sessionControl contract exports', () => {
     const result = V2SessionResourceAccessResponseSchema.safeParse({ accountId: 'a', throughCursor: -1, status: 'available' });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toBeInstanceOf(z.ZodError);
+      expect(result.error).toBeInstanceOf(z.core.$ZodError);
       expect(result.error.issues).toMatchObject([{ code: 'too_small', path: ['throughCursor'], minimum: 0 }]);
     }
-    expect(() => V2SessionResourceAccessResponseSchema.parse({})).toThrow(z.ZodError);
+    expect(() => V2SessionResourceAccessResponseSchema.parse({})).toThrow(z.core.$ZodError);
   });
   it('accepts only the exact v2 session-by-id not-found body', () => {
     expect(protocol.V2SessionByIdNotFoundSchema).toBe(V2SessionByIdNotFoundSchema);

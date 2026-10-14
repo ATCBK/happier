@@ -30,7 +30,9 @@ export function createUiProjectDefinitionAction(account?: LazyActionAccountConte
             }
             const execution = await executeOriginalAccountMachineAction({ account, actionId,
                 input: { ...request, workspace: { ...request.workspace, serverId: account.serverId } },
-                machineId: request.workspace.machineId, requestId: context.actionRequestId, foreignTargetOnly: true,
+                machineId: request.workspace.machineId, requestId: context.actionRequestId,
+                // Passive setup review needs requester custody on own targets too.
+                ...(actionId === 'projects.inspect' ? {} : { foreignTargetOnly: true as const }),
                 ...(context.signal ? { signal: context.signal } : {}) });
             account.assertResultCurrent(spec.sideEffectClass);
             if (execution) return execution.ok ? execution.result : execution;

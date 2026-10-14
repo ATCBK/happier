@@ -58,15 +58,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     listContent: {
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
     },
     urlEntry: {
-        marginHorizontal: 16,
-        marginTop: 12,
+        marginHorizontal: theme.space.s16,
+        marginTop: theme.space.s12,
     },
     banner: {
-        marginHorizontal: 16,
-        marginTop: 12,
+        marginHorizontal: theme.space.s16,
+        marginTop: theme.space.s12,
     },
     monoSubtitle: {
         ...Typography.mono(),

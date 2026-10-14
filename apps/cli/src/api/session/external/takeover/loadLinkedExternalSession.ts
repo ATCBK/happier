@@ -1,6 +1,7 @@
 import { buildLinkedExternalSessionMetadataV1, normalizeLinkedExternalSessionMetadataV1, resolveExternalHistoryImportV1FromMetadata, readNonAuthoritativeLinkedExternalSessionV1FromMetadata, resolveLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import type { RuntimeDescriptorV1, ExternalSessionsAgentId, ExternalSessionsSource, PluginAgentExternalSessionLinkData, PluginAgentExternalLinkedTakeoverWriterSafetyV1 } from '@happier-dev/protocol';
+import { PluginAgentExternalSessionLinkDataSchema } from '@happier-dev/protocol/plugins/contributions/agentExternalSessions';
 import { applyRuntimeDescriptorSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
 
 import type { StoredCredentials } from '@/persistence';
@@ -13,6 +14,7 @@ import {
 import {
   canonicalizeLinkedExternalSessionSource,
   readExternalAgentSurfaceRuntimeDescriptorV1,
+  resolveExternalSessionLinkIdentity,
 } from '@/agent/runtime/bridges/session/externalSessionSourceCanonicalization';
 import {
   metadataProvesHostedExternalSessionIdentity,
@@ -477,19 +479,6 @@ export async function loadLinkedExternalSessionFromRaw(params: Readonly<{
 
     const runtimeDescriptorV1 =
       readRuntimeDescriptorV1FromMetadata(parsedMetadata);
-    const hostedMetadata = buildLinkedExternalSessionMetadataV1(
-      parsedMetadata,
-      {
-        v: 1,
-        agentId: hostedIdentity.agentId,
-        machineId: hostedIdentity.machineId,
-        remoteSessionId: hostedIdentity.remoteSessionId,
-        source: hostedIdentity.source,
-        ...(runtimeDescriptorV1
-          ? { runtimeDescriptorV1 }
-          : {}),
-      },
-    );
     const admitted = deps.admitPersistedSourceBeforeCanonicalization
       ? await deps.admitPersistedSourceBeforeCanonicalization({
           agentId: hostedIdentity.agentId,
@@ -505,14 +494,28 @@ export async function loadLinkedExternalSessionFromRaw(params: Readonly<{
         error: 'linked_session_source_not_current',
       };
     }
-    const canonicalized = await canonicalizeLinkedExternalSessionSource({
+    // A hosted native Session has no persisted external-link bag. Resolve its
+    // current native identity before synthesizing a private follow projection;
+    // the linked normalizer below is only for an actual persisted link.
+    const canonicalized = await resolveExternalSessionLinkIdentity({
       agentId: hostedIdentity.agentId,
-      metadata: hostedMetadata,
+      metadata: parsedMetadata,
       remoteSessionId: hostedIdentity.remoteSessionId,
       source: admitted?.source ?? hostedIdentity.source,
     }, deps.resolveExternalSessionProviderOps
       ? { resolveExternalSessionProviderOps: deps.resolveExternalSessionProviderOps }
       : {});
+    const linkData = canonicalized.externalSessionMetadata?.linkData === undefined ? undefined
+      : PluginAgentExternalSessionLinkDataSchema.parse(canonicalized.externalSessionMetadata.linkData);
+    const hostedMetadata = buildLinkedExternalSessionMetadataV1(parsedMetadata, {
+      v: 1,
+      agentId: hostedIdentity.agentId,
+      machineId: hostedIdentity.machineId,
+      remoteSessionId: canonicalized.remoteSessionId,
+      source: canonicalized.source,
+      ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
+      ...(linkData === undefined ? {} : { linkData }),
+    });
     const sessionPath =
       typeof parsedMetadata.path === 'string'
       && parsedMetadata.path.trim().length > 0
@@ -527,6 +530,7 @@ export async function loadLinkedExternalSessionFromRaw(params: Readonly<{
       remoteSessionId: canonicalized.remoteSessionId,
       linkGeneration: rawSession.id,
       source: canonicalized.source,
+      ...(linkData === undefined ? {} : { linkData }),
       ...(admitted
         ? {
             externalLinkedTakeoverWriterSafety:

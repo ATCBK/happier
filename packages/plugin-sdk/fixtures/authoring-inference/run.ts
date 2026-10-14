@@ -15,9 +15,9 @@ if (manifest.id !== 'example.inference' || typeof activate !== 'function') {
 }
 if (!manifest.contributes.promptAssets?.some((entry) => (
   entry.id === 'external-skills'
-  && entry.adapterDescriptor?.id === 'example.inference.skill'
+  && entry.resource === 'readme'
 ))) {
-  throw new Error('definePlugin did not project the external Prompt Asset authoring fixture');
+  throw new Error('definePlugin did not project the static prompt authoring fixture');
 }
 
 const managedProviderTestkit = await createPluginTestkit({

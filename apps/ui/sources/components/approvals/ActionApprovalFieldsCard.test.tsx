@@ -9,17 +9,123 @@ import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfil
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 import { describeUnnamedApprovalSession } from './approvalRequesterLabels';
-import { describeApprovalActionFields } from './approvalFieldValues';
+import { describeApprovalActionFields, describeApprovalRequestFields } from './approvalFieldValues';
 import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
 import { t } from '@/text';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { getActionSpec } from '@happier-dev/protocol/actions';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { settleApprovalRequestActionArgs } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
+
+it.each(['open', 'executed'] as const)('names the MCP catalog title in %s approvals and keeps the id in Technical details', async (status) => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://mcp-approval-title.test' });
+    profiles.push(home.id);
+    const accountId = 'mcp-approval-account';
+    const serverId = 'fd1b6b4c-a056-48c8-b2dd-1787091b9dd7';
+    const scope = { serverId: home.id, accountId };
+    await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+        token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+    });
+    // Use the real destination-row shape and scoped catalog hook, not a mocked reference reader.
+    const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{
+        id: serverId, name: 'filesystem', title: 'Filesystem', transport: 'stdio',
+        stdio: { command: 'filesystem-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    }], bindings: [] });
+    await act(async () => {
+        storage.setState({ settingsScope: scope });
+        applyMcpServerCatalogSnapshot(scope, { status: 'ready', catalog, revision: 1, authority: 'active', diagnostics: [] }, true);
+    });
+    const spec = getActionSpec('mcp.rules.set');
+    const open = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, requestedSurface: 'cli', summary: 'Turn on Filesystem', actionId: spec.id,
+        actionArgs: spec.inputSchema.parse({ items: [{ serverId }], change: {
+            kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' },
+        } }), executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+            serverId: home.id, actionId: spec.id, requestId: 'mcp-title-approval' },
+    });
+    const request = status === 'open' ? open : ApprovalRequestV2Schema.parse({ ...open, status, updatedAtMs: 3,
+        actionArgs: settleApprovalRequestActionArgs(open), decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 3, ok: true },
+    });
+    try {
+        for (const anatomy of ['page', 'card'] as const) {
+            const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId={home.id}
+                presentation={describeApprovalRequestFields(request)} />);
+            const text = screen.getTextContent();
+            for (const value of ['MCP server', 'Filesystem', 'Everywhere', 'Turn on']) expect(text).toContain(value);
+            expect(text).not.toContain('filesystem');
+            expect(text).not.toContain(serverId);
+            const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+            expect(details).toBeTruthy();
+            await act(async () => { details?.props.onExpandedChange(true); });
+            expect(screen.getTextContent()).toContain(serverId);
+        }
+    } finally {
+        await act(async () => { await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id }); });
+    }
+});
+
+it('names reviewed skills and the exact Home machine, keeping their ids in Technical details', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://capability-approval.test' });
+    profiles.push(home.id);
+    const skillId = 'opaque-reviewed-skill';
+    const machineId = 'opaque-reviewed-machine';
+    const machine = createMachineFixture({ id: machineId, metadata: { ...createMachineFixture().metadata!, displayName: 'Studio' } });
+    await act(async () => {
+        storage.setState({ settingsScope: { serverId: home.id, accountId: 'account' },
+            machineListByServerId: { [home.id]: [machine] } });
+        storage.getState().applyArtifacts([{ id: skillId, title: 'Release notes', isDecrypted: true,
+            header: { v: 1, kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1', title: 'Release notes' },
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
+    });
+    const spec = getActionSpec('skills.rules.set');
+    const actionArgs = spec.inputSchema.parse({ items: [{ skillId }], change: {
+        kind: 'write', write: { place: { t: 'machine', machineId }, state: 'on' },
+    } });
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={home.id}
+        presentation={describeApprovalActionFields({ actionId: spec.id, actionArgs,
+            preview: { actionId: spec.id, actionArgs: spec.projectObservationInput?.(actionArgs) } })} />);
+    const text = screen.getTextContent();
+    for (const value of ['Skill', 'Release notes', 'Where', 'Machine Studio', 'Change', 'Turn on']) expect(text).toContain(value);
+    for (const value of [skillId, machineId, 'Rules change', 'Kind Write', 'State on']) expect(text).not.toContain(value);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain(skillId);
+    expect(screen.getTextContent()).toContain(machineId);
+});
 
 const initialState = storage.getState();
 const profiles: string[] = [];
 
 afterEach(async () => {
     await standardCleanup();
+    resetMcpServerCatalogEngineForTests();
+    resetMcpServerCatalogSnapshotsForTests();
     storage.setState(initialState);
     for (const id of profiles.splice(0)) await removeServerProfile(id);
+});
+
+it('keeps widget placement internals behind the canonical Details disclosure', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.group.add', actionArgs: {
+        surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+        group: { kind: 'group', id: 'opaque-group', title: 'Release checks', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [
+            { kind: 'widget', instance: { v: 1, id: 'opaque-child', displayName: 'Pull requests', bindings: {},
+                definition: { kind: 'installed', surface: { pluginId: 'happier.triage', localId: 'latest' } } } },
+        ] },
+    } });
+    for (const anatomy of ['card', 'page'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
+        expect(screen.getTextContent()).toContain('Release checks');
+        expect(screen.getTextContent()).toContain('Pull requests');
+        for (const value of ['opaque-group', 'opaque-child', 'happier.triage', 'latest']) expect(screen.getTextContent()).not.toContain(value);
+        const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+        await act(async () => { details?.props.onExpandedChange(true); });
+        for (const value of ['opaque-group', 'opaque-child', 'happier.triage', 'latest']) expect(screen.getTextContent()).toContain(value);
+    }
 });
 
 it('reads the declared setting name and exact new value in both approval anatomies', async () => {
@@ -46,12 +152,13 @@ it('the approval Details page preserves an exact remote host id when a session h
     const hostId = 'exact-remote-host';
     const session = createSessionFixture();
     if (!session.metadata) throw new Error('Missing Session metadata fixture');
+    const metadata = session.metadata;
     await act(async () => {
         storage.getState().applySessions([
             createSessionFixture({ id: hostId, serverId: profile.id,
-                metadata: { ...session.metadata, name: 'Unrelated same-id session' } }),
+                metadata: { ...metadata, name: 'Unrelated same-id session' } }),
             createSessionFixture({ id: profile.id, serverId: profile.id,
-                metadata: { ...session.metadata, name: 'Session sharing Home token' } }),
+                metadata: { ...metadata, name: 'Session sharing Home token' } }),
         ]);
     });
     const presentation = { rows: [

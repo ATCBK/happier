@@ -18,6 +18,9 @@ export function resolvePluginUiFrameworkTranslations(): Readonly<Record<string, 
         'happier.plugin-ui.action.open': t('common.open'),
         'happier.plugin-ui.action.copied': t('common.copied'),
         'happier.plugin-ui.action.refresh': t('common.refresh'),
+        // The public `ApprovalPendingNotice`: the same words as Happier's own waiting notices.
+        'happier.plugin-ui.approvalPending.title': t('settingsProvidersCollection.approvalPendingTitle'),
+        'happier.plugin-ui.approvalPending.open': t('settingsProvidersCollection.openApproval'),
         // What a refused Action means, for a page that shows `useExecutePluginAction`'s message.
         'happier.plugin-ui.action.error.failed': t('ui.pluginUi.actionFailed'),
         'happier.plugin-ui.action.error.unavailable': t('ui.pluginUi.actionUnavailable'),
@@ -37,6 +40,8 @@ export function resolvePluginUiFrameworkTranslations(): Readonly<Record<string, 
         'happier.plugin-ui.collection.board.empty': t('ui.pluginUi.collectionEmpty'),
         'happier.plugin-ui.select.choose': t('common.choose'),
         'happier.plugin-ui.select.empty': t('settingsAgents.noOptionsAvailable'),
+        'happier.plugin-ui.select.search': t('common.search'),
+        'happier.plugin-ui.select.noMatches': t('common.noMatches'),
         'happier.plugin-ui.detailsPane.back': t('common.back'),
         // A segmented choice whose value follows a default announces it ("Ask, default").
         'happier.plugin-ui.segmented.inherited': t('capabilities.detail.inheritedValue'),

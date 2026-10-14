@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,13 +7,16 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
 import { RestartSessionRunnerRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
-import { readCapabilitySelectionApplyV1, resolveSelectionRestartMarkersForStartupV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readCapabilitySelectionApplyV1, readPendingCapabilityApplyV1, resolveSelectionRestartMarkersForStartupV1, writeCapabilitySelectionApplyV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createCapabilitySelectionSynchronizer, type CapabilitySelectionSynchronizerInput } from './capabilitySelectionSynchronizer';
+import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 
 function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 'restarted', sessionId: 'session' }],
-  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports'>> = {}) {
-  let metadata = createTestMetadata();
+  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports' | 'readSkillRules' | 'initialMcpRules' | 'readMcpRules' | 'subscribeAccountSettings'>> = {}, initialMetadata = createTestMetadata()) {
+  let metadata = initialMetadata;
   let settled = false;
   let refusePublication = false;
   let refuseNextPublication = false;
@@ -42,6 +45,160 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it.each(['retry', 'restore', 'include'] as const)('uses the captured MCP launch baseline through unavailable reads and busy settlement for %s', async scenario => {
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: 'project', agentId: 'codex' };
+    const settings = (enabled: boolean) => ({ v: 1 as const, strictMode: false,
+      servers: [{ id: 'inherited', name: 'inherited', transport: 'http' as const, remote: { url: 'https://example.com/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 }],
+      bindings: [{ id: 'rule', serverId: 'inherited', target: { t: 'project' as const, projectKey: 'project' }, enabled, createdAt: 1, updatedAt: 1 }] });
+    let available = true;
+    let current = settings(false); // Rule changed after launch, before loop construction.
+    let wake = () => {};
+    const f = fixture([{ ok: false, status: 'busy', sessionId: 'session', reasonCode: 'approval_pending' },
+      { ok: true, status: 'restarted', sessionId: 'session' }], {
+      initialMcpRules: { context, settings: settings(true), mcpPluginItems: [], selectedServerIds: ['inherited'] },
+      readMcpRules: () => available ? { context, settings: current, mcpPluginItems: [] } : null,
+      subscribeAccountSettings: listener => { wake = listener; return () => {}; },
+    }, createTestMetadata(scenario === 'include' ? { mcpSelectionV1: { v: 1, managedServersEnabled: true,
+      forceIncludeServerIds: ['inherited'], forceExcludeServerIds: [] } } : {}));
+    await f.sync.flushBeforeTurn();
+    if (scenario === 'include') {
+      expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(false);
+      f.settle(); await f.sync.flushAfterSettledTurn();
+      expect(f.requests).toEqual([]);
+      await f.sync.dispose(); return;
+    }
+    expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(true);
+    expect(f.metadata.capabilitySelectionApplyV1?.mcp).toMatchObject({ reason: 'next_turn', source: 'rules' });
+    expect(f.requests).toEqual([]);
+    available = false; wake(); await f.sync.flushBeforeTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(true);
+    available = true; wake(); f.settle(); await f.sync.flushAfterSettledTurn('one');
+    expect(f.requests).toHaveLength(1);
+    expect(f.metadata.capabilitySelectionApplyV1?.mcp).toMatchObject({ reason: 'next_turn', source: 'rules' });
+    if (scenario === 'restore') {
+      current = settings(true); wake();
+      await vi.waitFor(() => expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(false));
+      expect(f.metadata.capabilitySelectionApplyV1).toBeUndefined();
+      expect(f.metadata.mcpSelectionV1).toBeUndefined();
+      expect(f.requests).toHaveLength(1);
+      await f.sync.dispose(); return;
+    }
+    wake(); await f.sync.flushBeforeTurn(); await f.sync.flushAfterSettledTurn('one');
+    expect(f.requests).toHaveLength(1);
+    await f.sync.flushAfterSettledTurn('two');
+    expect(f.requests).toHaveLength(2);
+    expect(f.requests[1]).toEqual({ sessionId: 'session', mode: 'force_current_cli', reason: 'capability_selection_change' });
+    await f.sync.dispose();
+  });
+  it.each(['supported', 'unsupported'] as const)('publishes rule-only pending metadata through the strict notice consumer with %s reload', async skillsLiveReload => {
+    let enabled = true;
+    let wake = () => {};
+    const f = fixture(undefined, {
+      agent: { vendorResume: 'supported', skillsLiveReload },
+      readSkillRules: () => ({ context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' },
+        rules: [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' }, enabled, createdAt: 1, updatedAt: 1 }] }),
+      subscribeAccountSettings: listener => { wake = listener; return () => { wake = () => {}; }; },
+    });
+    const notice = () => {
+      const created = createSessionOwnerMetadataV1({ metadata: f.metadata });
+      if (!created.ok) throw new Error(`Owner metadata rejected: ${created.unsupportedFields.join(', ')}`);
+      const ownerMetadata = SessionOwnerMetadataV1Schema.parse(created.ownerMetadata);
+      const metadata = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: projectSessionSharedMetadataV1({ metadata: f.metadata }), ownerMetadata });
+      return sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(metadata),
+        applyTiming: { mcp: { t: 'next_turn' }, skills: { t: skillsLiveReload === 'supported' ? 'applied_now' : 'next_turn' } },
+        change: readSessionCapabilityApplyChange(metadata, () => null), machineOnline: true, machineName: 'QA', turnSettled: false });
+    };
+    try {
+      enabled = false; wake();
+      await vi.waitFor(() => expect(notice()?.key).toBe('pendingNextTurn'));
+      expect(f.metadata.skillSelectionV1).toBeUndefined();
+      expect(f.requests).toEqual([]);
+      enabled = true; wake(); await f.sync.flushBeforeTurn();
+      expect(notice()).toBeNull();
+    } finally { await f.sync.dispose(); }
+  });
+  it('does not acknowledge a retained rule refusal merely by attaching to current rules', async () => {
+    const retained = writeCapabilitySelectionApplyV1(createTestMetadata({ startedBy: 'terminal' }), {
+      skills: { source: 'rules', reason: 'restart_to_apply', restartBy: 'terminal' },
+    });
+    const f = fixture(undefined, {
+      readSkillRules: () => ({ context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' }, rules: [] }),
+    }, resolveSelectionRestartMarkersForStartupV1({ current: retained, applied: 'preserved_process' }));
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata)).toEqual({ mcp: false, skills: true });
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ skills: { reason: 'restart_to_apply', restartBy: 'terminal' } });
+    expect(f.requests).toEqual([]);
+  });
+  it('preserves a rule-only refusal when an MCP edit arrives during an unavailable rule read', async () => {
+    let enabled = true;
+    let available = true;
+    let wake = () => {};
+    const f = fixture(undefined, {
+      readSkillRules: () => available ? { context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' },
+        rules: [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' }, enabled, createdAt: 1, updatedAt: 1 }] } : null,
+      subscribeAccountSettings: listener => { wake = listener; return () => { wake = () => {}; }; },
+    });
+    f.patch({ startedBy: 'terminal' });
+    enabled = false; wake(); f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata).skills).toBe(true);
+    available = false; wake(); f.change('server'); await f.sync.flushBeforeTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata)).toEqual({ mcp: true, skills: true });
+    expect(f.metadata.capabilitySelectionApplyV1?.skills).toEqual({ source: 'rules', reason: 'restart_to_apply', restartBy: 'terminal' });
+    expect(f.requests).toEqual([]);
+  });
+  it('does not retry a hard rule-apply refusal on an unchanged Account refresh', async () => {
+    let enabled = true;
+    let available = true;
+    let wake = () => {};
+    const f = fixture([{ ok: false, status: 'missing_resume_snapshot', sessionId: 'session', reasonCode: 'missing_resume_identity' }], {
+      readSkillRules: () => available ? { context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' },
+        rules: [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' }, enabled, createdAt: 1, updatedAt: 1 }] } : null,
+      subscribeAccountSettings: listener => { wake = listener; return () => { wake = () => {}; }; },
+    });
+    enabled = false; wake(); f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+    available = false; wake(); await f.sync.flushBeforeTurn();
+    available = true; wake(); await f.sync.flushBeforeTurn();
+    expect(f.requests).toHaveLength(1);
+    expect(readPendingCapabilityApplyV1(f.metadata)).toEqual({ mcp: false, skills: true });
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ skills: { reason: 'missing_resume_snapshot' } });
+  });
+  it('keeps rule-only manual apply pending without inventing a Session override or retrying', async () => {
+    let enabled = true;
+    let wake = () => {};
+    const f = fixture(undefined, {
+      readSkillRules: () => ({ context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' },
+        rules: [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' }, enabled, createdAt: 1, updatedAt: 1 }] }),
+      subscribeAccountSettings: listener => { wake = listener; return () => { wake = () => {}; }; },
+    });
+    f.patch({ startedBy: 'terminal' });
+    enabled = false; wake(); f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([]);
+    expect(f.metadata.skillSelectionV1).toBeUndefined();
+    expect(readPendingCapabilityApplyV1(f.metadata)).toEqual({ mcp: false, skills: true });
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ skills: { reason: 'restart_to_apply', restartBy: 'terminal' } });
+    expect(f.metadata.capabilitySelectionApplyV1?.skills).toMatchObject({ source: 'rules' });
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([]);
+    enabled = true; wake(); await f.sync.flushBeforeTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata)).toEqual({ mcp: false, skills: false });
+    expect(f.metadata.capabilitySelectionApplyV1).toBeUndefined();
+    expect(f.requests).toEqual([]);
+  });
+  it('restarts for effective rule changes at settlement while unrelated rules stay inert', async () => {
+    let rules: SkillRuleV1[] = [{ id: 'rule', skillId: 'inherited', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }];
+    let wake = () => {};
+    const f = fixture(undefined, {
+      readSkillRules: () => ({ context: { machineId: 'machine', machinePlatform: 'posix', directory: '/repo', projectKey: null, agentId: 'codex' }, rules }),
+      subscribeAccountSettings: listener => { wake = listener; return () => { wake = () => {}; }; },
+    });
+    rules = [...rules, { id: 'other', skillId: 'neighbour', target: { t: 'machine', machineId: 'other' }, enabled: true, createdAt: 1, updatedAt: 1 }];
+    wake(); await f.sync.flushBeforeTurn(); expect(f.requests).toEqual([]);
+    rules = rules.map(rule => ({ ...rule, enabled: false, updatedAt: 2 }));
+    wake(); await f.sync.flushBeforeTurn(); expect(f.requests).toEqual([]);
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([{ sessionId: 'session', mode: 'force_current_cli', reason: 'capability_selection_change' }]);
+  });
   it.each([
     [{ startedBy: 'terminal' }, 'terminal'],
     [{ terminal: { mode: 'windows_console' } }, 'user'],

@@ -96,7 +96,7 @@ async function setup(options: Readonly<{
         // Binding observation now reads the real Machine inventory to qualify child
         // topology. These are ordinary Machines; a missing HTTP fixture is not
         // evidence that their native service custody is unavailable.
-        if (path === '/v1/machines') return json(['devbox', 'hz-build-1', 'pool-worker'].map(id => ({
+        if (path === '/v1/machines?includeRevoked=true') return json(['devbox', 'hz-build-1', 'pool-worker'].map(id => ({
           id, revokedAt: null, replacedByMachineId: null,
         })));
         if (path === '/v1/projects/execution/config/read' && placementReadsFail) return json({ error: 'unavailable' }, 503);
@@ -470,6 +470,10 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     await vi.waitFor(() => expect(String(runsOn().props.subtitle)).toBe('projectServices.primaryOnly'));
     const { WorkerDestinationPicker } = await import('@/components/projects/workers/WorkerDestinationPicker');
     expect(screen.tree.findAllByType(WorkerDestinationPicker)).toHaveLength(0);
+    // A primary-only service has nothing to choose: no control that can never succeed, no dimmed row.
+    expect(screen.tree.findAll(node => String(node.props.testID ?? '').startsWith('placement.fallback'))).toHaveLength(0);
+    expect(runsOn().props.disabled).toBeFalsy();
+    expect(runsOn().props.onPress).toBeUndefined();
   });
 
   it('does not claim primary-only custody when the actual binding is unavailable', async () => {

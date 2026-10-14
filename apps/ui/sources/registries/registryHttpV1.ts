@@ -26,7 +26,8 @@ export function createUiRegistryHttpV1(fetch: RegistryFetch, signal?: AbortSigna
                 if (rateLimit.retryAt !== undefined) rateLimitedUntil.set(origin, rateLimit.retryAt);
                 return { ok: false, status: rateLimit };
             }
-            return { ok: false, status: { state: response.status === 401 || response.status === 403 ? 'auth_failed' : 'unreachable' } };
+            return { ok: false, status: { state: response.status === 401 || response.status === 403 ? 'auth_failed'
+                : response.status === 404 ? 'invalid_source' : 'unreachable' } };
         }
         try {
             const value = await decode(response);

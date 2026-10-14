@@ -300,7 +300,8 @@ const styles = StyleSheet.create((theme) => ({
   // Both columns take the band's height, so a hole's slot fills the room beside the cell next to it.
   columns: { flexDirection: 'row', alignItems: 'stretch' },
   column: { flex: 1, minWidth: 0 },
-  childCell: { minWidth: 0 },
+  // A column shorter than its band hands the extra height to its cells, so a card fills the room beside a taller neighbour.
+  childCell: { minWidth: 0, flexGrow: 1 },
   cardCell: { paddingHorizontal: CELL_INSET_PX },
   leftCell: { paddingRight: CELL_INSET_PX },
   rightCell: { paddingLeft: CELL_INSET_PX },

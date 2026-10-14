@@ -1,10 +1,4 @@
-import {
-    SESSION_MESSAGE_USER_ATTENTION_IMPACT,
-    TranscriptRawAgentEventV1Schema,
-    TranscriptRawRecordV1Schema,
-    agentEventAttentionImpact,
-    type SessionMessageAttentionImpact,
-} from "@happier-dev/protocol";
+import { SESSION_MESSAGE_USER_ATTENTION_IMPACT, TranscriptRawAgentEventV1Schema, TranscriptRawRecordV1Schema, agentEventAttentionImpact, type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 
 export function resolveMessageAttentionImpact(params: Readonly<{
     content: PrismaJson.SessionMessageContent;

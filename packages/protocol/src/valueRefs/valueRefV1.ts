@@ -1,16 +1,16 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { appendSavedSecretReferencePathV1 } from '../account/settings/savedSecretReferenceV1.js';
 
 const ValueRefAtomV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('literal'), v: z.string() }).strict(),
-  z.object({ t: z.literal('savedSecret'), secretId: z.string().min(1) }).strict(),
+  z.strictObject({ t: z.literal('literal'), v: z.string() }),
+  z.strictObject({ t: z.literal('savedSecret'), secretId: z.string().check(z.minLength(1)) }),
 ]));
 
 export const ValueRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  ...ValueRefAtomV1Schema.options,
-  z.object({ t: z.literal('template'), template: z.string(), vars: z.record(z.string(), ValueRefAtomV1Schema) }).strict(),
-  z.object({ t: z.literal('sessionAttested'), field: z.enum(['externalPrincipalId', 'sourceMessageId', 'sessionId']) }).strict(),
+  ...ValueRefAtomV1Schema._zod.def.options,
+  z.strictObject({ t: z.literal('template'), template: z.string(), vars: z.record(z.string(), ValueRefAtomV1Schema) }),
+  z.strictObject({ t: z.literal('sessionAttested'), field: z.enum(['externalPrincipalId', 'sourceMessageId', 'sessionId']) }),
 ]));
 
 export type ValueRefV1 = z.infer<typeof ValueRefV1Schema>;

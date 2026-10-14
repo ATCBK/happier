@@ -9,7 +9,7 @@ import { resolveHomeGovernanceViewState } from '@/components/settings/home/gover
 
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { describePublicLinkNetworkChoice, PublicLinkNetworkSwitch } from '@/components/sharing/PublicLinkNetworkConfirmation';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
@@ -215,7 +215,7 @@ export function SessionPublicLinkCard(props: Readonly<{
     const [creating, setCreating] = React.useState(false);
     const [revoking, setRevoking] = React.useState(false);
     const [mutationFailure, setMutationFailure] = React.useState<ReturnType<typeof presentSessionAccessFailure> | null>(null);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     // One outward request at a time: a second create would mint a second link and orphan the
     // first, and a second DELETE would surface its 404 after the first succeeded. The refs refuse
     // a same-tick second activation before React has committed the busy state.

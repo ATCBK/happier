@@ -16,6 +16,7 @@ import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import * as persistence from '@/persistence';
 import { refreshDemandedActiveProfileCatalog } from './hydrateProfileCatalog';
+import { createCliActionInventoryDeps } from '@/session/actions/cliActionDeps/createCliActionInventoryDeps';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -82,6 +83,9 @@ describe('CLI Profile catalog hydration', () => {
       expect(config?.headers?.Authorization).toBe('Bearer bob-profile');
       if (url.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
         mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.pathname === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
+      if (url.pathname === '/v1/artifacts') return { status: 200, data: [] };
       if (url.pathname.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: 1 } };
       if (url.pathname.endsWith('/transfer')) return { status: 200, data: transfer };
       if (url.pathname === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } };
@@ -100,7 +104,18 @@ describe('CLI Profile catalog hydration', () => {
     expect(refreshed).toMatchObject({ status: 'ready', source: 'destination', records: [{ record: { id: 'bob-row' } }] });
     expect(operationContext.readSnapshot()?.profileCatalog).toBe(refreshed);
     expect(getActiveAccountSettingsSnapshot()).toBe(before);
+    const profiles = await readAccountLaunchProfiles(accountSettingsParse({}), credentials, undefined, undefined, operationContext);
+    expect(profiles.visibleProfiles.find(profile => profile.id === 'bob-row')).toMatchObject({ name: 'Bob', enabled: true });
+    expect(getActiveAccountSettingsSnapshot()).toBe(before);
+    const inventory = createCliActionInventoryDeps({ token: credentials.token, credentials, savedSecretOperationContext: operationContext,
+      sessionId: 'requester-profile-session', mode: 'plain', ctx: null });
+    expect(await inventory.spawnProfilesList?.({})).toMatchObject({ coverage: 'complete', items: expect.arrayContaining([
+      expect.objectContaining({ id: 'bob-row', label: 'Bob' }),
+    ]) });
+    expect(getActiveAccountSettingsSnapshot()).toBe(before);
     live = false;
+    await expect(readAccountLaunchProfiles(accountSettingsParse({}), credentials, undefined, undefined, operationContext))
+      .rejects.toMatchObject({ code: 'profile_catalog_unavailable' });
     expect(await refreshActiveProfileCatalog(input)).toMatchObject({ status: 'unavailable', reason: 'scope-retired' });
   });
   it('loads all pages and publishes row-only refreshes independently of Settings revision', async () => {

@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
     ChangeEntrySchema,
     ChangeKindSchema,
+    PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
 } from '@happier-dev/protocol/changes';
 import {
@@ -15,6 +16,7 @@ import {
     classifyChangeForCheckpoint,
     planSyncActionsFromChanges,
     plannedChangesAffectSessionListQuery,
+    plannedChangesAffectProfileCatalog,
     plannedChangesAffectUsageQuery,
 } from './changesPlanner';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
@@ -212,6 +214,20 @@ describe('planSyncActionsFromChanges', () => {
         });
     });
 
+    it('refreshes only Usage for a provider observation while keeping Account-currentness changes conservative', () => {
+        const planned = planSyncActionsFromChanges([buildChange({
+            cursor: 1, kind: 'account', entityId: PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
+        })]);
+        expect(Object.values(planned.invalidate).some(Boolean)).toBe(false);
+        expect(plannedChangesAffectProfileCatalog(planned)).toBe(false);
+        expect(plannedChangesAffectSessionListQuery(planned)).toBe(false);
+        expect(plannedChangesAffectUsageQuery(planned)).toBe(true);
+        const mixed = planSyncActionsFromChanges([...planned.changes, buildChange({ cursor: 2, kind: 'account', entityId: 'self' })]);
+        expect(mixed.invalidate.settings).toBe(true);
+        expect(mixed.invalidate.profile).toBe(true);
+        expect(plannedChangesAffectProfileCatalog(mixed)).toBe(true);
+    });
+
     it('routes an exact workflow Run change to its canonical body refresh without broad Account invalidation', () => {
         const planned = planSyncActionsFromChanges([
             buildChange({ cursor: 1, kind: 'account', entityId: 'workflow-run:run-42' }),
@@ -230,6 +246,27 @@ describe('planSyncActionsFromChanges', () => {
             buildChange({ cursor: 3, kind: 'account', entityId: 'self', hint: { settingsVersion: 8 } }),
             buildChange({ cursor: 4, kind: 'session', entityId: 'session-a' }),
         ]) expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([machine, change]))).toBe(true);
+    });
+
+    it('does not reread Usage for exact workflow Run and draft materialization, while preserving mixed-page freshness', () => {
+        const unrelated = [
+            buildChange({ cursor: 1, kind: 'account', entityId: 'workflow-run:run-42' }),
+            buildChange({ cursor: 2, kind: 'account', hint: {
+                v: 2, sessionDraftV2: true,
+                address: { kind: 'newSession', draftId: '00000000-0000-4000-8000-000000000001' },
+                revision: 2, status: 'present',
+            } }),
+        ];
+        const planned = planSyncActionsFromChanges(unrelated);
+        expect(planned.workflowRunIdsToRefresh).toEqual(['run-42']);
+        expect(planned.sessionDraftAddresses).toHaveLength(1);
+        expect(plannedChangesAffectUsageQuery(planned)).toBe(false);
+        for (const change of [
+            buildChange({ cursor: 3, kind: 'session', entityId: 'session-a' }),
+            buildChange({ cursor: 4, kind: 'account', entityId: 'provider-account-usage' }),
+            buildChange({ cursor: 5, kind: 'account', entityId: 'self', hint: { settingsVersion: 9 } }),
+            buildChange({ cursor: 6, kind: 'account', entityId: 'unknown-source' }),
+        ]) expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([...unrelated, change]))).toBe(true);
     });
 
     it('routes Saved Secret AccountChange through the catalog materialization owner', () => {
@@ -348,10 +385,10 @@ describe('planSyncActionsFromChanges', () => {
     it('refreshes only the rows of listed Sessions for row-level writes, never the whole list', () => {
         const listed = new Set(['listed-message', 'listed-metadata', 'listed-pending']);
         const planned = planSyncActionsFromChanges([
-            buildChange({ cursor: 1, kind: 'session', entityId: 'listed-message', hint: { lastMessageSeq: 5, lastMessageId: 'm5' } }),
-            // Metadata, agent-state and runtime-activity writes carry no hint.
-            buildChange({ cursor: 2, kind: 'session', entityId: 'listed-metadata' }),
-            buildChange({ cursor: 3, kind: 'session', entityId: 'listed-pending', hint: { pendingVersion: 3, pendingCount: 1 } }),
+            buildChange({ cursor: 1, kind: 'session', entityId: 'listed-message', hint: { lastMessageSeq: 5, lastMessageId: 'm5', pendingExecutionRunIds: [] } }),
+            // The server enriches metadata/activity writes with pending targets.
+            buildChange({ cursor: 2, kind: 'session', entityId: 'listed-metadata', hint: { pendingExecutionRunIds: [] } }),
+            buildChange({ cursor: 3, kind: 'session', entityId: 'listed-pending', hint: { pendingVersion: 3, pendingCount: 1, pendingExecutionRunIds: ['run-a'] } }),
         ], { isSessionListMember: (sessionId) => listed.has(sessionId) });
 
         expect(planned.invalidate.sessions).toBe(false);

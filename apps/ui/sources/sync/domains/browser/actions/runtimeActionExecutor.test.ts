@@ -157,10 +157,21 @@ describe('browser runtime action executor', () => {
         const request = { v: 1, automationRequestId: 'fresh', browserSessionId: 'browser_session_1', viewId: 'view_1',
             navigationGeneration: 4, requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' },
             actionKind: 'snapshot', payload: {}, timeoutMs: 1000 };
-        const context = { authority: 'present_user' as const, defaultMachineId: 'machine_1', defaultSessionId: 'session_1' };
+        const context = { authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } satisfies RuntimeActionExecuteArgs['context'];
         expect(await execute(runtimeArgs({ actionId: 'browser.automation.snapshot', input: request, context })))
             .toMatchObject({ status: 'succeeded', automationRequestId: 'fresh' });
         expect(executeOnMachine).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'browser.automation.snapshot', input: request, context }));
+        expect(engine).not.toHaveBeenCalled();
+        executeOnMachine.mockClear();
+        for (const unavailableContext of [
+            { authority: 'present_user', defaultSessionMachineId: 'machine_1' },
+            { authority: 'present_user', externalActionTarget: { kind: 'session', sessionId: 'session_1' } },
+            { authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: ' ' } },
+        ] satisfies RuntimeActionExecuteArgs['context'][]) {
+            expect(await execute(runtimeArgs({ actionId: 'browser.automation.snapshot', input: request, context: unavailableContext })))
+                .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        }
+        expect(executeOnMachine).not.toHaveBeenCalled();
         expect(engine).not.toHaveBeenCalled();
     });
     it('opens the exact mounted page in the system browser without navigating or replacing it', async () => {

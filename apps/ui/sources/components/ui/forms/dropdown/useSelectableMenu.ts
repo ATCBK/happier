@@ -102,8 +102,10 @@ export function useSelectableMenu(params: {
         allowEmptySelection: params.allowEmptySelection,
         enableTypeahead: params.enableTypeahead,
         onKeyboardSelectionChange: params.onKeyboardSelectionChange,
-        // Filtering is this adapter's concern; the portable owner performs the reset.
-        resetKey: allItems,
+        // Filtering is this adapter's concern; the portable owner performs the reset. Only a new query resets the
+        // highlight: rows that arrive or change while the menu is open (discovered models, a spinner) keep the
+        // highlighted row, so the list never jumps back to the selection under the pointer.
+        resetKey: searchQuery,
         onRequestClose: params.onRequestClose,
         getItemLabel,
     });

@@ -40,6 +40,46 @@ async function postSessionHook(params: {
 }
 
 describe('createSessionHooksService', () => {
+  it('isolates invocation hook resources from a live retained Session endpoint', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-hook-invocation-'));
+    const service = createSessionHooksService({ happyHomeDir, hasCapability: hasSessionHooksCapability });
+    let retained: Awaited<ReturnType<typeof service.startServer>> | null = null;
+    let invocation: Awaited<ReturnType<typeof service.startServer>> | null = null;
+    let retainedDir: string | null = null;
+    let invocationDir: string | null = null;
+    const retainedFacts: unknown[] = [];
+    const invocationFacts: unknown[] = [];
+    const identity = { providerId: 'claude', sessionId: 'same-happier-session',
+      lifecycle: { kind: 'session' as const, sessionId: 'same-happier-session' } };
+    try {
+      retained = await service.startServer({ ...identity, sessionHookSecret: 'retained-secret',
+        onSessionHook: (_id, row) => { retainedFacts.push(row); } });
+      retainedDir = await service.createPluginDir({ ...identity, files: [{ path: 'origin.txt', contents: 'retained' }] });
+      invocation = await service.startServer({ ...identity, ...{ lifetime: 'invocation' as const },
+        sessionHookSecret: 'invocation-secret', onSessionHook: (_id, row) => { invocationFacts.push(row); } });
+      invocationDir = await service.createPluginDir({ ...identity, ...{ lifetime: 'invocation' as const },
+        files: [{ path: 'origin.txt', contents: 'invocation' }] });
+      expect(invocationDir).not.toBe(retainedDir);
+      expect(await readFile(join(retainedDir, 'origin.txt'), 'utf8')).toBe('retained');
+      const body = { session_id: 'same-native-session', hook_event_name: 'SubagentStart', agent_id: 'same-task' };
+      expect((await postSessionHook({ port: retained.port, sessionHookSecret: 'retained-secret', body })).status).toBe(200);
+      expect((await postSessionHook({ port: invocation.port, sessionHookSecret: 'invocation-secret', body })).status).toBe(200);
+      expect((await postSessionHook({ port: invocation.port, sessionHookSecret: 'retained-secret', body })).status).toBe(403);
+      expect((await postSessionHook({ port: retained.port, sessionHookSecret: 'invocation-secret', body })).status).toBe(403);
+      expect(retainedFacts).toEqual([body]);
+      expect(invocationFacts).toEqual([body]);
+      await invocation.dispose();
+      await service.disposePluginDir(invocationDir);
+      expect((await postSessionHook({ port: retained.port, sessionHookSecret: 'retained-secret', body })).status).toBe(200);
+    } finally {
+      await invocation?.dispose();
+      await retained?.dispose();
+      if (invocationDir) await service.disposePluginDir(invocationDir);
+      if (retainedDir) await service.disposePluginDir(retainedDir);
+      await rm(happyHomeDir, { recursive: true, force: true });
+    }
+  });
+
   it('lets session runtimes dispose hook server secret files directly', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-hooks-'));
     const disposables: Array<{ dispose(): Promise<void> | void }> = [];

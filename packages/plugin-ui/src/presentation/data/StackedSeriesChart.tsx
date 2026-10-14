@@ -10,7 +10,7 @@ import type { HappierFocusable, HappierLayoutChangeEvent, HappierPortableStyle }
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
 import { HappierDataTable } from './DataRows.js';
-import { buildHappierSeriesPath, describeHappierSeriesBucket, describeHappierSeriesCoordinate, formatHappierDataValue, resolveHappierSeriesGeometry, resolveHappierSeriesRampColor, type HappierSeries, type HappierSeriesBucket } from './dataModel.js';
+import { buildHappierSeriesPath, describeHappierSeriesBucket, describeHappierSeriesCoordinate, formatHappierDataValue, resolveHappierSeriesGeometry, resolveHappierSeriesRampColor, resolveHappierSeriesRampStep, type HappierSeries, type HappierSeriesBucket } from './dataModel.js';
 
 /** A line-chart fill between caller-produced bounds; it adds no values or forecast semantics. */
 export type StackedSeriesBand = Readonly<{
@@ -64,14 +64,15 @@ export type StackedSeriesChartProps = Readonly<{
     change?: Readonly<{ stiffness: number; damping: number; mass: number }>;
   }>;
   barWidth?: number;
-  /** A column never grows past this, however few buckets share the plot; it stays centred in its slot. */
+  /** A column never grows past this, however few buckets share the plot; it stays centred in its slot. Defaults to the data metric outside inline charts. */
   barMaxWidth?: number;
   barSlotWidth?: number;
   barLeadingInset?: number;
   barGap?: number;
   barMinHeight?: number;
   barTrackColor?: string;
-  barEmphasis?: 'last' | 'maximum';
+  /** Which bar a single series singles out at full ink; `none` draws the series in one ink (no "now" to point at). */
+  barEmphasis?: 'last' | 'maximum' | 'none';
   showPointLabels?: boolean;
   showPeakValue?: boolean;
   axisTicks?: readonly string[];
@@ -92,6 +93,8 @@ export type StackedSeriesChartProps = Readonly<{
   /** Callers supply localized unavailable wording. */
   unknownLabel?: string;
   valueFormatter?: (value: number) => string;
+  /** The caller's reading of a numeric x (a time bucket as its date) for exact values and Details. */
+  coordinateFormatter?: (x: number) => string;
   onSelect?: (bucketId: string) => void;
   /** Host overlay adapter; the chart retains selection and exact values. */
   renderBucket?: (bucket: HappierSeriesBucket, visual: ReactNode, select: () => void) => ReactNode;
@@ -130,6 +133,9 @@ function HatchSwatch(props: Readonly<{ ink: string }>) {
   return <Svg width="100%" height="100%"><Defs><HatchPattern id={id} color={props.ink} /></Defs>
     <Rect width="100%" height="100%" fill={`url(#${id})`} /></Svg>;
 }
+
+/** A column narrower than a compact peak figure ("12.4M") cannot centre it without cutting it at the plot's edge. */
+const PEAK_LABEL_SLOT_PX = 44;
 
 function SeriesBar(props: Readonly<{ top: number; height: number; color: string; opacity: number; index: number; fillPattern?: 'hatch'; patternInk: string;
   /** A mark that joins an already drawn chart (a period change) rises from the axis; it never pops in. */
@@ -201,12 +207,13 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
     ? localization?.translate('happier.plugin-ui.state.details', 'Details') ?? 'Details' : undefined);
   const showAxis = props.showAxis ?? !inline;
   const showLegend = props.showLegend ?? (!inline && props.series.length > 1);
-  // The values toggle is quiet meta: at the legend's trailing end when there is one, else on its own line.
+  // The values toggle is quiet meta: at the legend's trailing end when there is one, else on its own line
+  // at the same trailing edge. On the leading edge it sat under the first axis label and read as one more.
   const toggleInLegend = showLegend && !props.summary;
   const valuesToggle = valuesLabel ? <HappierPressable testID={props.testID ? `${props.testID}-values-toggle` : undefined}
     accessibilityLabel={valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}
     expanded={valuesExpanded} onPress={() => setValuesExpanded((value) => !value)}
-    style={toggleInLegend ? { marginLeft: 'auto' } : { alignSelf: 'flex-start', marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
+    style={toggleInLegend ? { marginLeft: 'auto' } : { alignSelf: 'flex-end', marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
     <HappierText style={text.captionStrong}>{valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}</HappierText>
   </HappierPressable> : null;
   const height = Math.max(1, (props.viewportHeight ?? (inline ? 16 : props.size === 'tile' ? 64 : 150)));
@@ -219,13 +226,14 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const unknown = props.unknownLabel ?? '—';
   const magnitude = (value: number) => props.mirrored ? Math.abs(value) : value;
   const format = (value: number) => props.valueFormatter ? props.valueFormatter(magnitude(value)) : formatHappierDataValue(magnitude(value), text.locale);
+  const reading = { formatCoordinate: props.coordinateFormatter, locale: text.locale };
   const describe = (bucket: HappierSeriesBucket) => describeHappierSeriesBucket(props.mirrored
-    ? { ...bucket, values: bucket.values.map((entry) => ({ ...entry, value: entry.value === null ? null : magnitude(entry.value) })) } : bucket, unknown);
+    ? { ...bucket, values: bucket.values.map((entry) => ({ ...entry, value: entry.value === null ? null : magnitude(entry.value) })) } : bucket, unknown, reading);
   const selected = geometry.buckets.find((bucket) => bucket.id === selectedId) ?? null;
   const select = (id: string) => { setSelectedId(id); props.onSelect?.(id); };
-  // A series without its own colour takes the accent's ordered ramp, so several read apart.
+  // A series without its own colour takes the accent's ordered ramp, spread so several read apart.
   const color = (index: number) => props.series[index]?.color
-    ?? resolveHappierSeriesRampColor(props.theme.colors.accent, props.theme.colors.surface, index);
+    ?? resolveHappierSeriesRampColor(props.theme.colors.accent, props.theme.colors.surface, resolveHappierSeriesRampStep(index, props.series.length));
   // A live chart's image announces its latest sample, not its entire retained history.
   // Bucket controls and the exact-values table still expose every point.
   const exact = (props.liveMotion ? geometry.buckets.slice(-1) : geometry.buckets).map(describe).join('; ');
@@ -403,7 +411,7 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
             testID={props.testID ? `${props.testID}-shading-${bucket.id}` : undefined}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
               backgroundColor: shade.color ?? props.theme.colors.secondaryText, opacity: shade.opacity ?? HAPPIER_DATA_METRICS.bucketShadeOpacity }} /> : null}
-          <View style={{ height, width: props.barWidth ?? '100%', maxWidth: props.barMaxWidth, alignSelf: 'center', position: 'relative', overflow: 'hidden', backgroundColor: props.barTrackColor, borderTopLeftRadius: HAPPIER_DATA_METRICS.barRadiusPx, borderTopRightRadius: HAPPIER_DATA_METRICS.barRadiusPx }}>
+          <View style={{ height, width: props.barWidth ?? '100%', maxWidth: props.barMaxWidth ?? (inline ? undefined : HAPPIER_DATA_METRICS.barMaxWidthPx), alignSelf: 'center', position: 'relative', overflow: 'hidden', backgroundColor: props.barTrackColor, borderTopLeftRadius: HAPPIER_DATA_METRICS.barRadiusPx, borderTopRightRadius: HAPPIER_DATA_METRICS.barRadiusPx }}>
           {bucket.values.map((entry, seriesIndex) => {
             if (entry.value === null) return null;
             const extent = Math.max(props.barMinHeight ?? (entry.value === 0 ? HAPPIER_DATA_METRICS.barStubPx : 0), Math.abs(geometry.yAt(entry.lower) - geometry.yAt(entry.upper)));
@@ -413,7 +421,7 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
             const emphasized = index === (props.barEmphasis === 'maximum' ? peakIndex : geometry.buckets.length - 1);
             return <SeriesBar key={entry.seriesId} testID={props.testID ? `${props.testID}-bar-${index}-${seriesIndex}` : undefined}
               top={entry.value >= 0 ? Math.max(0, geometry.yAt(entry.lower) - extent) : geometry.yAt(entry.lower) + seam} height={barHeight}
-              color={entry.color ?? color(seriesIndex)} opacity={entry.opacity ?? (selectedId === bucket.id || props.series.length > 1 || emphasized ? 1 : props.barEmphasis === 'maximum' ? Math.max(0.55, 0.9 * barHeight / height) : 0.65)}
+              color={entry.color ?? color(seriesIndex)} opacity={entry.opacity ?? (selectedId === bucket.id || props.series.length > 1 || emphasized || props.barEmphasis === 'none' ? 1 : props.barEmphasis === 'maximum' ? Math.max(0.55, 0.9 * barHeight / height) : 0.65)}
               fillPattern={props.series[seriesIndex]?.fillPattern} patternInk={props.theme.colors.surface}
               index={index} joining={drawn.current} motion={props.barMotion} reducedMotion={reducedMotion} />;
           })}
@@ -435,8 +443,13 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
           : { position: 'absolute' as const, ...geometry.hitRangeAt(index), height };
         const peakTotal = props.showPeakValue && index === peakIndex ? bucketTotal(bucket) : null;
         // A peak of nothing names nothing ("$0.00" over an empty plot).
+        // It rests on its own bar (a scale rounded above the peak would otherwise leave it floating at the
+        // plot's top), and the edge buckets align it inward so a narrow column never cuts it at the card edge.
         const peakLabel = peakTotal !== null && peakTotal > 0
-          ? <HappierText style={{ ...text.captionStrong, position: 'absolute', top: -peakInset, alignSelf: 'center' }} tabularNumbers>{format(peakTotal)}</HappierText> : null;
+          ? <HappierText testID={props.testID ? `${props.testID}-peak` : undefined} style={{ ...text.captionStrong, position: 'absolute',
+            bottom: height - geometry.yAt(peakTotal) + HAPPIER_DATA_METRICS.axisGapPx,
+            alignSelf: barSlotWidth >= PEAK_LABEL_SLOT_PX ? 'center' : index === 0 ? 'flex-start' : index === geometry.buckets.length - 1 ? 'flex-end' : 'center' }}
+            tabularNumbers>{format(peakTotal)}</HappierText> : null;
         if (props.renderBucket) return <View key={columnKey} style={columnStyle}>{peakLabel}{props.renderBucket(bucket, visual, () => select(bucket.id))}</View>;
         if (nativeInline || nativeDense) return <View key={columnKey} style={columnStyle} aria-hidden importantForAccessibility="no-hide-descendants">{peakLabel}{visual}</View>;
         return bucketControl(bucket, index, <>{peakLabel}{visual}</>, columnStyle, columnKey);
@@ -513,7 +526,8 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describe(bucket)}</HappierText>, { justifyContent: 'center' }))}
     </View> : valuesExpanded ? <HappierDataTable theme={props.theme} label={props.label}
       columns={[{ label: props.label }, ...props.series.map((entry) => ({ label: entry.label }))]}
-      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket), ...bucket.values.map((entry) => entry.value === null ? unknown : magnitude(entry.value))])}
+      // Details keeps every meaningful digit (a display formatter may abbreviate); coordinates read in the caller's words.
+      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket, reading), ...bucket.values.map((entry) => entry.value === null ? unknown : magnitude(entry.value))])}
       testID={props.testID ? `${props.testID}-values` : undefined} /> : null}
   </View>;
 }

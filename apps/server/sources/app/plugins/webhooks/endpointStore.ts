@@ -1,20 +1,7 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 
-import {
-    PluginWebhookEndpointEnsureResultV1Schema,
-    PluginWebhookEndpointIdV1Schema,
-    PluginWebhookEndpointReadResultV1Schema,
-    PluginWebhookEndpointRetargetResultV1Schema,
-    PluginWebhookEndpointRevokeResultV1Schema,
-    PluginWebhookPublicUrlV1Schema,
-    createCanonicalJsonSigningInput,
-    formatPluginWebhookEndpointIdV1,
-    type PluginWebhookEndpointEnsureInputV1,
-    type PluginWebhookEndpointEnsureResultV1,
-    type PluginWebhookEndpointReadResultV1,
-    type PluginWebhookEndpointRetargetResultV1,
-    type PluginWebhookEndpointRevokeResultV1,
-} from "@happier-dev/protocol";
+import { PluginWebhookEndpointEnsureResultV1Schema, PluginWebhookEndpointIdV1Schema, PluginWebhookEndpointReadResultV1Schema, PluginWebhookEndpointRetargetResultV1Schema, PluginWebhookEndpointRevokeResultV1Schema, PluginWebhookPublicUrlV1Schema, formatPluginWebhookEndpointIdV1, type PluginWebhookEndpointEnsureInputV1, type PluginWebhookEndpointEnsureResultV1, type PluginWebhookEndpointReadResultV1, type PluginWebhookEndpointRetargetResultV1, type PluginWebhookEndpointRevokeResultV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";

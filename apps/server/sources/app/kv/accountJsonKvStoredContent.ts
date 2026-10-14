@@ -1,4 +1,5 @@
-import { StoredJsonContentEnvelopeSchema, classifyAccountJsonKvKey } from "@happier-dev/protocol";
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { classifyAccountJsonKvKey } from '@happier-dev/protocol/account/accountJsonKv';
 
 export type AccountJsonKvStoredContentClassification =
     | Readonly<{ domain: "generic" }>

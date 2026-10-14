@@ -1,6 +1,7 @@
 import { AgentModelOptionOverrideRuleReadSchema } from '@happier-dev/protocol/models/descriptor';
 import { readSessionModesMetadata, type SessionOwnerModeCatalogV2 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { z } from 'zod';
+import { optional } from 'zod/mini';
 
 const SessionModelOptionChoiceSchema = z.object({
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
@@ -29,7 +30,7 @@ const SessionModelOptionSchema = z.object({
     type: z.string().trim().min(1),
     currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     options: z.array(SessionModelOptionChoiceSchema).default([]),
-    overridesWhenOn: SessionOptionOverrideRuleSchema.optional(),
+    overridesWhenOn: optional(SessionOptionOverrideRuleSchema),
 });
 
 const SessionModelSchema = z.object({
@@ -68,7 +69,7 @@ const SessionConfigOptionSchema = z.object({
     currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     options: z.array(SessionConfigOptionSelectOptionSchema).optional(),
     groups: z.array(SessionConfigOptionSelectGroupSchema).optional(),
-    overridesWhenOn: SessionOptionOverrideRuleSchema.optional(),
+    overridesWhenOn: optional(SessionOptionOverrideRuleSchema),
 });
 
 const SessionConfigOptionsStateSchema = z.object({

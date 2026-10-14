@@ -1,15 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const BrowserSessionStateV1Schema = z.enum(['active', 'closing', 'closed', 'failed']);
 export type BrowserSessionStateV1 = z.infer<typeof BrowserSessionStateV1Schema>;
 
-export const BrowserSessionV1Schema = z
-  .object({
-    browserSessionId: z.string().trim().min(1).max(256),
-    profileId: z.string().trim().min(1).max(256),
-    createdAt: z.number().int().nonnegative(),
-    closedAt: z.number().int().nonnegative().optional(),
+export const BrowserSessionV1Schema = z.strictObject({
+    browserSessionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    profileId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
+    closedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     state: BrowserSessionStateV1Schema,
-  })
-  .strict();
+  });
 export type BrowserSessionV1 = z.infer<typeof BrowserSessionV1Schema>;

@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionDraftAddressV1Schema } from '../drafts/sessionDrafts.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { ComposerRefV1Schema } from '../plugins/ui/composerRef.js';
@@ -12,77 +13,77 @@ export function isAppShellActionId(value: string): value is AppShellActionId {
   return (APP_SHELL_ACTION_IDS as readonly string[]).includes(value);
 }
 
-const InboxTargetSchema = lazyZodSchema(() => z.object({ serverId: z.string().min(1), sessionId: z.string().min(1) }).strict());
-const WorkReadItemSchema = z.object({
+const InboxTargetSchema = lazyZodSchema(() => z.strictObject({ serverId: z.string().check(z.minLength(1)), sessionId: z.string().check(z.minLength(1)) }));
+const WorkReadItemSchema = z.strictObject({
   key: z.string(), kind: z.enum(['session', 'workflow_run', 'background_run', 'agent', 'project_command']),
-  title: z.string(), agentId: z.string().nullable(), facts: z.array(z.string()), parentKey: z.string().nullable(), level: z.number(),
-  status: z.object({ bucket: z.enum(['needs_you', 'working', 'finished', 'idle', 'offline']),
-    tone: z.enum(['neutral', 'attention', 'danger']), word: z.string() }).strict(),
-  progress: z.object({ completed: z.number(), total: z.number() }).strict().nullable(),
+  title: z.string(), agentId: z.nullable(z.string()), facts: z.array(z.string()), parentKey: z.nullable(z.string()), level: z.number(),
+  status: z.strictObject({ bucket: z.enum(['needs_you', 'working', 'finished', 'idle', 'offline']),
+    tone: z.enum(['neutral', 'attention', 'danger']), word: z.string() }),
+  progress: z.nullable(z.strictObject({ completed: z.number(), total: z.number() })),
   open: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('session'), sessionId: z.string() }).strict(),
-    z.object({ kind: z.literal('workflow_run'), runId: z.string() }).strict(),
-    z.object({ kind: z.literal('action_operation'), serverId: z.string(), operationId: z.string() }).strict(),
-    z.object({ kind: z.literal('agent_activity'), entryId: z.string(), subagentId: z.string().nullable(), runId: z.string().nullable() }).strict(),
+    z.strictObject({ kind: z.literal('session'), sessionId: z.string() }),
+    z.strictObject({ kind: z.literal('workflow_run'), runId: z.string() }),
+    z.strictObject({ kind: z.literal('action_operation'), serverId: z.string(), operationId: z.string() }),
+    z.strictObject({ kind: z.literal('agent_activity'), entryId: z.string(), subagentId: z.nullable(z.string()), runId: z.nullable(z.string()) }),
   ]),
-}).strict();
-const ReadUnavailableSchema = z.object({ status: z.literal('unavailable') }).strict();
-const ReadLoadingSchema = z.object({ status: z.literal('loading') }).strict();
+});
+const ReadUnavailableSchema = z.strictObject({ status: z.literal('unavailable') });
+const ReadLoadingSchema = z.strictObject({ status: z.literal('loading') });
 const InboxReadItemSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('session'), key: z.string(), serverId: z.string(), sessionId: z.string(), title: z.string(),
-    attentionState: z.string(), pendingPermissionCount: z.number(), pendingQuestionCount: z.number(), foldedUnderRunId: z.string().nullable() }).strict(),
-  z.object({ kind: z.literal('workflow_run'), key: z.string(), runId: z.string() }).strict(),
-  z.object({ kind: z.literal('automation_run'), key: z.string(), runId: z.string() }).strict(),
-  z.object({ kind: z.literal('approval'), key: z.string(), artifactId: z.string() }).strict(),
-  z.object({ kind: z.literal('stalled'), key: z.string(), serverId: z.string(), sessionId: z.string() }).strict(),
-  z.object({ kind: z.literal('landing'), key: z.string(), serverId: z.string(), sessionId: z.string(), pullRequestNumber: z.number(), pullRequestUrl: z.string().url(),
-    pullRequestState: z.enum(['open', 'merged', 'closed', 'unknown']).optional(), pullRequestObservedAt: z.number().int().nonnegative().optional() }).strict(),
-  z.object({ kind: z.literal('snoozed'), key: z.string(), serverId: z.string(), sessionId: z.string(), remindAt: z.number() }).strict(),
+  z.strictObject({ kind: z.literal('session'), key: z.string(), serverId: z.string(), sessionId: z.string(), title: z.string(),
+    attentionState: z.string(), pendingPermissionCount: z.number(), pendingQuestionCount: z.number(), foldedUnderRunId: z.nullable(z.string()) }),
+  z.strictObject({ kind: z.literal('workflow_run'), key: z.string(), runId: z.string() }),
+  z.strictObject({ kind: z.literal('automation_run'), key: z.string(), runId: z.string() }),
+  z.strictObject({ kind: z.literal('approval'), key: z.string(), artifactId: z.string() }),
+  z.strictObject({ kind: z.literal('stalled'), key: z.string(), serverId: z.string(), sessionId: z.string() }),
+  z.strictObject({ kind: z.literal('landing'), key: z.string(), serverId: z.string(), sessionId: z.string(), pullRequestNumber: z.number(), pullRequestUrl: z.string().check(z.url()),
+    pullRequestState: z.optional(z.enum(['open', 'merged', 'closed', 'unknown'])), pullRequestObservedAt: z.optional(z.number().check(z.int(), z.nonnegative())) }),
+  z.strictObject({ kind: z.literal('snoozed'), key: z.string(), serverId: z.string(), sessionId: z.string(), remindAt: z.number() }),
 ]);
-const InboxReadGroupSchema = z.object({ key: z.string(), root: z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('lead'), sessionId: z.string() }).strict(),
-  z.object({ kind: z.literal('run'), runId: z.string() }).strict(),
-  z.object({ kind: z.literal('automation'), automationId: z.string(), serverId: z.string(), runId: z.string() }).strict(),
-  z.object({ kind: z.literal('other') }).strict(),
-]), items: z.array(InboxReadItemSchema) }).strict();
+const InboxReadGroupSchema = z.strictObject({ key: z.string(), root: z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('lead'), sessionId: z.string() }),
+  z.strictObject({ kind: z.literal('run'), runId: z.string() }),
+  z.strictObject({ kind: z.literal('automation'), automationId: z.string(), serverId: z.string(), runId: z.string() }),
+  z.strictObject({ kind: z.literal('other') }),
+]), items: z.array(InboxReadItemSchema) });
 export const AppShellActionInputSchemas = {
-  'session.work.get': z.object({ sessionId: z.string().min(1) }).strict(),
-  'inbox.get': z.object({}).strict(),
-  'inbox.mark_all_read': z.object({ targets: z.array(InboxTargetSchema) }).strict(),
-  'session.draft.open': z.object({ draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
-  'session.draft.delete': z.object({ draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
-  'session.draft.directory.set': z.object({ ref: asProtocolZod(ComposerRefV1Schema).refine(ref => ref.kind === 'newSession'),
-    directory: SessionDirectoryIntentV1Schema }).strict(),
-  'session.draft.append': z.object({ sessionId: z.string().trim().min(1),
-    text: z.string().refine(text => text.trim().length > 0), sourceSessionId: z.string().trim().min(1).optional() }).strict(),
+  'session.work.get': z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
+  'inbox.get': z.strictObject({}),
+  'inbox.mark_all_read': z.strictObject({ targets: z.array(InboxTargetSchema) }),
+  'session.draft.open': z.strictObject({ draftId: SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId }),
+  'session.draft.delete': z.strictObject({ draftId: SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId }),
+  'session.draft.directory.set': z.strictObject({ ref: asProtocolZod(ComposerRefV1Schema).check(zMini.refine(ref => ref.kind === 'newSession')),
+    directory: SessionDirectoryIntentV1Schema }),
+  'session.draft.append': z.strictObject({ sessionId: z.string().check(z.trim(), z.minLength(1)),
+    text: z.string().check(z.refine(text => text.trim().length > 0)), sourceSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
 } as const;
 export const AppShellActionOutputSchemas = {
-  'session.work.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.object({
+  'session.work.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.strictObject({
     status: z.literal('ready'), sessionId: z.string(),
-    summary: z.object({ outstanding: z.number(), needsYou: z.number(), stalled: z.number(), sessions: z.number(), runs: z.number() }).strict(),
+    summary: z.strictObject({ outstanding: z.number(), needsYou: z.number(), stalled: z.number(), sessions: z.number(), runs: z.number() }),
     items: z.array(WorkReadItemSchema),
-    managedRuns: z.object({ phase: z.enum(['idle', 'loading', 'loaded', 'failed']), refreshFailed: z.boolean() }).strict(),
-  }).strict()]),
-  'inbox.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.object({
+    managedRuns: z.strictObject({ phase: z.enum(['idle', 'loading', 'loaded', 'failed']), refreshFailed: z.boolean() }),
+  })]),
+  'inbox.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.strictObject({
     status: z.literal('ready'), groups: z.array(InboxReadGroupSchema),
     approvalIds: z.array(z.string()), usageNoticeIds: z.array(z.string()), friendRequestIds: z.array(z.string()),
     automationRunIds: z.array(z.string()),
     readySessions: z.array(InboxTargetSchema),
-    actionOperations: z.array(z.object({ serverId: z.string(), operationId: z.string(), reason: z.string() }).strict()),
+    actionOperations: z.array(z.strictObject({ serverId: z.string(), operationId: z.string(), reason: z.string() })),
     isLoading: z.boolean(), refreshFailed: z.boolean(),
-  }).strict()]),
-  'inbox.mark_all_read': z.object({ results: z.array(InboxTargetSchema.extend({
+  })]),
+  'inbox.mark_all_read': z.strictObject({ results: z.array(lazyZodSchema(() => z.extend(InboxTargetSchema, {
     status: z.enum(['succeeded', 'failed', 'skipped', 'cancelled']),
-  })) }).strict(),
-  'session.draft.delete': z.object({ status: z.enum(['deleted', 'missing', 'launch_custody', 'unavailable']) }).strict(),
+  }))) }),
+  'session.draft.delete': z.strictObject({ status: z.enum(['deleted', 'missing', 'launch_custody', 'unavailable']) }),
   'session.draft.open': z.discriminatedUnion('status', [
-    z.object({ status: z.literal('opened'), draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
-    z.object({ status: z.enum(['missing', 'unavailable']) }).strict(),
+    z.strictObject({ status: z.literal('opened'), draftId: SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId }),
+    z.strictObject({ status: z.enum(['missing', 'unavailable']) }),
   ]),
-  'session.draft.directory.set': z.object({ status: z.enum(['applied', 'unavailable']) }).strict(),
-  'session.draft.append': z.discriminatedUnion('status', [ReadUnavailableSchema, z.object({
-    status: z.literal('appended'), sessionId: z.string().min(1), createdAtMs: z.number().int().nonnegative(),
-  }).strict()]),
+  'session.draft.directory.set': z.strictObject({ status: z.enum(['applied', 'unavailable']) }),
+  'session.draft.append': z.discriminatedUnion('status', [ReadUnavailableSchema, z.strictObject({
+    status: z.literal('appended'), sessionId: z.string().check(z.minLength(1)), createdAtMs: z.number().check(z.int(), z.nonnegative()),
+  })]),
 } as const;
 
 export const APP_SHELL_ACTION_SPECS = [
@@ -115,7 +116,7 @@ export const APP_SHELL_ACTION_SPECS = [
     description: 'Read the answering client’s mounted canonical Work projection for one exact Session. Unavailable without its mounted owner; never loads a second projection.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_work_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'work', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['session.work.get'], outputSchema: AppShellActionOutputSchemas['session.work.get'],
@@ -126,7 +127,7 @@ export const APP_SHELL_ACTION_SPECS = [
     description: 'Read the answering client’s open canonical Inbox for the exact invoking Home and Account. Unavailable without its mounted owner; never opens or loads Inbox.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'inbox_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['inbox.get'], outputSchema: AppShellActionOutputSchemas['inbox.get'],
@@ -137,7 +138,7 @@ export const APP_SHELL_ACTION_SPECS = [
     description: 'Mark an exact Home-scoped Inbox snapshot read. Does not resolve approvals, mentions or human attention.',
     safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'inbox_mark_all_read' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'mark-all-read'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['inbox.mark_all_read'], outputSchema: AppShellActionOutputSchemas['inbox.mark_all_read'],

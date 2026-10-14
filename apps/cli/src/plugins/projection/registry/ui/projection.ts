@@ -1,10 +1,10 @@
-import { projectPluginUiPresentationEntriesV1, projectPluginUiTranslationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { projectPluginReactNativeArtifactEntryV1, projectPluginUiPresentationEntriesV1, projectPluginUiTranslationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 export {
     projectPluginUiRendererRef,
     projectPluginUiRendererAvailability,
     resolvePluginUiRendererProjectionEntry,
 } from '@happier-dev/protocol/plugins/contributions/ui';
-import { PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import {
     PluginUiResourceBindingCapabilityV1Schema,
     DaemonHostedWebFrameCapabilityV1Schema,
@@ -14,7 +14,7 @@ import type {
     DaemonHostedWebFrameCapabilityV1,
     DaemonPluginHostedWebArtifactCacheIdentityV1,
     DaemonPluginUiArtifactByteIdentityV1 as ReactNativeBundleCacheIdentity,
-    PluginMachineMaterializationExecutionOriginV1,
+    PluginMachineExecutionOriginV1,
     PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui/surfaceRegistry';
@@ -136,14 +136,14 @@ function addEntry(
 }
 
 /**
- * F7's exact materialization stamp is applied once after every UI entry has
+ * The exact execution-origin stamp is applied once after every UI entry has
  * been projected. The projection lease owns the map; this family neither
  * rebuilds it from paths nor substitutes a machine-level identity when it is
  * unavailable.
  */
 function stampEntriesWithExecutionOrigins(
     entriesById: Record<string, PluginUiProjectedEntryCandidate>,
-    originsByPluginId: Readonly<Record<string, PluginMachineMaterializationExecutionOriginV1>> | undefined,
+    originsByPluginId: Readonly<Record<string, PluginMachineExecutionOriginV1>> | undefined,
 ): void {
     if (!originsByPluginId) return;
     for (const [entryId, entry] of Object.entries(entriesById)) {
@@ -153,12 +153,11 @@ function stampEntriesWithExecutionOrigins(
         // Action carries its own execution origin, and the closed Protocol arm
         // admits no second copy.
         if (entry.contributionKind === 'searchProvider') continue;
-        const parsedOrigin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse(originsByPluginId[pluginId]);
-        if (!parsedOrigin.success || parsedOrigin.data.materializationRef.pluginId !== pluginId) continue;
+        const parsedOrigin = PluginMachineExecutionOriginV1Schema.safeParse(originsByPluginId[pluginId]);
+        if (!parsedOrigin.success || getPluginMachineExecutionOriginRef(parsedOrigin.data).pluginId !== pluginId) continue;
         entriesById[entryId] = Object.freeze({
             ...entry,
-            serverIdentityId: parsedOrigin.data.serverIdentityId,
-            materializationRef: Object.freeze({ ...parsedOrigin.data.materializationRef }),
+            executionOrigin: Object.freeze(parsedOrigin.data),
         });
     }
 }
@@ -556,33 +555,16 @@ function projectGeneratedReactNativeBundles(
                         cacheIdentity,
                     });
 
-        addEntry(entriesById, {
-            id: `reactNativeBundle:${pluginId}:${contributionId}`,
-            pluginId,
+        addEntry(entriesById, projectPluginReactNativeArtifactEntryV1({
+            pluginId, contributionId, artifactId: owner.artifactId,
             pluginVersion: owner.pluginVersion ?? '0.0.0',
-            contributionKind: 'reactNativeBundle',
-            contributionId,
             artifactSelectionOwner: artifactSelectionOwnerForPluginSource(owner.pluginSource),
-            generatedV2: true,
             generatedOwnerKind: owner.kind,
             requiredHostMethods,
-            entry: Object.freeze({
-                artifactId: entry?.artifactId ?? owner.artifactId,
-                exportName: owner.expectedExecutable?.exportName ?? 'renderSurface',
-            }),
-            compatibility: entry
-                ? Object.freeze({
-                    hostUiApiRange: entry.hostUiApiRange,
-                })
-                : undefined,
-            hostApi: Object.freeze({
-                minVersion: entry?.hostUiApiRange ?? PLUGIN_UI_HOST_API_VERSION_V1,
-                methods: Object.freeze([...requiredHostMethods]),
-            }),
-            fallback: Object.freeze({ kind: 'unavailable' as const }),
-            ...(entry ? { artifactGraph: entry } : {}),
+            exportName: owner.expectedExecutable?.exportName ?? 'renderSurface',
+            ...(entry ? { artifact: entry } : {}),
             runtime,
-        });
+        }));
     }
     return ownedContributionKeys;
 }

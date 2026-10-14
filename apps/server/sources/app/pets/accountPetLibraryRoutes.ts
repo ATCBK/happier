@@ -1,11 +1,6 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
-import {
-    AccountPetAssetReadResponseV1Schema,
-    AccountPetCreateResponseV1Schema,
-    AccountPetDeleteResponseV1Schema,
-    AccountPetListResponseV1Schema,
-} from "@happier-dev/protocol";
+import { AccountPetAssetReadResponseV1Schema, AccountPetCreateResponseV1Schema, AccountPetDeleteResponseV1Schema, AccountPetListResponseV1Schema } from '@happier-dev/protocol/pets/accountLibrary';
 
 import { readPetsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -97,7 +92,7 @@ export function registerAccountPetLibraryRoutes(app: Fastify): void {
         },
         schema: {
             params: z.object({
-                petId: z.string().min(1),
+                petId: z.string().check(z.minLength(1)),
             }),
             response: {
                 200: z.any(),
@@ -128,7 +123,7 @@ export function registerAccountPetLibraryRoutes(app: Fastify): void {
         },
         schema: {
             params: z.object({
-                petId: z.string().min(1),
+                petId: z.string().check(z.minLength(1)),
             }),
             response: {
                 200: AccountPetDeleteResponseV1Schema,
@@ -157,8 +152,8 @@ export function registerAccountPetLibraryRoutes(app: Fastify): void {
         },
         schema: {
             params: z.object({
-                petId: z.string().min(1),
-                assetId: z.string().min(1),
+                petId: z.string().check(z.minLength(1)),
+                assetId: z.string().check(z.minLength(1)),
             }),
             response: {
                 200: z.any(),

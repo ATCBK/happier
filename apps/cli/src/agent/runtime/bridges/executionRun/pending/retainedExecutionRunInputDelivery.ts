@@ -51,6 +51,8 @@ export type RetainedExecutionRunInputDeliveryOptions = Readonly<{
     authorizeProviderEffect: () => Promise<Readonly<{ ok: boolean; errorCode?: string; error?: string }>>;
     /** Capture the profile's publication basis before this exact input can have a provider effect. */
     beforeProviderInput?: (localId: string) => Promise<void>;
+    /** Install exact input custody only once this delivery can actually affect the native runtime. */
+    beforeNativeInputDispatch?: (localId: string) => void;
     structuredInputContext?: Omit<
         Parameters<typeof resolveStructuredInputProviderDispatchContext>[0],
         'structuredInput' | 'sessionMedia' | 'composerAttachments'
@@ -282,6 +284,7 @@ export function createRetainedExecutionRunInputDelivery(
                 : {}),
         };
         try {
+            options.beforeNativeInputDispatch?.(localId);
             const meta = {
                 localId,
                 ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),

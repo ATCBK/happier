@@ -271,6 +271,7 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_COMPOSER_REFERENCE_SEARCH, 'Daemon-local generation-leased composer-reference picker search returns bounded candidates through the canonical registered reference; no durable resolved context, server persistence, or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ, 'Daemon-local read of the current contributions to one mounted plugin target; no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ, 'Daemon-local generation-leased plugin resource snapshot read for a mounted plugin UI surface; no server persistence or cross-device fanout.'),
+  directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_CAPTURE_SOURCE_READ, 'Exact-Machine, occurrence-bound capture viewing metadata discovery; capture approval and stream admission remain at their existing owners, with no durable mutation or server fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_STORED_IMAGE_READ, 'Exact plugin occurrence Session READ-scoped image disclosure; no server persistence or mutation.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_OPEN, 'Daemon-local plugin resource invalidation subscription open; establishes one bounded daemon-side observer and returns its current digest without server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_NEXT, 'Daemon-local plugin resource invalidation long-poll; returns one bounded signal carrying no resource bytes, without server persistence or cross-device fanout.'),
@@ -340,7 +341,6 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.UI_ACTION_EXECUTE, 'Exact-Machine reverse delivery of an already admitted client Action to one connected app, with no server persistence or fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT, 'Daemon-local simulator preview snapshot read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_ACTION, 'Daemon-local simulator preview action dispatch with typed adapter validation and no durable server mutation.'),
-  directEphemeral(RPC_METHODS.DAEMON_PROMPT_ASSETS_LIST_TYPES, 'Daemon-local prompt asset type catalog read.'),
   directEphemeral(RPC_METHODS.DAEMON_REGISTRIES_FETCH, 'Daemon registry fetch resolves Account sources without receiving credentials or source lists.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET, 'Daemon-local session-runner runtime status read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET, 'Daemon-local additive session-runner status read carrying only exact process-currentness evidence beside the unchanged V1 aggregate.'),
@@ -475,7 +475,6 @@ const SESSION_DURABLE_METHODS = [
   SESSION_RPC_METHODS.SESSION_NOTES_SET,
   SESSION_RPC_METHODS.SESSION_ROLES_APPLY_TO_REPORTS,
   SESSION_RPC_METHODS.SESSION_WORKFLOW_STEP_WITHDRAW,
-  SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE,
   SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, SESSION_RPC_METHODS.EXECUTION_RUN_START, SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE,
   SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START, SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1,
   SESSION_RPC_METHODS.EXECUTION_RUN_SEND, SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START,
@@ -541,8 +540,7 @@ const TRANSFER_CONTROL_OUTBOUND_METHODS = [
 const TRANSFER_CONTROL_METHODS = [
   RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_CAPABILITY_GET_V1,
   RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_RELEASE,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_CHUNK,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_ABORT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,
+  RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,
   RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
   RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_CHUNK,
   RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_ABORT,
@@ -565,8 +563,6 @@ const LOCAL_MUTATION_AGENT_INPUT_METHODS = [
 
 const LOCAL_MUTATION_METHODS = [
   RPC_METHODS.STOP_DAEMON,
-  RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
-  RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL,
   RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND,
   RPC_METHODS.DAEMON_MEMORY_SETTINGS_SET,
   RPC_METHODS.DAEMON_MEMORY_CLEAR_INDEX,
@@ -590,7 +586,6 @@ const LOCAL_MUTATION_METHODS = [
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREPARE_SOURCE,
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM,
   RPC_METHODS.DAEMON_EXTENSIONS_RELOAD,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE,
   RPC_METHODS.SKILLS_MACHINE_INSTALL,
   RPC_METHODS.SKILLS_MACHINE_UNINSTALL,
   RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
@@ -672,9 +667,6 @@ const AMBIGUOUS_READ_RUNNER_READABLE_METHODS = [
 ] as const;
 
 const AMBIGUOUS_READ_OR_EXTERNAL_METHODS = [
-  RPC_METHODS.DAEMON_AGENTS_INSTALL_READ,
-  RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST,
-  RPC_METHODS.DAEMON_PLUGIN_UI_CAPTURE_SOURCE_READ,
   RPC_METHODS.DAEMON_MEMORY_SEARCH,
   RPC_METHODS.DAEMON_MEMORY_GET_WINDOW,
   RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE,
@@ -777,7 +769,6 @@ const SERVER_PERSISTENCE_METHODS = [
 ] as const;
 
 const AUTOMATION_METHODS = [
-  RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
   RPC_METHODS.DAEMON_MCP_SERVERS_TEST,
   RPC_METHODS.DAEMON_MCP_SERVERS_DETECT,
   RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
@@ -876,8 +867,13 @@ function withSharedMachineAccess(policy: MachineRpcRoutePolicyV1): MachineRpcRou
 }
 
 export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
+  ...serverRequiredRows([
+    RPC_METHODS.DAEMON_AGENTS_INSTALL_START, RPC_METHODS.DAEMON_AGENTS_INSTALL_READ,
+    RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL, RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST,
+  ], 'auth', 'Agent install jobs retain authenticated exact-Machine routing; configured definitions and job visibility require current requester Account admission, while reviewed install/update/uninstall effects remain owned by their public Actions.'),
   serverRequired(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, 'ambiguous',
     'Contribution registry projection admits cross-device Session creation and plugin surfaces; a Machine loopback advertisement does not establish client reachability, so read through the authenticated Home without an uncertain direct attempt.'),
+  serverRequired(RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE, 'auth', 'Reverse contributed-Action execution reaches the answering UI through authenticated Home ingress; exact occurrence admission, Action policy and approval remain at the canonical front door.'),
   serverRequired(RPC_METHODS.DAEMON_CONNECTED_SERVICE_POOL_SELECTION_GET, 'auth',
     'Pool selection observes the custodian Account group and private quota evidence through the current exact-Machine owner; shared Machine Use does not grant access to that Account data.'),
   ...serverRequiredRows([
@@ -953,9 +949,10 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   serverRequired(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE, 'durable_session_write', 'Guard notices commit Session metadata and transcript receipts through the current owner on the authenticated exact-Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, 'auth', 'Native Agent tool calls execute inside the live Session authority boundary and stay on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   {
-    ...serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'reconnect_catch_up', 'Daemon plugin catalog freshness hints stay on the authenticated owner Session route; executable admission remains daemon-owned.', SESSION_SERVER_REQUIRED_SCOPE),
+    ...serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'auth', 'Daemon catalog invalidation is an exact Session-owner freshness signal; it grants no executable admission and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
     sharedMachineAccess: 'custodian_only',
   } satisfies MachineRpcRoutePolicyV1,
+  serverRequired(SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE, 'auth', 'Native CLI attachment prepares live terminal custody under exact Session-owner authority and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   ...serverRequiredRows(PLUGIN_PERMISSION_GRANT_METHODS, 'auth', 'Plugin permission grant reads and mutations are authorization policy state and stay server-routed.'),
   ...serverRequiredRows(REVIEW_COMMENT_METHODS, 'server_persistence', 'Review comment reads and mutations operate on durable review-comment state and stay server-routed.'),
   ...serverRequiredRows(SESSION_AUTH_CONTROL_METHODS, 'auth', 'Session connected-service auth runtime controls expose or mutate authentication state and stay server-routed.', SESSION_SERVER_REQUIRED_SCOPE),
@@ -1075,6 +1072,18 @@ export function resolveMachineRpcExternalActionEffectV1(method: string,
   }
   const declared = resolveMachineRpcRoutePolicy(method).actionSpecId;
   if (declared) return declared;
+  const exactTransferTarget = binding?.target && (binding.target.kind === 'machine'
+    ? binding.target.machineId === binding.machineId
+    : binding.actionId === 'skills.found.read' || binding.actionId === 'skills.found.adopt');
+  if (exactTransferTarget && (TRANSFER_CONTROL_OUTBOUND_METHODS as readonly string[]).includes(method)) {
+    // These phases transport the same prepared capability. The admitted root,
+    // exact installed target and signed phase body remain the Home authority.
+    if (binding.actionId === 'skills.found.read' || binding.actionId === 'skills.found.adopt'
+      || binding.actionId === 'skills.install' || binding.actionId === 'prompt_registry.install'
+      || binding.actionId === 'daemon.filesystem.download' || binding.actionId === 'daemon.filesystem.copy') return binding.actionId;
+  }
+  if (exactTransferTarget && (TRANSFER_CONTROL_INBOUND_METHODS as readonly string[]).includes(method)
+    && (binding.actionId === 'daemon.filesystem.upload' || binding.actionId === 'daemon.filesystem.copy')) return binding.actionId;
   if (method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT
     || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK
     || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE

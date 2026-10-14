@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ProviderModelDescriptorV1Schema,
@@ -29,11 +29,11 @@ import {
  * listener URL is resolved by the managed runtime rather than authorized at
  * bind time; such a deployment always mints its own runtime credential.
  */
-export const AgentSessionProviderBindingUpstreamV1Schema = lazyZodSchema(() => z.object({
+export const AgentSessionProviderBindingUpstreamV1Schema = lazyZodSchema(() => z.strictObject({
   protocol: ProviderWireProtocolSchema,
-  normalizedUrl: ProviderEndpointUrlSyntaxSchema.nullable(),
+  normalizedUrl: z.nullable(ProviderEndpointUrlSyntaxSchema),
   credential: z.enum(['none', 'apiKey']),
-}).strict());
+}));
 
 const AgentSessionProviderBindingCommonV1Schema = lazyZodSchema(() => z.object({
   model: ProviderModelDescriptorV1Schema,
@@ -41,17 +41,17 @@ const AgentSessionProviderBindingCommonV1Schema = lazyZodSchema(() => z.object({
   materialization: AgentProviderBindingLaunchMaterializationV1Schema,
 }));
 
-const AgentSessionAccountProviderBindingV1Schema = AgentSessionProviderBindingCommonV1Schema.extend({
+const AgentSessionAccountProviderBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSessionProviderBindingCommonV1Schema, {
   connectionId: ProviderConnectionIdSchema,
-}).strict() satisfies z.ZodType<AgentSessionProviderBindingV1>;
+}))) satisfies z.ZodMiniType<AgentSessionProviderBindingV1>;
 
-export const AgentSessionTeamProviderBindingV1Schema = lazyZodSchema(() => AgentSessionProviderBindingCommonV1Schema.extend({
-  source: z.object({
+export const AgentSessionTeamProviderBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSessionProviderBindingCommonV1Schema, {
+  source: z.strictObject({
     kind: z.literal('team_resource'),
-    resourceId: z.string().trim().min(1).max(256),
-    resourceRevision: z.number().int().nonnegative(),
-  }).strict(),
-}).strict());
+    resourceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    resourceRevision: z.number().check(z.int(), z.nonnegative()),
+  }),
+})));
 
 export const AgentSessionProviderBindingV1Schema = lazyZodSchema(() => z.union([
   AgentSessionAccountProviderBindingV1Schema,

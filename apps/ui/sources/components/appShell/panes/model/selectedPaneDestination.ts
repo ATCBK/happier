@@ -47,7 +47,7 @@ export const SelectedPaneDestinationV1Schema = z.discriminatedUnion('kind', [
     z.object({
         kind: z.literal('plugin'),
         destination: PersistedPluginUiDestinationReferenceV1Schema,
-        instanceKey: PluginUiInstanceKeyV1Schema.optional(),
+        instanceKey: z.optional(PluginUiInstanceKeyV1Schema),
     }).strict(),
 ]);
 

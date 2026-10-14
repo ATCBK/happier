@@ -1,9 +1,6 @@
-import type {
-    ConnectedServiceCredentialRevisionV1,
-    ConnectedServiceId,
-    QualifiedConnectedAccountGroupV4,
-    QualifiedConnectedAccountProfileV4,
-} from "@happier-dev/protocol";
+import type { ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import type { QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import { ImageRef } from "./storage/blob/files";
 import type { LinkedProvider } from "./app/auth/providers/linkedProviders";

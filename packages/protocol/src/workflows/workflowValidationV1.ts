@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { listActionSpecs } from '../actions/actionSpecs.js';
 import { resolveEffectiveActionInputFields } from '../actions/actionInputHintsRuntime.js';
@@ -31,6 +31,8 @@ import {
   type WorkflowValueReference,
 } from './workflowReferenceV1.js';
 import { readWorkflowWorkspaceProducerRef } from './workflowWorkspaceV1.js';
+import { walkWorkflowBlocks } from './workflowDefinitionEditV1.js';
+import { readWorkflowClosedResultFieldNames } from './workflowResultFieldsV1.js';
 import { resolveWorkflowStepSelectionV1 } from './workflowStepSelectionV1.js';
 import { WorkflowRoleV1Schema } from '../prompts/roles/rolesV1.js';
 import { MENTION_KIND_V1, readMentionRefOpaqueForKindV1 } from '../runtime/input/mentionRefV1.js';
@@ -53,14 +55,14 @@ const BLOCK_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
  * their own canonical schemas below so each failure keeps its exact path and
  * issue code instead of collapsing into one union error.
  */
-const WorkflowIngressEnvelopeSchema = lazyZodSchema(() => z.object({
-  version: z.literal(1).optional(),
-  inputs: z.array(WorkflowInputDefinitionSchema).optional(),
-  defaults: z.unknown().optional(),
-  roles: z.array(WorkflowRoleV1Schema).optional(),
-  blocks: z.array(z.unknown()).min(1),
-  finalOutput: WorkflowAuthoredResultReferenceSchema.optional(),
-}).strict());
+const WorkflowIngressEnvelopeSchema = lazyZodSchema(() => z.strictObject({
+  version: z.optional(z.literal(1)),
+  inputs: z.optional(z.array(WorkflowInputDefinitionSchema)),
+  defaults: z.optional(z.unknown()),
+  roles: z.optional(z.array(WorkflowRoleV1Schema)),
+  blocks: z.array(z.unknown()).check(z.minLength(1)),
+  finalOutput: z.optional(WorkflowAuthoredResultReferenceSchema),
+}));
 
 function issue(
   code: WorkflowValidationIssueCode,
@@ -230,7 +232,7 @@ function mapZodIssueCode(zodIssue: z.core.$ZodIssue): WorkflowValidationIssueCod
   return 'invalid_input';
 }
 
-function issuesFromZodError(error: z.ZodError<unknown>, pathPrefix = ''): readonly WorkflowValidationIssue[] {
+function issuesFromZodError(error: z.core.$ZodError<unknown>, pathPrefix = ''): readonly WorkflowValidationIssue[] {
   return error.issues.map((zodIssue) => issue(
     mapZodIssueCode(zodIssue),
     joinPath(pathPrefix, ...zodIssue.path.map((segment) => String(segment))),
@@ -379,6 +381,8 @@ type WalkState = {
   readonly levels: ScopeLevel[];
   /** Index currently being visited at each level; parallel to `levels`. */
   readonly positions: number[];
+  /** Producers whose closed named-field result declares exactly these first path segments. */
+  readonly closedResultFields: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 function recordId(state: WalkState, id: string, path: string): void {
@@ -521,6 +525,17 @@ function validateValueReference(
             `No block named "${reference.producer.blockId}" is available here.`,
             blockId,
           ));
+        return;
+      }
+      const declared = reference.kind === 'result' ? state.closedResultFields.get(reference.producer.blockId) : undefined;
+      const field = reference.kind === 'result' ? reference.path[0] : undefined;
+      if (declared !== undefined && typeof field === 'string' && !declared.has(field)) {
+        state.issues.push(issue(
+          'missing_reference',
+          joinPath(path, 'path', 0),
+          `"${reference.producer.blockId}" does not return a field named "${field}".`,
+          blockId,
+        ));
       }
       return;
     }
@@ -1162,6 +1177,10 @@ function collectSemanticIssues(definition: WorkflowDefinitionV1): WorkflowValida
     workflowDefaults: definition.defaults,
     levels: [],
     positions: [],
+    closedResultFields: new Map(walkWorkflowBlocks(definition.blocks).flatMap((block) => {
+      const fields = block.kind === 'step' || block.kind === 'wait' ? readWorkflowClosedResultFieldNames(block.result) : null;
+      return fields === null ? [] : [[block.id, fields] as const];
+    })),
   };
   validateInputs(state, definition);
   collectDeclaredIds(state, definition.blocks, '/blocks');

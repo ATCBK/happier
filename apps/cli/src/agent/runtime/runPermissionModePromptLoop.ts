@@ -1033,6 +1033,11 @@ export async function runPermissionModePromptLoop(opts: {
       message = { message: next.message, mode: next.mode, hash: next.hash };
     }
     if (!message) continue;
+    const inputPreparationStartedAt = performance.now();
+    logger.infoFile('[PermissionModePromptLoop] Input collected', {
+      sessionId: opts.session.sessionId,
+      localIds: normalizePermissionModeQueuedPromptLocalIds(message.message),
+    });
 
     if (isQueuedPromptAlreadyLocallyConsumed(opts.session, message.message, message.mode)) {
       continue;
@@ -1194,6 +1199,11 @@ export async function runPermissionModePromptLoop(opts: {
       currentCheckpointMessageId = localId ?? message.hash;
       if (!wasStarted) {
         const runtimeStart = await ensureRuntimeStarted();
+        logger.infoFile('[PermissionModePromptLoop] Runtime startup settled', {
+          sessionId: opts.session.sessionId, localId,
+          durationMs: Math.round(performance.now() - inputPreparationStartedAt),
+          exitRequested: runtimeStart.exitRequested,
+        });
         if (runtimeStart.exitRequested) {
           shouldSendReady = false;
           return;
@@ -1306,6 +1316,19 @@ export async function runPermissionModePromptLoop(opts: {
         continue;
       }
       const dispatchProviderPrompt = async (): Promise<void> => {
+        const preparationStartedAt = performance.now();
+        let phaseStartedAt = preparationStartedAt;
+        const recordPreparationPhase = (phase: string): void => {
+          const now = performance.now();
+          logger.infoFile('[PermissionModePromptLoop] Turn preparation phase', {
+            phase, sessionId: opts.session.sessionId, localId,
+            durationMs: Math.round(now - phaseStartedAt),
+            elapsedMs: Math.round(now - preparationStartedAt),
+            sinceInputCollectedMs: Math.round(now - inputPreparationStartedAt),
+          });
+          phaseStartedAt = now;
+        };
+        recordPreparationPhase('entered');
         activeCheckpointMessageId = currentCheckpointMessageId;
         activeCheckpointTurnId = null;
         activeCheckpointFinalStatus = 'unknown';
@@ -1380,11 +1403,13 @@ export async function runPermissionModePromptLoop(opts: {
         if (replaySeedWasOmitted) {
           await releaseReplaySeedBeforeProviderDispatch();
         }
+        recordPreparationPhase('replay_seed');
         const agentComposition = providerNativeCommand
           ? undefined
           : await opts.resolveAgentCompositionBeforeDispatch?.({
               signal: dispatchAbortSignal,
             });
+        recordPreparationPhase('agent_composition');
         const effectiveAgentCompositionPrompt =
           typeof agentComposition?.prompt === 'string'
             ? agentComposition.prompt.trim()
@@ -1400,6 +1425,7 @@ export async function runPermissionModePromptLoop(opts: {
                 : {}),
             })
           : undefined;
+        recordPreparationPhase('session_prompt_plan');
         const effectiveAppendSystemPrompt = typeof freshSessionSystemPrompt === 'string'
           ? freshSessionSystemPrompt.trim()
           : '';
@@ -1443,6 +1469,7 @@ export async function runPermissionModePromptLoop(opts: {
           }
           preparedNativePlan = startupInstructions === null || nativePlanMatches();
         }
+        recordPreparationPhase('native_plan_delivery');
         const deliveredNatively = preparedNativePlan
           || (!planChanged && !lostNativePlan && lastDeliveredSessionSystemPrompt?.native === true)
           || (planDeliveryState?.startupInstructionsSupported === true
@@ -1478,6 +1505,7 @@ export async function runPermissionModePromptLoop(opts: {
         // point, after the queue has drained and immediately before the provider call.
         // Resolving at admission would freeze a snapshot for however long the message sits
         // in the permission-mode queue.
+        recordPreparationPhase('agent_context_transform');
         const preparedDispatch = await prepareSessionInputForProviderDispatch({
           prompt: message.message,
           transformedUserText: transformedDispatchPrompt,
@@ -1504,6 +1532,7 @@ export async function runPermissionModePromptLoop(opts: {
             ...(opts.resolveComposerAttachmentForDispatch ? { resolveComposerAttachmentForDispatch: opts.resolveComposerAttachmentForDispatch } : {}),
           },
         });
+        recordPreparationPhase('input_preparation');
         const requiredDispatchPrompt = preparedDispatch.requiredPrompt;
         const requiredProviderContextForBudget = preparedDispatch.requiredProviderContextForBudget;
         // The checkpoint hook captures the repository, which is arbitrary-duration
@@ -1517,6 +1546,7 @@ export async function runPermissionModePromptLoop(opts: {
           messageId: currentCheckpointMessageId!,
           prompt: requiredDispatchPrompt,
         }));
+        recordPreparationPhase('checkpoint');
 
         const hostContextOnly = message.message.hostContextOnly;
         // Required workflow text is already FIN-materialized, not optional context.
@@ -1632,6 +1662,7 @@ export async function runPermissionModePromptLoop(opts: {
         );
         // Awaited context and checkpoint preparation can withdraw the resolved plan.
         if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
+        recordPreparationPhase('host_context');
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         opts.onBeforeTurnBegin?.(message.message);
         opts.runtime.beginTurnLifecycle();
@@ -1667,6 +1698,7 @@ export async function runPermissionModePromptLoop(opts: {
         // Invoking the runtime is the effect boundary. From here onward a thrown transport or
         // AbortError is ambiguous, so the durable association must remain for reconciliation.
         releaseUndispatchedReplaySeed = null;
+        recordPreparationPhase('native_send_entered');
         const providerSend = Object.keys(promptDeliveryMeta).length === 0
           ? opts.runtime.sendTurnPrompt(dispatchPrompt)
           : opts.runtime.sendTurnPrompt(dispatchPrompt, promptDeliveryMeta);
@@ -1677,6 +1709,7 @@ export async function runPermissionModePromptLoop(opts: {
         // turn-in-flight state is allowed to start the Pending pump.
         startActiveTurnPendingPump();
         await providerSend;
+        recordPreparationPhase('native_send_returned');
         // Provider transport custody alone cannot settle replay or Follow effects. The
         // mandatory localId-correlated delivery outcome port owns that exact decision.
         await drainReplaySeedSettlement();

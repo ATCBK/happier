@@ -1,12 +1,11 @@
-import type {
-    UsageAnalyticsQueryRequest,
-    UsageAnalyticsQueryResponse,
-} from "@happier-dev/protocol";
+import type { UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 
 import type { UsageMessageCounts } from "./loadUsageMessageStatsForQuery";
 import type { ScopedUsageContribution } from "./resolveScopedUsageContributions";
 import { resolveUsageContributionSourceContext } from "./resolveScopedUsageContributions";
-import { buildUsageLeaderList, resolveUsageBucketBounds as resolveBucketBounds, resolveUsageCalendarInstant, resolveUsageContributionDimensionKey, type UsageLeaderDimension } from "@happier-dev/protocol";
+import { buildUsageLeaderList, type UsageLeaderDimension } from '@happier-dev/protocol/usage/usageLeaderProjection';
+import { resolveUsageBucketBounds as resolveBucketBounds, resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
+import { resolveUsageContributionDimensionKey } from '@happier-dev/protocol/usage/usageCostFacts';
 import { resolveUsageCostMode } from "./resolveUsageCostMode";
 
 type UsageEventRow = Pick<

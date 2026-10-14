@@ -1,4 +1,4 @@
-import * as z from "zod";
+import * as z from "zod/mini";
 
 export const FeedBodySchema = z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('friend_request'), uid: z.string() }),

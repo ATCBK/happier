@@ -4,13 +4,14 @@ import { usePathname, useRouter } from '@/components/appShell/workspace/destinat
 import { useUnistyles } from 'react-native-unistyles';
 
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -23,14 +24,14 @@ import { shortWhereItsOn } from '@/components/capabilities/where/whereItsOnPrese
 import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
-import { AddMcpServerMenu } from './AddMcpServerMenu';
+import { useOpenMcpAddModal } from '../add/useOpenMcpAddModal';
 import { usePluginMcpServerItems } from './usePluginMcpServerItems';
 import type { McpPluginItemMetadataV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import {
     buildMcpServerCollection,
+    MCP_COLLECTION_ROUTE,
     MCP_NEW_SERVER_ROUTE,
-    MCP_ON_MACHINE_ROUTE,
-    MCP_SESSION_PREVIEW_ROUTE,
+    MCP_FOUND_ROUTE,
     mcpServerDraftTitle,
     mcpServerRoute,
     type McpServerCollectionRow,
@@ -39,10 +40,12 @@ import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectio
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import { AskHappierMark } from '@/components/sessions/bots/AskHappierOfferCard';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { CollectionIndexRow } from '@/components/ui/lists/collection/CollectionIndexRow';
+import { setPreviewedMcpServer } from '../home/mcpServerPreview';
+import { McpServersEmpty, McpServersHomeHero } from '../home/McpServersHome';
 
 /** The collection offers a search field only once it no longer fits at a glance. */
 const SEARCH_THRESHOLD = 8;
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] = [];
 
 /**
  * The MCP servers collection: what other agents run on your machines (Found) first, the Account's
@@ -65,9 +68,8 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
     const { machines: reachMachines } = useReachMachines();
     const placeMachines = React.useMemo(() => reachMachines.map((machine) => ({ machineId: machine.machineId, name: machine.name ?? machine.machineId })), [reachMachines]);
     const agentIds = React.useMemo(() => [...new Set(reachMachines.flatMap((machine) => machine.agentIds))], [reachMachines]);
-    const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines, projects: NO_PROJECTS });
+    const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines });
     const savedSecretCatalog = useSavedSecretCatalog({ scope });
-    const savedSecretIds = React.useMemo(() => new Set(savedSecretCatalog.materializedSecrets.map((secret) => secret.id)), [savedSecretCatalog.materializedSecrets]);
     const pluginItems = usePluginMcpServerItems();
     const plugins = React.useMemo(() => {
         const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -102,10 +104,12 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
                     ...(toolCount !== undefined ? { cost: { toolCount, ...(tokens ? { tokensPerTurn: tokens } : {}) } } : {}),
                     extra: [row.server.transport === 'stdio' ? t('capabilities.mcp.local') : t('capabilities.mcp.remote')],
                 }}
-                status={mcpServerNeedsKey(row.server, savedSecretIds) ? { kind: 'key' } : null}
+                status={mcpServerNeedsKey(row.server, savedSecretCatalog) ? { kind: 'key' } : null}
                 density={rail ? 'rail' : 'page'}
                 selected={rail ? selected : undefined}
                 onPress={() => navigate(mcpServerRoute(row.server.id))}
+                // Beside the homepage, pointing at a server lights its tether there (lab hm-A2h).
+                {...(rail ? { onPreviewChange: (active: boolean) => setPreviewedMcpServer(active ? row.server.id : null) } : {})}
             />
         );
     };
@@ -131,19 +135,18 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
         />
     );
 
-    // Pinned destinations: what other agents already run on your machines (Found), and, until the
-    // session sheet (P8) replaces it, what a session gets.
-    const renderToolRow = (id: 'onMachine' | 'preview') => {
-        const href = id === 'onMachine' ? MCP_ON_MACHINE_ROUTE : MCP_SESSION_PREVIEW_ROUTE;
+    // Pinned destination: what other agents already run on your machines (Found).
+    const renderToolRow = () => {
+        const href = MCP_FOUND_ROUTE;
         const selected = rail && pathname === href;
         return (
             <Item
-                key={id}
-                testID={`settings.mcpServers.tool.${id}`}
-                title={id === 'onMachine' ? t('capabilities.mcp.foundOnMachines') : t('mcpSettings.previewTitle')}
+                key="onMachine"
+                testID="settings.mcpServers.tool.onMachine"
+                title={t('capabilities.mcp.foundOnMachines')}
                 icon={(
                     <HappierCollectionListMark>
-                        <Icon name={id === 'onMachine' ? 'desktop' : 'eye'} size={20} color={theme.colors.text.secondary} />
+                        <Icon name="desktop" size={20} color={theme.colors.text.secondary} />
                     </HappierCollectionListMark>
                 )}
                 selected={rail ? selected : undefined}
@@ -175,7 +178,17 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
         />
     );
 
-    const addMenu = <AddMcpServerMenu onAdd={navigate} />;
+    const openAdd = useOpenMcpAddModal();
+    const addMenu = (
+        <IconButton
+            testID="settings.mcpServers.addServer"
+            iconName="plus"
+            accessibilityLabel={t('mcpSettings.add')}
+            tooltip={t('mcpSettings.add')}
+            variant="plain"
+            onPress={() => openAdd()}
+        />
+    );
     const searchable = total > SEARCH_THRESHOLD;
     const search = {
         testID: 'settings.mcpServers.search',
@@ -194,8 +207,13 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
                 headerAction={addMenu}
                 search={searchable ? search : null}
             >
-                {renderToolRow('onMachine')}
-                {renderToolRow('preview')}
+                <CollectionIndexRow
+                    testID="settings.mcpServers.rail.all"
+                    title={t('capabilities.mcp.allServers')}
+                    selected={pathname === MCP_COLLECTION_ROUTE}
+                    onPress={() => navigate(MCP_COLLECTION_ROUTE)}
+                />
+                {renderToolRow()}
                 {draftOpen ? <McpServerDraftRow /> : null}
                 {total === 0 && !draftOpen ? (
                     <EmptyState
@@ -220,7 +238,15 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
 
     return (
         <ItemList testID="settings.mcpServers.page">
-            <SettingsPageHeader description={t('mcpSettings.purpose')} actions={total > 0 ? addMenu : undefined} />
+            {/* A phone's page is the list: a large title with Add beside it (lab hm-A2p); a folded overflow would hide the bare plus. */}
+            <SettingsPageHeader
+                testID="settings.mcpServers.header"
+                alwaysShowTitle
+                titleProminence="page"
+                actionsPlacement="page"
+                actions={total > 0 ? addMenu : undefined}
+            />
+            {total > 0 ? <McpServersHomeHero /> : null}
             {searchable ? (
                 <CompactSearchField
                     testID={search.testID}
@@ -230,22 +256,19 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
                     placement="page"
                 />
             ) : null}
-            {total === 0 ? <EmptyState
-                testID="settings.mcpServers.invitation"
-                layout="page"
-                variant="add"
-                iconName="plug"
-                title={t('mcpSettings.landingTitle')}
-                subtitle={t('mcpSettings.landingDescription')}
-                action={<AddMcpServerMenu onAdd={navigate} renderTrigger={(toggle) => <RoundButton
-                    testID="settings.mcpServers.invitation.add" size="normal" title={t('mcpSettings.add')} onPress={toggle} />} />}
-            /> : <ItemGroup title={t('settings.mcpServers')}>
-                {rows.map(renderServerRow)}
-            </ItemGroup>}
-            <ItemGroup>
-                {renderToolRow('onMachine')}
-                {renderToolRow('preview')}
-            </ItemGroup>
+            {total === 0 ? <McpServersEmpty /> : (
+                <>
+                    <ItemGroup>
+                        {renderToolRow()}
+                    </ItemGroup>
+                    {inUse.length > 0 ? <ItemGroup title={t('capabilities.mcp.inUse')} titleAccessory={<GroupCount count={inUse.length} />}>
+                        {inUse.map(renderServerRow)}
+                    </ItemGroup> : null}
+                    {off.length > 0 ? <ItemGroup title={t('capabilities.mcp.off')} titleAccessory={<GroupCount count={off.length} />}>
+                        {off.map(renderServerRow)}
+                    </ItemGroup> : null}
+                </>
+            )}
             {plugins.length > 0 ? (
                 <ItemGroup title={t('capabilities.mcp.fromPlugins')}>
                     {plugins.map(renderPluginRow)}
@@ -257,6 +280,12 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
         </ItemList>
     );
 });
+
+/** A group's count beside its title, quiet and tabular (the rail's group labels say the same). */
+function GroupCount(props: Readonly<{ count: number }>) {
+    const { theme } = useUnistyles();
+    return <Text variant="meta" style={{ color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] }}>{String(props.count)}</Text>;
+}
 
 /** The server being added in the detail pane, at the top of the rail, titled as it is typed. */
 const McpServerDraftRow = React.memo(function McpServerDraftRow() {

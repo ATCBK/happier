@@ -72,7 +72,7 @@ export async function prepareRunnerAgentSessionBootstrapForLease(
   });
 }
 
-async function resolveRunnerAgentSessionDescriptorForLease(
+export async function resolveRunnerAgentSessionDescriptorForLease(
   input: Readonly<{
     target: BackendTargetRefV2;
     lease: PluginRuntimeRegistryLease;

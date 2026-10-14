@@ -39,7 +39,7 @@ import {
     resolveSessionListItemDensity,
     resolveSessionListRowIdentityMetrics,
     resolveSessionListRowTitleTextMetrics,
-    SESSION_LIST_ROW_STATUS_TEXT_METRICS,
+    resolveSessionListRowStatusTextMetrics,
 } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useTemporaryComputerLaunchObservation, type TemporaryComputerLaunchStatus } from '@/components/sessions/new/hooks/useTemporaryComputerLaunch';
@@ -194,7 +194,7 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
     });
     const agentId = resolveNewSessionDraftAgentId(props.draft);
     const machineId = resolveNewSessionDraftMachineId(props.draft);
-    const subtitleTextMetrics = SESSION_LIST_ROW_STATUS_TEXT_METRICS[props.density];
+    const subtitleTextMetrics = resolveSessionListRowStatusTextMetrics(props.density);
     const accessibleSummary = [
         presentation.title, status, t('sessionDrafts.continueEditing'),
     ].filter(Boolean).join(', ');

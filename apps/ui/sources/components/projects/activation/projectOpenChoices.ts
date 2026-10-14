@@ -116,8 +116,8 @@ export function resolveProjectOpenDefaults(state: ProjectOpenChoiceState): Parti
   const option = options.find(candidate => candidate.use === use);
   // The one checkout here is named even when an earlier choice pointed at another Machine's checkout.
   if ((use === 'existing' || use === 'worktree') && option && !option.from && option.candidates.length === 1) {
-    patch.checkoutId = option.candidates[0]!.id;
-    patch.checkoutAddress = workspaceAddressFromRefV1(option.candidates[0]!);
+    return { ...patch, checkoutId: option.candidates[0]!.id,
+      checkoutAddress: workspaceAddressFromRefV1(option.candidates[0]!) };
   }
   return patch;
 }

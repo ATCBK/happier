@@ -26,7 +26,6 @@ type SnapshotContracts = {
     projectNativeAdapters: PluginRegistrationValueByFamily['projectNativeAdapters'];
     composerAttachments: PluginRegistrationValueByFamily['composerAttachments'];
     composerReferences: PluginRegistrationValueByFamily['composerReferences'];
-    promptAssets: PluginRegistrationValueByFamily['promptAssets'];
     resources: PluginRegistrationValueByFamily['resources'];
     dragSources: PluginRegistrationValueByFamily['dragSources'];
     dropTargets: PluginRegistrationValueByFamily['dropTargets'];
@@ -142,7 +141,6 @@ const cases: Case[] = [
     { contract: 'mcp', capture: (fixture) => capture('mcp.servers', fixture) },
     ...(['projectNativeAdapters', 'composerAttachments', 'composerReferences', 'resources', 'dragSources', 'dropTargets', 'captureSources'] as const)
         .map((family) => ({ contract: family, capture: (fixture: object) => capture(family, fixture) })),
-    { contract: 'promptAssets', capture: (fixture) => capture('promptAssets', fixture), seeds: { descriptor: { id: 'fixture' } } },
     { contract: 'speech', capture: (fixture) => capture('voiceProviders', fixture), seeds: { kind: 'speech' } },
     { contract: 'conversation', capture: (fixture) => capture('voiceProviders', fixture), seeds: {
         kind: 'conversation', microphoneMode: 'provider_managed', outputLevelMeter: 'measured',

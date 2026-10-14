@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { isMap, parseDocument } from 'yaml';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 import { RegistryContentRefV1Schema, RegistryProvenanceV1Schema } from '../../../registries/registryItemsV1.js';
@@ -14,16 +15,16 @@ export type SkillLibraryItemV1 = Readonly<{
 }>;
 
 export const SkillProvenanceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }).strict(),
-  z.object({ kind: z.literal('link'), url: z.string().min(1), ref: RegistryContentRefV1Schema }).strict(),
-  z.object({ kind: z.literal('machine'), machineId: z.string().min(1), agentIds: z.array(z.string()), path: z.string().min(1), importedAt: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('upload'), importedAt: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('written') }).strict(),
-  z.object({ kind: z.literal('first_party') }).strict(),
+  z.strictObject({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }),
+  z.strictObject({ kind: z.literal('link'), url: z.string().check(z.minLength(1)), ref: RegistryContentRefV1Schema }),
+  z.strictObject({ kind: z.literal('machine'), machineId: z.string().check(z.minLength(1)), agentIds: z.array(z.string()), path: z.string().check(z.minLength(1)), importedAt: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('upload'), importedAt: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('written') }),
+  z.strictObject({ kind: z.literal('first_party') }),
 ]));
 export type SkillProvenanceV1 = z.infer<typeof SkillProvenanceV1Schema>;
-export const SkillLockV1Schema = lazyZodSchema(() => z.object({ provenance: SkillProvenanceV1Schema,
-  importedDigest: z.string().min(1).optional(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: RegistryUpstreamV1Schema.optional() }).strict());
+export const SkillLockV1Schema = lazyZodSchema(() => z.strictObject({ provenance: SkillProvenanceV1Schema,
+  importedDigest: z.optional(z.string().check(z.minLength(1))), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema) }));
 export type SkillLockV1 = z.infer<typeof SkillLockV1Schema>;
 const SkillLockStoredV1Schema = createStoredReadSchema(SkillLockV1Schema);
 export function readSkillLockV1(header: unknown): SkillLockV1 {
@@ -37,10 +38,10 @@ export function isSkillModifiedV1(lock: SkillLockV1, currentDigest: string): boo
   return (lock.provenance.kind === 'registry' || lock.provenance.kind === 'link')
     && lock.importedDigest !== currentDigest;
 }
-export const SkillRevisionV1Schema = lazyZodSchema(() => z.union([z.string().regex(/^sha256:[0-9a-f]{64}$/), z.string().regex(/^\d+:\d+$/).refine(value => {
+export const SkillRevisionV1Schema = lazyZodSchema(() => z.union([z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/)), z.string().check(z.regex(/^\d+:\d+$/), z.refine(value => {
   const [headerVersion, bodyVersion] = value.split(':').map(Number);
   return ArtifactRevisionV1Schema.safeParse({ headerVersion, bodyVersion }).success;
-})]));
+}))]));
 export function encodeSkillRevisionV1(revision: Readonly<{ headerVersion: number; bodyVersion: number }>): string {
   const valid = ArtifactRevisionV1Schema.parse(revision);
   return `${valid.headerVersion}:${valid.bodyVersion}`;
@@ -49,35 +50,108 @@ export function decodeSkillRevisionV1(revision: string): Readonly<{ headerVersio
   const [headerVersion, bodyVersion] = revision.split(':').map(Number);
   return ArtifactRevisionV1Schema.parse({ headerVersion, bodyVersion });
 }
-export const SkillListItemV1Schema = lazyZodSchema(() => z.object({
-  skillId: z.string().min(1), name: z.string().min(1), description: z.string().nullable(), revision: SkillRevisionV1Schema,
+export const SkillListItemV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId: z.string().check(z.minLength(1)), name: z.string().check(z.minLength(1)), description: z.nullable(z.string()), revision: SkillRevisionV1Schema,
   rules: z.array(SkillRuleV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema,
-  provenance: SkillProvenanceV1Schema, modified: z.boolean(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: RegistryUpstreamV1Schema.optional(),
-  lastUsedAt: z.number().int().nonnegative().optional(), createdAt: z.number().int().nonnegative(), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.string().nullable(),
-}).strict());
+  provenance: SkillProvenanceV1Schema, modified: z.boolean(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema),
+  lastUsedAt: z.optional(z.number().check(z.int(), z.nonnegative())), createdAt: z.number().check(z.int(), z.nonnegative()), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.nullable(z.string()),
+}));
 export type SkillListItemV1 = z.infer<typeof SkillListItemV1Schema>;
+/** Identity and public title remain knowable when a single stored skill cannot be opened. */
+export const SkillUnavailableItemV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId: z.string().check(z.minLength(1)), title: z.nullable(z.string().check(z.minLength(1))),
+  reason: z.enum(['skill_content_unavailable', 'not_found', 'invalid_skill_lock']),
+}));
+export type SkillUnavailableItemV1 = z.infer<typeof SkillUnavailableItemV1Schema>;
 
 export const SKILL_NAME_PATTERN_V1 = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const SkillFrontmatterV1Schema = lazyZodSchema(() => z.object({
+  name: z.optional(z.string().check(z.regex(SKILL_NAME_PATTERN_V1))),
+  description: z.optional(z.string()),
+  'disable-model-invocation': z.optional(z.boolean()),
+  'user-invocable': z.optional(z.boolean()),
+}));
+const skillFrontmatterPattern = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** One frontmatter projection for registry discovery, delivery and the picker. */
-export function readSkillFrontmatterV1(markdown: string): Readonly<{
+/** Delimiter lines consume only their own whitespace, never Markdown body indentation. */
+export function splitSkillMarkdownV1(markdown: string): Readonly<{ frontmatter: string | null; body: string }> {
+  const match = markdown.match(skillFrontmatterPattern);
+  return { frontmatter: match?.[1] ?? null, body: match ? markdown.slice(match[0].length) : markdown };
+}
+
+function openSkillFrontmatter(markdown: string) {
+  const { frontmatter, body } = splitSkillMarkdownV1(markdown);
+  try {
+    const document = parseDocument(frontmatter ?? '');
+    return { document, hasHeader: frontmatter !== null, body };
+  } catch { return null; }
+}
+
+type SkillFrontmatterV1 = Readonly<{
   name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean;
-}> {
-  const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
-  const out: { name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean } = {
-    disableModelInvocation: false, userInvocable: true,
-  };
+}>;
+
+/** Exact 82f2997875 predecessor line projection, used only after a stored YAML syntax failure. */
+function readPredecessorSkillFrontmatter(markdown: string) {
+  const match = String(markdown ?? '').match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  const out: { name?: string; description?: string } = {};
   if (!match) return out;
-  for (const line of match[1]!.split(/\r?\n/)) {
+  for (const line of match[1]!.split('\n')) {
     const separatorIndex = line.indexOf(':');
     if (separatorIndex <= 0) continue;
     const key = line.slice(0, separatorIndex).trim().toLowerCase();
     const value = line.slice(separatorIndex + 1).trim();
     if (!value) continue;
-    if (key === 'name' && SKILL_NAME_PATTERN_V1.test(value)) out.name = value;
+    if (key === 'name') out.name = value;
     if (key === 'description') out.description = value;
-    if (key === 'disable-model-invocation') out.disableModelInvocation = value === 'true';
-    if (key === 'user-invocable') out.userInvocable = value !== 'false';
   }
   return out;
+}
+
+function readFrontmatter(markdown: string, stored: boolean): SkillFrontmatterV1 {
+  const out: { name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean } = {
+    disableModelInvocation: false, userInvocable: true,
+  };
+  const opened = openSkillFrontmatter(markdown);
+  let value: unknown;
+  if (!opened) {
+    if (!stored) return out;
+    value = readPredecessorSkillFrontmatter(markdown);
+  } else if (!opened.hasHeader) return out;
+  else if (opened.document.errors.length) {
+    if (!stored) return out;
+    value = readPredecessorSkillFrontmatter(markdown);
+  } else {
+    if (opened.document.contents !== null && !isMap(opened.document.contents)) return out;
+    try { value = opened.document.toJS(); } catch { return out; }
+  }
+  const decoded = SkillFrontmatterV1Schema.safeParse(value);
+  if (!decoded.success) return out;
+  if (decoded.data.name) out.name = decoded.data.name;
+  if (decoded.data.description) out.description = decoded.data.description;
+  out.disableModelInvocation = decoded.data['disable-model-invocation'] === true;
+  out.userInvocable = decoded.data['user-invocable'] !== false;
+  return out;
+}
+
+/** Current registry imports and writes require decoded, semantically valid YAML. */
+export function readSkillFrontmatterV1(markdown: string): SkillFrontmatterV1 {
+  return readFrontmatter(markdown, false);
+}
+
+/** Stored 0.2 Markdown is YAML-first; only syntax failures reach its predecessor line rule. */
+export function readStoredSkillFrontmatterV1(markdown: string): SkillFrontmatterV1 {
+  return readFrontmatter(markdown, true);
+}
+
+/** Editing uses the same YAML owner; block children, quoting and retained metadata are not line fragments. */
+export function writeSkillFrontmatterV1(markdown: string, fields: Readonly<{ name?: string; description?: string }>): string | null {
+  const opened = openSkillFrontmatter(markdown);
+  if (!opened || opened.document.errors.length || opened.document.contents !== null && !isMap(opened.document.contents)) return null;
+  try {
+    if (fields.name !== undefined) opened.document.set('name', fields.name);
+    if (fields.description !== undefined) opened.document.set('description', fields.description);
+    if (!SkillFrontmatterV1Schema.safeParse(opened.document.toJS()).success) return null;
+    return `---\n${opened.document.toString()}---\n${opened.body}`;
+  } catch { return null; }
 }

@@ -20,7 +20,7 @@ import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints }
 import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 import { EntityDropSettledFeedback } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
 import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { createEntityDragGestureAdapter, useEntityDragSource, useEntityDragSourceState, useEntityDragDomBinding,
     useEntityDropTargetState, type EntityDragCarry } from '@/components/ui/treeDragDrop';
 import { t } from '@/text';
@@ -355,9 +355,7 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         const action = MOVE_ACTIONS.find(candidate => candidate.name === event.nativeEvent.actionName);
         if (action) move(action.direction, false);
     };
-    const grip = <DropdownMenu open={chooserOpen} onOpenChange={chooser.onOpenChange} selectedId={null} closeOnSelect={false}
-        items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label,
-            subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+    const grip = <EntityDragGripChooser open={chooserOpen} onOpenChange={chooser.onOpenChange} closeOnSelect={false} sections={sections}
         onSelect={id => chooser.select(destinations[Number(id)])}
         trigger={({ toggle }) => <GestureDetector gesture={gesture}><EntityDragGripTrigger testID={'board-canvas-organize:' + member.key}
             accessibilityLabel={t('entityDragDrop.organize.grip', { item: member.title })}
@@ -480,8 +478,8 @@ const styles = StyleSheet.create(theme => ({
     guideY: { position: 'absolute', left: 0, right: 0, height: 0, borderTopWidth: 1, borderStyle: 'dashed', borderColor: theme.colors.border.focus },
     snapTarget: { position: 'absolute', borderWidth: 1, borderColor: theme.colors.border.focus, borderStyle: 'dashed', borderRadius: theme.borderRadius.xl },
     // `left: -1` is the slot's own border width, so the chip's edge meets the outline's.
-    snapLabel: { position: 'absolute', left: -1, bottom: '100%', marginBottom: theme.margins.xs,
-        paddingHorizontal: theme.margins.sm, borderRadius: theme.borderRadius.sm,
+    snapLabel: { position: 'absolute', left: -1, bottom: '100%', marginBottom: theme.space.s4,
+        paddingHorizontal: theme.space.s8, borderRadius: theme.borderRadius.sm,
         borderWidth: 1, borderColor: theme.colors.border.focus, backgroundColor: theme.colors.surface.elevated },
-    snapLabelText: { ...Typography.rowMeta(), ...Typography.default('semiBold'), color: theme.colors.border.focus },
+    snapLabelText: { ...Typography.variant('meta'), ...Typography.default('semiBold'), color: theme.colors.border.focus },
 }));

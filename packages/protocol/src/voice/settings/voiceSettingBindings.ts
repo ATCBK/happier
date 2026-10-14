@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { resolveVoiceProviderLanguagePreference } from '../../plugins/contributions/voiceProviders.js';
 import { SettingsDeclarationValueV1Schema } from '../../actions/settingsDeclarationActionFamily.js';
 import type { SettingDomainValueV1 } from '../../actions/settings/settingsOwnerActions.js';
@@ -14,7 +14,7 @@ import type { VoiceSpeechDiagnosticsSettingsV1 } from '../diagnostics.js';
 export const VoiceMemoryRestoreChoiceSchema = z.enum(['recent_messages', 'summary_plus_recent', 'provider_resume']);
 export type VoiceMemoryRestoreChoice = z.infer<typeof VoiceMemoryRestoreChoiceSchema>;
 type CaptureDirection = 'captureSttInput' | 'captureTtsOutput';
-const executionMachineChoiceSchema = z.string().trim().min(1);
+const executionMachineChoiceSchema = z.string().check(z.trim(), z.minLength(1));
 export function applyVoiceExecutionMachineChoice(voice: VoiceSettings, choice: string): VoiceSettings {
     const machineId = executionMachineChoiceSchema.parse(choice);
     return { ...voice, executionMachine: machineId === 'auto' ? { mode: 'auto', machineId: null }
@@ -59,7 +59,7 @@ export function createVoiceSettingBindingsV1<T extends {voice: VoiceSettings}>(i
    const entry = providerId ? registry.get(providerId) : null;
    return (voice: VoiceSettings) => providerId !== null && voice.providerId === providerId && registry.get(providerId) === entry;
  });
-const serviceChoiceSchema = z.object({ providerId: z.string().min(1), optionId: z.string().min(1) }).strict();
+const serviceChoiceSchema = z.strictObject({ providerId: z.string().check(z.minLength(1)), optionId: z.string().check(z.minLength(1)) });
 const voiceGreetingChoiceSchema = z.enum(['off', 'immediate', 'on_first_turn']);
 
 function decodeServiceChoice(value: unknown) {
@@ -112,9 +112,9 @@ function replacePath(value: unknown, path: readonly string[], next: unknown): un
 }
 
 function unwrap(schema: z.core.$ZodType): z.core.$ZodType {
-    if (schema instanceof z.ZodDefault || schema instanceof z.ZodPrefault) return unwrap(schema.unwrap());
-    if (schema instanceof z.ZodCatch) return unwrap(schema.removeCatch());
-    if (schema instanceof z.ZodPipe) return unwrap(schema.out);
+    if (schema instanceof z.ZodMiniDefault || schema instanceof z.ZodMiniPrefault) return unwrap(schema._zod.def.innerType);
+    if (schema instanceof z.ZodMiniCatch) return unwrap(schema._zod.def.innerType);
+    if (schema instanceof z.ZodMiniPipe) return unwrap(schema._zod.def.out);
     return schema;
 }
 
@@ -122,7 +122,7 @@ function schemaAtPath(root: z.core.$ZodType, segments: readonly string[]): z.cor
     let schema = root;
     for (const segment of segments) {
         const parent = unwrap(schema);
-        if (!(parent instanceof z.ZodObject) || !parent.shape[segment]) throw new Error(`Unknown Voice preference: ${segments.join('.')}`);
+        if (!(parent instanceof z.ZodMiniObject) || !parent.shape[segment]) throw new Error(`Unknown Voice preference: ${segments.join('.')}`);
         schema = parent.shape[segment];
     }
     return unwrap(schema);
@@ -290,7 +290,7 @@ const voiceAgentSelectionBinding: VoiceSettingBindingV1<T> = {
         ? readLocalConversationVoiceSettings(settings.voice).agent.agentTargetKey
             ?? readLocalConversationVoiceSettings(settings.voice).agent.agentId : SETTING_VALUE_UNAVAILABLE,
     parse: (value) => {
-        const parsed = z.string().trim().min(1).safeParse(value);
+        const parsed = z.string().check(z.trim(), z.minLength(1)).safeParse(value);
         return parsed.success ? { success: true, value: parsed.data } : { success: false };
     },
     // Catalog choices are prepared through the exact Account/machine owner below, never inferred.

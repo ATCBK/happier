@@ -1,19 +1,14 @@
 import { createHash } from "node:crypto";
 
-import {
-    buildProviderAccountUsageRecordId,
-    ProviderAccountUsageSnapshotV1Schema,
-    QualifiedConnectedAccountRefSchema,
-    projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4,
-    QualifiedConnectedServiceUsageSourceV4Schema,
-    readAccountScopedCiphertextKindByte,
-    type ConnectedServiceId,
-    type ConnectedServiceQuotaSnapshotV1,
-    type QualifiedConnectedAccountRef,
-    type QualifiedConnectedServiceUsageSourceResolutionV4,
-    type QualifiedConnectedServiceUsageSourceV4,
-    type SealedConnectedServiceQuotaSnapshotV1,
-} from "@happier-dev/protocol";
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4, type QualifiedConnectedServiceUsageSourceResolutionV4, type QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { readAccountScopedCiphertextKindByte, isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
+import type { ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
+import { readProviderAccountUsagePageProjection, writeProviderAccountUsagePageProjection } from '../providerAccountUsage/pageProjectionStorage';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { type ConnectedServiceQuotaSnapshotV1, type SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { isConnectedServiceUsageProviderCompatible } from "@happier-dev/agents";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
@@ -1249,14 +1244,44 @@ export async function readQualifiedProviderAccountUsageRecord(
 
 export async function readQualifiedProviderAccountUsageHistory(params: Readonly<{ accountId: string }> & ReturnType<typeof import('@happier-dev/protocol/connect/providerAccountUsageHistory').QualifiedProviderAccountUsageHistoryRequestV4Schema.parse>) {
     return await inTx(async tx => {
-        const admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, params);
+        let admitted;
+        try { admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, params); }
+        catch (error) {
+            if ('projection' in params && error instanceof ProviderAccountUsagePayloadInvariantError) return { status: 'storage_mode_mismatch' as const };
+            throw error;
+        }
         if (admitted.status !== 'resolved') return admitted;
+        if ('projection' in params) {
+            const stored = admitted.record.metadata?.pageProjection;
+            if (stored && !projectionMatchesMode(stored, admitted.record)) return { status: 'storage_mode_mismatch' as const };
+            try { return { status: 'resolved' as const, ...await readProviderAccountUsagePageProjection(params, tx) }; }
+            catch (error) {
+                if (error instanceof ProviderAccountUsagePayloadInvariantError) return { status: 'storage_mode_mismatch' as const };
+                throw error;
+            }
+        }
         const page = 'history' in params
             ? await readProviderAccountUsageHistory(params, tx)
             : { entries: [await readProviderAccountUsageHistoryWitness(params, tx)].filter((entry): entry is NonNullable<typeof entry> => entry !== null), nextCursor: null };
         if (page.entries.some(entry => entry.record.accountId !== params.accountId || entry.record.recordId !== params.recordId || entry.record.payloadMode !== admitted.record.payloadMode)) return { status: 'storage_mode_mismatch' as const };
         return { status: 'resolved' as const, entries: page.entries, nextCursor: page.nextCursor, sources: admitted.sources };
     }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+}
+
+function projectionMatchesMode(value: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>, record: StoredProviderAccountUsageRecord) {
+    return record.payloadMode === 'plain_json_v1' ? value.content.t === 'plain'
+        : value.content.t === 'encrypted' && isAccountScopedBlobCiphertextForKind({ kind: 'provider_account_usage_page_projection', ciphertext: value.content.c });
+}
+
+/** Derived B materialization; accepted history and qualified source admission remain authoritative. */
+export async function writeQualifiedProviderAccountUsagePageProjection(params: Readonly<{ accountId: string }> & ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>) {
+    return await inTx(async tx => {
+        const admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, params);
+        if (admitted.status !== 'resolved') return admitted.status;
+        if (!projectionMatchesMode(params, admitted.record)) return 'storage_mode_mismatch' as const;
+        const { accountId, ...value } = params;
+        return await writeProviderAccountUsagePageProjection({ accountId, value }, tx) ? 'written' as const : 'projection_conflict' as const;
+    }, { isolationLevel: 'Serializable' });
 }
 
 export async function deleteQualifiedProviderAccountUsageRecord(

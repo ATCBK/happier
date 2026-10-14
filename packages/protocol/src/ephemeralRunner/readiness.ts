@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { RunnerClaimPayloadV1Schema } from './endpoint.js';
@@ -12,15 +12,15 @@ import { verifyRunnerClaimV1 } from './endpoint.js';
 import { RunnerCredentialSelectionBindingV1Schema } from './review.js';
 import { RunnerBrokerReadinessRequestV1Schema } from './brokerReadinessRequestV1.js';
 
-export const RunnerManagedAgentInstallationV1Schema = lazyZodSchema(() => z.object({
+export const RunnerManagedAgentInstallationV1Schema = lazyZodSchema(() => z.strictObject({
   agentTarget: AgentExecutionTargetV1Schema,
   // Canonical Agent runtime descriptor, not an installer-issued attestation.
   agentRuntimeId: RunnerResourceIdSchema,
-  executablePath: z.string().min(1).max(16 * 1024),
-  authoritativeVersion: z.string().min(1).max(512).nullable(),
-}).strict());
+  executablePath: z.string().check(z.minLength(1), z.maxLength(16 * 1024)),
+  authoritativeVersion: z.nullable(z.string().check(z.minLength(1), z.maxLength(512))),
+}));
 
-export const RunnerReadinessPayloadV1Schema = lazyZodSchema(() => z.object({
+export const RunnerReadinessPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-session-runner.readiness'),
   claim: RunnerClaimPayloadV1Schema,
@@ -28,14 +28,14 @@ export const RunnerReadinessPayloadV1Schema = lazyZodSchema(() => z.object({
   installation: RunnerManagedAgentInstallationV1Schema,
   credentialSelectionBinding: RunnerCredentialSelectionBindingV1Schema,
   brokerReadinessRequest: RunnerBrokerReadinessRequestV1Schema,
-}).strict());
+}));
 export type RunnerReadinessPayloadV1 = z.infer<typeof RunnerReadinessPayloadV1Schema>;
 
-export const RunnerReadinessV1Schema = lazyZodSchema(() => z.object({
+export const RunnerReadinessV1Schema = lazyZodSchema(() => z.strictObject({
   payload: RunnerReadinessPayloadV1Schema,
   activationSignature: RunnerSignatureSchema,
   installationSignature: RunnerSignatureSchema,
-}).strict());
+}));
 export type RunnerReadinessV1 = z.infer<typeof RunnerReadinessV1Schema>;
 
 export function signRunnerReadinessV1(params: Readonly<{ payload: RunnerReadinessPayloadV1; activationSecretKey: Uint8Array; installationSecretKey: Uint8Array }>): RunnerReadinessV1 {

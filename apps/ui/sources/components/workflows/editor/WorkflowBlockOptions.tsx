@@ -37,7 +37,6 @@ import {
 import type {
     WorkflowBlock,
     WorkflowLeafExecutionTargetV1,
-    WorkflowResultContract,
     WorkflowRunWhenV1,
     WorkflowStep,
 } from '@happier-dev/protocol/workflows/workflowV1';
@@ -54,6 +53,7 @@ import { formatWorkflowGroupSentence, WorkflowGroupOptions } from './WorkflowGro
 import type { WorkflowInspectorProps } from './WorkflowInspector';
 import { formatWorkflowLoopSentence, WorkflowLoopOptions } from './WorkflowLoopEditor';
 import { formatWorkflowResultSummary } from './WorkflowStepDataEditor';
+import { WorkflowResultFieldsEditor } from './WorkflowResultFieldsEditor';
 import { WorkflowStepInspector, WorkflowStepTimeoutField } from './WorkflowStepInspector';
 import { useWorkflowStepFieldControlRenderer } from './workflowStepFieldControls';
 import { workflowEditorStyles } from './workflowEditorStyles';
@@ -92,18 +92,18 @@ const styles = StyleSheet.create((theme) => ({
     subjectHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
-        paddingTop: theme.margins.md,
-        paddingBottom: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     subjectTitle: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
     subjectLocation: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
@@ -405,38 +405,18 @@ function MainPage(props: WorkflowInspectorProps & Readonly<{
     }
 }
 
-/** The Result destination: a step's or Wait's result shape, pushed into the same surface. */
+/** The Result destination: a step's or Wait's result shape, pushed into the same surface (04 §6.1). */
 function ResultPage(props: WorkflowInspectorProps & Readonly<{ block: WorkflowBlock }>): React.ReactElement | null {
-    const { block, draft, onChange, testIDPrefix } = props;
+    const { block } = props;
     if (block.kind !== 'step' && block.kind !== 'wait') return null;
-    const result: WorkflowResultContract = block.result ?? { kind: 'text' };
-    const setResult = (next: WorkflowResultContract) => onChange(updateWorkflowBlock(draft, block.id, (current) => (
-        current.kind === 'step' || current.kind === 'wait' ? { ...current, result: next } : current
-    )));
-    if (result.kind === 'decision') {
-        // A decision contract is authored by its loop (the evaluator's continue/stop); it is read here, not changed.
-        return (
-            <ItemGroup>
-                <Item testID={`${testIDPrefix}-result-kind`} title={t('workflows.page.inspector.resultTitle')} subtitle={formatWorkflowResultSummary(result)} showChevron={false} />
-            </ItemGroup>
-        );
-    }
     return (
-        <ItemGroup>
-            <SegmentedChoiceItem<'text' | 'json'>
-                title={t('workflows.page.inspector.resultTitle')}
-                value={result.kind}
-                onChange={(kind) => {
-                    if (kind === result.kind) return;
-                    setResult(kind === 'text' ? { kind: 'text' } : { kind: 'json', schema: { type: 'object' } });
-                }}
-                testIDPrefix={`${testIDPrefix}-result-kind`}
-                options={[
-                    { id: 'text', label: t('workflows.inputs.typeString'), description: t('workflows.page.blocks.returnsText') },
-                    { id: 'json', label: t('workflows.inputs.typeJson'), description: t('workflows.page.inspector.returnsStructured') },
-                ]}
-            />
-        </ItemGroup>
+        <WorkflowResultFieldsEditor
+            draft={props.draft}
+            block={block}
+            onChange={props.onChange}
+            editable={props.documentEditable !== false}
+            testIDPrefix={props.testIDPrefix}
+        />
     );
 }
 

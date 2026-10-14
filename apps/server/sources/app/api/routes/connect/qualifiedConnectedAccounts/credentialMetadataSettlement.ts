@@ -1,6 +1,4 @@
-import type {
-    QualifiedConnectedAccountCredentialMetadataV4,
-} from "@happier-dev/protocol";
+import type { QualifiedConnectedAccountCredentialMetadataV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 type ProviderIdentity =
     QualifiedConnectedAccountCredentialMetadataV4["providerIdentity"];

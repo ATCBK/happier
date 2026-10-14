@@ -5,8 +5,9 @@ import {
   Pressable,
   StyleSheet as RNStyleSheet,
   View,
+  type ViewStyle,
 } from 'react-native';
-import Svg, { Circle, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
@@ -19,6 +20,10 @@ import type { HomeOrbitScene } from './homeOrbitScene';
 
 /** Dots outside a preview fade to this strength; the previewed ones grow (lab L4 "reach map hover"). */
 const PREVIEW_FADED_OPACITY = 0.16;
+/** Ring marks and tethers outside a preview recede to this strength (lab hm-A "others recede to 22%"). */
+const RING_PREVIEW_FADED_OPACITY = 0.22;
+/** A mark with no tether (off, or not added yet) stands faded on the ring. */
+const RING_UNTETHERED_OPACITY = 0.38;
 const PREVIEW_DOT_SCALE = 1.7;
 /** A moon's press target: the canonical pointer baseline around a few-px moon. */
 const MOON_HIT_PX = 28;
@@ -36,6 +41,8 @@ export type HomeOrbitMapProps = Readonly<{
    * for their orbits one after another, once per `id`; never looping, never on arrival.
    */
   travel?: Readonly<{ id: string; dotKeys: readonly string[] }> | null;
+  /** A ring scene's mark, drawn centred on its place (an MCP server's mark, the "+N" count). */
+  renderRingMark?: (key: string) => React.ReactNode;
   /** The map is art; the legend and the present sentence carry its facts. */
   accessibilityLabel: string;
   small?: boolean;
@@ -75,12 +82,22 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
   const f = (value: number) => Number(value.toFixed(1));
   const previewing = highlightKeys != null;
   // Entering a preview takes the fast role; leaving is quicker (popover exit). Reduced motion: none.
-  const transition =
+  // react-native-svg forwards `style` to the DOM node on web; its CSS transition is not a ViewStyle key.
+  const transition: SvgWebStyle =
     Platform.OS === 'web' && !reducedMotion
-      ? {
+      ? ({
           transition: `opacity ${previewing ? motionTokens.durationMs.fast : motionTokens.overlay.popover.exitMs}ms ease-out, r ${previewing ? motionTokens.durationMs.fast : motionTokens.overlay.popover.exitMs}ms ease-out`,
-        }
+        } as SvgWebStyle)
       : undefined;
+  // The same fade for the ring's marks, which are views (react-native-web transition style keys).
+  const markTransition =
+    Platform.OS === 'web' && !reducedMotion
+      ? ({
+          transitionProperty: 'opacity',
+          transitionDuration: `${previewing ? motionTokens.durationMs.fast : motionTokens.overlay.popover.exitMs}ms`,
+          transitionTimingFunction: 'ease-out',
+        } as object)
+      : null;
   const travelStyle = useTravelStyle(props.travel ?? null, scene, reducedMotion);
   const labelStyle = Typography.variant('meta');
   const labelFontSize = labelStyle.fontSize ?? 12;
@@ -139,6 +156,40 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
           height={scene.height}
           style={RNStyleSheet.absoluteFill}
         >
+          {scene.ring?.marks.map((mark) => {
+            if (mark.tether === 'none') return null;
+            const lit = !previewing || highlightKeys.has(mark.key);
+            const attention = mark.tether === 'attention';
+            return (
+              <Line
+                key={`tether:${mark.key}`}
+                x1={f(mark.from.x)}
+                y1={f(mark.from.y)}
+                x2={f(mark.to.x)}
+                y2={f(mark.to.y)}
+                stroke={attention ? amber : ink}
+                strokeOpacity={attention ? 0.9 : previewing && lit ? 0.8 : 0.34}
+                strokeWidth={attention ? 1.4 : 1.2}
+                strokeLinecap="round"
+                strokeDasharray={mark.tether === 'machine' ? '0 4' : attention ? '4 3.4' : undefined}
+                opacity={lit ? 1 : RING_PREVIEW_FADED_OPACITY}
+                style={transition}
+              />
+            );
+          })}
+          {scene.ring?.marks.map((mark) =>
+            mark.tether === 'attention' ? (
+              <Circle
+                key={`beacon:${mark.key}`}
+                cx={f(mark.x + 9)}
+                cy={f(mark.y - 9)}
+                r={2.6}
+                fill={amber}
+                opacity={!previewing || highlightKeys.has(mark.key) ? 1 : RING_PREVIEW_FADED_OPACITY}
+                style={transition}
+              />
+            ) : null,
+          )}
           {scene.dots.map((dot) => {
             const lit = !previewing || highlightKeys.has(dot.key);
             const grow = previewing && lit ? PREVIEW_DOT_SCALE : 1;
@@ -239,7 +290,6 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
                   fillOpacity={moon.off ? 0.45 : 0.72}
                   fontFamily={labelStyle.fontFamily as string | undefined}
                   fontSize={labelStyle.fontSize}
-                  fontWeight={labelStyle.fontWeight as string | undefined}
                 >
                   {placedLabels[moon.key]!.text}
                 </SvgText>
@@ -248,6 +298,43 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
           ))}
         </Svg>
       </View>
+      {scene.ring && props.renderRingMark ? (
+        <View
+          pointerEvents="none"
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={RNStyleSheet.absoluteFill}
+        >
+          {scene.ring.marks.map((mark) => {
+            const lit = !previewing || highlightKeys.has(mark.key);
+            const opacity = !lit
+              ? RING_PREVIEW_FADED_OPACITY
+              : mark.faded && !(previewing && lit)
+                ? RING_UNTETHERED_OPACITY
+                : 1;
+            const size = scene.ring!.markSize;
+            return (
+              <View
+                key={mark.key}
+                style={[
+                  styles.ringMark,
+                  {
+                    left: mark.x - size / 2,
+                    top: mark.y - size / 2,
+                    width: size,
+                    height: size,
+                    opacity,
+                  },
+                  markTransition,
+                ]}
+              >
+                {props.renderRingMark!(mark.key)}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
       {props.onBodyPress
         ? scene.moons.map((moon) => (
             <Pressable
@@ -271,6 +358,9 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
     </View>
   );
 });
+
+/** A web-only CSS style on an SVG element (transition, transform-box), typed as the element's style prop. */
+type SvgWebStyle = ViewStyle | undefined;
 
 type TravelPhase = Readonly<{ id: string; at: 'from' | 'go' }> | null;
 
@@ -309,16 +399,16 @@ function useTravelStyle(
     [travel?.dotKeys],
   );
   return React.useCallback(
-    (dot: Readonly<{ key: string; x: number; y: number }>) => {
+    (dot: Readonly<{ key: string; x: number; y: number }>): SvgWebStyle => {
       if (!phase || phase.id !== travelId) return undefined;
       const index = order.get(dot.key);
       if (index === undefined) return undefined;
       if (reducedMotion) {
         return phase.at === 'from'
           ? { opacity: 0 }
-          : {
+          : ({
               transition: `opacity ${motionTokens.successMoment.reducedCrossFadeMs}ms ease-out`,
-            };
+            } as SvgWebStyle);
       }
       if (phase.at === 'from') {
         return {
@@ -326,7 +416,7 @@ function useTravelStyle(
           opacity: 0,
           transformBox: 'fill-box',
           transformOrigin: 'center',
-        };
+        } as SvgWebStyle;
       }
       const delay = index * motionTokens.successMoment.fillStaggerMs;
       return {
@@ -334,7 +424,7 @@ function useTravelStyle(
         transformBox: 'fill-box',
         transformOrigin: 'center',
         transition: `transform ${motionTokens.spring.travel.durationMs}ms ${motionTokens.easingCss.standard} ${delay}ms, opacity ${motionTokens.durationMs.fast}ms ease-out ${delay}ms`,
-      };
+      } as SvgWebStyle;
     },
     [order, phase, reducedMotion, scene.px, scene.py, travelId],
   );
@@ -369,6 +459,11 @@ function placeMoonLabel(
 
 const styles = StyleSheet.create(() => ({
   scene: { position: 'relative', flexShrink: 0, overflow: 'hidden' },
+  ringMark: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   moonHit: {
     position: 'absolute',
     width: MOON_HIT_PX,

@@ -139,7 +139,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
                         <Text
                             testID="scm-commit-selection-summary"
-                            style={{ flexGrow: 1, fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}
+                            style={{ flexGrow: 1, ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.secondary,  }}
                         >
                             {t('files.sourceControlOperations.selection', { count: props.selectionCount ?? 0 })}
                         </Text>
@@ -179,7 +179,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                 )
             ) : null}
             {props.status && !props.busy ? (
-                <Text style={{ marginBottom: 8, fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ marginBottom: 8, ...Typography.variant('micro'), color: props.theme.colors.text.secondary,  }}>
                     {props.status}
                 </Text>
             ) : null}
@@ -255,7 +255,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         <Text
                             testID="scm-commit-selection-lines"
                             numberOfLines={1}
-                            style={{ flexShrink: 1, fontSize: 12, color: props.theme.colors.text.tertiary, ...Typography.default(), ...Typography.tabular() }}
+                            style={{ flexShrink: 1, ...Typography.variant('meta'), color: props.theme.colors.text.tertiary,  ...Typography.tabular() }}
                         >
                             {t('files.commitMessageEditor.selectionMeta', {
                                 count: props.selectionSummary.fileCount,
@@ -303,7 +303,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
             </View>
 
             {!props.commitAllowed && props.commitBlockedMessage ? (
-                <Text style={{ marginTop: 8, fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ marginTop: 8, ...Typography.variant('micro'), color: props.theme.colors.text.secondary,  }}>
                     {props.commitBlockedMessage}
                 </Text>
             ) : null}

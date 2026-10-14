@@ -1,17 +1,32 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
-import type { ScmPullRequestListRequest } from '@happier-dev/protocol/scm';
+import { REMOVE_INDEX_LOCK_CONFIRMATION_TOKEN, type ScmPullRequestListRequest } from '@happier-dev/protocol/scm';
 import { RPC_METHODS, type SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 const sessionRpcMock = vi.hoisted(() => vi.fn());
 const machineRpcMock = vi.hoisted(() => vi.fn());
 const getStateMock = vi.hoisted(() => vi.fn());
 const resolvePreferredServerIdForSessionIdMock = vi.hoisted(() => vi.fn());
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const actionSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: Object.fromEntries([
+    'scm.change.discard', 'scm.remote.add', 'scm.remote.setUrl', 'scm.remote.remove',
+    'scm.branch.merge', 'scm.branch.rebase', 'scm.branch.operation.continue', 'scm.branch.operation.abort',
+    'scm.repository.init', 'scm.repository.removeIndexLock', 'scm.hostingRepository.publish',
+    'scm.pullRequest.openCompose', 'scm.pullRequest.openOrReuse',
+].map(actionId => [actionId, ['ui']])) });
+const accountScope = { serverId: 'server-owned', accountId: 'scm-account' };
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
@@ -77,8 +92,11 @@ function createSessionScmState(params: Readonly<{
     const machines = params.machines ?? [];
     return {
         settings: {
+            ...settingsParse({ actionsSettingsV1: actionSettings }),
             scmGitRepoPreferredBackend: params.preferredBackend ?? 'git',
         },
+        settingsScope: accountScope,
+        profileScope: accountScope,
         sessions: session ? { [session.id]: session } : {},
         machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
         getProjectForSession: params.getProjectForSession ?? (() => null),
@@ -86,6 +104,16 @@ function createSessionScmState(params: Readonly<{
 }
 
 describe('sessionScm', () => {
+    beforeEach(async () => {
+        getStateMock.mockReturnValue(createSessionScmState());
+        await harness.reset();
+        const serverId = await harness.addHome({ name: 'SCM Home', serverUrl: 'https://session-scm.test',
+            accountId: accountScope.accountId, serverIdentityId: accountScope.serverId, currentAccount: true });
+        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain',
+            v: settingsParse({ actionsSettingsV1: actionSettings }) }, version: 1 } });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue(accountScope.serverId);
+    });
     it('admits private Work evidence only under the exact Session transport authorization', async () => {
         getStateMock.mockReturnValue(createSessionScmState({
             session: createSessionFixture({ id: 'session-1', metadata: baseSessionMetadata }),
@@ -98,10 +126,15 @@ describe('sessionScm', () => {
         expect(machineRpcMock.mock.calls[0]?.[3]).toMatchObject({ authorization: { kind: 'session.write', sessionId: 'session-1' } });
         const foreignSessionRequest: ScmPullRequestListRequest = { workEvidence: { sessionId: 'another-session' } };
         const refused = await runSessionScmRpc('session-1', RPC_METHODS.SCM_PULL_REQUEST_LIST, foreignSessionRequest);
-        expect(refused.success).toBe(false);
+        expect(refused).toMatchObject({ success: false });
         expect(machineRpcMock.mock.calls.filter(call => call[2].workEvidence?.sessionId === 'another-session')).toEqual([]);
     });
     it('keeps reads and mutations on the explicitly selected Home with duplicate session and machine ids', async () => {
+        const selectedHome = await harness.addHome({ name: 'Other SCM Home', serverUrl: 'https://session-scm-other.test',
+            accountId: accountScope.accountId, serverIdentityId: 'home-b', currentAccount: true, active: false });
+        const selectedServerId = resolveServerProfileScopeIdForIdentifier(selectedHome);
+        harness.answer(selectedHome, '/v2/account/settings', { body: { content: { t: 'plain',
+            v: settingsParse({ actionsSettingsV1: actionSettings }) }, version: 1 } });
         const session = (serverId: string, path: string) => createSessionFixture({
             id: 'same-session', serverId, active: true,
             metadata: { ...baseSessionMetadata, machineId: 'same-machine', path },
@@ -109,16 +142,17 @@ describe('sessionScm', () => {
         getStateMock.mockReturnValue({
             ...createSessionScmState({ session: session('home-a', '/repo/a'), machines: [createMachineFixture({ id: 'same-machine', active: true })] }),
             sessionListRowsByServerId: {
-                'home-b': { 'same-session': buildSessionListRenderableFromSession(session('home-b', '/repo/b')) },
+                [selectedServerId]: { 'same-session': buildSessionListRenderableFromSession(session(selectedServerId, '/repo/b')) },
             },
-            machineListByServerId: { 'home-b': [createMachineFixture({ id: 'same-machine', active: true })] },
+            machineListByServerId: { [selectedServerId]: [createMachineFixture({ id: 'same-machine', active: true })] },
         });
         machineRpcMock.mockResolvedValue({ success: true });
         const { sessionScmStatusSnapshot, sessionScmChangeDiscard } = await import('./sessionScm');
-        await sessionScmStatusSnapshot('same-session', {}, 'home-b');
-        await sessionScmChangeDiscard('same-session', { entries: [] }, 'home-b');
+        await sessionScmStatusSnapshot('same-session', {}, selectedServerId);
+        const discarded = await sessionScmChangeDiscard('same-session', { entries: [{ path: 'file.txt', kind: 'modified' }] }, selectedServerId);
+        expect(discarded, JSON.stringify(discarded)).toMatchObject({ success: true });
         expect(machineRpcMock.mock.calls.map((call) => ({ cwd: call[2].cwd, serverId: call[3].serverId })))
-            .toEqual([{ cwd: '/repo/b', serverId: 'home-b' }, { cwd: '/repo/b', serverId: 'home-b' }]);
+            .toEqual([{ cwd: '/repo/b', serverId: selectedServerId }, { cwd: '/repo/b', serverId: selectedServerId }]);
         expect(resolvePreferredServerIdForSessionIdMock).not.toHaveBeenCalled();
     });
 
@@ -736,7 +770,10 @@ describe('sessionScm', () => {
             title: 'Feature PR',
             body: '',
         });
-        await (sessionScm.sessionScmRepositoryRemoveIndexLock as Function)('session-1', {});
+        await (sessionScm.sessionScmRepositoryRemoveIndexLock as Function)('session-1', {
+            confirmed: true,
+            confirmationToken: REMOVE_INDEX_LOCK_CONFIRMATION_TOKEN,
+        });
 
         expect(machineRpcMock).toHaveBeenNthCalledWith(
             1,

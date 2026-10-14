@@ -4,6 +4,10 @@ import { FEATURE_CATALOG, FEATURE_IDS, isFeatureId, type FeatureId } from './cat
 import type { FeatureFailMode } from './catalogTypes.js';
 
 describe('feature catalog', () => {
+  it('keeps MCP servers core rather than exposing a feature gate', () => {
+    expect(isFeatureId('mcp.servers')).toBe(false);
+    expect(FEATURE_IDS).not.toContain('mcp.servers');
+  });
   it('owns Workflow activation as a fail-closed server feature behind Automations', () => {
     expect(FEATURE_CATALOG.workflows).toMatchObject({
       representation: 'server',

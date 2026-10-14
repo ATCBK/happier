@@ -42,6 +42,7 @@ export type AgentExecutionRunOpenRequest =
     stateSharing?: AgentSessionOpenRequest['stateSharing'];
     /** Exact host-resolved MCP process bindings for this Run open. */
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     /** Exact host-resolved session-private skills for this Run. */
     skills?: AgentSessionOpenRequest['skills'];
@@ -593,6 +594,7 @@ function createSessionOpenRequestFromExecutionRun(
     ...(request.providerBinding ? { providerBinding: request.providerBinding } : {}),
     ...(request.stateSharing ? { stateSharing: request.stateSharing } : {}),
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
+    ...(request.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: request.mcpServersStrictMode } : {}),
     ...(request.mcpToolPolicy ? { mcpToolPolicy: request.mcpToolPolicy } : {}),
     ...(request.skills ? { skills: request.skills } : {}),
   };

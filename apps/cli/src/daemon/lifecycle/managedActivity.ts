@@ -37,6 +37,8 @@ export type ManagedActivityInventory = Readonly<{
     read(): Promise<LiveWorkInventoryV1>;
     readDecision(): Promise<ActivityDecisionV1>;
     subscribe(listener: (decision: ActivityDecisionV1) => void): () => void;
+    /** Per-item facts, excluding the aggregate Machine retention anchor. */
+    subscribeFacts(listener: () => void): () => void;
     dispose(): void;
 }>;
 
@@ -143,11 +145,12 @@ export function createManagedActivityInventory(params: Readonly<{
 }>): ManagedActivityInventory {
     const now = params.now ?? Date.now;
     const listeners = new Set<(decision: ActivityDecisionV1) => void>();
+    const factListeners = new Set<() => void>();
+    let publishedFacts: Omit<LiveWorkInventoryV1, 'idleSince'> | undefined;
     let idleSince: number | undefined;
     let priorDecision: ActivityDecisionV1 | undefined;
     let publishedOwnerEdge = -1;
     let disposed = false;
-    let reads = Promise.resolve();
     let ownerEdge = 0;
     let inFlight: Readonly<{ ownerEdge: number; result: Promise<LiveWorkInventoryV1> }> | null = null;
     let unsubscribe: Array<() => void> | null = null;
@@ -175,8 +178,7 @@ export function createManagedActivityInventory(params: Readonly<{
         const observationsPending = Promise.allSettled(params.producers.map(producer => {
             try { return producer.read(); } catch (error) { return Promise.reject(error); }
         }));
-        const next = reads.then(async () => {
-            const observations = await observationsPending;
+        const next = observationsPending.then(observations => {
             const items: LiveWorkItemV1[] = [];
             let coverage: LiveWorkInventoryV1['coverage'] = observations.length ? 'complete' : 'unknown';
             for (const observation of observations) {
@@ -184,13 +186,31 @@ export function createManagedActivityInventory(params: Readonly<{
                 items.push(...observation.value.items);
                 if (observation.value.coverage === 'unknown') coverage = 'unknown';
             }
-            if (observedEdge !== ownerEdge) coverage = 'unknown';
+            // A retired observation neither blocks its successor nor changes the
+            // successor's idle anchor/publication when its transport finally replies.
+            if (observedEdge !== ownerEdge) return { items, coverage: 'unknown' as const };
             const settled = coverage === 'complete' && items.every(item => item.state === 'settled');
             // All applicable asynchronous owners must have proved absence before
             // starting the interval; a slow read cannot backdate an idle proof.
             idleSince = settled ? idleSince ?? now() : undefined;
             const inventory: LiveWorkInventoryV1 = { items, coverage, ...(idleSince === undefined ? {} : { idleSince }) };
             const decision = projectManagedActivityDecision(inventory);
+            const factsChanged = factListeners.size > 0 && (!publishedFacts || publishedFacts.coverage !== coverage
+                || publishedFacts.items.length !== items.length
+                || items.some((item, index) => {
+                    const previous = publishedFacts!.items[index];
+                    return previous.ownerRef !== item.ownerRef || previous.category !== item.category
+                        || previous.state !== item.state || previous.settledAt !== item.settledAt
+                        || previous.activeCount !== item.activeCount || previous.associatedTerminal !== item.associatedTerminal
+                        || previous.workspacePath !== item.workspacePath || previous.workspaceId !== item.workspaceId
+                        || JSON.stringify(previous.attribution) !== JSON.stringify(item.attribution);
+                }));
+            if (factsChanged) {
+                publishedFacts = { items, coverage };
+                if (!disposed) for (const listener of factListeners) {
+                    try { listener(); } catch { /* Observation cannot change work custody. */ }
+                }
+            }
             if (observedEdge !== publishedOwnerEdge || JSON.stringify(decision) !== JSON.stringify(priorDecision)) {
                 publishedOwnerEdge = observedEdge;
                 priorDecision = decision;
@@ -203,13 +223,16 @@ export function createManagedActivityInventory(params: Readonly<{
         inFlight = { ownerEdge: observedEdge, result: next };
         const release = () => { if (inFlight?.result === next) inFlight = null; };
         void next.then(release, release);
-        reads = next.then(() => {}, () => {});
         return next;
     };
     return {
         read,
         readDecision: async () => projectManagedActivityDecision(await read()),
         subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); },
+        subscribeFacts(listener) {
+            factListeners.add(listener);
+            return () => { factListeners.delete(listener); if (!factListeners.size) publishedFacts = undefined; };
+        },
+        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); factListeners.clear(); publishedFacts = undefined; },
     };
 }

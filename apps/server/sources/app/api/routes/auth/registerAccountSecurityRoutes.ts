@@ -1,39 +1,8 @@
-import {
-    ACCOUNT_EMAIL_CHANGE_PATH_V1,
-    ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1,
-    ACCOUNT_PASSWORD_CHANGE_PATH_V1,
-    ACCOUNT_PASSWORD_ENROLL_PATH_V1,
-    ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1,
-    ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1,
-    ACCOUNT_PASSWORD_REMOVE_PATH_V1,
-    ACCOUNT_SECURITY_PATH_V1,
-    ACCOUNT_TERMINAL_PRESENT_USER_POLICY_PATH_V1,
-    NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1,
-    AccountEmailChangeCompleteRequestV1Schema,
-    AccountEmailChangeRequestV1Schema,
-    AccountEmailChangeRequestResponseV1Schema,
-    AccountPasswordChangeRequestV1Schema,
-    AccountPasswordEnrollRequestV1Schema,
-    AccountPasswordEnrollEmailRequestV1Schema,
-    AccountPasswordRemoveRequestV1Schema,
-    AccountSecurityGetRequestV1Schema,
-    AccountSecurityGetResponseV1Schema,
-    AccountSecurityRouteErrorV1Schema,
-    AccountTerminalPresentUserPolicySetRequestV1Schema,
-    AccountTerminalPresentUserPolicySetResponseV1Schema,
-    TerminalPresentUserPolicySchema,
-    AccountPasswordMutationResponseV1Schema,
-    PasswordMutationPreparationRequestV1Schema,
-    PasswordMutationPreparationResponseV1Schema,
-    PlainPasswordResetSubmitRequestV1Schema,
-    PlainPasswordResetSubmitResponseV1Schema,
-    createPasswordCredentialTargetDigestV1,
-    createPasswordCredentialMutationDigestV1,
-    normalizeVerifiedEmail,
-    parseAccountPasswordCredentialV1,
-    type AccountPasswordCredentialV1,
-    type PasswordCredentialMutationV1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_EMAIL_CHANGE_PATH_V1, ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1, ACCOUNT_PASSWORD_CHANGE_PATH_V1, ACCOUNT_PASSWORD_ENROLL_PATH_V1, ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1, ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1, ACCOUNT_PASSWORD_REMOVE_PATH_V1, ACCOUNT_SECURITY_PATH_V1, ACCOUNT_TERMINAL_PRESENT_USER_POLICY_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1, AccountEmailChangeCompleteRequestV1Schema, AccountEmailChangeRequestV1Schema, AccountEmailChangeRequestResponseV1Schema, AccountPasswordChangeRequestV1Schema, AccountPasswordEnrollRequestV1Schema, AccountPasswordEnrollEmailRequestV1Schema, AccountPasswordRemoveRequestV1Schema, AccountSecurityGetRequestV1Schema, AccountSecurityGetResponseV1Schema, AccountSecurityRouteErrorV1Schema, AccountTerminalPresentUserPolicySetRequestV1Schema, AccountTerminalPresentUserPolicySetResponseV1Schema, AccountPasswordMutationResponseV1Schema, PasswordMutationPreparationRequestV1Schema, PasswordMutationPreparationResponseV1Schema, PlainPasswordResetSubmitRequestV1Schema, PlainPasswordResetSubmitResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
+import { TerminalPresentUserPolicySchema } from '@happier-dev/protocol/actions/invocationAuthority';
+import { createPasswordCredentialTargetDigestV1, createPasswordCredentialMutationDigestV1, type PasswordCredentialMutationV1 } from '@happier-dev/protocol/auth/passwordMutationChallenge';
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
+import { parseAccountPasswordCredentialV1, type AccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 
 import { requirePresentUser } from "@/app/api/utils/requirePresentUser";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";

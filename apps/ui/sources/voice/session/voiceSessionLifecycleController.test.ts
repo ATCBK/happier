@@ -22,6 +22,9 @@ import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSes
 import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 import { storage } from '@/sync/domains/state/storage';
+function isControlRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
 import type { VoiceAdapterController, VoiceSessionSnapshot } from './types';
 
@@ -831,6 +834,31 @@ describe('createVoiceSessionLifecycleController', () => {
         } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
+    it.each(['stop', 'toggle'] as const)('%s cancels a queued provider replacement before source cleanup settles', async (operation) => {
+        const fixture = await createActualLifecycle();
+        const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+        const { createLocalConversationVoiceAdapter } = await import('@/voice/adapters/localConversation/localConversationAdapter');
+        // Keep both real adapters and their host wiring; hold only the physical
+        // Web Audio cleanup that serializes the provider handoff.
+        registerVoiceAdapters([fixture.runtime.adapter, createLocalConversationVoiceAdapter()]);
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        try {
+            await fixture.start();
+            fixture.lifecycle.setConfiguredProviderId('off');
+            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await fixture.environment.configureVoice({ ...storage.getState().settings.voice, providerId: 'local_conversation' });
+            fixture.lifecycle.setConfiguredProviderId('local_conversation');
+            const ending = operation === 'stop'
+                ? fixture.lifecycle.stop(fixture.runtime.historySessionId)
+                : fixture.lifecycle.toggle(fixture.target);
+            cleanup.resolve();
+            await ending;
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+        } finally { cleanup.resolve(); await fixture.dispose(); }
+    });
+
     it('starts the configured adapter when toggled from a disconnected state', async () => {
         const fixture = await createActualLifecycle();
         try {
@@ -1094,11 +1122,10 @@ describe('createVoiceSessionLifecycleController', () => {
             const peer = fixture.browser.peers[index];
             if (!peer) throw new Error('Actual OpenAI peer missing');
             const controls = peer.channel.sent.map(raw => StrictJsonValueSchema.parse(JSON.parse(raw)));
-            const update = controls.find(value => value !== null && typeof value === 'object'
-                && !Array.isArray(value) && value.type === 'session.update');
-            if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('OpenAI session.update missing');
+            const update = controls.find((value): value is Readonly<Record<string, ReturnType<typeof StrictJsonValueSchema.parse>>> => isControlRecord(value) && value.type === 'session.update');
+            if (!isControlRecord(update)) throw new Error('OpenAI session.update missing');
             const session = update.session;
-            if (!session || typeof session !== 'object' || Array.isArray(session) || !Array.isArray(session.tools)) {
+            if (!isControlRecord(session) || !Array.isArray(session.tools)) {
                 throw new Error('OpenAI tool configuration missing');
             }
             return session.tools.flatMap(tool => tool && typeof tool === 'object' && !Array.isArray(tool)

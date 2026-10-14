@@ -1,15 +1,6 @@
 import type { Prisma } from "@prisma/client";
-import { isPersistentMachine } from "@happier-dev/protocol";
-import type {
-    MachinePoolCreateInputV1,
-    MachinePoolDeleteInputV1,
-    MachinePoolDeleteOutputV1,
-    MachinePoolErrorV1,
-    MachinePoolResolveInputV1,
-    MachinePoolResolveResultV1,
-    MachinePoolUpdateInputV1,
-    MachinePoolViewV1,
-} from "@happier-dev/protocol";
+import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
+import type { MachinePoolCreateInputV1, MachinePoolDeleteInputV1, MachinePoolDeleteOutputV1, MachinePoolErrorV1, MachinePoolResolveInputV1, MachinePoolResolveResultV1, MachinePoolUpdateInputV1, MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";

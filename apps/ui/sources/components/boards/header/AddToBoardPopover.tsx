@@ -156,7 +156,7 @@ function BoardWidgetGallery(props: Readonly<{
     initialEntryId?: string;
     onRequestClose: () => void;
 }>): React.ReactElement {
-    const sections = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
+    const { sections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
         addInstance: props.addWidget, labels: BOARD_WIDGET_LABELS, testID: 'board-add.gallery' });
     return (
         <WidgetAddSurface
@@ -199,7 +199,7 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
     const activeServerId = props.homes.activeServerId;
     const refsRef = React.useRef(new Map<string, BoardItemRefV1>());
     const widgetsRef = React.useRef(new Map<string, WidgetAddEntry>());
-    const widgetSections = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
+    const { sections: widgetSections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
         addInstance: props.addWidget, labels: BOARD_WIDGET_LABELS, testID: 'board-add.widgets' });
 
     const step = React.useMemo<SelectionListStep>(() => {
@@ -363,17 +363,17 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     failures: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        gap: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        gap: theme.space.s8,
     },
     onBoard: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     onBoardText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

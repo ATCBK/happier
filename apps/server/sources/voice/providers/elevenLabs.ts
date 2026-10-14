@@ -1,5 +1,5 @@
-import { HAPPIER_VOICE_BINDING_NONCE_DYNAMIC_VARIABLE } from "@happier-dev/protocol";
-import { z } from "zod";
+import { HAPPIER_VOICE_BINDING_NONCE_DYNAMIC_VARIABLE } from '@happier-dev/protocol/voice/sessionBinding';
+import { z } from "zod/mini";
 import { voiceProviderConversationIdSchema } from "@/app/api/routes/voice/voiceSessionLifecycleSchemas";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -7,10 +7,10 @@ const LEASE_TIME_SKEW_MS = 5 * 60 * 1000;
 const MAX_MINT_RESPONSE_BYTES = 64 * 1024;
 const MAX_CONVERSATION_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-const mintResponseSchema = z.object({
-    token: z.string().trim().min(1).max(16_384),
-    conversation_id: voiceProviderConversationIdSchema.optional(),
-}).passthrough();
+const mintResponseSchema = z.looseObject({
+    token: z.string().check(z.trim(), z.minLength(1), z.maxLength(16_384)),
+    conversation_id: z.optional(voiceProviderConversationIdSchema),
+});
 
 export type HostedElevenLabsFetch = (url: string, init: RequestInit) => Promise<Response>;
 

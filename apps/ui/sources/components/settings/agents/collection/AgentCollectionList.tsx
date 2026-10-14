@@ -25,7 +25,10 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-import { buildAgentCollection, resolveSelectedAgentCollectionId, type AgentCollectionRow } from './agentCollectionModel';
+import { resolveConfiguredAcpAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
+import { useSetting } from '@/sync/domains/state/storage';
+import { openAgentAddModal } from '../add/agentAddModalConfig';
+import { buildAgentCollection, isCommandAgentDefinition, resolveSelectedAgentCollectionId, type AgentCollectionRow } from './agentCollectionModel';
 import { recordAgentCollectionVisit } from './agentCollectionVisit';
 import { customAcpDraftTitle } from './customAcpDraftTitle';
 import { useAgentAdministrationCatalog, type AgentAdministrationCatalog } from './useAgentAdministrationCatalog';
@@ -62,6 +65,7 @@ function resolveRowStatusLabel(row: AgentCollectionRow): string | undefined {
         case 'failed': return t('agentInstallJob.failed');
         case 'unsupported': return t('machineAgents.unsupportedOs');
         case 'checking': return t('machineAgents.checking');
+        case 'installsOnFirstUse': return t('capabilities.agentAdd.adding.firstUse');
         case 'unknown': return undefined;
     }
 }
@@ -92,6 +96,11 @@ export const AddAgentMenu = React.memo(function AddAgentMenu(props: Readonly<{
     const authoring = useAgentAuthoringEntry(props.catalog);
     const items = React.useMemo((): ReadonlyArray<DropdownMenuItem> => [
         {
+            id: 'browse',
+            title: t('capabilities.agentAdd.browse'),
+            subtitle: t('capabilities.agentAdd.browseDescription'),
+        },
+        {
             id: 'acp',
             title: t('settingsAgents.collection.addAcpAgent'),
             subtitle: t('settingsAgents.collection.addAcpAgentDescription'),
@@ -112,6 +121,18 @@ export const AddAgentMenu = React.memo(function AddAgentMenu(props: Readonly<{
             items={items}
             onSelect={(id) => {
                 setOpen(false);
+                if (id === 'browse') {
+                    openAgentAddModal({
+                        onCommand: () => openCustomAcpEditor(router, null, besideDetail),
+                        onOpenDefinition: (definitionId) => openCustomAcpEditor(router, definitionId, besideDetail),
+                        onOpenAgent: (entry) => {
+                            const href = createAgentSettingsRoute(entry) as never;
+                            const result = runGuardedNavigation(() => (besideDetail ? router.replace(href) : router.push(href)));
+                            if (result !== true) fireAndForget(result, { tag: 'AddAgentMenu.openAgent' });
+                        },
+                    });
+                    return;
+                }
                 if (id === 'acp') {
                     openCustomAcpEditor(router, null, besideDetail);
                     return;
@@ -149,6 +170,13 @@ export function useAgentCollection(
     options?: Readonly<{ detect?: boolean }>,
 ) {
     const { executionTarget, agentEntries } = catalog;
+    const { backends } = useAcpCatalogBackends();
+    const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
+    // Registry agents are agents: each definition gets its catalog presentation (title, enablement) once.
+    const definitions = React.useMemo(() => backends
+        .filter((definition) => !isCommandAgentDefinition(definition))
+        .map((definition) => ({ definition, entry: resolveConfiguredAcpAgentCatalogProjection(definition, { enabledAgentIds: [], backendEnabledByTargetKey }) })),
+    [backendEnabledByTargetKey, backends]);
     const inventory = useMachineAgents({
         serverId: executionTarget?.serverId ?? null,
         machineId: executionTarget?.machine.id ?? null,
@@ -157,8 +185,9 @@ export function useAgentCollection(
     const collection = React.useMemo(() => buildAgentCollection({
         entries: agentEntries,
         agents: inventory.agents,
+        definitions,
         query,
-    }), [agentEntries, inventory.agents, query]);
+    }), [agentEntries, definitions, inventory.agents, query]);
     return {
         collection,
         detecting: executionTarget !== null && inventory.status === 'loading',
@@ -187,8 +216,9 @@ export const AgentCollectionList = React.memo(function AgentCollectionList(props
     const [query, setQuery] = React.useState('');
     const { collection } = useAgentCollection(props.catalog, query);
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    const visibleCustomBackends = React.useMemo(() => customBackends.filter((backend) => !normalizedQuery
-        || (backend.title || backend.name).toLocaleLowerCase().includes(normalizedQuery)), [customBackends, normalizedQuery]);
+    const commandBackends = React.useMemo(() => customBackends.filter(isCommandAgentDefinition), [customBackends]);
+    const visibleCustomBackends = React.useMemo(() => commandBackends.filter((backend) => !normalizedQuery
+        || (backend.title || backend.name).toLocaleLowerCase().includes(normalizedQuery)), [commandBackends, normalizedQuery]);
 
     const onDetailRoute = pathname.startsWith('/settings/agents/');
     const customAcpRoute = resolveCustomAcpAgentRoute(pathname);
@@ -213,11 +243,31 @@ export const AgentCollectionList = React.memo(function AgentCollectionList(props
 
     const rail = props.variant === 'rail';
     const renderRow = (row: AgentCollectionRow) => {
-        const dimmed = row.status === 'notInstalled';
+        const dimmed = row.status === 'notInstalled' || row.status === 'installsOnFirstUse';
         const statusLabel = resolveRowStatusLabel(row);
+        const definition = row.definition;
+        if (definition) {
+            const selectedDefinition = customAcpRoute?.kind === 'saved' && customAcpRoute.backendId === definition.id;
+            return (
+                <Item
+                    key={row.key}
+                    testID={`settings-agents-collection.definition.${definition.id}`}
+                    title={row.entry.title}
+                    subtitle={statusLabel}
+                    subtitleLeading={row.trouble ? <View style={collectionListStyles.troubleDot} /> : undefined}
+                    icon={<CustomAcpAgentMark iconUrl={definition.origin?.kind === 'registry' ? definition.origin.iconUrl ?? null : null} dimmed={dimmed} />}
+                    titleStyle={dimmed ? collectionListStyles.dimmedTitle : undefined}
+                    selected={rail ? selectedDefinition : undefined}
+                    density={rail ? 'compact' : undefined}
+                    showChevron={!rail}
+                    pressableStyle={rail ? collectionListStyles.row : undefined}
+                    onPress={() => openCustomAcpEditor(router, definition.id, rail && onDetailRoute)}
+                />
+            );
+        }
         return (
             <Item
-                key={row.entry.agentId}
+                key={row.key}
                 testID={`settings-agents-collection.row.${row.entry.agentId}`}
                 title={row.entry.title}
                 titleAccessory={row.entry.channel === 'experimental' ? (
@@ -291,13 +341,13 @@ export const AgentCollectionList = React.memo(function AgentCollectionList(props
             },
         ];
     const firstGroupKey = groups.find((group) => group.rows.length > 0)?.key ?? null;
-    const total = collection.total + customBackends.length;
+    const total = collection.total + commandBackends.length;
     const searchable = total > SEARCH_THRESHOLD;
     const noMatches = total > 0
         && collection.onMachine.length === 0
         && collection.available.length === 0
         && visibleCustomBackends.length === 0;
-    const emptyRow = collection.total === 0 && customBackends.length === 0 ? (
+    const emptyRow = collection.total === 0 && commandBackends.length === 0 ? (
         <Item
             title={t('settingsAgents.notAvailable')}
             subtitle={t('settingsAgents.footer')}

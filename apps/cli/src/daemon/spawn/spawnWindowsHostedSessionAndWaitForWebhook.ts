@@ -34,6 +34,7 @@ import { buildSpawnChildProcessEnv } from './buildSpawnChildProcessEnv';
 import type { SpawnCommitRevalidation } from './spawnCommitRevalidation';
 import {
     completeStartupCancellationCleanup,
+    projectRetiredStartupLaunchResult,
     resolveSpawnErrorAfterStartupCancellation,
     type CancelStartupLaunch,
 } from './startupLaunchCancellation';
@@ -369,6 +370,13 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
                         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
                         errorMessage: incompleteRetirement,
                     };
+                } else {
+                    resolved = projectRetiredStartupLaunchResult({
+                        result: resolved,
+                        readinessFailure: trackedSession.spawnStartupReadinessFailure,
+                        spawnNonce: params.trackedSpawnOptions.spawnNonce,
+                        wrapperPid: waitParams.pid,
+                    });
                 }
             }
             if (resolved.type === 'success') {

@@ -6,7 +6,7 @@ import { MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, type MarketplaceIndexEntryV1 } from
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
 import type { RegistryFetchContextV1, RegistryFormatAdapterV1 } from './registryFormatAdapterV1.js';
-import { registryPluginItemV1, registryPluginSummaryV1 } from './registryPluginListingV1.js';
+import { registryPluginItemV1, registryPluginSummaryV1, registryPluginSupportsKindV1 } from './registryPluginListingV1.js';
 
 async function readListing(ctx: RegistryFetchContextV1, source: RegistrySourceV1, packageName: string, version?: string) {
   const response = await ctx.http.getJson(`${new URL(source.url).origin}/${encodeURIComponent(packageName)}`, { source });
@@ -28,7 +28,7 @@ async function readListing(ctx: RegistryFetchContextV1, source: RegistrySourceV1
 }
 
 export const happierNpmRegistryAdapterV1: RegistryFormatAdapterV1 = {
-  format: 'happier-npm', kinds: ['plugin'], browserFetchable: () => true, supportsQuery: true,
+  format: 'happier-npm', kinds: ['plugin', 'agent'], browserFetchable: () => true, supportsQuery: true,
   async list(ctx, req) {
     const from = req.cursor ? Number(req.cursor) : 0;
     if (!Number.isSafeInteger(from) || from < 0 || req.cursor && !/^\d+$/.test(req.cursor)) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
@@ -46,7 +46,8 @@ export const happierNpmRegistryAdapterV1: RegistryFormatAdapterV1 = {
     const body = response.value;
     const returned = body !== null && typeof body === 'object' && 'objects' in body && Array.isArray(body.objects) ? body.objects.length : 0;
     return { sourceId: req.source.id, status: { state: 'ok', fetchedAt: response.fetchedAt },
-      items: entries.map(entry => registryPluginSummaryV1(req.source, entry)), total: search.total,
+      items: entries.filter(entry => registryPluginSupportsKindV1(entry, req.kind)).map(entry => registryPluginSummaryV1(req.source, entry)),
+      ...(req.kind === 'plugin' ? { total: search.total } : {}),
       nextCursor: returned > 0 && from + returned < search.total ? String(from + returned) : null };
   },
   async read(ctx, req) {
@@ -64,7 +65,7 @@ export const happierNpmRegistryAdapterV1: RegistryFormatAdapterV1 = {
     if (!username) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     const listing = projectCommunityNpmListingV1({ ...resolved.metadata, packageName: resolved.packageName,
       version: resolved.version, registryOrigin: resolved.registryOrigin, publisher: { id: username, displayName: username } });
-    if (listing.status !== 'listed') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+    if (listing.status !== 'listed' || !registryPluginSupportsKindV1(listing.entry, req.kind)) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     return registryPluginItemV1(req.source, listing.entry, resolved.response.fetchedAt);
   },
   async latest() { return new Map(); }, // Plugins keep the plugin update-policy owner.

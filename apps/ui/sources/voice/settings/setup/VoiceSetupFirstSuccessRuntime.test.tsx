@@ -186,6 +186,7 @@ it.each([
     let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
     try {
         const session = createSessionFixture({ id: 'conversation', serverId: scope.serverId, seq: 10 });
+        if (!session.metadata) throw new Error('Conversation Session metadata missing');
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope,
             sessions: { conversation: { ...session, metadata: writeVoiceConversationScopeMetadata(
                 { ...session.metadata, ...buildVoiceTranscriptHistorySessionMetadata() }, { kind: 'voice_home' }) } } });

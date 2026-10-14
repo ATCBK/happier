@@ -297,7 +297,7 @@ describe('executeExternalAction', () => {
   it.each([
     ['foreign', 'present_user', 'account'], ['own', 'account_automation', 'account'],
     ['foreign', 'account_automation', 'account'], ['own', 'account_automation', 'terminal'],
-  ] as const)('preserves UI Ask through the real private requester credential factory for %s %s %s', async (custody, authority, authenticationKind) => {
+  ] as const)('preserves Ask and the authenticated host surface through the real private requester credential factory for %s %s %s', async (custody, authority, authenticationKind) => {
     const accountId = 'bob-private-ask';
     const custodianAccountId = custody === 'own' ? accountId : 'alice';
     const token = `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
@@ -372,7 +372,8 @@ describe('executeExternalAction', () => {
         result: { kind: 'approval_request_created', actionId } } } });
       expect(effects).toBe(0);
       expect(approvals).toHaveLength(1);
-      expect(approvals[0]).toMatchObject({ status: 'open', executionOriginV1: { surface: 'ui', authority, accountId,
+      expect(approvals[0]).toMatchObject({ status: 'open', executionOriginV1: {
+        surface: authenticationKind === 'terminal' ? 'cli' : 'ui', authority, accountId,
         externalActionExecutionAuthorization: { binding: { accountId, custodianAccountId } } } });
       expect(JSON.stringify(approvals[0])).not.toContain(token);
       expect(getActiveAccountSettingsSnapshot()).toBe(aliceSnapshot);

@@ -49,7 +49,10 @@ describe('useFeatureDetails', () => {
             ...DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS,
             modes: {
                 ...DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS.modes,
-                background_wake_best_effort: { available: true, reasons: [] },
+                background_wake_best_effort: {
+                    ...DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS.modes.background_wake_best_effort,
+                    available: true, reasons: [],
+                },
             },
         };
         const features = createRootLayoutFeaturesResponse({ capabilities: { liveActivities: { remoteUpdates: diagnostics } } });

@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -115,6 +116,114 @@ describe('useSelectableMenu (allowEmptySelection)', () => {
     expect(onActivate).toHaveBeenCalledWith(items[3]);
     expect(onRequestClose).toHaveBeenCalledOnce();
 
+    await hook.unmount();
+  });
+
+  it('honors and preserves an empty-string selected id used by default options', async () => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const row = (id: string): SelectableMenuItem => ({ id, title: id || 'Default', left: null, right: null });
+    const hook = await renderHook(
+      ({ items }: { items: SelectableMenuItem[] }) =>
+        useSelectableMenu({ items, initialSelectedId: '', onRequestClose: () => {}, open: true }),
+      { initialProps: { items: [row('custom'), row('')] } },
+    );
+    expect(hook.getCurrent().selectedIndex).toBe(1);
+    await hook.rerender({ items: [row('arriving'), row('custom'), row('')] });
+    expect(hook.getCurrent().selectedIndex).toBe(2);
+    await hook.rerender({ items: [row(''), row('custom')] });
+    expect(hook.getCurrent().selectedIndex).toBe(0);
+    await hook.unmount();
+  });
+
+  it('keeps the highlighted row when rows arrive while open, and resets it only for a new query', async () => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const row = (id: string): SelectableMenuItem => ({ id, title: id, left: null, right: null });
+    const hook = await renderHook(
+      ({ items }: { items: SelectableMenuItem[] }) =>
+        useSelectableMenu({ items, onRequestClose: () => {}, open: true, initialSelectedId: 'alpha' }),
+      { initialProps: { items: [row('alpha'), row('find-more')] } },
+    );
+    await act(async () => {
+      hook.getCurrent().setSelectedIndex(1);
+    });
+    // Discovery adds models above the operation the pointer is on; the highlight stays on that operation.
+    await hook.rerender({ items: [row('alpha'), row('beta'), row('gamma'), row('find-more')] });
+    expect(hook.getCurrent().selectedIndex).toBe(3);
+    // Discovery can also insert above the initial selection; its index is not a new selection intent.
+    await hook.rerender({ items: [row('aardvark'), row('alpha'), row('beta'), row('gamma'), row('find-more')] });
+    expect(hook.getCurrent().selectedIndex).toBe(4);
+    await hook.rerender({ items: [row('find-more'), row('gamma'), row('alpha'), row('beta')] });
+    expect(hook.getCurrent().selectedIndex).toBe(0);
+    await act(async () => {
+      hook.getCurrent().handleSearchChange('a');
+    });
+    expect(hook.getCurrent().selectedIndex).toBe(1);
+    await hook.unmount();
+  });
+
+  it('falls back when the highlighted row disappears or becomes disabled, and honors a new initial selection', async () => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const row = (id: string, disabled = false): SelectableMenuItem => ({ id, title: id, disabled, left: null, right: null });
+    const hook = await renderHook(
+      ({ items, initialSelectedId }: { items: SelectableMenuItem[]; initialSelectedId: string }) =>
+        useSelectableMenu({ items, initialSelectedId, onRequestClose: () => {}, open: true }),
+      { initialProps: { items: [row('alpha'), row('beta'), row('find-more')], initialSelectedId: 'alpha' } },
+    );
+    await act(async () => hook.getCurrent().setSelectedIndex(2));
+    await hook.rerender({ items: [row('beta'), row('alpha')], initialSelectedId: 'alpha' });
+    expect(hook.getCurrent().selectedIndex).toBe(1);
+    await act(async () => hook.getCurrent().setSelectedIndex(0));
+    await hook.rerender({ items: [row('beta', true), row('alpha')], initialSelectedId: 'alpha' });
+    expect(hook.getCurrent().selectedIndex).toBe(1);
+    await hook.rerender({ items: [row('beta'), row('alpha')], initialSelectedId: 'beta' });
+    expect(hook.getCurrent().selectedIndex).toBe(0);
+    await hook.unmount();
+  });
+
+  it.each([false, true])('admits arriving rows according to empty-selection policy (allowEmptySelection=%s)', async (allowEmptySelection) => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const emptyItems: SelectableMenuItem[] = [];
+    const hook = await renderHook(
+      ({ items }: { items: SelectableMenuItem[] }) =>
+        useSelectableMenu({ items, allowEmptySelection, onRequestClose: () => {}, open: true }),
+      { initialProps: { items: emptyItems } },
+    );
+    expect(hook.getCurrent().selectedIndex).toBe(-1);
+    await hook.rerender({ items: [{ id: 'arriving', title: 'Arriving', left: null, right: null }] });
+    expect(hook.getCurrent().selectedIndex).toBe(allowEmptySelection ? -1 : 0);
+    await hook.unmount();
+  });
+
+  it('keeps an already visible discovery operation in view when rows arrive above the initial selection', async () => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const { useScrollRectIntoViewRegistry } = await import('@/components/ui/scroll/useScrollRectIntoView');
+    const row = (id: string): SelectableMenuItem => ({ id, title: id, left: null, right: null });
+    const layout = (y: number) => ({ nativeEvent: { layout: { y, height: 40 } } });
+    const hook = await renderHook(
+      ({ items }: { items: SelectableMenuItem[] }) => {
+        const menu = useSelectableMenu({ items, initialSelectedId: 'alpha', onRequestClose: () => {}, open: true });
+        const scroll = useScrollRectIntoViewRegistry({ activeKey: items[menu.selectedIndex]?.id ?? null });
+        // Web row frames report geometry during layout, before passive selection effects settle.
+        useLayoutEffect(() => {
+          scroll.onViewportLayout({ nativeEvent: { layout: { height: 100 } } });
+          scroll.onContentSizeChange(200, 1000);
+          items.forEach((item, index) => scroll.registerItemLayout(item.id)(layout(item.id === 'find-more' ? 500 : index * 100)));
+        }, [items]);
+        return { menu, scroll };
+      },
+      { initialProps: { items: [row('alpha'), row('find-more')] } },
+    );
+    const scrollTo = vi.fn();
+    // The ScrollView and its geometry are the native/browser boundary; both interaction and scroll policy run real.
+    hook.getCurrent().scroll.scrollRef.current = { scrollTo } as unknown as import('react-native').ScrollView;
+    await act(async () => {
+      hook.getCurrent().menu.setSelectedIndex(1);
+    });
+    await act(async () => hook.getCurrent().scroll.onScroll({ nativeEvent: { contentOffset: { y: 450 } } }));
+    scrollTo.mockClear();
+    await hook.rerender({ items: [row('arriving'), row('alpha'), row('find-more')] });
+    expect(hook.getCurrent().menu.selectedIndex).toBe(2);
+    expect(scrollTo).not.toHaveBeenCalled();
     await hook.unmount();
   });
 

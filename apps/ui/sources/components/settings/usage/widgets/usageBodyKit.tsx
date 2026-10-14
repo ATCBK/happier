@@ -13,6 +13,7 @@ import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThem
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { USAGE_METER_METRICS } from '@/components/settings/connectedServices/usage/UsageMeterRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
@@ -23,12 +24,17 @@ import {
 } from '@/sync/api/account/usageAnalytics';
 import { getPreferredLanguage, t, type TranslationKeyNoParams } from '@/text';
 import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { type UsagePageCostProjection, type UsageAnalyticsCoverage } from '@happier-dev/protocol';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { formatUsageCalendarPeriod, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { usageSourceTitle } from '@/sync/domains/usage/usageLabels';
 export { usageSourceTitle, usageAgentTitle, usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
 import { useUsageWidgetPageHasCoverageDetail } from './usageWidgetBatch';
+import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 
 /** What every Usage body receives from the one dispatcher: admitted facts, never a fetch handle. */
 export type UsageBodyProps = Readonly<{
@@ -54,6 +60,29 @@ export function usagePeriodPhrase(query: Pick<UsageQuery, 'period' | 'timeZoneOf
 // One projection per admitted accounting response and presentation; bodies share it, never rebuild it.
 type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection }>;
 const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView>>();
+
+/** Names stay in the opened Account projection; accounting carries only the Project anchor. */
+export function useUsageProjectLabels(serverId: string): ReadonlyMap<string, string> {
+  const rows = useProjectAccountRows();
+  return React.useMemo(() => {
+    const labels = new Map<string, string>();
+    if (!rows || rows.status === 'locked' || rows.status === 'refused'
+      || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, serverId)) return labels;
+    const projection = projectProjectListV1({ serverId, workspaceRefs: rows.workspaceRefs,
+      organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier });
+    for (const group of [...projection.projectGroups, ...projection.hiddenProjectGroups]) {
+      const ref = group.items[0];
+      if (ref) labels.set(group.projectKey.projectKey, resolveWorkspaceRefDisplayName(ref));
+    }
+    // The opened snapshot supplies Home/Account authority. Native opaque keys
+    // retain their producing CLI profile namespace, which is not a UI Home id
+    // or routing grant; join those keys only within this admitted snapshot.
+    for (const row of rows.organizations) {
+      if (row.value.label) labels.set(row.key.projectKey, row.value.label);
+    }
+    return labels;
+  }, [rows, serverId]);
+}
 
 /** The incumbent UI projection of A facts for this slice (A owns the numbers, this only shapes them). */
 export function useUsageAnalyticsView(
@@ -99,10 +128,48 @@ export function useUsageAnalyticsView(
  * what lands (a figure, its meter, a caption line); it never reads as "none" (lab kitstates "Loading ·
  * first time"). The page header already says what is still being read.
  */
-export function UsageBodyReading(props: Readonly<{ testID: string }>) {
+export function UsageBodyReading(props: Readonly<{
+  testID: string;
+  /**
+   * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
+   * name, a bar and a caption (a list of allowance windows), or the `mix` of two figures over a strip.
+   */
+  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }>;
+}>) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
   const color = theme.colors.surface.pressedOverlay;
+  const shape = props.shape;
+  if (shape?.kind === 'meters') {
+    return (
+      <View testID={props.testID} style={readingStyles.meters}>
+        {Array.from({ length: Math.max(1, shape.rows) }, (_, index) => (
+          <View key={index} style={readingStyles.meter}>
+            <HappierSkeletonBlock color={color} width="46%" height={12} radius={4} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="100%" height={6} radius={3} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="22%" height={10} radius={4} reducedMotion={reducedMotion} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (shape?.kind === 'mix') {
+    return (
+      <View testID={props.testID} style={readingStyles.mix}>
+        <View style={readingStyles.mixFigures}>
+          {[0, 1].map((index) => (
+            <View key={index} style={readingStyles.mixFigure}>
+              <HappierSkeletonBlock color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="38%" height={22} radius={6} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="70%" height={10} radius={4} reducedMotion={reducedMotion} />
+            </View>
+          ))}
+        </View>
+        <HappierSkeletonBlock color={color} width="100%" height={14} radius={5} reducedMotion={reducedMotion} />
+        <HappierSkeletonBlock color={color} width="60%" height={10} radius={4} reducedMotion={reducedMotion} />
+      </View>
+    );
+  }
   return (
     <View testID={props.testID} style={readingStyles.body}>
       <HappierSkeletonBlock color={color} width="28%" height={28} radius={6} reducedMotion={reducedMotion} />
@@ -112,7 +179,14 @@ export function UsageBodyReading(props: Readonly<{ testID: string }>) {
   );
 }
 
-const readingStyles = StyleSheet.create(() => ({ body: { gap: 12, paddingVertical: 4 } }));
+const readingStyles = StyleSheet.create(() => ({
+  body: { gap: 12, paddingVertical: 4 },
+  meters: { gap: USAGE_METER_METRICS.rowGapPx, paddingVertical: 4 },
+  meter: { gap: 8 },
+  mix: { gap: 18, paddingVertical: 4 },
+  mixFigures: { flexDirection: 'row', columnGap: 24 },
+  mixFigure: { flex: 1, gap: 8 },
+}));
 
 /** True while every read a body depends on is still outstanding (pending or not yet loaded). */
 export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: readonly string[]): boolean {
@@ -182,7 +256,18 @@ export function readUsageCoverageGaps(
 ): readonly UsageQuerySourceState[] {
   const accounting = sources.includes('accounting') ? slice.accounting?.coverage : undefined;
   const dependent = new Set([...sources, ...(accounting?.sources.map(source => source.source) ?? [])]);
-  const gaps = slice.sources.filter(source => dependent.has(source.source) && source.status !== 'available');
+  const quotaRequested = sources.includes('quota');
+  const gaps = slice.sources.filter(source => (dependent.has(source.source)
+    || quotaRequested && source.source.startsWith('quota:')) && source.status !== 'available');
+  // Transport settlement does not establish history completeness. Keep the
+  // settled allowance's qualification visible between refreshes as well.
+  if (quotaRequested && slice.quota?.some(read => read.history?.nextCursor != null
+    || read.unusedCapacity && read.unusedCapacity.historyStatus !== 'returned_page')
+    && !gaps.some(source => source.source === 'quota')) {
+    const clocks = slice.quota.flatMap(read => read.current && wasConnectedServiceQuotaObserved(read.current)
+      ? [read.current.fetchedAtMs] : []);
+    gaps.push({ source: 'quota', status: 'partial', ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}) });
+  }
   if (sources.includes('accounting') && slice.accounting && !accounting
     && !gaps.some(source => source.source === 'accounting')) {
     gaps.unshift({ source: 'accounting', status: 'unknown' });
@@ -203,15 +288,38 @@ export function readUsageCoverageGaps(
   return [...unique.values()];
 }
 
-/** One wording owner for inline coverage and the page's Sources chooser. */
+function usageCoverageHeadlineKey(gaps: readonly Pick<UsageQuerySourceState, 'status'>[]) {
+  return gaps.some(gap => gap.status === 'error') ? 'usage.board.page.coverageFailed' as const
+    : gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded') ? 'usage.board.page.coveragePending' as const
+      : 'usage.board.page.coveragePartial' as const;
+}
+
+/**
+ * The one quiet clause a body's own line carries when its host has no Sources detail (Home, a Board): a read
+ * still going or failed names its sources (a failure with its Retry); an incomplete read says only "Partial
+ * history", never a paragraph of sources and reasons. The full wording is `usageCoverageDescription`.
+ */
+export function usageCoverageSummary(slice: UsageQueryResultSlice, sources: readonly string[]): string {
+  const gaps = readUsageCoverageGaps(slice, sources);
+  if (!gaps.length) return '';
+  const key = usageCoverageHeadlineKey(gaps);
+  if (key === 'usage.board.page.coveragePartial') return usagePartialHistoryLabel();
+  return usageCoverageDescription(slice, sources);
+}
+
+/** "Partial history": the whole of what a body's quiet line says about an incomplete read. */
+export function usagePartialHistoryLabel(): string {
+  const text = t('usage.board.page.factIncomplete');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** One wording owner for the page's Sources chooser and the failed or pending line. */
 export function usageCoverageDescription(slice: UsageQueryResultSlice, sources: readonly string[]): string {
   const gaps = readUsageCoverageGaps(slice, sources);
   if (!gaps.length) return '';
   const names = [...new Set(gaps.map(gap => gap.status === 'unsupported'
     ? `${usageSourceTitle(gap.source)} (${t('usage.board.sources.unsupported')})` : usageSourceTitle(gap.source)))].join(', ');
-  const key = gaps.some(gap => gap.status === 'error') ? 'usage.board.page.coverageFailed'
-    : gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded') ? 'usage.board.page.coveragePending'
-      : 'usage.board.page.coveragePartial';
+  const key = usageCoverageHeadlineKey(gaps);
   const reasons = sources.includes('accounting')
     ? [...new Set(slice.accounting?.coverage?.reasons ?? [])].map(reason => t(COVERAGE_REASON_KEYS[reason])) : [];
   return [t(key, { sources: names }), ...reasons].join(' · ');
@@ -233,10 +341,31 @@ export function usageCoverageLineMode(gaps: readonly Pick<UsageQuerySourceState,
 /** The page header's one "Still reading …" fact: every source any view's read still waits on, named once. */
 const USAGE_PAGE_READ_SOURCES: ReadonlySet<string> = new Set(['accounting', 'quota', 'work', 'how_you_work']);
 
+export function readUsagePageAsOfMs(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'quota'>[]): number | null {
+  // Older observations retain their own dates in source detail. The page names
+  // its latest witnessed update, never the oldest historical source in a total.
+  let latest: number | null = null;
+  for (const slice of slices) {
+    for (const source of slice.sources) {
+      if (source.asOfMs !== undefined) latest = latest === null ? source.asOfMs : Math.max(latest, source.asOfMs);
+    }
+    // A refresh can retain individual account facts before its qualified source
+    // rows arrive. The aggregate quota date deliberately remains conservative.
+    for (const read of slice.quota ?? []) {
+      if (read.current && wasConnectedServiceQuotaObserved(read.current)) {
+        latest = latest === null ? read.current.fetchedAtMs : Math.max(latest, read.current.fetchedAtMs);
+      }
+    }
+  }
+  return latest;
+}
+
 export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
   // Only the page's shared reads; a widget's own read (a pool selection) is said by that widget.
   const names = [...new Set(slices.flatMap(slice => slice.sources
-    .filter(source => source.status === 'pending' || source.status === 'not_loaded')
+    // Not loaded also describes intentionally undemanded private evidence.
+    // Only its producer's pending state establishes that a read is in flight.
+    .filter(source => source.status === 'pending')
     // A sibling can already supply the aggregate quota while this account is still being read.
     // Keep qualified identity at the Resource; the shared header names its read family only once.
     .map(source => source.source.startsWith('quota:') ? 'quota' : source.source)
@@ -287,7 +416,7 @@ export function UsageCoverageLine(
       testID={props.testID}
       busy={pending}
       tone={failed ? 'warning' : 'neutral'}
-      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageDescription(props.slice, props.sources)].join(' · ')}
+      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
       {...(failed && props.onRetry
         ? { action: { label: t('common.retry'), onPress: props.onRetry } }
         : {})}
@@ -311,6 +440,57 @@ const SHORT_TAIL_ROWS = 2;
 export function leadingUsageRows<Row>(rows: readonly Row[], expanded: boolean): Readonly<{ rows: readonly Row[]; hidden: number }> {
   if (expanded || rows.length <= LEADING_ROWS + SHORT_TAIL_ROWS) return { rows, hidden: 0 };
   return { rows: rows.slice(0, LEADING_ROWS), hidden: rows.length - LEADING_ROWS };
+}
+
+/** An allowance account reports a session and a longer window; this only sizes the room held while reads arrive. */
+const EXPECTED_WINDOWS_PER_ACCOUNT = 2;
+/** What the settled list measures: a captioned meter row, the Show all button, one quiet line, the body's row gap. */
+const SETTLED_ROW_PX = 43;
+const SETTLED_SHOW_ALL_PX = 26;
+const SETTLED_QUIET_LINE_PX = 18;
+const SETTLED_BODY_GAP_PX = 16;
+/** The quiet lines that can close a led list: the unreported-windows note (one line) and the pace legend (two on a phone). */
+const SETTLED_LEGEND_LINES = { wide: 1, narrow: 2 } as const;
+/** The pace alert ("runs out Thu 02:26 AM before it resets") sits among them and wraps to two lines at a half-width. */
+const SETTLED_PACE_NOTE_LINES = 2;
+
+/**
+ * The room a list of allowance windows holds while their reads still arrive, from the accounts already
+ * known: rows fill it and the notes under them join it, so nothing below the list moves until the
+ * reads settle. Undefined when no allowance read is outstanding or no account is known yet.
+ */
+export function readUsageMeterListReserve(slice: UsageQueryResultSlice, accountCount: number, narrow = false): Readonly<{
+  shape: Extract<NonNullable<React.ComponentProps<typeof UsageBodyReading>['shape']>, { kind: 'meters' }>;
+  minHeight: number;
+}> | undefined {
+  const outstanding = readUsageCoverageGaps(slice, ['quota']).some(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+  if (!outstanding || accountCount < 1) return undefined;
+  const led = leadingUsageRows(Array.from({ length: accountCount * EXPECTED_WINDOWS_PER_ACCOUNT }), false);
+  const rows = led.rows.length;
+  const gap = SETTLED_BODY_GAP_PX;
+  const minHeight = rows * SETTLED_ROW_PX + (rows - 1) * USAGE_METER_METRICS.rowGapPx
+    + (led.hidden > 0 ? gap + SETTLED_SHOW_ALL_PX : 0)
+    + (gap + SETTLED_QUIET_LINE_PX)
+    + gap + SETTLED_LEGEND_LINES[narrow ? 'narrow' : 'wide'] * SETTLED_QUIET_LINE_PX
+    + gap + SETTLED_PACE_NOTE_LINES * SETTLED_QUIET_LINE_PX;
+  return { shape: { kind: 'meters', rows }, minHeight };
+}
+
+/**
+ * The list's first-read room: held from the first frame until every account has answered once, through the
+ * reads' arrivals, so the pace alert, its shared reason and the legend come and go inside it and the body
+ * settles its height once. After that settle a re-read never reserves again, so it cannot add blank room
+ * under retained rows. Nothing is held before the read's accounts are known.
+ */
+export function useUsageMeterListFirstReadReserve(
+  slice: UsageQueryResultSlice,
+  accountCount: number,
+  everyAccountAnswered: boolean,
+  narrow: boolean,
+): ReturnType<typeof readUsageMeterListReserve> {
+  const settledOnce = React.useRef(false);
+  if (everyAccountAnswered) settledOnce.current = true;
+  return settledOnce.current ? undefined : readUsageMeterListReserve(slice, accountCount, narrow);
 }
 
 /** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */

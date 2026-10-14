@@ -69,3 +69,22 @@ describe('published transcript visual correspondence', () => {
         })).toBe(false);
     });
 });
+
+describe('Claude ACP tool-result envelope', () => {
+    it('recognizes a generic action_execute acknowledgement whose content is the JSON text itself', () => {
+        // Stored shape of a real Claude `mcp__happier__action_execute` result (QA-LIVE-2, seq 55).
+        const ack = JSON.stringify({ v: 1, serverId: 'srv_home', sessionId: 'session', itemDestination: 'transcript', destination: null,
+            result: { operation: 'upsert_item', itemId: 'chart', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', outcome: 'created' } });
+        const meta = { v: 2, protocol: 'acp', provider: 'claude', rawToolName: 'mcp__happier__action_execute', canonicalToolName: 'mcp__happier__action_execute' };
+        const item = { v: 1, title: 'Chart', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Chart' } } } };
+        const input = { actionId: 'session.board.item.upsert', input: { sessionId: 'session', itemId: 'chart', expectedItemRevision: null, destination: 'transcript', item },
+            _mcp: { serverId: 'happier', toolId: 'action_execute' }, _happier: meta };
+        const result = { content: ack, tool_use_result: [{ type: 'text', text: ack }], text: ack,
+            _mcp: { serverId: 'happier', toolId: 'action_execute' }, _happier: meta, _raw: { content: ack } };
+        expect(resolveTranscriptSessionBoardItemReferenceV1({
+            toolName: 'mcp__happier__action_execute', state: 'completed', input, result,
+            address: { serverId: 'srv_home', sessionId: 'session' }, resolveServerScopeId: (id: string) => id,
+        })).toMatchObject({ itemId: 'chart', itemDestination: 'transcript' });
+    });
+});

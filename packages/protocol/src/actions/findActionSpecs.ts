@@ -1,28 +1,28 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 
-export const FindOptionsSchema = lazyZodSchema(() => z.object({ matchCase: z.boolean(), regex: z.boolean() }).strict());
-const target = { target: z.string().min(1).optional() };
+export const FindOptionsSchema = lazyZodSchema(() => z.strictObject({ matchCase: z.boolean(), regex: z.boolean() }));
+const target = { target: z.optional(z.string().check(z.minLength(1))) };
 export const UiFindInputSchema = lazyZodSchema(() => z.discriminatedUnion('op', [
-  z.object({ op: z.literal('read'), ...target }).strict(),
-  z.object({ op: z.literal('set'), query: z.string(), options: FindOptionsSchema.optional(), ...target }).strict(),
-  z.object({ op: z.literal('step'), direction: z.union([z.literal(1), z.literal(-1)]), ...target }).strict(),
-  z.object({ op: z.literal('stop'), ...target }).strict(),
-  z.object({ op: z.literal('close'), ...target }).strict(),
+  z.strictObject({ op: z.literal('read'), ...target }),
+  z.strictObject({ op: z.literal('set'), query: z.string(), options: z.optional(FindOptionsSchema), ...target }),
+  z.strictObject({ op: z.literal('step'), direction: z.union([z.literal(1), z.literal(-1)]), ...target }),
+  z.strictObject({ op: z.literal('stop'), ...target }),
+  z.strictObject({ op: z.literal('close'), ...target }),
 ]));
 export const UiFindOutputSchema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('noMountedSurface') }).strict(),
-  z.object({ status: z.literal('idle') }).strict(),
-  z.object({ status: z.literal('invalidPattern') }).strict(),
-  z.object({ status: z.literal('results'), current: z.number().int().nonnegative().nullable(), total: z.number().int().nonnegative(),
-    files: z.number().int().nonnegative().optional(), coverage: z.enum(['complete', 'loaded', 'olderRemaining', 'limited', 'partialErrors']) }).strict(),
-  z.object({ status: z.literal('searching'), total: z.number().int().nonnegative() }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.enum(['offline', 'unsupportedEngine', 'noClient']) }).strict(),
+  z.strictObject({ status: z.literal('noMountedSurface') }),
+  z.strictObject({ status: z.literal('idle') }),
+  z.strictObject({ status: z.literal('invalidPattern') }),
+  z.strictObject({ status: z.literal('results'), current: z.nullable(z.number().check(z.int(), z.nonnegative())), total: z.number().check(z.int(), z.nonnegative()),
+    files: z.optional(z.number().check(z.int(), z.nonnegative())), coverage: z.enum(['complete', 'loaded', 'olderRemaining', 'limited', 'partialErrors']) }),
+  z.strictObject({ status: z.literal('searching'), total: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['offline', 'unsupportedEngine', 'noClient']) }),
   // Public engine actions expose controls, but not the widget's current counts.
   // Query/options here are the last explicit host seed, never private engine state.
-  z.object({ status: z.literal('unavailable'), unavailable: z.literal('engineOwned'),
-    query: z.string(), options: FindOptionsSchema }).strict(),
+  z.strictObject({ status: z.literal('unavailable'), unavailable: z.literal('engineOwned'),
+    query: z.string(), options: FindOptionsSchema }),
 ]));
 
 /** Additive client Action: no persistence, remote corpus or second Find decision owner. */

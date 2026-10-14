@@ -21,6 +21,7 @@ import { resolveTrackedSessionExitSettlementEvidence } from './resolveTrackedSes
 import { stageObservedExit } from './stageObservedExit';
 import { resolveTrackedSessionActiveTurn } from './trackedSessionActiveTurn';
 import type { SkillStore } from '@/prompts/skills/store/skillStore';
+import { readRetainedPlainRunnerExitMarker } from './retireTerminalControlServiceability';
 
 export type ChildExit = {
   reason: string;
@@ -296,7 +297,8 @@ export function createOnChildExited(params: Readonly<{
         (typeof exit.signal === 'string' && exit.signal.length > 0 && !['SIGTERM', 'SIGINT'].includes(exit.signal));
       const personRequestedKill = tracked.stopRequestedReason === 'user_process_kill'
         && typeof tracked.stopRequestedAtMs === 'number';
-      const isUnexpected = !personRequestedKill && (typeof override === 'boolean' ? override : isUnexpectedBase);
+      const isUnexpected = !personRequestedKill && (typeof override === 'boolean' ? override
+        : typeof tracked.stopRequestedAtMs !== 'number' && isUnexpectedBase);
 
       if (liveReplacement) {
         logger.debug('[DAEMON RUN] Skipping session-end for exited PID because another live PID owns the same session', {
@@ -328,12 +330,16 @@ export function createOnChildExited(params: Readonly<{
       }
       const hasServerBackedSession = Boolean(finalSessionId) && isServerBackedSessionId(finalSessionId);
       const actionableUnexpectedExit = shouldReportSessionEnd && isUnexpected && hasServerBackedSession;
-      const shouldPreserveMarker = !personRequestedKill && hasServerBackedSession && await shouldPreserveSessionMarkerOnExit?.({
+      let shouldPreserveMarker = !personRequestedKill && hasServerBackedSession && await shouldPreserveSessionMarkerOnExit?.({
         pid,
         trackedSession: tracked,
         exit,
         unexpected: actionableUnexpectedExit,
       }) === true;
+      // Explicit Stop still owes control-serviceability publication after this
+      // exit callback. Keep its existing durable evidence until that owner settles.
+      if (hasServerBackedSession && typeof tracked.stopRequestedAtMs === 'number'
+          && await readRetainedPlainRunnerExitMarker(tracked)) shouldPreserveMarker = true;
       const apiMachineForSessions = getApiMachineForSessions();
       const observedAt = Date.now();
       const trackedExitSettlementEvidence = resolveTrackedSessionExitSettlementEvidence(tracked);
@@ -365,7 +371,8 @@ export function createOnChildExited(params: Readonly<{
           apiMachine: apiMachineForSessions,
           sessionId: finalSessionId,
         })) {
-          return;
+          if (!await readRetainedPlainRunnerExitMarker(tracked)) return;
+          shouldPreserveMarker = true;
         }
       }
       const stagingStartedAtMs = Date.now();

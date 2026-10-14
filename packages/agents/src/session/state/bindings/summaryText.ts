@@ -48,9 +48,9 @@ export const summaryTextBinding: SessionStateBinding<'display.title'> = {
       update.staleBehavior ?? structuredValue?.staleBehavior ?? 'drop';
 
     const resolved = resolveTimestampedFieldUpdate({
-      current: current.value === null || current.updatedAt === null
+      current: current.value === null
         ? null
-        : { value: current.value, updatedAt: current.updatedAt },
+        : { value: current.value, updatedAt: current.updatedAt ?? 0 },
       candidate,
       staleBehavior,
     });
@@ -82,9 +82,9 @@ export function createSummaryTextMetadataUpdater(params: Readonly<{
   return <TMetadata extends SessionMetadata>(metadata: TMetadata): TMetadata => {
     const current = summaryTextBinding.read(metadata);
     const resolved = resolveTimestampedFieldUpdate({
-      current: current.value === null || current.updatedAt === null
+      current: current.value === null
         ? null
-        : { value: current.value, updatedAt: current.updatedAt },
+        : { value: current.value, updatedAt: current.updatedAt ?? 0 },
       candidate,
       staleBehavior,
     });

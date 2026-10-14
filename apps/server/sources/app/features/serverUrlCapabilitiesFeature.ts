@@ -1,4 +1,5 @@
-import { SERVER_CONFIG, readServerConfig } from "@happier-dev/protocol";
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import type { FeaturesPayloadDelta } from "./types";
 import {

@@ -19,6 +19,7 @@ import {
     usePluginRegistrySourceAdministration,
     type PluginRegistrySourceAdministrationParamsV1,
 } from './model/usePluginRegistrySourceAdministration';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type PluginRegistryProfileSelectionParams = Readonly<{
     /** What the daemon's change owner said this machine must select. */
@@ -100,7 +101,7 @@ export function PluginRegistryProfileSelectionDialog(props: PluginRegistryProfil
         kind: 'card' as const,
         title: t('settingsPlugins.discover.registrySelection.title', { name: props.pluginName }),
         testID: 'settings.plugins.registrySelection',
-        dimensions: { width: 640, maxHeightRatio: 0.9, size: 'lg' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'lg' as const },
         footer,
     }), [footer, props.pluginName]);
 

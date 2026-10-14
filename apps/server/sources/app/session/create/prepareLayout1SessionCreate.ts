@@ -1,20 +1,12 @@
-import {
-    isSessionEncryptionModeAllowedByStoragePolicy,
-    resolveEffectiveDefaultAccountEncryptionMode,
-    SessionSharedMetadataV1Schema,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-    type SessionOwnerMetadataEnvelopeV1,
-    type SessionInitialAccessMaterializedV1,
-    SessionCreateOriginFieldsV1Schema,
-    type SessionCreateOriginFieldsV1,
-    SessionReportsToV1Schema,
-    type SessionReportsToV1,
-    type SessionReportsToSetResultV1,
-    SessionInitialTriggerAdmissionV1Schema,
-    type SessionInitialTriggerAdmissionV1,
-} from "@happier-dev/protocol";
+import * as z from 'zod/mini';
+import { isSessionEncryptionModeAllowedByStoragePolicy, resolveEffectiveDefaultAccountEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { SessionSharedMetadataV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { type SessionInitialAccessMaterializedV1 } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
+import { SessionCreateOriginFieldsV1Schema, type SessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
+import { SessionReportsToV1Schema, type SessionReportsToV1, type SessionReportsToSetResultV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionInitialTriggerAdmissionV1Schema, type SessionInitialTriggerAdmissionV1 } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
 import type { SessionAccessGrantErrorCode } from "@/app/session/access/sessionAccessGrantService";
-import type { SessionTeamCredentialBindingIntentListV1 } from "@happier-dev/protocol/teams";
+import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import type { SessionTeamCredentialBindingRejection } from "@/app/teams/credentials/sessionBinding";
 
 import {
@@ -214,9 +206,9 @@ export function prepareLayout1SessionCreate(
         workDepth: request.workDepth,
     });
     if (!origin.success) return { ok: false, rejection: { reason: "invalid-params" } };
-    const reportsTo = SessionReportsToV1Schema.optional().safeParse(request.reportsTo);
+    const reportsTo = z.optional(SessionReportsToV1Schema).safeParse(request.reportsTo);
     if (!reportsTo.success) return { ok: false, rejection: { reason: "invalid-params" } };
-    const initialTriggers = SessionInitialTriggerAdmissionV1Schema.array().optional().safeParse(request.initialTriggers);
+    const initialTriggers = z.optional(z.array(SessionInitialTriggerAdmissionV1Schema)).safeParse(request.initialTriggers);
     if (!initialTriggers.success) {
         return { ok: false, rejection: { reason: "session-initial-trigger-invalid", code: "invalid_input" } };
     }

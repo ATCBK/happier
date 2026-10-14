@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 export const WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1 = [

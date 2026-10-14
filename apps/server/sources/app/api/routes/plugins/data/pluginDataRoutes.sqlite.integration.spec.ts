@@ -31,7 +31,7 @@ import {
     applyAccountEncryptionTransitionInTx,
 } from "@/app/encryption/accountEncryptionTransition";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx } from "@/storage/inTx";
 import {
     createLightSqliteHarness,
     type LightSqliteHarness,
@@ -865,7 +865,7 @@ function failPluginCollectionQuotaCensusRead(input: Readonly<{
             return await originalTransaction(...args);
         }
         return await originalTransaction(async (tx) => {
-            const censusTx = Object.create(tx) as Tx;
+            const censusTx: typeof tx = Object.create(tx);
             const censusRows = Object.create(tx.pluginCollectionRow);
             const originalFindMany = tx.pluginCollectionRow.findMany.bind(tx.pluginCollectionRow);
             Object.defineProperty(censusRows, "findMany", {
@@ -5096,7 +5096,7 @@ describe("plugin collection UI query route", () => {
             return await originalTransaction(async (tx) => {
                 // This narrow database-boundary observer retains the actual
                 // transaction and mutation path while recording only quota IO.
-                const observedTx = Object.create(tx) as Tx;
+                const observedTx: typeof tx = Object.create(tx);
                 const observedRows = Object.create(tx.pluginCollectionRow);
                 const originalFindMany = tx.pluginCollectionRow.findMany.bind(tx.pluginCollectionRow);
                 Object.defineProperties(observedRows, {

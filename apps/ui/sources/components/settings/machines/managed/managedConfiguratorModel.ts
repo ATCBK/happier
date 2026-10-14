@@ -1,12 +1,12 @@
 import type { MachineProvisionerOptionsResultV1, MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import type { ManagedControllerV1, ValidatedLaunchSnapshotV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import type { ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
+import { ManagedConfigurationFactsV1Schema, type ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import type { ManagedAcquireInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { ManagedAcquireInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { buildManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/publicTypes';
+import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
@@ -151,7 +151,7 @@ export function managedConfiguratorFacts(draft: ManagedConfiguratorDraft): Manag
     const available = current && current.available !== false && pluginJsonValuesEqual(current.launch, selected.launch);
     const credentials = draft.credentials?.filter(credential => isMachineProvisionerCredentialPurposeRequiredV1(
         draft.provisioner.descriptor, credential.purpose.purpose, parsed.data));
-    return buildManagedConfigurationFactsV1({ choicesSchema: draft.choicesSchema,
+    return ManagedConfigurationFactsV1Schema.parse(buildManagedConfigurationFactsV1({ choicesSchema: draft.choicesSchema,
         launch: { provider: draft.provisioner.contribution, schemaVersion: draft.provisioner.descriptor.schemaVersion,
             name: draft.name, choices: parsed.data, ...(credentials?.length ? { credentials } : {}) }, controller: draft.controller,
         optionStatus: draft.optionStatus !== 'current' ? draft.optionStatus : available ? 'current' : 'unavailable',
@@ -159,7 +159,7 @@ export function managedConfiguratorFacts(draft: ManagedConfiguratorDraft): Manag
         prerequisites: draft.check?.prerequisites ?? [], localResources: draft.check?.localResources,
         prices: selected.prices,
         nativeFacts: selected.nativeFacts, machineOverride: draft.override, preset: draft.preset, environment: draft.environment,
-        categoryPreferences: draft.categoryPreferences });
+        categoryPreferences: draft.categoryPreferences }));
 }
 export function managedConfiguratorAcquireInput(draft: ManagedConfiguratorDraft, homeId: string): ManagedAcquireInputV1 | null {
     const facts = managedConfiguratorFacts(draft);

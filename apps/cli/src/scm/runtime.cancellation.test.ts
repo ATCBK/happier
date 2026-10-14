@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { fstatSync } from 'node:fs';
+import { join } from 'node:path';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -48,6 +51,38 @@ function createFakeChild(pid: number): FakeChild {
 }
 
 describe('runScmCommand cancellation', () => {
+  it.each(['abort', 'stderr_limit', 'timeout'] as const)('retains command budgets and closes an owned stdout file after process cleanup (%s)', async reason => {
+    await withTempDir('happier-scm-owned-stdout-', async directory => {
+      const child = createFakeChild(41008);
+      mocks.spawn.mockReset(); mocks.spawn.mockReturnValue(child);
+      let settleCleanup!: () => void;
+      mocks.terminateProcessTree.mockReset();
+      mocks.terminateProcessTree.mockReturnValue(new Promise<void>(resolve => { settleCleanup = resolve; }));
+      const controller = new AbortController();
+      if (reason === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        let completed = false;
+        const command = runScmCommand({ bin: 'git', cwd: directory, args: ['log'],
+          stdoutFilePath: join(directory, 'listing'), maxOutputBytes: 4, signal: controller.signal })
+          .then(result => { completed = true; return result; });
+        const options = mocks.spawn.mock.calls[0]?.[2] as { stdio: (string | number)[] };
+        const descriptor = options.stdio[1];
+        if (typeof descriptor !== 'number') throw new Error('Expected a native stdout descriptor');
+        if (reason === 'abort') controller.abort();
+        else if (reason === 'stderr_limit') child.stderr.emit('data', Buffer.from('large stderr'));
+        else await vi.advanceTimersByTimeAsync(15_000);
+        child.emit('close', null);
+        await Promise.resolve();
+        expect(completed).toBe(false);
+        expect(fstatSync(descriptor).isFile()).toBe(true);
+        settleCleanup();
+        expect(await command).toMatchObject({ success: false, stdout: '',
+          outputLimitExceeded: reason === 'stderr_limit', timedOut: reason === 'timeout' });
+        expect(() => fstatSync(descriptor)).toThrow();
+      } finally { vi.useRealTimers(); }
+    });
+  });
+
   it.each([false, true])('settles a streamed read after owned cleanup and honors late cancellation (%s)', async (cancelAfterClose) => {
     const child = createFakeChild(41006);
     mocks.spawn.mockReset();

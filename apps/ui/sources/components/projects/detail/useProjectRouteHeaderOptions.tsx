@@ -67,7 +67,7 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
                 hitSlop={15}
                 accessibilityRole="button"
                 accessibilityLabel={t('common.back')}
-                style={{ paddingHorizontal: 12, paddingVertical: 6 }}
+                style={{ paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s6 }}
             >
                 <Icon name="arrow-left" size={24} color={theme.colors.chrome.header.foreground} />
             </Pressable>

@@ -12,6 +12,16 @@ describe('safe producer setup review presentation', () => {
     ] })).toEqual(['"C:\\\\Program Files\\\\tool.exe" "" "a b" "say \\"hello\\"" tail', literal, literal]);
   });
 
+  it('reads the literal command DTO emitted by projectSetupPreparation and omits empty or unknown steps', () => {
+    // reviewProjectSetupEffect emits literal steps directly, without a nested source.
+    expect(listReviewedSetupCommands({ commands: [
+      { kind: 'command', command: 'echo setup', cwd: '.', os: 'linux' },
+      { source: { kind: 'pluginNative', adapter: { pluginId: 'custom.native', localId: 'task' }, file: 'tasks.json', target: 'bootstrap' } },
+      { kind: 'command', command: '  ' }, {}, null,
+    ] })).toEqual(['echo setup', 'bootstrap']);
+    expect(listReviewedSetupCommands({ commands: [{}] })).toEqual([]);
+  });
+
   it('retains exact binding labels and SCM context while excluding values and extra producer fields', () => {
     const presentation = {
       bindings: [{ name: 'TOKEN', ref: 'saved-secret:deployment', revision: 7, source: 'personal', displayName: 'Deployment account', value: 'private-secret' }],

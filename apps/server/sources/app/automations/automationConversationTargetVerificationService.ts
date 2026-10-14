@@ -1,15 +1,9 @@
-import {
-    AutomationConversationTargetsListInputV1Schema,
-    AutomationConversationTargetsListResultV1Schema,
-    AutomationConversationActionHttpRequestSchemasV1,
-    AutomationConversationTargetVerifyResultV1Schema,
-    type AutomationConversationTargetsListResultV1,
-    type AutomationConversationTargetVerifyResultV1,
-    type AutomationConversationScopedTriggerRefV1,
-    openAutomationTriggerDefinitionStoredEnvelopeV1,
-    AutomationPullRequestTriggerSchema,
-    createCanonicalJsonSigningInput,
-} from "@happier-dev/protocol";
+import { AutomationConversationTargetsListInputV1Schema, AutomationConversationTargetsListResultV1Schema, AutomationConversationTargetVerifyResultV1Schema, type AutomationConversationTargetsListResultV1, type AutomationConversationTargetVerifyResultV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
+import { AutomationConversationActionHttpRequestSchemasV1 } from '@happier-dev/protocol/automations/event';
+import { type AutomationConversationScopedTriggerRefV1 } from '@happier-dev/protocol/automations/result-delivery';
+import { openAutomationTriggerDefinitionStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationTriggerDefinitionStoredContent';
+import { AutomationPullRequestTriggerSchema } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { inTx, type Tx } from "@/storage/inTx";

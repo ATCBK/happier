@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Pressable } from 'react-native';
 import { BaseModal } from './BaseModal';
 import { AlertModalConfig, ConfirmModalConfig } from '../types';
-import { Typography } from '@/constants/Typography';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
@@ -14,30 +14,29 @@ interface WebAlertModalProps {
     onClose: () => void;
     onConfirm?: (value: boolean) => void;
     showBackdrop?: boolean;
+    /** False while the dialog leaves; the host unmounts it once the exit has played. */
+    visible?: boolean;
     zIndexBase?: number;
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
     content: {
-        paddingHorizontal: 16,
-        paddingTop: 20,
-        paddingBottom: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s20,
+        paddingBottom: theme.space.s16,
         // Stretch, not centre: a centred text item sizes to its longest word, so an unbroken token
         // (a path, an id) would overflow the card. The text itself stays centred.
         alignItems: 'stretch',
     },
     title: {
-        fontSize: 17,
         textAlign: 'center',
         color: theme.colors.text.primary,
-        marginBottom: 4,
+        marginBottom: theme.space.s4,
     },
     message: {
-        fontSize: 13,
         textAlign: 'center',
         color: theme.colors.text.primary,
-        marginTop: 4,
-        lineHeight: 18,
+        marginTop: theme.space.s4,
     },
     buttonContainer: {
         borderTopWidth: 1,
@@ -51,7 +50,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     button: {
         flex: 1,
-        paddingVertical: 11,
+        paddingVertical: theme.space.s10,
         paddingHorizontal: 14,
         alignItems: 'center',
         justifyContent: 'center',
@@ -68,18 +67,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.border.default,
     },
     buttonText: {
-        fontSize: 17,
         color: theme.colors.text.primary,
         textAlign: 'center',
-        lineHeight: 20,
         flexShrink: 1,
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
     },
     primaryText: {
         color: theme.colors.text.primary,
-    },
-    cancelText: {
-        fontWeight: '400',
     },
     destructiveText: {
         color: theme.colors.state.danger.foreground,
@@ -89,7 +83,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true, zIndexBase }: WebAlertModalProps) {
+export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true, visible = true, zIndexBase }: WebAlertModalProps) {
     useUnistyles();
     const styles = stylesheet;
     const isConfirm = config.type === 'confirm';
@@ -101,6 +95,16 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
         }
         if (!isConfirm && config.buttons?.[buttonIndex]?.onPress) {
             config.buttons[buttonIndex].onPress!();
+        }
+        onClose();
+    };
+
+    // Escape and the hardware Back dismiss the card without a button press. An alert settles that through
+    // its cancel choice, as the native alert does, so whoever awaits the decision (an unsaved-changes guard)
+    // is released instead of waiting on a card that is gone. A confirm settles its dismissal in the provider.
+    const handleDismiss = () => {
+        if (!isConfirm) {
+            config.buttons?.find((button) => button.style === 'cancel')?.onPress?.();
         }
         onClose();
     };
@@ -127,29 +131,28 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
 
     return (
         <BaseModal
-            visible={true}
-            onClose={onClose}
+            visible={visible}
+            onClose={handleDismiss}
             accessibilityLabel={config.accessibilityLabel ?? config.title}
             closeOnBackdrop={false}
             showBackdrop={showBackdrop}
             zIndexBase={zIndexBase}
             focusReturnRef={config.focusReturnRef}
         >
-            <ModalCardFrame dimensions={{ width: 270, maxHeightRatio: 0.48 }}>
+            <ModalCardFrame dimensions={{ width: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow, maxHeightRatio: 0.48 }}>
                 <View style={styles.content}>
-                    <Text style={[styles.title, Typography.default('semiBold')]}>
+                    <Text variant="heading" style={styles.title}>
                         {config.title}
                     </Text>
                     {isConfirm && config.messageParagraphs ? config.messageParagraphs.map((paragraph, index) => (
-                        <Text key={index} style={[
+                        <Text key={index} variant="body" emphasis={paragraph.irreversible ? 'semiBold' : undefined} style={[
                             styles.message,
-                            Typography.default(paragraph.irreversible ? 'semiBold' : undefined),
                             paragraph.irreversible ? styles.irreversibleText : null,
                         ]}>
                             {paragraph.text}
                         </Text>
                     )) : config.message && (
-                        <Text style={[styles.message, Typography.default()]}>
+                        <Text variant="body" style={styles.message}>
                             {config.message}
                         </Text>
                     )}
@@ -176,12 +179,10 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
                                 accessibilityLabel={button.text}
                                 onPress={() => handleButtonPress(index)}
                             >
-                                <Text style={[
+                                <Text variant="label" emphasis={button.style === 'cancel' ? 'regular' : 'semiBold'} style={[
                                     styles.buttonText,
                                     buttonLayout === 'column' && (button.style === 'default' || !button.style) && styles.primaryText,
-                                    button.style === 'cancel' && styles.cancelText,
                                     button.style === 'destructive' && styles.destructiveText,
-                                    Typography.default(button.style === 'cancel' ? undefined : 'semiBold')
                                 ]}>
                                     {button.text}
                                 </Text>

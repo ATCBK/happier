@@ -1440,6 +1440,58 @@ async function writeHostedWebStaticAssetsFixture(input: Readonly<{
 }
 
 describe('startDaemonSessionControlRuntime', () => {
+    it('projects a wrapper parent through the installed daemon reader and strict runner contract', async () => {
+        const registry = new ConnectedServiceRuntimeRegistry();
+        const tracked: TrackedSession = { pid: process.ppid, sessionRunnerPid: process.pid,
+            startedBy: 'daemon', happySessionId: 'wrapped-parent', spawnOptions: { directory: '/repo',
+                backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } } };
+        registry.registerTarget({ pid: tracked.pid, sessionId: tracked.happySessionId, agentId: 'claude',
+            connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: {
+                'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'applied-parent' },
+            } } });
+        // Use the real live OS process for presence; capture only the control listener boundary.
+        const runtime = await startDaemonSessionControlRuntime({ machineId: 'machine',
+            credentials: { token: 'daemon-fixture', encryption: null }, api: {} as never,
+            connectedServicesMaterializationBaseDir: '/tmp/connected-services',
+            getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
+            connectedServiceRuntimeRegistry: registry, pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+            pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+            getApiMachineForSessions: () => null, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+            connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {},
+            onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
+        });
+        try {
+            const read = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0].readAppliedSessionConnectedServices;
+            if (!read) throw new Error('Production applied-parent reader was not registered');
+            const { ConnectedServiceAppliedParentSelectionRequestSchema, ConnectedServiceAppliedParentSelectionResultSchema } =
+                await import('../connectedServices/runs/materializeContract');
+            const request = ConnectedServiceAppliedParentSelectionRequestSchema.parse({
+                runnerPid: process.pid, sessionId: 'wrapped-parent', agentId: 'claude',
+            });
+            expect(ConnectedServiceAppliedParentSelectionResultSchema.parse(await read(request))).toMatchObject({
+                status: 'applied', connectedServices: { bindingsByServiceId: {
+                    'happier.agent.claude/claude-subscription': { source: 'connected', profileId: 'applied-parent' },
+                } },
+            });
+            const materialize = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0].materializeConnectedServicesForExecutionRun;
+            if (!materialize) throw new Error('Production Run materializer was not registered');
+            const runInput = { runId: 'wrapped-parent-run', agentId: 'claude',
+                cwd: '/repo', connectedServices: { v: 2 as const, bindingsByServiceId: {} } };
+            // Both identities belong to the same tracked Session. An unavailable
+            // contribution remains unavailable after custody is resolved; it must
+            // not be misclassified as an unknown runner only for wrapper launches.
+            const direct = await materialize({ ...runInput, runnerPid: tracked.pid });
+            expect(direct).not.toMatchObject({ errorMessage: 'Execution-run connected services runner identity is not current' });
+            expect(await materialize({ ...runInput, runnerPid: process.pid })).toEqual(direct);
+            tracked.sessionRunnerPid = undefined;
+            expect(await materialize({ ...runInput, runnerPid: process.pid })).toMatchObject({
+                ok: false, errorCode: 'connected_service_run_materialization_blocked',
+                errorMessage: 'Execution-run connected services runner identity is not current',
+            });
+            expect(ConnectedServiceAppliedParentSelectionResultSchema.parse(await read(request)))
+                .toEqual({ status: 'unavailable' });
+        } finally { await runtime.stopControlServer(); }
+    });
     async function runPrivateManagedRequesterFixture(finiteWake = false, refreshRequesterPolicy = false,
         finiteRpc?: 'allow' | 'ask' | 'revoked' | 'changed-root' | 'revoked-after-ask') {
         if (!fetchAccountEncryptionCurrentnessActual.current) throw new Error('Account currentness HTTP owner unavailable');

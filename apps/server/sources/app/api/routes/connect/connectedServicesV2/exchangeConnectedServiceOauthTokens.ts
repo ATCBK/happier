@@ -1,17 +1,11 @@
 import { randomBytes } from "node:crypto";
 
-import {
-    sealBoxBundle,
-    decodeBase64,
-    encodeBase64,
-    BOX_BUNDLE_PUBLIC_KEY_BYTES,
-    isValidBoxBundlePublicKey,
-    type ConnectedServiceId,
-    CONNECTED_SERVICE_ERROR_CODES,
-} from "@happier-dev/protocol";
-import {
-    projectConnectedAccountOauthProfileMetadata,
-} from "@happier-dev/protocol";
+import { sealBoxBundle, isValidBoxBundlePublicKey } from '@happier-dev/protocol/crypto/boxBundle';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { BOX_BUNDLE_PUBLIC_KEY_BYTES } from '@happier-dev/protocol/crypto/boxBundleFormat';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
+import { projectConnectedAccountOauthProfileMetadata } from '@happier-dev/protocol/providers/claude/oauth-profile';
 import { parseIntEnv } from "@/config/env";
 import { assertNonEmptyString } from "./connectValueParsers";
 import {

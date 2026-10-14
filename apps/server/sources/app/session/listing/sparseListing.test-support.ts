@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { cpus } from "node:os";
 import { expect, vi } from "vitest";
-import { SessionListQueryResponseV1Schema, SessionListQueryV1Schema } from "@happier-dev/protocol";
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import {

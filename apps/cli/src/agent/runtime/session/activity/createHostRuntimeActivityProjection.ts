@@ -136,7 +136,7 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
   enqueueRegisteredSessionStateFieldMutation(
     mutation: RegisteredSessionStateFieldMutationV1,
   ): void | Promise<void>;
-  onFireAndForgetPublicationError?(error: unknown): void;
+  onPublicationError?(error: unknown, snapshot: HostRuntimeActivitySnapshot): void;
 }>): HostRuntimeActivityProjection {
   const initialAgentRuntimeApplicability = options.agentRuntimeApplicability;
   let agentRuntime: AgentRuntimeActivitySnapshot = initialAgentRuntimeApplicability === 'not_applicable'
@@ -186,6 +186,13 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
     const result = enqueue
       .then(() => {
         acceptedSnapshot = publication;
+      }, (error: unknown) => {
+        try {
+          options.onPublicationError?.(error, publication);
+        } catch {
+          // Reporting must preserve the original publication failure for its caller.
+        }
+        throw error;
       });
     publicationTail = result.catch(() => undefined);
     desiredPublication = Object.freeze({ id, snapshot: publication, result });
@@ -203,9 +210,7 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
   const publishIfChanged = (): Promise<void> => publishCurrentSnapshot(false);
 
   const observeFireAndForgetPublication = (publication: Promise<void>): void => {
-    void publication
-      .catch((error: unknown) => options.onFireAndForgetPublicationError?.(error))
-      .catch(() => undefined);
+    void publication.catch(() => undefined);
   };
 
   observeFireAndForgetPublication(publishIfChanged());
@@ -218,10 +223,9 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
   };
 
   return Object.freeze({
-    bindAgentRuntime(bindingOptions) {
+    bindAgentRuntime(_bindingOptions) {
       const binding = ++runtimeBinding;
-      void bindingOptions;
-      agentRuntime = { state: 'idle', activeCount: 0 };
+      agentRuntime = UNKNOWN;
       observeFireAndForgetPublication(publishIfChanged());
       return Object.freeze({
         async observeEvent(event: AgentSessionRuntimeEventV1) {
@@ -239,7 +243,7 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
         async revoke() {
           if (disposed || binding !== runtimeBinding) return;
           runtimeBinding += 1;
-          agentRuntime = { state: 'idle', activeCount: 0 };
+          agentRuntime = UNKNOWN;
           await publishIfChanged();
         },
       });

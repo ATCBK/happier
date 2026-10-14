@@ -31,7 +31,7 @@ import {
   type StopSessionIncompleteReason,
   type StopSessionResult,
 } from './stopSessionContract';
-import type { ExactTerminalControlServiceabilityRetirement } from './retireTerminalControlServiceability';
+import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement } from './retireTerminalControlServiceability';
 import { resolveTrackedSessionTerminalPresentation } from './resolveTrackedSessionTerminalPresentation';
 
 function mapDispositionFailureReason(
@@ -191,6 +191,10 @@ export function createStopSession(params: Readonly<{
     attachmentInfo: ExactTerminalHostAttachmentInfo;
     terminalMode: TerminalMode;
   }>) => Promise<ExactTerminalControlServiceabilityRetirement | void>;
+  retireAbsentTerminalControlServiceability?: (input: Readonly<{
+    sessionId: string;
+    trackedSession: TrackedSession;
+  }>) => Promise<RetainedPlainRunnerRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
     sessionId: string;
     expectedAttachmentId?: string;
@@ -818,6 +822,25 @@ export function createStopSession(params: Readonly<{
       return disposition.status === 'parked'
         ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
         : incompleteStopSession('destroy_failed');
+    }
+    if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
+      try {
+        let retired = false;
+        for (const trackedSession of expectedTrackedSessionsByPid.values()) {
+          const retirement = await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession });
+          if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
+            return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          }
+          if (retirement === 'retired' || retirement === 'deferred') {
+            retired = true;
+            break;
+          }
+        }
+        if (!retired) return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+      } catch (error) {
+        logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
+        return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+      }
     }
     return { status: 'stopped' };
   };

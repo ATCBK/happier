@@ -91,6 +91,34 @@ import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots'
 import { createStableDeclaredMcpTransportConnector } from './mcpDeclaredTransport';
 
 describe('stable declared MCP transport connector', () => {
+    it.each(['retired', 'aborted'] as const)('does not connect when the invocation is %s during SDK loading', async (state) => {
+        const connectCount = sdk.connect.mock.calls.length;
+        const controller = new AbortController();
+        let current = true;
+        const pending = createStableDeclaredMcpTransportConnector()({
+            declaration: {
+                provenance: 'external', source: { kind: 'path' }, pluginId: 'acme.static',
+                manifestPath: '/fixture/plugin.json', daemonEntryPath: '/fixture/daemon.js',
+                definition: { id: 'remote', title: 'Remote', kind: 'static',
+                    transport: { kind: 'http', url: 'https://mcp.example.test/' } },
+            },
+            ref: { pluginId: 'acme.static', localId: 'remote' },
+            elicitation: { mode: 'reject' },
+            seed: {
+                plugin: { id: 'caller.plugin', version: '1.0.0' },
+                contribution: { id: 'run', qualifiedId: 'caller.plugin/actions/run' },
+                occurrenceId: createPluginRuntimeOccurrenceId('caller.plugin'),
+                correlationId: 'fixture-request', surface: 'agent', signal: controller.signal,
+                isOccurrenceCurrent: () => current,
+            },
+        });
+        if (state === 'retired') current = false;
+        else controller.abort(new Error('fixture-aborted'));
+        if (state === 'retired') await expect(pending).rejects.toMatchObject({ code: 'plugin_mcp_generation_retired' });
+        else await expect(pending).rejects.toThrow('fixture-aborted');
+        expect(sdk.connect.mock.calls.length).toBe(connectCount);
+    });
+
     it('consumes a static HTTP declaration and routes form elicitation through the current session owner', async () => {
         const interactions = vi.fn(async () => ({
             requestId: 'interaction-1',

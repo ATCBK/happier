@@ -1,10 +1,5 @@
-import {
-    createPeerMediationObservabilityFlowStore,
-    type PeerMediationObservabilityDeltaV1,
-    type PeerMediationObservabilityEventV1,
-    type PeerMediationObservabilityScopeV1,
-    type PeerMediationObservabilitySnapshotV1,
-} from "@happier-dev/protocol";
+import { createPeerMediationObservabilityFlowStore } from '@happier-dev/protocol/machines/peer/mediation/observability/flowStore';
+import { type PeerMediationObservabilityDeltaV1, type PeerMediationObservabilityEventV1, type PeerMediationObservabilityScopeV1, type PeerMediationObservabilitySnapshotV1 } from '@happier-dev/protocol/machines/peer/mediation/observability/v1';
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { log } from "@/utils/logging/log";

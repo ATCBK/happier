@@ -13,20 +13,20 @@ describe('list/detail readable geometry', () => {
   it('includes the gutter when deciding whether the panes fit', () => {
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 711 })).toEqual({ mode: 'stacked' });
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 712 })).toEqual({
-      mode: 'split', listRatio: 300 / 700,
+      mode: 'split', listRatio: 300 / 700, detailWidthPx: 400,
     });
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 0 })).toEqual({ mode: 'stacked' });
   });
 
   it('keeps the requested ratio only while both panes remain readable', () => {
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 1012 })).toEqual({
-      mode: 'split', listRatio: 0.4,
+      mode: 'split', listRatio: 0.4, detailWidthPx: 600,
     });
     expect(resolveHappierListDetailGeometry({
       ...readingMeasures, availableWidth: 1012, preferredListRatio: 0.2,
-    })).toEqual({ mode: 'split', listRatio: 0.3 });
+    })).toEqual({ mode: 'split', listRatio: 0.3, detailWidthPx: 700 });
     expect(resolveHappierListDetailGeometry({
       ...readingMeasures, availableWidth: 1012, preferredListRatio: 0.9,
-    })).toEqual({ mode: 'split', listRatio: 0.6 });
+    })).toEqual({ mode: 'split', listRatio: 0.6, detailWidthPx: 400 });
   });
 });

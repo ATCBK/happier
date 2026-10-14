@@ -203,7 +203,8 @@ export function presentProjectRun(
     startedAt,
     phase,
     queueAhead,
-    tail: snapshot.progress?.label ?? null,
+    // A phase (queued, copying, preparing) is already the status text; only output progress adds a line.
+    tail: phaseProgress ? null : snapshot.progress?.label ?? null,
   });
   if (!isActionOperationTerminal(snapshot.state)) {
     if (snapshot.observation?.kind === 'stop_unconfirmed')

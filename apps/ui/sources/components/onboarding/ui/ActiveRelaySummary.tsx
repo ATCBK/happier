@@ -20,9 +20,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: theme.space.s10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
@@ -32,16 +32,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 1,
     },
     label: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
     },
     value: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
 }));
 

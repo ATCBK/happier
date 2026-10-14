@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -90,6 +90,44 @@ describe('stageWorkspaceEntries', () => {
         await expect(readFile(join(stagingRoot.workspaceDirectory, 'README.md'))).resolves.toEqual(fixture.content);
         await expect(readlink(join(stagingRoot.workspaceDirectory, 'docs', 'readme-link'))).resolves.toBe('../README.md');
         expect(result.verification.isVerified).toBe(true);
+    });
+
+    it('never writes a regular file through a staged link chain', async () => {
+        const fixtureDirectory = await makeTempDir('workspace-stage-entries-link-chain-');
+        const stagingRoot = await createWorkspaceStagingRoot({ parentDirectory: fixtureDirectory, stagingId: 'stage_link_chain' });
+        const fixture = await createFileEntryFixture();
+        const outside = join(fixtureDirectory, 'outside');
+        await mkdir(outside);
+        await expect(stageWorkspaceEntries({
+            stagingRoot,
+            expectedManifest: { entries: [
+                { relativePath: 'dir', kind: 'directory' },
+                { relativePath: 'dir/up', kind: 'symlink', target: '..' },
+                { relativePath: 'top', kind: 'symlink', target: 'dir/up/../../outside' },
+                { relativePath: 'top/new.txt', kind: 'file', digest: fixture.digest, sizeBytes: fixture.content.byteLength, executable: false },
+            ] },
+            scmRegistry,
+            blobProvider: { getBlobFilePath: digest => digest === fixture.digest ? fixture.filePath : null },
+        })).rejects.toThrow();
+        await expect(access(join(outside, 'new.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('never installs a link through a previously staged escaping link parent', async () => {
+        const fixtureDirectory = await makeTempDir('workspace-stage-entries-link-parent-');
+        const stagingRoot = await createWorkspaceStagingRoot({ parentDirectory: fixtureDirectory, stagingId: 'stage_link_parent' });
+        const failure: unknown = await stageWorkspaceEntries({
+            stagingRoot,
+            expectedManifest: { entries: [
+                { relativePath: 'dir', kind: 'directory' },
+                { relativePath: 'dir/up', kind: 'symlink', target: '..' },
+                { relativePath: 'top', kind: 'symlink', target: 'dir/up/../..' },
+                { relativePath: 'top/new', kind: 'symlink', target: 'safe' },
+            ] },
+            scmRegistry,
+            blobProvider: { getBlobFilePath: () => null },
+        }).then(() => undefined, (error: unknown) => error);
+        await expect(lstat(join(fixtureDirectory, 'new'))).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(failure).toBeInstanceOf(Error);
     });
 
     it('fails closed before staging anything when a manifest file digest is missing blob contents', async () => {

@@ -2,6 +2,7 @@ import type {
   AgentExecutionRunOpenRequest,
   AgentExecutionRunConversationRuntimeV1,
   AgentSessionOpenRequest,
+  AgentSessionMcpService,
   AgentSessionRuntime,
   AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -11,6 +12,7 @@ import type {
   ManagedServiceSpec,
 } from '@happier-dev/plugin-sdk/managed-services';
 
+import { asRecord } from './openCodeParsing.js';
 import type { OpenCodeServerEndpoint } from './endpoint.js';
 import {
   detectOpenCodeServerDialect,
@@ -25,6 +27,7 @@ import { readOpenCodeProviderConfigPart } from '../../providerBinding/runtime.js
 import type { OpenCodeConfigPart } from './opencodeConfigContent.js';
 import {
   buildOpenCodeSessionMcpProjection,
+  readOpenCodeMcpToolNameBudget,
   disconnectOpenCodeMcpServers,
   scheduleOpenCodeMcpServerRegistration,
 } from './mcpRegistration.js';
@@ -189,6 +192,7 @@ type OpenCodeServerRuntimeAssemblyCommon = Readonly<{
   permissionMode?: string | null;
   mcpServers?: unknown;
   signal?: AbortSignal;
+  mcpService?: AgentSessionMcpService;
   models?: AgentSessionRuntimeContext['session']['services']['models'];
   modes?: AgentSessionRuntimeContext['session']['services']['modes'];
   inputFiles?: NonNullable<AgentSessionRuntimeContext['session']['services']['inputFiles']>;
@@ -288,9 +292,25 @@ export async function createOpenCodeServerRuntimeAssembly(
       dialect: dialectDetection.dialect,
       signal: params.signal ?? params.ctx.abort.signal,
     });
+    const initialProjection = buildOpenCodeSessionMcpProjection(
+      params.executionRunId ?? params.happierSessionId, params.mcpServers,
+    );
+    let mcpServers = params.mcpServers;
+    let toolAliasPrefix: string | undefined;
+    // V2 has no registration route; retain its established unsupported capability path.
+    if (dialectDetection.dialect !== 'v2' && params.mcpService?.resolveToolNaming) {
+      const required = initialProjection.registrations.find(registration => registration.originalName === 'happier');
+      if (required) {
+        const naming = await params.mcpService.resolveToolNaming({ serverName: 'happier',
+          toolNameMaxLength: readOpenCodeMcpToolNameBudget(required.projectedName) }, { signal: params.signal ?? params.ctx.abort.signal });
+        if (naming) {
+          mcpServers = { ...(asRecord(mcpServers) ?? {}), happier: naming.launchConfig };
+          toolAliasPrefix = naming.aliasPrefix;
+        }
+      }
+    }
     const mcpProjection = buildOpenCodeSessionMcpProjection(
-      params.executionRunId ?? params.happierSessionId,
-      params.mcpServers,
+      params.executionRunId ?? params.happierSessionId, mcpServers, params.mcpService?.resolveToolNaming, toolAliasPrefix,
     );
     const mcpRegistration = scheduleOpenCodeMcpServerRegistration({
       ctx: params.ctx,

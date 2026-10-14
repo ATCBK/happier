@@ -914,6 +914,7 @@ describe('realtime_codex normal web composed gate', () => {
       id: 'machine-global-preflight',
       activeAt: Date.now(),
       metadata: {
+        ...createMachineFixture().metadata!,
         homeDir: '/Users/global-preflight',
         happyHomeDir: '/Users/global-preflight/.happier',
       },
@@ -1236,6 +1237,7 @@ describe('realtime_codex normal web composed gate', () => {
       id: 'machine-global',
       activeAt: Date.now(),
       metadata: {
+        ...createMachineFixture().metadata!,
         homeDir: '/Users/global',
         happyHomeDir: '/Users/global/.happier',
       },

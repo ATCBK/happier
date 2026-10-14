@@ -1,13 +1,4 @@
-import {
-    assertAuthoringMemoryContentForModeV1,
-    assertAuthoringMemoryValueForKeyV1,
-    assertStoredAuthoringMemoryValueForKeyV1,
-    AuthoringMemoryChangeHintV1Schema,
-    AuthoringMemoryContentV1Schema,
-    StoredAuthoringMemoryContentV1Schema,
-    type AuthoringMemoryContentV1,
-    type AuthoringMemoryRowV1,
-} from "@happier-dev/protocol";
+import { assertAuthoringMemoryContentForModeV1, assertAuthoringMemoryValueForKeyV1, assertStoredAuthoringMemoryValueForKeyV1, AuthoringMemoryChangeHintV1Schema, AuthoringMemoryContentV1Schema, StoredAuthoringMemoryContentV1Schema, type AuthoringMemoryContentV1, type AuthoringMemoryRowV1 } from '@happier-dev/protocol/account/authoringMemory';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { inTx, type Tx } from "@/storage/inTx";

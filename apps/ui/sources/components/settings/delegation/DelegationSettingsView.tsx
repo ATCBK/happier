@@ -119,7 +119,7 @@ export function DepthLadder(props: Readonly<{ limit: number }>) {
 
 const styles = StyleSheet.create((theme) => ({
     stepDetail: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

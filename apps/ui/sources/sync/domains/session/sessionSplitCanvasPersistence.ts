@@ -26,8 +26,8 @@ export type SessionSplitCanvasPersistenceSnapshot = Readonly<{
 }>;
 
 const id = z.string().trim().min(1);
-const StoredScopeSchema = EntityDragScopeV1Schema.strip();
-const StoredSessionAddressSchema = EntityDragSessionAddressV1Schema.strip();
+const StoredScopeSchema = z.object(EntityDragScopeV1Schema.shape);
+const StoredSessionAddressSchema = z.object(EntityDragSessionAddressV1Schema.shape);
 const SessionCanvasTabSchema = z.object({
     id, scope: StoredScopeSchema, address: StoredSessionAddressSchema,
     pinned: z.boolean(), preview: z.boolean(),

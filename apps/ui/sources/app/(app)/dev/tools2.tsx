@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React, { useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { Stack } from 'expo-router';
@@ -581,8 +582,7 @@ const styles = StyleSheet.create(() => ({
         flex: 1,
     },
     pageTitle: {
-        fontSize: 28,
-        fontWeight: 'bold',
+        ...Typography.variant('display'),
         marginTop: 20,
         marginBottom: 8,
         paddingHorizontal: 16,
@@ -608,8 +608,7 @@ const styles = StyleSheet.create(() => ({
         paddingHorizontal: 16,
     },
     exampleTitle: {
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: '#666',
         marginBottom: 8,
         textTransform: 'uppercase',

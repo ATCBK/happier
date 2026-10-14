@@ -25,7 +25,7 @@ import { ESCAPE_LAYER_PRIORITIES, EscapeLayerProvider, useEscapeLayer } from '@/
 import { type FocusReturnRef, useRestoreFocusToTrigger } from '@/keyboard/focusReturn';
 import { visuallyHiddenDomStyle } from '@/components/ui/accessibility/visuallyHiddenStyle';
 import { SheetDismissProvider } from './card/sheetDragDismiss';
-import { MODAL_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
+import { MODAL_Z_INDEX, resolveModalWebPortalTarget } from '@/components/ui/overlays/overlayLayers';
 
 const BASE_MODAL_FOCUS_RETURN = { kind: 'activation-time' } as const;
 
@@ -188,9 +188,7 @@ export function BaseModal({
 
         const resolvedWebPortalTarget: ModalPortalTarget = (() => {
             if (webPortalTarget) return webPortalTarget;
-            if (inheritedWebPortalTarget) return inheritedWebPortalTarget;
-            if (typeof document === 'undefined') return null;
-            return document.body ?? null;
+            return resolveModalWebPortalTarget(inheritedWebPortalTarget, typeof document === 'undefined' ? null : document.body ?? null);
         })();
 
         const { Branch: DismissableLayerBranch, Root: DismissableLayer } = radixDismissableLayer!;
@@ -208,6 +206,10 @@ export function BaseModal({
             event.preventDefault();
         };
 
+        // Leaving, the scrim fades on the same curve as the surface's own fade, so the page clears with it.
+        const scrimTiming = visible
+            ? `${motionTokens.overlay.modal.enterMs}ms cubic-bezier(0.2, 0, 0, 1)`
+            : `${motionTokens.overlay.modal.exitMs}ms ${motionTokens.easingCss.exit}`;
         const overlayStyle: React.CSSProperties = {
             position: 'fixed',
             top: 0,
@@ -216,11 +218,11 @@ export function BaseModal({
             bottom: 0,
             zIndex: baseZ,
             transition: [
-                `background-color ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
+                `background-color ${scrimTiming}`,
                 ...(materialBlurEnabled
                     ? [
-                        `backdrop-filter ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
-                        `-webkit-backdrop-filter ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
+                        `backdrop-filter ${scrimTiming}`,
+                        `-webkit-backdrop-filter ${scrimTiming}`,
                     ]
                     : []),
             ].join(', '),
@@ -253,7 +255,7 @@ export function BaseModal({
             overflow: 'visible',
         };
 
-        const topPlacementGap = theme.margins.xxl * 2;
+        const topPlacementGap = theme.space.s24 * 2;
         const autoPlacementContainerStyle = {
             // Auto-placement:
             // - content <= viewport ⇒ container height is 100% ⇒ centered

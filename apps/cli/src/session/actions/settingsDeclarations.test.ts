@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema, AccountSettingsV2UpdateRequestSchema, accountSettingsParse } from '@happier-dev/protocol';
 import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol';
 import { ACCOUNT_SETTING_DECLARATIONS_V1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -128,6 +129,38 @@ describe('CLI declared Account settings', () => {
       futurePreference: { preserved: true } } });
   });
 
+  it('sets and resets one Machine connection choice through the discovered Account Action and preserves CAS siblings', async () => {
+    const anchor = 'machines.connection.direct';
+    const policy = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] } });
+    const flows = { machine_rpc: { direct: 'disabled' } } as const;
+    const neighbor = { flows: { machine_rpc: { direct: 'enabled' } } } as const;
+    concurrentContent = { t: 'plain', v: { futureSetting: 'preserved', peerMediationPreferencesV1: {
+      v: 1, flows, byMachineId: { neighbor },
+    } } };
+    conflict = true;
+    const owner = executor();
+    const agent = { surface: 'agent', authority: 'account_automation', actionsSettings: policy } as const;
+    expect(await owner.execute('settings.list', { pageId: 'machines' }, agent)).toMatchObject({ ok: true, result: {
+      items: expect.arrayContaining([expect.objectContaining({ anchor, readable: true, writable: true, storageScope: 'account' })]),
+    } });
+    for (const value of ['direct', 'relay', 'default'] as const) {
+      const set = await owner.execute('settings.set', { anchor, key: 'machine-a', value }, agent);
+      expect(set).toMatchObject({ ok: true, result: { anchor, value } });
+      if (set.ok) SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(set.result);
+      const get = await owner.execute('settings.get', { anchor, key: 'machine-a' }, agent);
+      expect(get).toMatchObject({ ok: true, result: { anchor, value } });
+      if (get.ok) SettingsDeclarationActionOutputSchemasV1['settings.get'].parse(get.result);
+      expect(content).toMatchObject({ t: 'plain', v: { futureSetting: 'preserved', peerMediationPreferencesV1: {
+        flows, byMachineId: { neighbor },
+      } } });
+    }
+    expect(content.t === 'plain' && accountSettingsParse(content.v).peerMediationPreferencesV1.byMachineId['machine-a']).toBeUndefined();
+    expect(await owner.execute('settings.set', { anchor, value: 'direct' }, agent)).toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+    expect(await owner.execute('settings.set', { anchor, key: 'machine-a', value: { direct: true } }, agent)).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+    expect(await owner.execute('settings.set', { anchor, key: 'machine-a', value: 'direct', target: { kind: 'home', serverId: 'other-home' } }, agent))
+      .toMatchObject({ ok: false, errorCode: 'setting_target_mismatch' });
+  });
+
   it('isolates provider state through the consent owner without requiring catalog evidence or replacing configuration', async () => {
     const sharing = accountSettingsParse({}).connectedServicesProviderStateSharingSettingsV1;
     content = { t: 'plain', v: { favoriteMachines: ['neighbor'], connectedServicesProviderStateSharingSettingsV1: {
@@ -205,6 +238,49 @@ describe('CLI declared Account settings', () => {
     expect(await owner.execute('settings.set', { anchor, value: 4, reversal }, user))
       .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
     expect(version).toBe(3);
+  });
+
+  it.each([
+    { anchor: 'sourceControl.investigateSurroundingFiles', baseline: false, value: true },
+    { anchor: 'sourceControl.outputLanguage', baseline: '', value: 'fr' },
+    { anchor: 'sourceControl.summaryModel', baseline: '', value: '' },
+    { anchor: 'sourceControl.prepareAfterTurn', baseline: false, value: false },
+  ])('uses the real Settings Action and declaration to capture and reverse $anchor', async ({ anchor, baseline, value }) => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'settings-account' })).toString('base64url')}.signature`;
+    const owner = executor(token);
+    expect(await owner.execute('settings.get', { anchor, includeVersion: true }, user))
+      .toMatchObject({ ok: true, result: { value: baseline, settingsVersion: 1 } });
+    const changed = await owner.execute('settings.set', { anchor, value, reversal: { kind: 'capture' } }, user);
+    expect(changed).toMatchObject({ ok: true, result: { anchor, value, reversal: {
+      before: { unset: true }, applied: { value }, beforeVersion: 1, appliedVersion: 2,
+    } } });
+    if (!changed.ok) throw new Error(JSON.stringify(changed));
+    const receipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(changed.result);
+    if (!('reversal' in receipt) || !receipt.reversal) throw new Error('Missing reversal');
+    expect(await owner.execute('settings.get', { anchor }, user)).toMatchObject({ ok: true, result: { value } });
+    const reversal = { kind: 'restore', ...receipt.reversal };
+    expect(await owner.execute('settings.set', { anchor, value: baseline, reversal }, user))
+      .toMatchObject({ ok: true, result: { value: baseline } });
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'] } });
+    expect(await owner.execute('settings.set', { anchor, value: baseline, reversal }, user))
+      .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
+  });
+
+  it('keeps catalog and scalar admission when a walkthrough setting requests a reversal', async () => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'settings-account' })).toString('base64url')}.signature`;
+    const owner = executor(token);
+    for (const input of [
+      { anchor: 'sourceControl.investigateSurroundingFiles', value: 'true' },
+      { anchor: 'sourceControl.outputLanguage', value: 'not-a-language' },
+    ]) expect(await owner.execute('settings.set', { ...input, reversal: { kind: 'capture' } }, user))
+      .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+    for (const input of [
+      { anchor: 'sourceControl.summaryModel', value: 'invented-model' },
+      { anchor: 'sourceControl.prepareAfterTurn', value: true },
+    ]) expect(await owner.execute('settings.set', { ...input, reversal: { kind: 'capture' } }, user))
+      .toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'] } });
+    expect(version).toBe(1);
   });
 
   it('rejects resource targets on Account declarations before reading or writing preferences', async () => {

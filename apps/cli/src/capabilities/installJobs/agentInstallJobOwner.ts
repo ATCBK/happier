@@ -20,7 +20,7 @@ import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/cat
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { getAcpArchiveInstallableDescriptor, getAcpNpmRuntimeSpec, installAcpLaunch, resolveAcpLaunch, type AcpLaunchInstallResult } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
+import { getAcpArchiveInstallableDescriptor, getAcpNpmRuntimeSpec, getAcpUvRuntimeSpec, installAcpLaunch, resolveAcpLaunch, type AcpLaunchInstallResult } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
 import { hasPinnedArchiveManagedInstall } from '@/packagedRuntime/installables/sourceAdapters/pinnedArchive';
 import { isAgentInstallTargetInUse, removeManagedAcpInstall } from '@/agent/acp/catalog/registry/managedAgentInstalls';
 import type { TrackedSession } from '@/daemon/types';
@@ -163,10 +163,11 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
           onProgress: progressFor(job, stepId), intent: input.intent, force: input.force };
         const archive = getAcpArchiveInstallableDescriptor(definition, job.accountId!);
         const npm = getAcpNpmRuntimeSpec(definition, job.accountId!);
+        const uv = getAcpUvRuntimeSpec(definition, job.accountId!);
         const resolutionBeforeInstall = await resolveAcpLaunch(params);
         const retained = archive
           ? await hasPinnedArchiveManagedInstall({ installId: archive.capabilityId, env })
-          : npm !== null && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: npm, env });
+          : (npm ?? uv) !== null && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: (npm ?? uv)!, env });
         // A pin change acquires another root. Repair/removal of this exact version still needs live-use evidence.
         const needsRemoval = retained && (input.force || resolutionBeforeInstall.kind !== 'ready');
         const replacingInUse = needsRemoval && inUse(input);

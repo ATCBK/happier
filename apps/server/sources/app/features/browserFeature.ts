@@ -1,23 +1,16 @@
-import {
-    BROWSER_RECORDING_CAPTURE_PROFILES,
-    BrowserAutomationFidelityV1Schema,
-    BrowserAutomationImplementedActionKindV1Schema,
-    BrowserContextKindV1Schema,
-    BrowserDiagnosticFamilyV1Schema,
-    BrowserDiagnosticFidelityV1Schema,
-    BrowserPermissionKindV1Schema,
-    BrowserProfileStorageModeV1Schema,
-    BrowserRecordingRetentionClassV1Schema,
-    BrowserSemanticAdapterKindV1Schema,
-    BrowserViewTargetKindV1Schema,
-    DEFAULT_BROWSER_AUTOMATION_CAPABILITIES,
-    DEFAULT_BROWSER_CONTEXT_CAPABILITIES,
-    DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES,
-    DEFAULT_BROWSER_RECORDING_CAPABILITIES,
-    readServerEnabledBit,
-    type BrowserCapabilities,
-    type FeaturesResponse,
-} from "@happier-dev/protocol";
+import { BROWSER_RECORDING_CAPTURE_PROFILES } from '@happier-dev/protocol/browser/recording/captureProfiles';
+import { BrowserAutomationFidelityV1Schema } from '@happier-dev/protocol/browser/automation/v1';
+import { BrowserAutomationImplementedActionKindV1Schema } from '@happier-dev/protocol/browser/automation/notImplemented';
+import { BrowserContextKindV1Schema } from '@happier-dev/protocol/browser/context/v1';
+import { BrowserDiagnosticFamilyV1Schema, BrowserDiagnosticFidelityV1Schema } from '@happier-dev/protocol/browser/diagnostics/v1';
+import { BrowserPermissionKindV1Schema } from '@happier-dev/protocol/browser/permissions/v1';
+import { BrowserProfileStorageModeV1Schema } from '@happier-dev/protocol/browser/profile/v1';
+import { BrowserRecordingRetentionClassV1Schema } from '@happier-dev/protocol/browser/recording/v1';
+import { BrowserSemanticAdapterKindV1Schema } from '@happier-dev/protocol/browser/adapters/kinds';
+import { BrowserViewTargetKindV1Schema } from '@happier-dev/protocol/browser/target/v1';
+import { DEFAULT_BROWSER_AUTOMATION_CAPABILITIES, DEFAULT_BROWSER_CONTEXT_CAPABILITIES, DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES, DEFAULT_BROWSER_RECORDING_CAPABILITIES, type BrowserCapabilities } from '@happier-dev/protocol/features/payload/capabilities/browserCapabilities';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
+import { type FeaturesResponse } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import type { FeaturesPayloadDelta } from "./types";
 import { readBrowserFeatureEnv, type BrowserFeatureEnv } from "./catalog/readFeatureEnv";
@@ -50,7 +43,7 @@ const BROWSER_PERMISSION_KINDS = BrowserPermissionKindV1Schema.options;
 const BROWSER_DIAGNOSTIC_FAMILIES = BrowserDiagnosticFamilyV1Schema.options;
 
 /** `unavailable` is the absent-fidelity sentinel, not a fidelity the server can offer. */
-const BROWSER_DIAGNOSTIC_FIDELITIES = BrowserDiagnosticFidelityV1Schema.exclude(["unavailable"]).options;
+const BROWSER_DIAGNOSTIC_FIDELITIES = BrowserDiagnosticFidelityV1Schema.options.filter((fidelity) => fidelity !== 'unavailable');
 
 const BROWSER_CONTEXT_KINDS = BrowserContextKindV1Schema.options;
 
@@ -61,7 +54,7 @@ const BROWSER_CONTEXT_KINDS = BrowserContextKindV1Schema.options;
 const BROWSER_AUTOMATION_ACTIONS = BrowserAutomationImplementedActionKindV1Schema.options;
 
 /** `unavailable` is the absent-fidelity sentinel, not a fidelity the server can offer. */
-const BROWSER_AUTOMATION_FIDELITIES = BrowserAutomationFidelityV1Schema.exclude(["unavailable"]).options;
+const BROWSER_AUTOMATION_FIDELITIES = BrowserAutomationFidelityV1Schema.options.filter((fidelity) => fidelity !== 'unavailable');
 
 const BROWSER_RECORDING_RETENTION_CLASSES = BrowserRecordingRetentionClassV1Schema.options;
 

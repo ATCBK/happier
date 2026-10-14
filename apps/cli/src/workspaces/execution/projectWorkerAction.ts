@@ -1,5 +1,6 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
-import { ProjectWorkerActionInputSchemasV1, type ProjectWorkerStatusResultV1 } from '@happier-dev/protocol';
+import { ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
+import type { ProjectWorkerStatusResultV1 } from '@happier-dev/protocol';
 import { ProjectWorkerDependencyV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerExecutionV1';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { MachineWorkspaceSyncRpcService } from '@/api/machine/rpcHandlers.workspaceSync';

@@ -1,15 +1,15 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { ActionInvokeInputProtocolSchema } from '../actions/actionInvokeInput.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion, type ProtocolJsonValue, type ProtocolSchemaInput, type ProtocolSchemaOutput } from '../plugins/actions/protocolComposableSchema.js';
 
-const identity = z.string().min(1);
+const identity = z.string().check(z.minLength(1));
 const textEvidence = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('available') }).strict(),
-  z.object({ state: z.literal('unavailable'), reason: identity }).strict(),
+  z.strictObject({ state: z.literal('available') }),
+  z.strictObject({ state: z.literal('unavailable'), reason: identity }),
 ]);
 
 /** Selectors are inputs, never authority for captured endpoint bytes. */
@@ -35,59 +35,59 @@ export const ScmComparisonSourceProtocolSchema = defineProtocolUnion([
 // The portable parser omits absent optional values; its admitted output is JSON even when
 // a downstream exact-optional compiler reads declarations emitted by this package.
 export type ScmComparisonSource = ProtocolSchemaOutput<typeof ScmComparisonSourceProtocolSchema> & Readonly<{ [key: string]: ProtocolJsonValue }>;
-export const ScmComparisonSourceSchema: z.ZodType<ScmComparisonSource, ProtocolSchemaInput<typeof ScmComparisonSourceProtocolSchema>> = asProtocolZod(ScmComparisonSourceProtocolSchema);
+export const ScmComparisonSourceSchema: z.ZodMiniType<ScmComparisonSource, ProtocolSchemaInput<typeof ScmComparisonSourceProtocolSchema>> = asProtocolZod(ScmComparisonSourceProtocolSchema);
 
-const range = z.object({ startLine: z.number().int().nonnegative(), lineCount: z.number().int().nonnegative() }).strict();
-export const ScmChangeOccurrenceSchema = lazyZodSchema(() => z.object({
-  id: identity, alias: identity, path: identity, previousPath: identity.optional(),
-  beforeBlobId: identity.optional(), afterBlobId: identity.optional(),
-  before: range, after: range, position: z.number().int().nonnegative(),
-  layer: z.enum(['staged', 'unstaged', 'untracked', 'combined']).optional(),
-  evidence: textEvidence.optional(),
-}).strict());
+const range = z.strictObject({ startLine: z.number().check(z.int(), z.nonnegative()), lineCount: z.number().check(z.int(), z.nonnegative()) });
+export const ScmChangeOccurrenceSchema = lazyZodSchema(() => z.strictObject({
+  id: identity, alias: identity, path: identity, previousPath: z.optional(identity),
+  beforeBlobId: z.optional(identity), afterBlobId: z.optional(identity),
+  before: range, after: range, position: z.number().check(z.int(), z.nonnegative()),
+  layer: z.optional(z.enum(['staged', 'unstaged', 'untracked', 'combined'])),
+  evidence: z.optional(textEvidence),
+}));
 export type ScmChangeOccurrence = z.infer<typeof ScmChangeOccurrenceSchema>;
 
-export const ScmComparisonFileSchema = lazyZodSchema(() => z.object({
-  path: identity, previousPath: identity.optional(), changeKind: identity,
-  beforeBlobId: identity.optional(), afterBlobId: identity.optional(),
-  binary: z.boolean().nullable(), generated: z.boolean(), lockfile: z.boolean(),
+export const ScmComparisonFileSchema = lazyZodSchema(() => z.strictObject({
+  path: identity, previousPath: z.optional(identity), changeKind: identity,
+  beforeBlobId: z.optional(identity), afterBlobId: z.optional(identity),
+  binary: z.nullable(z.boolean()), generated: z.boolean(), lockfile: z.boolean(),
   evidence: z.discriminatedUnion('state', [
-    z.object({ state: z.literal('available'), unifiedDiff: z.string() }).strict(),
-    z.object({ state: z.literal('unavailable'), reason: identity, unifiedDiff: z.string().optional() }).strict(),
+    z.strictObject({ state: z.literal('available'), unifiedDiff: z.string() }),
+    z.strictObject({ state: z.literal('unavailable'), reason: identity, unifiedDiff: z.optional(z.string()) }),
   ]),
   occurrences: z.array(ScmChangeOccurrenceSchema),
-}).strict());
+}));
 export type ScmComparisonFile = z.infer<typeof ScmComparisonFileSchema>;
 
-export const ScmComparisonSchema = lazyZodSchema(() => z.object({
+export const ScmComparisonSchema = lazyZodSchema(() => z.strictObject({
   id: identity, source: ScmComparisonSourceSchema,
-  repository: z.object({ rootPath: identity }).strict(),
-  endpoints: z.object({ before: identity.optional(), after: identity.optional() }).strict(),
+  repository: z.strictObject({ rootPath: identity }),
+  endpoints: z.strictObject({ before: z.optional(identity), after: z.optional(identity) }),
   /** Pending mutation authority is distinct from the empty tree used to display a root diff. */
-  commitTarget: z.object({ headOid: identity.nullable(), ref: identity.nullable() }).strict().optional(),
+  commitTarget: z.optional(z.strictObject({ headOid: z.nullable(identity), ref: z.nullable(identity) })),
   /** Source-attested base tip used for PR freshness, never as the diff-before endpoint. */
-  pullRequest: z.object({ baseOid: identity }).strict().optional(),
-  inventory: z.object({
+  pullRequest: z.optional(z.strictObject({ baseOid: identity })),
+  inventory: z.strictObject({
     state: z.enum(['complete', 'incomplete', 'unavailable']),
     files: z.array(ScmComparisonFileSchema), reasons: z.array(identity),
-  }).strict(),
-  freshness: z.enum(['current', 'stale', 'unknown']).optional(),
-  attributionScope: z.enum(['shared_worktree', 'unknown', 'no_happier_checkpoint_overlap_observed']).optional(),
-}).strict().superRefine((value, ctx) => {
+  }),
+  freshness: z.optional(z.enum(['current', 'stale', 'unknown'])),
+  attributionScope: z.optional(z.enum(['shared_worktree', 'unknown', 'no_happier_checkpoint_overlap_observed'])),
+}).check(z.superRefine((value, ctx) => {
   const identities = new Map<string, string>();
   for (const [fileIndex, file] of value.inventory.files.entries()) {
     for (const [occurrenceIndex, occurrence] of file.occurrences.entries()) {
       if (identities.has(occurrence.id) || identities.has(occurrence.alias) || occurrence.path !== file.path) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['inventory', 'files', fileIndex, 'occurrences', occurrenceIndex], message: 'Occurrence identities must be unique and match their captured file' });
+        ctx.addIssue({ code: "custom", path: ['inventory', 'files', fileIndex, 'occurrences', occurrenceIndex], message: 'Occurrence identities must be unique and match their captured file' });
       }
       identities.set(occurrence.id, occurrence.id);
       identities.set(occurrence.alias, occurrence.id);
     }
   }
   if (value.inventory.state !== 'complete' && value.inventory.reasons.length === 0) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['inventory', 'reasons'], message: 'Missing source coverage requires an explicit reason' });
+    ctx.addIssue({ code: "custom", path: ['inventory', 'reasons'], message: 'Missing source coverage requires an explicit reason' });
   }
-}));
+})));
 export type ScmComparison = z.infer<typeof ScmComparisonSchema>;
 
 const GENERATED_PATH = /(?:^|\/)generated(?:\/|\.)|\.generated\./i;

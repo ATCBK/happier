@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageQuerySchema } from '../inputs/usageQuery.js';
 import { UsageObservationTokensSchema, UsageAnalyticsCostFactValueSchema, UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
@@ -13,65 +13,65 @@ export const UsageRecapFieldSchema = lazyZodSchema(() => z.enum(USAGE_RECAP_FIEL
 export type UsageRecapField = z.infer<typeof UsageRecapFieldSchema>;
 
 /** One closed input for private preview and subsequent client image rendering. */
-export const UsageRecapComposeInputSchema = lazyZodSchema(() => z.object({
+export const UsageRecapComposeInputSchema = lazyZodSchema(() => z.strictObject({
   query: UsageQuerySchema,
-  style: z.enum(USAGE_RECAP_STYLES).default('daybreak'),
-  format: z.enum(USAGE_RECAP_FORMATS).default('square'),
-  selectedFields: z.array(UsageRecapFieldSchema).default(['tokens', 'activeDays', 'modelMix', 'cache', 'rhythm', 'highlights']),
-}).strict());
+  style: z._default(z.enum(USAGE_RECAP_STYLES), 'daybreak'),
+  format: z._default(z.enum(USAGE_RECAP_FORMATS), 'square'),
+  selectedFields: z._default(z.array(UsageRecapFieldSchema), ['tokens', 'activeDays', 'modelMix', 'cache', 'rhythm', 'highlights']),
+}));
 export type UsageRecapComposeInput = z.infer<typeof UsageRecapComposeInputSchema>;
 
-const count = lazyZodSchema(() => z.number().int().nonnegative());
-const amount = lazyZodSchema(() => z.number().finite().nonnegative());
-const mixRow = lazyZodSchema(() => z.object({ tokens: amount, events: count, name: z.string().optional() }).strict());
+const count = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const amount = lazyZodSchema(() => z.number().check(z.nonnegative()));
+const mixRow = lazyZodSchema(() => z.strictObject({ tokens: amount, events: count, name: z.optional(z.string()) }));
 const highlight = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('observed_peak'), bucketStartMs: count, bucketEndMs: count, tokens: amount }).strict(),
-  z.object({ kind: z.literal('linked_outcomes'), count }).strict(),
+  z.strictObject({ kind: z.literal('observed_peak'), bucketStartMs: count, bucketEndMs: count, tokens: amount }),
+  z.strictObject({ kind: z.literal('linked_outcomes'), count }),
 ]));
 
-export const UsageRecapFactsSchema = lazyZodSchema(() => z.object({
-  tokens: UsageObservationTokensSchema.optional(),
-  activeDays: count.optional(),
-  streak: z.object({ longestDays: count }).strict().optional(),
-  modelMix: z.array(mixRow).optional(),
-  agentMix: z.array(mixRow).optional(),
-  cache: z.object({ readTokens: amount, writeTokens: amount }).strict().optional(),
-  rhythm: z.object({ calendarDays: UsageAnalyticsQueryResponseSchema.shape.activity.unwrap().shape.calendarDays.unwrap(),
-    weekdayHourBuckets: UsageAnalyticsQueryResponseSchema.shape.activity.unwrap().shape.weekdayHourBuckets.unwrap() }).strict().optional(),
-  parallel: z.object({ sumAgentMs: amount, unionElapsedMs: amount, maximumConcurrency: count }).strict().optional(),
-  night: UsageHowYouWorkSchema.shape.nightShift.unwrap().optional(),
-  work: z.object({ linkedOutcomes: count, allocatedContributions: count, unallocatedContributions: count }).strict().optional(),
-  coach: z.object({ findings: z.array(z.object({ detectorId: z.string().min(1), evidenceCount: count }).strict()) }).strict().optional(),
-  highlights: z.array(highlight).optional(),
-  dollars: z.object({ basis: UsageQuerySchema.shape.costBasis,
-    facts: z.array(UsageAnalyticsCostFactValueSchema).min(1) }).strict().optional(),
-}).strict());
+export const UsageRecapFactsSchema = lazyZodSchema(() => z.strictObject({
+  tokens: z.optional(UsageObservationTokensSchema),
+  activeDays: z.optional(count),
+  streak: z.optional(z.strictObject({ longestDays: count })),
+  modelMix: z.optional(z.array(mixRow)),
+  agentMix: z.optional(z.array(mixRow)),
+  cache: z.optional(z.strictObject({ readTokens: amount, writeTokens: amount })),
+  rhythm: z.optional(z.strictObject({ calendarDays: UsageAnalyticsQueryResponseSchema.shape.activity._zod.def.innerType.shape.calendarDays._zod.def.innerType,
+    weekdayHourBuckets: UsageAnalyticsQueryResponseSchema.shape.activity._zod.def.innerType.shape.weekdayHourBuckets._zod.def.innerType })),
+  parallel: z.optional(z.strictObject({ sumAgentMs: amount, unionElapsedMs: amount, maximumConcurrency: count })),
+  night: z.optional(UsageHowYouWorkSchema.shape.nightShift._zod.def.innerType),
+  work: z.optional(z.strictObject({ linkedOutcomes: count, allocatedContributions: count, unallocatedContributions: count })),
+  coach: z.optional(z.strictObject({ findings: z.array(z.strictObject({ detectorId: z.string().check(z.minLength(1)), evidenceCount: count })) })),
+  highlights: z.optional(z.array(highlight)),
+  dollars: z.optional(z.strictObject({ basis: UsageQuerySchema.shape.costBasis,
+    facts: z.array(UsageAnalyticsCostFactValueSchema).check(z.minLength(1)) })),
+}));
 export type UsageRecapFacts = z.infer<typeof UsageRecapFactsSchema>;
 
 /** Privacy projection of existing coverage: no source identity, scope key or error text. */
-export const UsageRecapCoverageSchema = lazyZodSchema(() => z.object({
-  accounting: UsageAnalyticsQueryResponseSchema.shape.coverage.unwrap().omit({ sources: true }).nullable(),
-  sourceCoverage: z.array(z.object({ status: UsageQuerySourceStatusSchema, asOfMs: count.optional(), eventCount: count, historyComplete: z.boolean().nullable() }).strict()),
-  sourceStatuses: z.array(z.object({ status: UsageQuerySourceStatusSchema, asOfMs: count.optional() }).strict()),
+export const UsageRecapCoverageSchema = lazyZodSchema(() => z.strictObject({
+  accounting: z.nullable(z.omit(UsageAnalyticsQueryResponseSchema.shape.coverage._zod.def.innerType, { sources: true })),
+  sourceCoverage: z.array(z.strictObject({ status: UsageQuerySourceStatusSchema, asOfMs: z.optional(count), eventCount: count, historyComplete: z.nullable(z.boolean()) })),
+  sourceStatuses: z.array(z.strictObject({ status: UsageQuerySourceStatusSchema, asOfMs: z.optional(count) })),
   pending: z.boolean(),
-  night: z.object({ detailStatus: z.enum(['available', 'partial', 'unknown']) }).strict().optional(),
-  coach: z.object({ currentness: z.enum(['current', 'stale', 'unknown']), asOfMs: count.nullable(),
-    findings: z.array(z.enum(['complete', 'partial', 'unknown'])) }).strict().optional(),
-  intervals: z.object({ method: z.literal('witnessed_intervals_v1'), status: z.enum(['complete_for_supplied_facts', 'partial']),
+  night: z.optional(z.strictObject({ detailStatus: z.enum(['available', 'partial', 'unknown']) })),
+  coach: z.optional(z.strictObject({ currentness: z.enum(['current', 'stale', 'unknown']), asOfMs: z.nullable(count),
+    findings: z.array(z.enum(['complete', 'partial', 'unknown'])) })),
+  intervals: z.optional(z.strictObject({ method: z.literal('witnessed_intervals_v1'), status: z.enum(['complete_for_supplied_facts', 'partial']),
     detailStatus: z.enum(['available', 'partial', 'unknown']),
-    unknownEndCount: count, invalidIntervalCount: count }).strict().optional(),
-}).strict());
+    unknownEndCount: count, invalidIntervalCount: count })),
+}));
 
 export const UsageRecapComposeResultSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('composed'), v: z.literal(1),
     style: z.enum(USAGE_RECAP_STYLES), format: z.enum(USAGE_RECAP_FORMATS),
     selectedFields: z.array(UsageRecapFieldSchema), unavailableFields: z.array(UsageRecapFieldSchema),
-    period: z.object({ startMs: count, endMs: count, timeZoneOffsetMinutes: UsageQuerySchema.shape.timeZoneOffsetMinutes }).strict(),
-    asOfMs: count.nullable(), coverage: UsageRecapCoverageSchema, facts: UsageRecapFactsSchema,
-  }).strict(),
-  z.object({ kind: z.literal('unavailable'), reason: z.enum(['query_mismatch', 'accounting_unavailable', 'period_unavailable']) }).strict(),
-]).superRefine((result, context) => {
+    period: z.strictObject({ startMs: count, endMs: count, timeZoneOffsetMinutes: UsageQuerySchema.shape.timeZoneOffsetMinutes }),
+    asOfMs: z.nullable(count), coverage: UsageRecapCoverageSchema, facts: UsageRecapFactsSchema,
+  }),
+  z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['query_mismatch', 'accounting_unavailable', 'period_unavailable']) }),
+]).check(z.superRefine((result, context) => {
   if (result.kind !== 'composed') return;
   for (const [field, value] of Object.entries(result.facts)) {
     if (value !== undefined && !result.selectedFields.some(selected => selected === field)) {
@@ -85,21 +85,21 @@ export const UsageRecapComposeResultSchema = lazyZodSchema(() => z.discriminated
       });
     }
   }
-}));
+})));
 export type UsageRecapComposeResult = z.infer<typeof UsageRecapComposeResultSchema>;
 export type UsageRecapComposed = Extract<UsageRecapComposeResult, { kind: 'composed' }>;
 
 /** Same file-byte boundary as data exports, with the recap's selected-field vocabulary. */
-export const UsageRecapImageResultSchema = lazyZodSchema(() => UsageFileResultSchema.omit({ fields: true }).extend({
+export const UsageRecapImageResultSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(UsageFileResultSchema, { fields: true }), {
   mediaType: z.literal('image/png'), selectedFields: z.array(UsageRecapFieldSchema),
-}).strict());
+})));
 export type UsageRecapImageResult = z.infer<typeof UsageRecapImageResultSchema>;
 
 export const UsageRecapExportResultSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('exported'), compose: UsageRecapComposeResultSchema, file: UsageRecapImageResultSchema }).strict(),
-  z.object({ kind: z.literal('unavailable'), reason: z.enum(['render_target_unavailable', 'render_failed', 'compose_unavailable']),
-    compose: UsageRecapComposeResultSchema }).strict(),
-]).superRefine((result, context) => {
+  z.strictObject({ kind: z.literal('exported'), compose: UsageRecapComposeResultSchema, file: UsageRecapImageResultSchema }),
+  z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['render_target_unavailable', 'render_failed', 'compose_unavailable']),
+    compose: UsageRecapComposeResultSchema }),
+]).check(z.superRefine((result, context) => {
   if (result.kind !== 'exported') return;
   if (result.compose.kind !== 'composed') {
     context.addIssue({ code: 'custom', path: ['compose'], message: 'Image requires composed facts' });
@@ -110,7 +110,7 @@ export const UsageRecapExportResultSchema = lazyZodSchema(() => z.discriminatedU
     || result.file.fileName !== usageRecapImageFileName(result.compose)) {
     context.addIssue({ code: 'custom', path: ['file'], message: 'Image does not match its composed manifest' });
   }
-}));
+})));
 export type UsageRecapExportResult = z.infer<typeof UsageRecapExportResultSchema>;
 
 /** Nameless display name from style, format and the last covered calendar date. */

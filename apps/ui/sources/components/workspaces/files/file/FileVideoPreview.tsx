@@ -120,9 +120,9 @@ const styles = StyleSheet.create((theme) => ({
     player: { width: '100%', height: '100%' },
     status: {
         position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
-        alignItems: 'center', justifyContent: 'center', padding: 16, gap: 12,
+        alignItems: 'center', justifyContent: 'center', padding: theme.space.s16, gap: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
     },
-    label: { color: theme.colors.text.secondary, textAlign: 'center', ...Typography.default() },
-    error: { color: theme.colors.state.danger.foreground, textAlign: 'center', ...Typography.default() },
+    label: { color: theme.colors.text.secondary, textAlign: 'center', ...Typography.variant('body') },
+    error: { color: theme.colors.state.danger.foreground, textAlign: 'center', ...Typography.variant('body') },
 }));

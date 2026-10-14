@@ -28,7 +28,7 @@ export function useConnectedAccountIdentityPrivacy(options: Readonly<{ mutation:
 export function useConnectedAccountIdentityPrivacy(options?: Readonly<{ mutation: true }>): ConnectedAccountIdentityPrivacyMutation {
     const value = useLocalSetting('hideConnectedAccountIdentities');
     const scope = useActiveServerAccountScope();
-    // Identity presentation is used per row; only the two editing surfaces bind Action custody.
+    // Identity presentation is used per row; editing surfaces explicitly bind Action custody.
     const execution = useMountedActionExecution(options?.mutation ? scope : null);
     const setHidden = React.useCallback(async (hidden: boolean) => {
         if (!scope) return;

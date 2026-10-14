@@ -32,7 +32,9 @@ const LINE_WIDTH = { under: 44, inline: 28, cells: 56, tiles: 120, preview: 36, 
 const LINE_HEIGHT = { under: 12, inline: 10, cells: 14, tiles: 24, preview: 10, fact: 0 } as const;
 const RING_SIZE = { under: 16, inline: 14, cells: 16, tiles: 28, preview: 14, fact: 0 } as const;
 /** A card's rings stand as instruments (lab `rw` V): the ring, its figure, then its name, centred. */
-const RING_FIGURE_SIZE = 44;
+const RING_FIGURE_SIZE = 52;
+/** The lab's ring (`rw` V) draws its arc at about a tenth of its diameter, on a track one step up from a hairline. */
+const RING_FIGURE_STROKE = 5;
 /** The list column's name keeps its line: one instrument stands beside it (one in trouble first, else the first chosen). */
 const INLINE_CAPACITY = 1;
 
@@ -78,7 +80,8 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
                     layout={layout}
                     // One caption names the instruments; labels return only where one or four metrics show (MPG-20).
                     labelled={props.layout === 'tiles' || ((props.layout === 'under' || props.layout === 'preview') && (shown.length === 1 || shown.length === 4))}
-                    neverSampled={props.availability?.kind === 'never_sampled'}
+                    neverSampled={props.availability?.kind === 'never_sampled'
+                        || props.availability?.kind === 'reporting' && !instruments?.[metric]?.figure}
                     color={theme.colors.text.secondary}
                 />
             ))}
@@ -126,13 +129,14 @@ const MachineSummaryInstrumentView = React.memo(function MachineSummaryInstrumen
     if (layout === 'tiles' && props.style === 'rings' && props.metric !== 'network') {
         const ring = (
             <View style={styles.ringFigure}>
-                <CapacityRing ratio={instrument?.used ?? 0} color={inkColor} trackColor={theme.colors.border.subtle}
-                    size={RING_FIGURE_SIZE} strokeWidth={3} />
+                <CapacityRing ratio={instrument?.used ?? 0} color={inkColor} trackColor={theme.colors.border.default}
+                    size={RING_FIGURE_SIZE} strokeWidth={RING_FIGURE_STROKE} />
                 <MachineSummaryRingValue metric={props.metric} figure={figure} color={toneColor} />
                 <Text numberOfLines={1} style={styles.label}>{machineSummaryMetricTitle(props.metric)}</Text>
             </View>
         );
-        return instrument?.exact ? <Tooltip label={instrument.exact}>{ring}</Tooltip> : ring;
+        // The tooltip's host takes the ring's column, so the rings spread over the card (loading and loaded alike).
+        return instrument?.exact ? <Tooltip label={instrument.exact} style={styles.ringTile}>{ring}</Tooltip> : ring;
     }
     const drawn = renderInstrument({ ...props, inkColor, trackColor: theme.colors.border.subtle });
     const body = (
@@ -284,6 +288,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: 24,
         justifyContent: 'center',
     },
+    ringTile: {
+        flex: 1,
+        minWidth: 0,
+    },
     ringFigure: {
         flex: 1,
         minWidth: 0,
@@ -303,12 +311,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: '100%',
     },
     ringNumber: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.default('semiBold'),
         ...Typography.tabular(),
     },
     ringUnit: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
@@ -316,21 +324,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
     },
     label: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     figure: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
     },
     figureSlot: {
         minWidth: 44,
     },
     tileFigure: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.tabular(),
     },
     fact: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
 }));

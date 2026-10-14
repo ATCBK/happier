@@ -34,7 +34,9 @@ import { loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/librar
 import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { loadAiLaunchProfileArtifacts, resolveProfileCatalogAuthorityV1, removeTransferredProfileSourcesV1, listTransferredProfileIdsV1,
   readEffectiveProfileSecretBindingsV1 } from '@happier-dev/protocol/profiles/read';
-import { AccountSettingsSchema, SavedSecretSchema, type SavedSecret } from '@happier-dev/protocol';
+import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
+import { SavedSecretSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
+import type { SavedSecret } from '@happier-dev/protocol';
 import { sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { deriveAccountMachineKeyFromRecoverySecret, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';

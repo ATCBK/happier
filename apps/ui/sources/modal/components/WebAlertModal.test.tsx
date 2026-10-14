@@ -148,4 +148,59 @@ describe('WebAlertModal', () => {
         expect(onConfirm).toHaveBeenCalledWith(false);
         expect(onClose).not.toHaveBeenCalled();
     });
+    it('settles an Escape dismissal of an alert through its cancel choice so a waiting guard is released', async () => {
+        const { WebAlertModal } = await import('./WebAlertModal');
+
+        baseModalSpy.mockClear();
+        const onClose = vi.fn();
+        const onDiscard = vi.fn();
+        const onKeepEditing = vi.fn();
+
+        await renderScreen(<WebAlertModal
+                    config={{
+                        id: 'test-alert',
+                        type: 'alert',
+                        title: 'Discard changes',
+                        message: 'You have unsaved changes.',
+                        buttons: [
+                            { text: 'Discard', style: 'destructive', onPress: onDiscard },
+                            { text: 'Keep editing', style: 'cancel', onPress: onKeepEditing },
+                        ],
+                    }}
+                    onClose={onClose}
+                />);
+
+        const [baseModalProps] = baseModalSpy.mock.calls.at(-1)!;
+        baseModalProps.onClose();
+
+        expect(onKeepEditing).toHaveBeenCalledOnce();
+        expect(onDiscard).not.toHaveBeenCalled();
+        expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('settles an explicit alert button once, without also running the cancel choice', async () => {
+        const { WebAlertModal } = await import('./WebAlertModal');
+        const onClose = vi.fn();
+        const onDiscard = vi.fn();
+        const onKeepEditing = vi.fn();
+
+        const screen = await renderScreen(<WebAlertModal
+                    config={{
+                        id: 'test-alert',
+                        type: 'alert',
+                        title: 'Discard changes',
+                        buttons: [
+                            { text: 'Discard', style: 'destructive', onPress: onDiscard },
+                            { text: 'Keep editing', style: 'cancel', onPress: onKeepEditing },
+                        ],
+                    }}
+                    onClose={onClose}
+                />);
+
+        getNodeByTestID(screen, 'web-modal-button-0').props.onPress();
+
+        expect(onDiscard).toHaveBeenCalledOnce();
+        expect(onKeepEditing).not.toHaveBeenCalled();
+        expect(onClose).toHaveBeenCalledOnce();
+    });
 });

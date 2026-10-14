@@ -81,7 +81,6 @@ export function installMachineDetailsCommonModuleMocks(
                 ...actual.Typography,
                 default: () => ({}),
                 mono: () => ({}),
-                rowMeta: () => ({}),
             },
         };
     });

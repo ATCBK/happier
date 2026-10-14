@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountDisplayProfileV1Schema } from '../../account/accountDisplayProfileV1.js';
 import {
@@ -17,12 +17,10 @@ import { SessionAccessAccountSummaryV1Schema } from './sessionAccessPrincipalV1.
  * identity/authority boundary where an unknown field is a bug, not an additive
  * extension.
  */
-export const SetSessionResponsibilityRequestSchema = lazyZodSchema(() => z
-  .object({
-    sessionId: z.string().min(1),
-    responsibleAccountId: z.string().min(1).nullable(),
-  })
-  .strict());
+export const SetSessionResponsibilityRequestSchema = lazyZodSchema(() => z.strictObject({
+    sessionId: z.string().check(z.minLength(1)),
+    responsibleAccountId: z.nullable(z.string().check(z.minLength(1))),
+  }));
 export type SetSessionResponsibilityRequest = z.infer<typeof SetSessionResponsibilityRequestSchema>;
 
 /**
@@ -37,32 +35,29 @@ export type SetSessionResponsibilityRequest = z.infer<typeof SetSessionResponsib
  * `autoFollowed` is the transient result of this exact committed assignment;
  * it is never persisted as assignment origin or inferred by a client.
  */
-export const SetSessionResponsibilityResponseSchema = lazyZodSchema(() => z
-  .object({
+export const SetSessionResponsibilityResponseSchema = lazyZodSchema(() => z.strictObject({
     changed: z.boolean(),
-    responsibleAccountId: z.string().min(1).nullable(),
-    responsibleAccount: SessionAccessAccountSummaryV1Schema.nullable(),
+    responsibleAccountId: z.nullable(z.string().check(z.minLength(1))),
+    responsibleAccount: z.nullable(SessionAccessAccountSummaryV1Schema),
     autoFollowed: z.boolean(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     if (value.autoFollowed && (!value.changed || value.responsibleAccountId === null)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'auto-Follow requires this response to describe a changed assignment',
         path: ['autoFollowed'],
       });
     }
     if (value.responsibleAccountId === null && value.responsibleAccount !== null) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'unassigned responsibility must project a null summary', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'unassigned responsibility must project a null summary', path: ['responsibleAccount'] });
     }
     if (
       typeof value.responsibleAccountId === 'string' &&
       (value.responsibleAccount === null || value.responsibleAccount.accountId !== value.responsibleAccountId)
     ) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'assigned responsibility must project the matching summary', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'assigned responsibility must project the matching summary', path: ['responsibleAccount'] });
     }
-  }));
+  })));
 export type SetSessionResponsibilityResponse = z.infer<typeof SetSessionResponsibilityResponseSchema>;
 
 /**
@@ -76,15 +71,13 @@ export const SessionResponsibilityCandidatePurposeV1Schema = lazyZodSchema(() =>
 export type SessionResponsibilityCandidatePurposeV1 =
   z.infer<typeof SessionResponsibilityCandidatePurposeV1Schema>;
 
-export const SessionResponsibilityCandidatesRequestSchema = lazyZodSchema(() => z
-  .object({
-    sessionId: z.string().min(1),
+export const SessionResponsibilityCandidatesRequestSchema = lazyZodSchema(() => z.strictObject({
+    sessionId: z.string().check(z.minLength(1)),
     purpose: SessionResponsibilityCandidatePurposeV1Schema,
-    query: z.string().min(1).max(HOME_ACCOUNT_SEARCH_QUERY_MAX_LENGTH_V1).optional(),
-    cursor: z.string().min(1).max(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1).optional(),
-    limit: z.number().int().min(1).max(HOME_ACCOUNT_PAGE_LIMIT_MAX_V1).optional(),
-  })
-  .strict());
+    query: z.optional(z.string().check(z.minLength(1), z.maxLength(HOME_ACCOUNT_SEARCH_QUERY_MAX_LENGTH_V1))),
+    cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1))),
+    limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(HOME_ACCOUNT_PAGE_LIMIT_MAX_V1))),
+  }));
 export type SessionResponsibilityCandidatesRequest =
   z.infer<typeof SessionResponsibilityCandidatesRequestSchema>;
 
@@ -102,21 +95,17 @@ export const SessionResponsibilityCandidateAccessHintV1Schema = lazyZodSchema(()
 export type SessionResponsibilityCandidateAccessHintV1 =
   z.infer<typeof SessionResponsibilityCandidateAccessHintV1Schema>;
 
-export const SessionResponsibilityCandidateV1Schema = lazyZodSchema(() => z
-  .object({
-    accountId: z.string().min(1),
+export const SessionResponsibilityCandidateV1Schema = lazyZodSchema(() => z.strictObject({
+    accountId: z.string().check(z.minLength(1)),
     profile: AccountDisplayProfileV1Schema,
-    accessHint: SessionResponsibilityCandidateAccessHintV1Schema.optional(),
-  })
-  .strict());
+    accessHint: z.optional(SessionResponsibilityCandidateAccessHintV1Schema),
+  }));
 export type SessionResponsibilityCandidateV1 = z.infer<typeof SessionResponsibilityCandidateV1Schema>;
 
-export const SessionResponsibilityCandidatesResponseSchema = lazyZodSchema(() => z
-  .object({
+export const SessionResponsibilityCandidatesResponseSchema = lazyZodSchema(() => z.strictObject({
     candidates: z.array(SessionResponsibilityCandidateV1Schema),
-    nextCursor: z.string().min(1).max(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1).nullable(),
-  })
-  .strict());
+    nextCursor: z.nullable(z.string().check(z.minLength(1), z.maxLength(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1))),
+  }));
 export type SessionResponsibilityCandidatesResponse =
   z.infer<typeof SessionResponsibilityCandidatesResponseSchema>;
 

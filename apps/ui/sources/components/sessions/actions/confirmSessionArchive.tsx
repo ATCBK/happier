@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -95,7 +96,7 @@ export function SessionArchiveConfirmModal(props: SessionArchiveConfirmModalProp
         title: t('sessionInfo.archiveSession'),
         testID: 'session-archive-confirm-modal',
         footer,
-        dimensions: { width: 360, maxHeightRatio: 0.6, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow, maxHeightRatio: 0.6, size: 'dialog' as const },
     }), [footer]);
     useModalCardChrome(props.setChrome, chrome);
 

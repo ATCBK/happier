@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ensureDevExpoServer, resolveExpoSpawnOptions } from './expo_dev.mjs';
+import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 
 test('ensureDevExpoServer does not drop Expo output when spawnOptions stdio is ignore', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-verbose-'));
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -29,12 +31,13 @@ test('ensureDevExpoServer does not drop Expo output when spawnOptions stdio is i
 
     const teeFile = join(tmp, 'expo.log');
     const children = [];
-    await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
       autostart: { baseDir: tmp },
-      baseEnv: { ...process.env, HAPPIER_STACK_VERBOSE: '1', HAPPIER_STACK_EXPO_RESTART_MAX_ATTEMPTS: '0' },
+      baseEnv: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: tmp }),
+        HAPPIER_STACK_SKIP_REFRESH_DEPS: '1', HAPPIER_STACK_VERBOSE: '1', HAPPIER_STACK_EXPO_RESTART_MAX_ATTEMPTS: '0' },
       apiServerUrl: 'http://127.0.0.1:1',
       restart: true,
       stackMode: false,
@@ -62,6 +65,8 @@ test('ensureDevExpoServer does not drop Expo output when spawnOptions stdio is i
     }
     assert.match(log, /hello-from-fake-expo/);
   } finally {
+    await result?.close?.();
+    await result?.proc?.completion;
     await rm(tmp, { recursive: true, force: true });
   }
 });

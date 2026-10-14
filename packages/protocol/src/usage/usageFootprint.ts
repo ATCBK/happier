@@ -1,12 +1,12 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageObservationTokensSchema, type UsageAnalyticsQueryResponse, type UsageObservationTokens } from './usageAnalyticsContracts.js';
 
-export const UsageFootprintProjectionSchema = lazyZodSchema(() => z.object({
+export const UsageFootprintProjectionSchema = lazyZodSchema(() => z.strictObject({
   status: z.literal('insufficient_basis'), reason: z.literal('no_applicable_versioned_method'),
   method: z.null(), energyWh: z.null(), emissionsGCo2e: z.null(),
-  coverage: z.object({ accountedTokens: UsageObservationTokensSchema, estimatedTokenCount: z.literal(0) }).strict(),
-}).strict());
+  coverage: z.strictObject({ accountedTokens: UsageObservationTokensSchema, estimatedTokenCount: z.literal(0) }),
+}));
 
 export type UsageFootprintProjection = Readonly<{
   status: 'insufficient_basis';

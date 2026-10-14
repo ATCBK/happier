@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { MachineGuardActivityFilterV1Schema, MachineGuardActivityListV1Schema, MachineGuardActivityRangeV1Schema } from '../../machines/guard/activityV1.js';
@@ -8,11 +8,11 @@ import { MACHINE_GUARD_ACTIVITY_ACTION_IDS } from '../../machines/guard/actionId
 export { MACHINE_GUARD_ACTIVITY_ACTION_IDS } from '../../machines/guard/actionIdsV1.js';
 export type MachineGuardActivityActionId = typeof MACHINE_GUARD_ACTIVITY_ACTION_IDS[number];
 export const MachineGuardActivityActionIdSchema = lazyZodSchema(() => z.enum(MACHINE_GUARD_ACTIVITY_ACTION_IDS));
-const routing = { serverId: z.string().trim().min(1).optional(), machineId: z.string().trim().min(1) };
-export const MachineGuardActivityListInputV1Schema = lazyZodSchema(() => z.object({ ...routing,
-  range: MachineGuardActivityRangeV1Schema, filter: MachineGuardActivityFilterV1Schema.optional(),
-}).strict());
-export const MachineGuardActivityUndoInputV1Schema = lazyZodSchema(() => z.object({ ...routing, entryId: z.string().trim().min(1) }).strict());
+const routing = { serverId: z.optional(z.string().check(z.trim(), z.minLength(1))), machineId: z.string().check(z.trim(), z.minLength(1)) };
+export const MachineGuardActivityListInputV1Schema = lazyZodSchema(() => z.strictObject({ ...routing,
+  range: MachineGuardActivityRangeV1Schema, filter: z.optional(MachineGuardActivityFilterV1Schema),
+}));
+export const MachineGuardActivityUndoInputV1Schema = lazyZodSchema(() => z.strictObject({ ...routing, entryId: z.string().check(z.trim(), z.minLength(1)) }));
 export const MACHINE_GUARD_ACTIVITY_INPUT_SCHEMAS = {
   'machines.guard.activity.list': MachineGuardActivityListInputV1Schema,
   'machines.guard.activity.undo': MachineGuardActivityUndoInputV1Schema,

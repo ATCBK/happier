@@ -10,10 +10,13 @@ import { readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { normalizeUiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 import { SessionVisualReviewedAdmissionV1Schema } from '../sessions/board/actions.js';
 import { resolveSessionVisualEffectiveCapabilitiesV1 } from '../sessions/board/visualPolicy.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { unwrapActionInputSchema } from './actionInputSchemaPath.js';
 import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
+import { ReachPlaceV1Schema } from '../reach/reachPlaceV1.js';
+import { ReachRuleDraftV1Schema } from '../reach/reachRuleV1.js';
+import { ReachRulesChangeV1Schema } from '../reach/reachRulesChangeV1.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -51,7 +54,7 @@ export type ApprovalActionFieldRow =
   | Readonly<{
     kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference;
     /** A boolean choice reads through the client's localized yes/no labels. */
-    valueFormat?: 'boolean';
+    valueFormat?: 'boolean' | 'unavailable';
     /** A readable reading of a structured (JSON) value; `value` stays the exact literal. */
     entries?: readonly ApprovalStructuredValueEntry[];
     /** A schema version argument: present, but read only when asked for. */
@@ -66,7 +69,9 @@ export type ApprovalActionReference =
   | Readonly<{ kind: 'account'; id: string }>
   | Readonly<{ kind: 'setting'; id: string }>
   | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string }>
-  | Readonly<{ kind: 'providerContribution'; id: string }>;
+  | Readonly<{ kind: 'providerContribution'; id: string }>
+  | Readonly<{ kind: 'skill' | 'mcpServer' | 'project' | 'agent' | 'registrySource'; id: string }>
+  | Readonly<{ kind: 'machine'; id: string; workspaceRoot?: string }>;
 
 // These are declared Action field keys, not a guess from an opaque value or suffix.
 const SESSION_REFERENCE_KEYS = new Set([
@@ -94,6 +99,9 @@ function isTechnicalApprovalKey(key: string | undefined): boolean {
 function describeApprovalReference(actionId: string, field: ActionInputFieldHint, values: readonly unknown[], input: unknown): ApprovalActionReference | undefined {
   if (values.length !== 1) return undefined;
   const value = values[0];
+  if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.place') {
+    return describeApprovalPlaceReference(value);
+  }
   if (field.path === 'target' && (actionId === 'ui.voice_global.start' || actionId === 'ui.voice_global.get')) {
     // Only this declared typed union owns this discriminator. Arbitrary JSON that happens
     // to contain kind/sessionId keys remains data, including access principals/configuration.
@@ -104,6 +112,13 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     return undefined;
   }
   if (typeof value !== 'string' || !value.trim()) return undefined;
+  if (actionId === 'skills.rules.set' && field.path === 'items.[].skillId') return { kind: 'skill', id: value };
+  if (actionId === 'mcp.rules.set' && field.path === 'items.[].serverId') return { kind: 'mcpServer', id: value };
+  if (actionId.startsWith('mcp.') && field.path === 'serverId') return { kind: 'mcpServer', id: value };
+  if (actionId.startsWith('skills.') && field.path === 'skillId') return { kind: 'skill', id: value };
+  if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.'))) return { kind: 'machine', id: value };
+  if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.agentId') return { kind: 'agent', id: value };
+  if (actionId.startsWith('registries.sources.') && field.path === 'sourceId') return { kind: 'registrySource', id: value };
   if (field.path === 'anchor' && isSettingsDeclarationActionIdV1(actionId) && readBuiltInSettingDeclarationV1(value)) {
     return { kind: 'setting', id: value };
   }
@@ -119,6 +134,65 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     return { kind: 'session', id: value.trim() };
   }
   return describeApprovalKeyReference(key, value);
+}
+
+function describeApprovalPlaceReference(value: unknown): ApprovalActionReference | undefined {
+  const place = ReachPlaceV1Schema.safeParse(value);
+  if (!place.success || place.data.t === 'allMachines') return undefined;
+  if (place.data.t === 'project') return { kind: 'project', id: place.data.projectKey };
+  return { kind: 'machine', id: place.data.machineId,
+    ...(place.data.t === 'workspace' ? { workspaceRoot: place.data.workspaceRoot } : {}) };
+}
+
+function describeApprovalRuleEntries(values: readonly unknown[]): readonly ApprovalStructuredValueEntry[] {
+  const rules = values.flatMap(value => Array.isArray(value) ? value : [value]);
+  if (rules.length === 0) return [{ label: 'Change', value: 'Remove all rules', depth: 0 }];
+  return rules.flatMap(value => {
+    const rule = ReachRuleDraftV1Schema.parse(value);
+    const reference = describeApprovalPlaceReference(rule.target);
+    return [
+      { label: 'Where', value: rule.target.t === 'allMachines' ? 'Everywhere' : JSON.stringify(rule.target), depth: 0,
+        ...(reference ? { reference } : {}) },
+      ...(rule.agentId ? [{ label: 'Agent', value: rule.agentId, depth: 0, reference: { kind: 'agent' as const, id: rule.agentId } }] : []),
+      { label: 'Change', value: rule.enabled ? 'Turn on' : 'Turn off', depth: 0 },
+    ];
+  });
+}
+
+function describeApprovalReachChange(value: unknown): readonly ApprovalStructuredValueEntry[] {
+  const change = ReachRulesChangeV1Schema.parse(value);
+  if (change.kind === 'replace') return describeApprovalRuleEntries([change.rules]);
+  const place = change.write.place;
+  const reference = describeApprovalPlaceReference(place);
+  return [{ label: 'Where', value: place.t === 'allMachines' ? 'Everywhere' : JSON.stringify(place), depth: 0,
+    ...(reference ? { reference } : {}) },
+    ...(change.write.agentId ? [{ label: 'Agent', value: change.write.agentId, depth: 0,
+      reference: { kind: 'agent' as const, id: change.write.agentId } }] : []),
+    { label: 'Change', value: change.write.state === 'on' ? 'Turn on' : change.write.state === 'off' ? 'Turn off' : 'Use inherited rules', depth: 0 }];
+}
+
+function describeMcpReviewConfiguration(value: unknown): readonly ApprovalStructuredValueEntry[] {
+  if (!isRecord(value)) return [];
+  const { where, toolPolicy, configOverrides, ...configuration } = value;
+  const entries: ApprovalStructuredValueEntry[] = [];
+  appendApprovalStructuredMembers(configuration, 0, entries);
+  if (isRecord(toolPolicy)) {
+    const defaults: Readonly<Record<string, string>> = { ask: 'Ask', allow_read_only: 'Allow read-only', allow_all: 'Allow all' };
+    const settings: Readonly<Record<string, string>> = { off: 'Off', ask: 'Ask', allow: 'Allow' };
+    entries.push({ label: 'Default tool policy', value: defaults[String(toolPolicy.default)] ?? String(toolPolicy.default), depth: 0 });
+    entries.push(...Object.entries(isRecord(toolPolicy.overrides) ? toolPolicy.overrides : {}).map(([name, setting]) => ({
+      label: name, value: settings[String(setting)] ?? String(setting), depth: 0,
+    })));
+  }
+  if (where !== undefined) {
+    const place = ReachPlaceV1Schema.safeParse(where);
+    entries.push(...(place.success ? [{ label: 'Where', value: JSON.stringify(place.data), depth: 0,
+      reference: describeApprovalPlaceReference(place.data) }] : describeApprovalReachChange(where)));
+  }
+  if (Array.isArray(configOverrides)) {
+    entries.push(...configOverrides.flatMap(override => describeMcpReviewConfiguration(override)));
+  }
+  return entries;
 }
 
 export type ApprovalActionFieldsPresentation = Readonly<{
@@ -248,6 +322,7 @@ function appendApprovalStructuredEntries(
   value: unknown,
   depth: number,
   output: ApprovalStructuredValueEntry[],
+  widgetStructure = false,
 ): void {
   const encodedBytes = key === 'contentBase64' && typeof value === 'string'
     ? readCanonicalPaddedBase64DecodedLength(value) : null;
@@ -261,7 +336,8 @@ function appendApprovalStructuredEntries(
     // A session-looking key there stays data, so an arbitrary value cannot borrow a session's name.
     const keyReference = describeApprovalKeyReference(key, value);
     const reference = keyReference?.kind === 'session' ? undefined : keyReference;
-    const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value));
+    const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value)
+      || widgetStructure && key !== undefined && ['id', 'instanceId', 'groupId', 'artifactId', 'pluginId', 'localId', 'kind'].includes(key));
     output.push({
       label, value: formatApprovalEntryValue(key, value), depth,
       ...(reference ? { reference } : {}),
@@ -269,22 +345,57 @@ function appendApprovalStructuredEntries(
     });
     return;
   }
+  const discriminatorOnly = !widgetStructure && isRecord(value) && Object.keys(value).length === 1
+    && (typeof value.kind === 'string' || typeof value.type === 'string');
+  if (discriminatorOnly) {
+    // A group that only says what kind it is reads as one line ("Owner  Home"), not a heading over "Kind".
+    const discriminator = typeof value.kind === 'string' ? 'kind' : 'type';
+    output.push({ label, value: formatApprovalEntryValue(discriminator, value[discriminator]), depth });
+    return;
+  }
+  const kindLed = !widgetStructure ? describeKindLedApprovalGroup(value) : null;
+  if (kindLed) {
+    // A group led by its kind whose other members are plain words reads as one line too
+    // ("Owner  Core page · Usage · Main"), not a heading over Kind / Page id / Area.
+    output.push({ label, value: kindLed, depth });
+    return;
+  }
   output.push({ label, value: null, depth });
-  appendApprovalStructuredMembers(value, depth + 1, output);
+  appendApprovalStructuredMembers(value, depth + 1, output,
+    widgetStructure && !['bindings', 'context', 'inputSchema', 'inputs', 'network'].includes(key ?? ''));
 }
 
-function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[]): void {
+// Words only: a value with digits or separators-only shapes (ids, hashes, uuids) keeps its own row.
+const APPROVAL_WORD_VALUE = /^[a-z][A-Za-z_-]*$/;
+
+/** A kind and a few plain words, joined: no ids, references, versions or nested values. */
+function describeKindLedApprovalGroup(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const discriminator = typeof value.kind === 'string' ? 'kind' : typeof value.type === 'string' ? 'type' : null;
+  if (!discriminator) return null;
+  const members = Object.entries(value);
+  const words: string[] = [formatApprovalEntryValue(discriminator, value[discriminator])];
+  for (const [key, member] of members) {
+    if (key === discriminator) continue;
+    if (typeof member !== 'string' || !APPROVAL_WORD_VALUE.test(member)
+      || isTechnicalApprovalKey(key) || describeApprovalKeyReference(key, member)) return null;
+    words.push(humanizeApprovalKey(member));
+  }
+  return words.join(' · ');
+}
+
+function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[], widgetStructure = false): void {
   const members: [string | undefined, string, unknown][] = Array.isArray(value)
     ? value.map((item, index) => [undefined, String(index + 1), item])
     : Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, humanizeApprovalKey(key), item]);
-  for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output);
+  for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output, widgetStructure);
 }
 
 /** Readable entries for one structured JSON value; scalars and flat lists read fine as they are. */
-function describeApprovalStructuredValue(values: readonly unknown[]): readonly ApprovalStructuredValueEntry[] | undefined {
+function describeApprovalStructuredValue(values: readonly unknown[], widgetStructure = false): readonly ApprovalStructuredValueEntry[] | undefined {
   if (values.length !== 1 || isApprovalScalar(values[0])) return undefined;
   const output: ApprovalStructuredValueEntry[] = [];
-  appendApprovalStructuredMembers(values[0], 0, output);
+  appendApprovalStructuredMembers(values[0], 0, output, widgetStructure);
   return output;
 }
 
@@ -354,6 +465,7 @@ export function describeApprovalActionFields(input: Readonly<{
   actionId: string;
   actionArgs: unknown;
   preview?: unknown;
+  status?: ApprovalRequest['status'];
 }>): ApprovalActionFieldsPresentation {
   let spec;
   try {
@@ -361,20 +473,35 @@ export function describeApprovalActionFields(input: Readonly<{
   } catch {
     return { rows: [], unrepresentable: { path: '', reason: 'missing_required_context' } };
   }
-  if (spec.approvalPresentation?.projectInput && !spec.inputSchema.safeParse(input.actionArgs).success) {
+  const review = spec.approvalPresentation;
+  const settled = input.status && ['executed', 'failed', 'rejected', 'canceled'].includes(input.status);
+  // Safe presentation data is not executable input. Only terminal history or a
+  // live-only continuation can read its declared schema from stored review.
+  const storedReview = review?.inputSchema && (settled || spec.approvalInputCustody === 'live_only')
+    ? review.inputSchema.safeParse(spec.approvalInputCustody === 'live_only'
+      ? readApprovalPresentationPreview(input)?.actionArgs : input.actionArgs) : null;
+  if (review?.projectInput && !spec.inputSchema.safeParse(input.actionArgs).success && !storedReview?.success) {
     const reason = 'missing_required_context' as const;
     return { rows: [{ kind: 'unrepresentable', path: '', title: spec.title, reason }],
       unrepresentable: { path: '', reason } };
   }
   // Observation previews can intentionally omit private domain content. Only the domain's
   // explicit review projection may disclose that content; never fall back to raw secret input.
-  const presentationInput = spec.approvalPresentation?.projectInput
-    ? spec.approvalPresentation.projectInput(input.actionArgs)
+  const projectedInput = storedReview?.success ? storedReview.data : review?.projectInput
+    ? review.projectInput(input.actionArgs)
     : resolveApprovalPresentationInput(input);
-  const resolved = [...resolveEffectiveActionInputFields(spec, presentationInput)];
+  const parsedReview = review?.inputSchema?.safeParse(projectedInput);
+  if (parsedReview && !parsedReview.success) {
+    const reason = 'missing_required_context' as const;
+    return { rows: [{ kind: 'unrepresentable', path: '', title: spec.title, reason }], unrepresentable: { path: '', reason } };
+  }
+  const presentationInput = parsedReview?.success ? parsedReview.data : projectedInput;
+  const presentationSpec = review?.inputSchema || review?.inputHints
+    ? { ...spec, inputSchema: review.inputSchema ?? spec.inputSchema, inputHints: review.inputHints ?? spec.inputHints } : spec;
+  const resolved = [...resolveEffectiveActionInputFields(presentationSpec, presentationInput)];
   const coveredRoots = new Set(resolved.map(field => field.path.split('.')[0]));
-  const schema = unwrapActionInputSchema(spec.inputSchema).schema;
-  const shape = schema instanceof z.ZodObject ? schema.shape as Record<string, z.core.$ZodType> : {};
+  const schema = unwrapActionInputSchema(presentationSpec.inputSchema).schema;
+  const shape = schema instanceof z.ZodMiniObject ? schema.shape as Record<string, z.core.$ZodType> : {};
   // Form hints refine a field's reading; without hints, the canonical review
   // projection determines which operands can be shown.
   // Existing hints also declare intentional safe omissions (for example a saved credential
@@ -391,7 +518,7 @@ export function describeApprovalActionFields(input: Readonly<{
   const schemaKeys = !spec.approvalPresentation?.projectInput && spec.projectObservationInput
     ? isRecord(observationInput) ? Object.keys(observationInput) : []
     : Object.keys(shape);
-  const keys = new Set((spec.inputHints?.fields.length ?? 0) === 0
+  const keys = new Set((presentationSpec.inputHints?.fields.length ?? 0) === 0
     ? [...schemaKeys, ...(isRecord(presentationInput) ? Object.keys(presentationInput) : [])]
     : []);
   for (const path of keys) {
@@ -425,7 +552,14 @@ export function describeApprovalActionFields(input: Readonly<{
     // A chosen option reads by the label the form that set it shows.
     const option = field.widget === 'select' && values.length === 1
       ? field.options?.find((candidate) => candidate.value === values[0]) : undefined;
-    const value = option && typeof option.label === 'string' ? option.label : literal;
+    const rulesAction = input.actionId === 'skills.rules.set' || input.actionId === 'mcp.rules.set';
+    const reachPlace = rulesAction && field.path === 'change.write.place' || field.path === 'where.write.place';
+    const place = reachPlace ? ReachPlaceV1Schema.safeParse(values[0]) : null;
+    const choices = (field.widget === 'multiselect' || field.widget === 'text_list') && field.options
+      ? values.flatMap(value => Array.isArray(value) ? value : [value]).map(value =>
+        field.options?.find(candidate => candidate.value === value)?.label ?? String(value)).join(', ') : null;
+    const value = place?.success && place.data.t === 'allMachines' ? 'Everywhere'
+      : choices || (option && typeof option.label === 'string' ? option.label : literal);
     if (value === null) {
       // A required field whose schema declares `null` and that carries exactly
       // that null is present context with nothing to display, not missing context.
@@ -444,15 +578,40 @@ export function describeApprovalActionFields(input: Readonly<{
       }
       continue;
     }
-    const reference = describeApprovalReference(input.actionId, field, values, presentationInput);
+    const reference = reachPlace ? describeApprovalPlaceReference(values[0]) : describeApprovalReference(input.actionId, field, values, presentationInput);
     // A typed reference already reads by its name; entries are for values nothing else can read.
-    const entries = field.widget === 'json' && !reference ? describeApprovalStructuredValue(values) : undefined;
+    let entries = (rulesAction && field.path === 'change.rules' || field.path === 'where.rules') ? describeApprovalRuleEntries(values)
+      : rulesAction && field.path.startsWith('items.') && values.length > 1 ? values.map(value => ({
+        label: field.title, value: String(value), depth: 0,
+        reference: describeApprovalReference(input.actionId, field, [value], presentationInput),
+      }))
+      : field.widget === 'json' && !reference && !place?.success ? describeApprovalStructuredValue(values,
+        input.actionId.startsWith('widgets.') && ['instance', 'group', 'fragment', 'definition'].includes(field.path)) : undefined;
+    if (input.actionId === 'mcp.servers.tools.set' && field.path === 'tools') {
+      const settings: Readonly<Record<string, string>> = { off: 'Off', ask: 'Ask', allow: 'Allow', inherit: 'Use server default' };
+      entries = values.flatMap(value => isRecord(value) ? Object.entries(value).map(([name, setting]) => ({
+        label: name, value: settings[String(setting)] ?? String(setting), depth: 0,
+      })) : []);
+    }
+    if (input.actionId.startsWith('mcp.') && (field.path === 'servers' || field.path === 'configOverrides')) {
+      entries = values.flatMap(value => Array.isArray(value) ? value : [value]).flatMap(describeMcpReviewConfiguration);
+    }
+    if (input.actionId === 'agents.acp.backends.upsert' && field.path === 'backend.launch' && entries) {
+      const methods: Readonly<Record<string, string>> = { Command: 'Command', Npm: 'npm package', Uv: 'Python package', Archive: 'Downloaded binary' };
+      entries = entries.map(entry => entry.depth === 0 && entry.label === 'Kind'
+        ? { ...entry, label: 'Method', value: methods[entry.value ?? ''] ?? entry.value } : entry);
+    }
     const technical = !reference && (isTechnicalApprovalKey(field.path.split('.').at(-1))
-      || values.length > 0 && values.every(isEmptyApprovalValue)
+      || values.length > 0 && values.every(isEmptyApprovalValue) && !(rulesAction && field.path === 'change.rules')
       // The visual summary already names this item. Preserve its exact identity
       // in Details, rather than adding an opaque id to that first reading.
       || field.path === 'itemId' && Boolean(readApprovalVisualItem(input.actionId, presentationInput)?.title?.trim())
-      || input.actionId.startsWith('providers.') && field.path === 'action');
+      || input.actionId.startsWith('providers.') && field.path === 'action'
+      // The terminal key is how the daemon finds its terminal; people know the terminal by its folder and Machine.
+      || input.actionId.startsWith('machines.terminal.') && field.path === 'terminalKey'
+      || input.actionId === 'agents.acp.backends.upsert' && ['backend.id', 'backend.name'].includes(field.path)
+      || (input.actionId.startsWith('widgets.fragment.') || input.actionId.startsWith('widgets.definition.'))
+        && (field.path === 'artifactId' || field.path === 'newArtifactId'));
     rows.push({
       kind: 'value', path: field.path, title: field.title, value,
       ...(reference ? { reference } : {}),
@@ -467,13 +626,25 @@ export function describeApprovalActionFields(input: Readonly<{
     const row = rows[at];
     if (row && row.kind === 'value') rows[at] = { ...row, technical: true };
   }
-  const network = describeApprovalVisualNetwork(input.actionId, presentationInput);
+  const network = describeApprovalVisualNetwork(input.actionId, presentationInput)
+    ?? describeApprovalWidgetNetwork(input.actionId, presentationInput);
   if (network) {
     // The one consequence a visual approval exists for, next to the visual it belongs to.
-    const at = rows.findIndex((row) => row.path === 'item');
+    const at = rows.findIndex((row) => row.path === (network.path.startsWith('instance') ? 'instance' : 'item'));
+    const owner = rows[at];
+    if (network.path === 'instance.networkOverride' && owner?.kind === 'value' && owner.entries) {
+      // The Network row says it in words; the override's raw members stay in Details only.
+      let inOverride = false;
+      rows[at] = { ...owner, entries: owner.entries.map((entry) => {
+        if (entry.depth === 0) inOverride = entry.label === humanizeApprovalKey('networkOverride');
+        return inOverride && entry.value !== null ? { ...entry, technical: true as const } : entry;
+      }) };
+    }
     rows.splice(at < 0 ? rows.length : at + 1, 0, network);
   }
-  return { rows, unrepresentable };
+  // A structured row with nothing readable left is read in Details, never as a bare title.
+  return { rows: rows.map((row) => row.kind === 'value' && row.entries && !row.technical
+    && !row.entries.some((entry) => entry.value !== null && !entry.technical) ? { ...row, technical: true as const } : row), unrepresentable };
 }
 
 /** The visual a Session visual approval asks to show, read once for its rows and its preview. */
@@ -518,20 +689,40 @@ function describeApprovalVisualNetwork(actionId: string, input: unknown): Approv
     isCreate: isRecord(input) && input.expectedItemRevision === null,
     networkSetting: reviewed.success ? reviewed.data.networkSetting : null,
   });
-  const value = policy.network === 'open' ? 'Any site'
-    : policy.network === 'origins' ? `Only ${policy.networkOrigins.join(', ')}`
+  return { kind: 'value', path: 'item.source.requestedCapabilities', title: 'Network', value: describeApprovalNetworkValue(policy) };
+}
+
+/** The network a placed widget gets from its own override, in the same words as a Session visual. */
+function describeApprovalWidgetNetwork(actionId: string, input: unknown): ApprovalActionFieldRow | null {
+  if (actionId !== 'widgets.item.add' || !isRecord(input) || !isRecord(input.instance) || input.instance.networkOverride === undefined) return null;
+  const policy = normalizeUiSurfaceCapabilityRequestV1(input.instance.networkOverride);
+  if (!policy) return null;
+  return { kind: 'value', path: 'instance.networkOverride', title: 'Network', value: describeApprovalNetworkValue(policy) };
+}
+
+function describeApprovalNetworkValue(policy: Readonly<{ network: string; networkOrigins?: readonly string[] }>): string {
+  return policy.network === 'open' ? 'Any site'
+    : policy.network === 'origins' ? `Only ${(policy.networkOrigins ?? []).join(', ')}`
       : 'No network access';
-  return { kind: 'value', path: 'item.source.requestedCapabilities', title: 'Network', value };
 }
 
 export function describeApprovalRequestFields(
-  request: Pick<ApprovalRequest, 'actionId' | 'actionArgs' | 'preview'>,
+  request: Pick<ApprovalRequest, 'actionId' | 'actionArgs' | 'preview'> & Partial<Pick<ApprovalRequest, 'status'>>,
 ): ApprovalActionFieldsPresentation {
-  return describeApprovalActionFields({
+  const presentation = describeApprovalActionFields({
     actionId: request.actionId,
     actionArgs: request.actionArgs,
+    ...(request.status === undefined ? {} : { status: request.status }),
     ...(request.preview === undefined ? {} : { preview: request.preview }),
   });
+  // A consumed request is history, not another admission attempt. Missing historical
+  // operands remain visibly unavailable; never offer rejection/re-submission as its next action.
+  if (request.status && ['executed', 'failed', 'rejected', 'canceled'].includes(request.status)) {
+    return { rows: presentation.rows.map(row => row.kind === 'unrepresentable'
+      ? { kind: 'value' as const, path: row.path, title: row.title, value: '', valueFormat: 'unavailable' as const } : row),
+      unrepresentable: null };
+  }
+  return presentation;
 }
 
 /**

@@ -2,7 +2,7 @@ import type { FeaturesResponse as ServerFeatures } from '@happier-dev/protocol';
 import type { HomeApplicationCarrierEligibility } from '@happier-dev/cli-common/homeEnrollment';
 
 import type { TransferRouteDecision } from '../routing/resolveTransferRouteDecision';
-import { resolveTransferRouteDecision } from '../routing/resolveTransferRouteDecision';
+import { resolveTransferAvailability } from './transferAvailability';
 import {
     isMachineFiniteTransferRpcDeclared,
     readCurrentMachineIrohEndpoint,
@@ -11,6 +11,7 @@ import {
 } from '../routing/resolveMachineCarrierPreselection';
 import {
     isMachineDaemonFiniteTransferApplicationSupported,
+    isMachineDaemonIrohTransferApplicationSupported,
     resolveMachineDaemonTransferDirectPeerDiagnostics,
     type MachineDaemonTransferDirectPeerDiagnostics,
 } from './machineDaemonTransferState';
@@ -72,17 +73,21 @@ export function resolveSessionFileTransferAvailability(
             revokedAt: input.machineRevokedAt,
         }),
         finiteTransferApplicationSupported,
+        irohApplicationSupported: input.machineKind === 'ephemeral_session_runner'
+            ? runnerFiniteTransferRpcDeclared : isMachineDaemonIrohTransferApplicationSupported(input.machineDaemonState),
     }) : { kind: 'unavailable' as const };
     const selectedNow = { status: 'viable' as const, checkedAt: 0, expiresAt: Number.MAX_SAFE_INTEGER };
 
-    const decision = machineCarrierPreselection.kind === 'unavailable'
+    const decision: TransferRouteDecision | null = machineCarrierPreselection.kind === 'unavailable'
         ? null
-        : resolveTransferRouteDecision({
-            serverFeatures: input.serverFeatures,
-            directPeerRoute: selectedNow,
-            directPeerRouteKinds: ['iroh_peer'],
-            preferredRouteKinds: ['iroh_peer'],
-        });
+        : { kind: 'selected',
+            preferredRouteKind: machineCarrierPreselection.kind === 'iroh_peer' ? 'iroh_peer' : 'machine_rpc_server',
+            preferScopedMachineRpc: true,
+            availability: resolveTransferAvailability({ serverFeatures: input.serverFeatures,
+                directPeerRoute: machineCarrierPreselection.kind === 'iroh_peer' ? selectedNow : { status: 'unknown' },
+                directPeerRouteKinds: machineCarrierPreselection.kind === 'iroh_peer' ? ['iroh_peer'] : [],
+                machineRpcDirectRoute: { status: 'unknown' } }),
+        };
 
     return {
         available: decision?.kind === 'selected',

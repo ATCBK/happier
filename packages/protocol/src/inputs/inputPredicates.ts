@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -22,13 +22,13 @@ function isBoundedInputPath(value: string): boolean {
 }
 
 /** Shared field/predicate grammar at Action descriptor admission. */
-export const InputPathSchema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+export const InputPathSchema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   if (isBoundedInputPath(value)) return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Action input paths must contain 1–16 non-empty dot-separated segments and be at most 256 UTF-8 bytes.',
   });
-}));
+})));
 export type InputPath = z.infer<typeof InputPathSchema>;
 
 export const InputPrimitiveSchema = lazyZodSchema(() => z.union([z.string(), z.number(), z.boolean(), z.null()]));
@@ -62,46 +62,34 @@ export type InputPredicate =
       any: readonly InputPredicate[];
     }>;
 
-export const InputPredicateSchema: z.ZodType<InputPredicate> = z.lazy(() =>
+export const InputPredicateSchema: z.ZodMiniType<InputPredicate> = z.lazy(() =>
   z.union([
-    z
-      .object({
+    z.strictObject({
         op: z.literal('truthy'),
         path: InputPathSchema,
-      })
-      .strict(),
-    z
-      .object({
+      }),
+    z.strictObject({
         op: z.literal('eq'),
         path: InputPathSchema,
         value: InputPrimitiveSchema,
-      })
-      .strict(),
-    z
-      .object({
+      }),
+    z.strictObject({
         op: z.literal('includes'),
         path: InputPathSchema,
-        value: z.string().min(1),
-      })
-      .strict(),
-    z
-      .object({
+        value: z.string().check(z.minLength(1)),
+      }),
+    z.strictObject({
         op: z.literal('not'),
         predicate: InputPredicateSchema,
-      })
-      .strict(),
-    z
-      .object({
+      }),
+    z.strictObject({
         op: z.literal('and'),
-        all: z.array(InputPredicateSchema).min(1),
-      })
-      .strict(),
-    z
-      .object({
+        all: z.array(InputPredicateSchema).check(z.minLength(1)),
+      }),
+    z.strictObject({
         op: z.literal('or'),
-        any: z.array(InputPredicateSchema).min(1),
-      })
-      .strict(),
+        any: z.array(InputPredicateSchema).check(z.minLength(1)),
+      }),
   ]),
 );
 

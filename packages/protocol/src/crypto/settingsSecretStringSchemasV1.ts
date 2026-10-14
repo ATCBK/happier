@@ -1,18 +1,18 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { appendSavedSecretReferencePathV1 } from '../account/settings/savedSecretReferenceV1.js';
 
 export const EncryptedStringV1Schema = lazyZodSchema(() => z.object({
   t: z.literal('enc-v1'),
-  c: z.string().min(1),
+  c: z.string().check(z.minLength(1)),
 }));
 
 export type EncryptedStringV1 = z.infer<typeof EncryptedStringV1Schema>;
 
 export const SecretStringV1Schema = lazyZodSchema(() => z.object({
   _isSecretValue: z.literal(true),
-  value: z.string().min(1).optional(),
-  encryptedValue: EncryptedStringV1Schema.optional(),
+  value: z.optional(z.string().check(z.minLength(1))),
+  encryptedValue: z.optional(EncryptedStringV1Schema),
 }));
 
 export type SecretStringV1 = z.infer<typeof SecretStringV1Schema>;

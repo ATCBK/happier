@@ -36,3 +36,6 @@ export type SelectableMenuCategory = Readonly<{
     title: string;
     items: ReadonlyArray<SelectableMenuItem>;
 }>;
+
+/** Keyed by category title: the section's identity mark (agent, provider) and one quiet line under its rows. */
+export type SelectableMenuCategoryDecorations = Readonly<Record<string, Readonly<{ icon?: React.ReactNode; note?: string }>>>;

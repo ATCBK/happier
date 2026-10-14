@@ -41,10 +41,6 @@ export type DirectTransferImportOpenRequest = Readonly<{
         sha256?: unknown;
     }>
     | SessionAttachmentUploadInitRequestV1
-    | Readonly<{
-        t: 'prompt_asset_upload_v1';
-        sizeBytes: unknown;
-    }>
     | ComposerMediaStageUploadRequest
 );
 
@@ -113,8 +109,8 @@ export function isDirectImportTerminalFinalizeErrorCode(errorCode: unknown): boo
 }
 
 const DIRECT_IMPORT_CHUNK_RESPONSE_MAX_BYTES = 8 * 1024;
-// Finalize can carry one prompt-asset mutation result whose path/ref originates
-// in the bounded bulk JSON request. Keep that budget plus a small control envelope.
+// Finalize can carry the target's result from the bounded bulk JSON request.
+// Keep that budget plus a small control envelope.
 const DIRECT_IMPORT_FINALIZE_RESPONSE_ENVELOPE_MAX_BYTES = 8 * 1024;
 // Recovery-required is an additive non-precommit response. Keep the status and
 // exact body discriminator coupled so ordinary transient 5xx failures stay indeterminate.
@@ -156,7 +152,7 @@ export function resolveDirectImportCarrierRequest(input: Readonly<{
     const localOrigin = input.carrier?.kind === 'native_http'
         ? input.carrier.localOrigin
         : input.httpOriginOverride ?? null;
-    const request = input.carrier?.kind === 'browser_stream' ? input.carrier.request : undefined;
+    const request = input.carrier && input.carrier.kind !== 'native_http' ? input.carrier.request : undefined;
     return {
         url: localOrigin ? rebaseMachineCarrierHttpEndpoint(input.endpointUrl, localOrigin) : input.endpointUrl,
         ...(request ? { request } : {}),
@@ -570,7 +566,7 @@ export async function prepareDirectImportSession(params: Readonly<{
             expiresAt: prepare.expiresAt,
             baseUrls,
             ...(params.request.t === 'session_file_upload_v1' ? { filesystemRootPath: params.request.workingDirectory } : {}),
-            ...(preparedCarrier?.kind === 'browser_stream' ? { request: preparedCarrier.request } : {}),
+            ...(preparedCarrier && preparedCarrier.kind !== 'native_http' ? { request: preparedCarrier.request } : {}),
             ...(preparedCarrier ? { releaseCarrier: preparedCarrier.release } : {}),
         },
     };

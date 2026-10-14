@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ConnectedAccountServiceKeyIngressSchema,
@@ -7,25 +7,25 @@ import {
 } from './connectedServiceBindings.js';
 import { SessionTeamCredentialBindingIntentsV1Schema } from '../teams/credentials/sessionBindingIntentV1.js';
 
-export const SessionConnectedServiceAuthSwitchRpcParamsSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  agentId: z.string().trim().min(1),
+export const SessionConnectedServiceAuthSwitchRpcParamsSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  agentId: z.string().check(z.trim(), z.minLength(1)),
   // Current callers write V2. Released V1 callers remain a required
   // new-daemon/old-client ingress and normalize before domain logic.
   bindings: ConnectedServiceBindingsV2IngressSchema,
   // Released V1 callers name the same services by scalar id in these adjacent
   // fields too, so they normalize through the one Connected Account service
   // key ingress rather than requiring the qualified key `bindings` accepts.
-  rematerializeServiceId: ConnectedAccountServiceKeyIngressSchema.optional(),
-  expectedGroupGenerationByServiceId: z.record(
+  rematerializeServiceId: z.optional(ConnectedAccountServiceKeyIngressSchema),
+  expectedGroupGenerationByServiceId: z.optional(z.record(
     ConnectedAccountServiceKeyIngressSchema,
-    z.number().int().nonnegative(),
-  ).optional(),
-  teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.min(1).optional(),
-  previousTeamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.min(1).optional(),
-  teamVisibilityGrantConsent: z.object({ teamId: z.string().min(1) }).strict().optional(),
-  accountSettingsVersionHint: z.number().int().nonnegative().optional(),
-}).strict());
+    z.number().check(z.int(), z.nonnegative()),
+  )),
+  teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema.check(z.minLength(1))),
+  previousTeamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema.check(z.minLength(1))),
+  teamVisibilityGrantConsent: z.optional(z.strictObject({ teamId: z.string().check(z.minLength(1)) })),
+  accountSettingsVersionHint: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 
 export type SessionConnectedServiceAuthSwitchRpcParams = z.infer<
   typeof SessionConnectedServiceAuthSwitchRpcParamsSchema

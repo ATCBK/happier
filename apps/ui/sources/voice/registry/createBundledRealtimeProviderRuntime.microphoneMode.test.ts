@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type MockInstance } from 'vitest';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -26,7 +26,7 @@ import { getExternalVoiceProviderRegistration } from './externalVoiceProviderReg
 import { createWebSocketPcmMedia as createNativeWebSocketPcmMedia } from '@/voice/runtime/connection/WebSocketPcmMedia.native';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
-const vendor = vi.hoisted(() => ({ platform: 'web' as 'web' | 'ios', startSession: vi.fn(), setAudioModeAsync: vi.fn(async () => undefined), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
+const vendor = vi.hoisted(() => ({ platform: 'web' as 'web' | 'ios', startSession: vi.fn(), setAudioModeAsync: vi.fn(async (_mode: unknown) => {}), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { get OS() { return vendor.platform; } } }));
 const nativeAudio = createNativeVoicePcmCaptureHarness();
 vi.mock('expo-modules-core', async original => {
@@ -222,7 +222,7 @@ async function withGeneratedElevenLabs(
     lifecycle: ReturnType<typeof createVoiceSessionLifecycleController>;
     adapter: ReturnType<typeof createBuiltinVoiceAdapterAssembly>['adapters'][number];
     assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
-    getUserMedia: MediaDevices['getUserMedia'];
+    getUserMedia: MockInstance<MediaDevices['getUserMedia']>;
   }>) => Promise<void>,
   platform: 'web' | 'ios' = 'web',
 ): Promise<void> {
@@ -283,7 +283,7 @@ function createVendorConversation(id = 'mode-conversation') {
   let muted = false;
   const setMicMuted = vi.fn((value: boolean) => { muted = value; });
   return {
-    endSession: vi.fn(async () => undefined),
+    endSession: vi.fn(async (): Promise<void> => {}),
     setMicMuted,
     setVolume: vi.fn(),
     sendUserMessage: vi.fn(),

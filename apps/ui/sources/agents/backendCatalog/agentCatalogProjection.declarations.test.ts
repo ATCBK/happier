@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveAgentCatalogProjection } from './agentCatalogProjection';
+import { resolveAgentCatalogProjection, resolveConfiguredAcpAgentCatalogProjection } from './agentCatalogProjection';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolveBuiltInAgentForRegistryId } from '@/agents/registry/resolveBuiltInAgentForRegistryId';
 
 describe('bundled Agent declarations without a machine projection', () => {
+    it('keeps configured ACP display names and marks distinct from the runtime contribution', () => {
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['review', 'build'].map(id => ({
+            id, name: id, title: `${id} configured agent`, launch: { kind: 'npm', package: 'fixture', version: '1.0', args: [] },
+            env: {}, createdAt: 1, updatedAt: 1,
+        })) });
+        const entries = record.definitions.map(definition => resolveConfiguredAcpAgentCatalogProjection(definition, { enabledAgentIds: [] }));
+        expect(entries.map(entry => [entry.title, entry.iconName])).toEqual([
+            ['review configured agent', 'hard-drives'], ['build configured agent', 'hard-drives'],
+        ]);
+        expect(entries[0]?.backendTargetKey).not.toBe(entries[1]?.backendTargetKey);
+    });
     it('resolves registry overlap from the generated cold declaration without a daemon', () => {
         const entry = resolveAgentCatalogProjection('claude', { enabledAgentIds: [] });
         expect(entry.acpRegistryIds).toEqual(['claude-acp']);

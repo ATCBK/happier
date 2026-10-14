@@ -1,37 +1,37 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const PluginSurfaceSessionTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSurfaceSessionTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session'),
-  sessionIdPath: z.string().trim().min(1).optional(),
-}).strict());
+  sessionIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 
-export const PluginSurfaceProjectTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSurfaceProjectTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('project'),
-  workspaceRefIdPath: z.string().trim().min(1).optional(),
-  serverIdPath: z.string().trim().min(1).optional(),
-  machineIdPath: z.string().trim().min(1).optional(),
-  rootPathPath: z.string().trim().min(1).optional(),
-  projectIdPath: z.string().trim().min(1).optional(),
-}).strict());
+  workspaceRefIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  serverIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  machineIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  rootPathPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  projectIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 
-export const PluginSurfaceAppTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSurfaceAppTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('app'),
-}).strict());
+}));
 
-export const PluginSurfaceBrowserTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSurfaceBrowserTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('browser'),
-  browserViewIdPath: z.string().trim().min(1),
-  sessionIdPath: z.string().trim().min(1).optional(),
-  profileIdPath: z.string().trim().min(1).optional(),
-}).strict());
+  browserViewIdPath: z.string().check(z.trim(), z.minLength(1)),
+  sessionIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  profileIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 
-export const PluginSurfaceServicesTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSurfaceServicesTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('services'),
-  sessionIdPath: z.string().trim().min(1).optional(),
-  serverIdPath: z.string().trim().min(1).optional(),
-  machineIdPath: z.string().trim().min(1).optional(),
-}).strict());
+  sessionIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  serverIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  machineIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 
 export const PluginSurfaceTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   PluginSurfaceSessionTargetV1Schema,

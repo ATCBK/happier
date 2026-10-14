@@ -1,7 +1,10 @@
 import { readBackendTargetRefV2, type BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { getAgentCore, getAgentStaticModels } from '@happier-dev/agents';
 import { isRecoveredHistoryTranscriptObservation, type Message } from '@happier-dev/session-core/messages';
 
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { getEnabledAgentIds } from '@/agents/catalog/enabled';
+import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -41,21 +44,18 @@ export async function prefetchCompletedCheckpointMessages(params: Readonly<{
         catalog = getAcpCatalogSnapshot(params.lifetime.scope);
     }
     if (catalog?.catalog.status !== 'ready' || catalog.stale) return;
+    const projection = readCachedDaemonMergedProjectionCacheEntry({ machineId: metadata?.machineId, serverId: params.lifetime.scope.serverId });
+    const inputs = projection && 'inputs' in projection ? projection.inputs : null;
+    const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: params.settings.backendEnabledByTargetKey }),
+        acpCatalogSnapshot: catalog.catalog, backendEnabledByTargetKey: params.settings.backendEnabledByTargetKey,
+        mergedProviderProjectionById: inputs?.mergedProviderProjectionById,
+        mergedBackendProjectionById: inputs?.mergedBackendProjectionById, discoveredBackendIds: inputs?.discoveredBackendIds });
     const defaults = resolveSessionActionDefaultBackend({ session: params.session });
     let defaultBackendTarget: BackendTargetRefV2 | null = defaults?.backendTarget ?? null;
     if (!defaultBackendTarget && defaults?.agentTarget) {
         try { defaultBackendTarget = readBackendTargetRefV2(defaults.agentTarget); }
         catch {
             // Only the existing exact machine catalog can map an installed Agent carrier.
-            const projection = readCachedDaemonMergedProjectionCacheEntry({ machineId: metadata?.machineId, serverId: params.lifetime.scope.serverId });
-            const inputs = projection && 'inputs' in projection ? projection.inputs : null;
-            const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: [],
-                acpCatalogSnapshot: catalog.catalog,
-                backendEnabledByTargetKey: params.settings.backendEnabledByTargetKey,
-                mergedProviderProjectionById: inputs?.mergedProviderProjectionById,
-                mergedBackendProjectionById: inputs?.mergedBackendProjectionById,
-                discoveredBackendIds: inputs?.discoveredBackendIds,
-            });
             const identity = defaults.agentTarget.identity;
             const entry = entries.find((candidate) => candidate.agentCatalogEntry.identity?.pluginId === identity.pluginId
                 && candidate.agentCatalogEntry.identity.localId === identity.localId);
@@ -64,6 +64,10 @@ export async function prefetchCompletedCheckpointMessages(params: Readonly<{
     }
     const selection = resolveScmDiffSummaryModelSelection({
         storedValue: params.settings['scm.diffSummary.modelProfileOverride'] ?? '', defaultBackendTarget,
+        catalogProfiles: entries.flatMap(entry => buildScmDiffSummaryModelProfiles({
+            backendTarget: readBackendTargetRefV2(entry.backendTarget), models: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
+            agentFormats: entry.kind === 'builtInAgent' ? getAgentCore(entry.agentId)?.structuredOutput?.formats : null,
+        })),
     });
     if (!selection.success || !current()) return;
     const controller = new AbortController();

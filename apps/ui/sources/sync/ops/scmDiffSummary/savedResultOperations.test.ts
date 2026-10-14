@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ScmDiffSummaryResultSchema, createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { ScmDiffSummaryResultSchema, createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -39,10 +40,10 @@ afterEach(() => standardCleanup());
 
 describe('machine saved result operations', () => {
   it('preserves a typed disabled Clear outcome before cleanup or machine deletion', async () => {
-    const actionExecutor = createActionExecutor({ isActionEnabled: () => false,
+    const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionEnabled: () => false,
       scmActionExecute: async () => { throw new Error('Disabled Clear reached Machine transport'); },
     // Keep the real Action policy and schemas; only the Machine boundary is supplied.
-    } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+    }));
     const operations = createScmDiffSummarySavedResultOperations({ machineId: 'machine', shouldContinue: () => true, actionExecutor });
     expect(await operations.clear(input)).toMatchObject({ success: false, errorCode: 'action_disabled' });
     expect(rpc).not.toHaveBeenCalled();

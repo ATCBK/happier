@@ -1,11 +1,9 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const SessionStateAttentionValueSchema = lazyZodSchema(() => z
-  .object({
-    observedProgressToken: z.string().min(1).optional(),
-    viewedProgressToken: z.string().min(1).optional(),
-    observedAtMs: z.number().int().min(0).optional(),
-    viewedAtMs: z.number().int().min(0).optional(),
-  })
-  .strict());
+export const SessionStateAttentionValueSchema = lazyZodSchema(() => z.strictObject({
+    observedProgressToken: z.optional(z.string().check(z.minLength(1))),
+    viewedProgressToken: z.optional(z.string().check(z.minLength(1))),
+    observedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    viewedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }));

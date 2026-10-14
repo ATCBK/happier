@@ -1,5 +1,5 @@
 import { machineInstallationPublicKeysEqual } from "./installationProof";
-import { isPersistentMachine, type MachineKind } from "@happier-dev/protocol";
+import { isPersistentMachine, type MachineKind } from '@happier-dev/protocol/machines/machineKind';
 
 export type MachineReplacementSource = "automatic" | "manual";
 

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { getStorage } from '@/sync/domains/state/storage';
-import { archiveSessionReports } from './confirmSessionArchive';
+import { archiveSessionReports, confirmSessionArchive } from './confirmSessionArchive';
+import { Modal } from '@/modal';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import type { SessionActionExecutionContext } from './sessionActionTypes';
 
 vi.mock('@/modal', async () => {
@@ -40,5 +42,43 @@ describe('archiveSessionReports', () => {
         archivedAddresses.length = 0;
         await archiveSessionReports({ leadSessionId: 'lead', serverId: null, context });
         expect(archivedAddresses).toEqual([]);
+    });
+});
+
+
+describe('archive confirmation policy', () => {
+    it('does not put a local confirmation in front of an allowed archive Action', async () => {
+        const settings = getStorage().getState().settings;
+        getStorage().setState({ settings: { ...settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {} }) } });
+        vi.mocked(Modal.confirm).mockClear();
+        try {
+            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(Modal.confirm).not.toHaveBeenCalled();
+        } finally {
+            getStorage().setState({ settings });
+        }
+    });
+
+    it('leaves explicit archive approval to the Action front door rather than asking twice', async () => {
+        const settings = getStorage().getState().settings;
+        getStorage().setState({ settings: { ...settings, actionsSettingsV1: normalizeActionsSettingsV1({
+            v: 1, actions: { 'session.archive': { approvalRequiredSurfaces: ['ui'] } },
+        }) } });
+        vi.mocked(Modal.confirm).mockClear();
+        try {
+            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(Modal.confirm).not.toHaveBeenCalled();
+        } finally {
+            getStorage().setState({ settings });
+        }
+    });
+
+    it('keeps confirmation before an archive stops a running session', async () => {
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
+        const stoppingArchive = { reportCount: 0, requiresStop: true };
+        expect(await confirmSessionArchive(stoppingArchive)).toEqual({ confirmed: false, alsoArchiveReports: false });
+        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[0]).toBe((await import('@/text')).t('sessionInfo.stopSession'));
     });
 });

@@ -1,6 +1,6 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
-export const voiceSessionLeaseIdSchema = z.string().trim().min(1).max(256);
+export const voiceSessionLeaseIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 function isUnicodeScalarString(value: string): boolean {
     for (let index = 0; index < value.length; index += 1) {
@@ -17,13 +17,7 @@ function isUnicodeScalarString(value: string): boolean {
 }
 
 function opaqueVoiceIdentifierSchema(maxUnicodeScalars: number) {
-    return z.string()
-        .refine(isUnicodeScalarString, "Identifier must contain valid Unicode")
-        .refine((value) => value.trim().length > 0, "Identifier must not be blank")
-        .refine(
-            (value) => [...value].length <= maxUnicodeScalars,
-            `Identifier must contain at most ${maxUnicodeScalars} Unicode characters`,
-        );
+    return z.string().check(z.refine(isUnicodeScalarString, "Identifier must contain valid Unicode"), z.refine((value) => value.trim().length > 0, "Identifier must not be blank"), z.refine((value) => [...value].length <= maxUnicodeScalars, `Identifier must contain at most ${maxUnicodeScalars} Unicode characters`));
 }
 
 // `providerConversationId` is written verbatim to the portable MySQL

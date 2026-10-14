@@ -20,6 +20,12 @@ Use the smallest relevant subset during RED/GREEN loops. Before handoff, run the
 
 Cross-component composition tests that import another app's source use the existing `.composed.` filename segment. Preserve the lane suffix around that segment: for example, `feature.composed.test.ts` remains in a unit lane, while `feature.composed.integration.spec.ts` remains in an integration lane. Composition-only support modules use the same segment. Package TypeScript projects exclude `**/*.composed.*` so a package compile does not absorb another app's source graph; Vitest configs continue to select the files by their unit, integration, or database-contract suffix. Shared non-test contracts belong in a shared package instead of using the composition-test exclusion.
 
+In 0.3 development, the shared finite compiler partition owner also includes
+imported authored JavaScript sidecars when the package enables `allowJs`.
+Dependency runtime JavaScript stays outside authored emission roots, including
+ambient declarations that self-reference their package's runtime subpaths.
+The public check derives these inputs without rewriting tracked membership lists.
+
 In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. Known CLI unit aliases use source-test preparation and the validation class; actual compiler and runtime preparation keeps its own class.
 
 CLI Vitest commands declare the existing `cli-dist-build.lock` at joint payload
@@ -197,6 +203,10 @@ Authenticated descendants may reenter their own leases and envelope. A charged
 payload cannot wait for a foreign publication lease, including a lock-only
 consumer: native admission marks this restriction, and the canonical workspace
 lock refuses contention with `HSTACK_WORKSPACE_ADMISSION_ORDER`. An inherited
+dependency read cannot upgrade to mutation custody for the same installation:
+the dependency owner refuses that cycle with the same admission-order code.
+Prepare the refresh before finite consumption. Independent writers still acquire
+the existing mutation lock. An inherited
 lease cannot queue a compiler or capacity escalation either. Move that producer
 before payload admission rather than retrying beneath the same charged ancestor.
 Local prerequisite preparation likewise precedes admission. Ordinary Linux CI
@@ -388,9 +398,16 @@ root, so two repositories routed to the same worker have independent causal
 barriers. Stack and QA supervisors only borrow existing producer mirrors and
 cannot replace their membership or retire them on shutdown. Provisioning and
 retirement belong to the routing sync service. A failed resume does not restart
-the shared daemon. Before project activation, the sync owner removes orphan
-repository writers by exact session identifier, using Mutagen's project label
-and current lock identity. A failed project termination preserves the project
+the shared daemon. Execution-host candidates are separate producers: each legacy
+or named workspace uses its own project in that same repository scope, daemon,
+OpenSSH configuration and lifecycle lock. Candidate refresh and activation pause
+only that candidate project; ordinary routing mirrors keep running. Before project
+retirement, a legacy candidate missing its state publication recovers source scopes
+from its exact owned generated project files; malformed ownership or source evidence
+blocks activation. The same pause and session readback then verify retirement.
+Before project activation, the sync owner removes orphan writers from that project's existing
+or desired session membership by exact session identifier, using Mutagen's project
+label and current lock identity. A failed project termination preserves the project
 file; replacement flushes current old membership before termination.
 Sibling command settings live only under the producer's `commands-<checkout>/dev-targets.json`;
 target definitions derive from the producer, and service endpoints derive from

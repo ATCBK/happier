@@ -3,7 +3,7 @@ import { MACHINE_BUILTIN_WIDGET_IDS_V1, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWi
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useHomeWidgetCandidates } from '@/components/hub/layout/useHomeWidgetCandidates';
-import { useYourWidgetCandidates } from '@/components/widgets/definitions/useYourWidgetCandidates';
+import { useYourWidgetCandidatesState } from '@/components/widgets/definitions/useYourWidgetCandidates';
 import { useYourWidgetLayoutFragments } from '@/components/widgets/definitions/useYourWidgetLayoutFragments';
 import { runAddWidgetLayoutFragmentCommandV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
 import { buildWidgetGroupFragmentEntry, WidgetGroupFragmentPreview } from '@/components/widgets/group/widgetGroupFragmentSetup';
@@ -155,24 +155,29 @@ export function useAccountWidgetAddSections(input: Readonly<{
     /** A Project area places a saved group in its own column. */
     area?: WidgetProjectAreaV1;
     testID: string;
-}>): readonly WidgetAddSection[] {
+}>): Readonly<{
+    sections: readonly WidgetAddSection[];
+    /** True while the Account's own widgets or saved groups are still being read: a search that finds nothing waits. */
+    loading: boolean;
+}> {
     const installed = useHomeWidgetCandidates();
     const appRuntime = useAppShellPluginUiProjection();
     const { scope, instances, addInstance, labels, context, testID } = input;
-    const yours = useYourWidgetCandidates(scope ? { serverId: scope.serverId, accountId: scope.accountId } : null, appRuntime.pluginUiProjection);
+    const { candidates: yours, loaded: yoursLoaded } = useYourWidgetCandidatesState(scope ? { serverId: scope.serverId, accountId: scope.accountId } : null, appRuntime.pluginUiProjection);
     const candidates = React.useMemo(() => (yours.length > 0 ? [...installed, ...yours] : installed), [installed, yours]);
     const phone = useDeviceType() === 'phone';
     // Saved groups only where groups can be placed (Home, Project, plugin and core-page areas).
     const groupCapable = scope !== null && supportsWidgetGroupsV1(scope.owner.kind);
-    const { fragments, actionsFor: fragmentActions } = useYourWidgetLayoutFragments(groupCapable ? { serverId: scope.serverId, accountId: scope.accountId } : null);
+    const { fragments, loaded: fragmentsLoaded, actionsFor: fragmentActions } = useYourWidgetLayoutFragments(groupCapable ? { serverId: scope.serverId, accountId: scope.accountId } : null);
     const area = input.area;
     const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1) => {
         if (!scope) throw new Error('widget_area_unavailable');
-        const outcome = await runAddWidgetLayoutFragmentCommandV1(fragment.group, scope, area ? { area } : {});
+        const outcome = await runAddWidgetLayoutFragmentCommandV1(fragment.group, scope,
+            { name: fragment.name, ...(area ? { area } : {}) });
         if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
         return outcome.kind === 'approvalPending' ? { ok: true as const, approvalPending: true as const } : { ok: true as const };
     }, [area, scope]);
-    return React.useMemo(() => buildAccountWidgetAddSections({
+    const sections = React.useMemo(() => buildAccountWidgetAddSections({
         candidates,
         instances,
         addInstance,
@@ -195,4 +200,5 @@ export function useAccountWidgetAddSections(input: Readonly<{
             ),
         } : {}),
     }), [addGroup, addInstance, appRuntime, candidates, context, fragmentActions, fragments, groupCapable, instances, labels, phone, scope, testID]);
+    return { sections, loading: !yoursLoaded || (groupCapable && !fragmentsLoaded) };
 }

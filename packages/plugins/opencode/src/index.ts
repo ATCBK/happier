@@ -27,7 +27,6 @@ export * from './agent/permissions/policy.js';
 export * from './agent/preferences/session.js';
 export * from './agent/preflight/models.js';
 export * from './agent/preflight/sessionControls.js';
-export * from './agent/promptAssets/descriptors.js';
 export * from './agent/surfaces/sessions/attach/descriptor.js';
 export * from './agent/surfaces/sessions/external/contribution.js';
 export * from './agent/surfaces/sessions/external/provider.js';

@@ -1,15 +1,6 @@
-import {
-    readServerConfigRaw,
-    serializeServerConfigValue,
-    readStoredServerConfigValue,
-    type ServerConfigApply,
-    type ServerConfigEditable,
-    type HomeSettingDeclarationV1,
-    type ServerConfigEntry,
-    type ServerConfigEnv,
-    type ServerConfigRegistry,
-    type ServerConfigValue,
-} from '@happier-dev/protocol';
+import { readServerConfigRaw, serializeServerConfigValue, readStoredServerConfigValue, type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { type ServerConfigApply, type ServerConfigEditable, type ServerConfigEntry, type ServerConfigRegistry, type ServerConfigValue } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
+import { type HomeSettingDeclarationV1 } from '@happier-dev/protocol/home/governance';
 
 import { SERVER_CONFIG_REGISTRY } from '@/config/serverConfigRegistry';
 import { readServerConfigRuntimeValue, resolveServerConfigRuntimeDefault } from '@/config/serverConfigRuntimeDefaults';

@@ -1,7 +1,4 @@
-import {
-    TEAM_INVITATION_TTL_MS,
-    type TeamInvitationAdmissibleRoleV1,
-} from "@happier-dev/protocol/teams";
+import { TEAM_INVITATION_TTL_MS, type TeamInvitationAdmissibleRoleV1 } from '@happier-dev/protocol/teams/invitation';
 import type { Tx } from "@/storage/inTx";
 import type {
     SessionHistoryAccess,

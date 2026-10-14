@@ -1,3 +1,4 @@
+import { readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,13 +58,13 @@ describe('local voice engine TTS behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: true,
                                 provider: 'device',
                                 bargeInEnabled: true,
@@ -121,13 +122,13 @@ describe('local voice engine TTS behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: true,
                                 provider: 'device',
                                 bargeInEnabled: false,
@@ -184,9 +185,9 @@ describe('local voice engine TTS behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: true,
                                 provider: 'happier.voice.openai-compat/tts',
                             },

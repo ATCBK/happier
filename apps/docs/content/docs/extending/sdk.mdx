@@ -791,7 +791,7 @@ plain data.
 ### Trigger a workflow with a scoped token
 
 For a backend that only starts an existing Automation, create a token restricted
-to `workflow.trigger.run_now` and its execution machine. This is a complete grant
+to `workflow.trigger.run_now`, its execution machine and exact Automation ID. This is a complete grant
 value, not a token-creation request:
 
 ```json
@@ -799,6 +799,7 @@ value, not a token-creation request:
   "v": 1,
   "actions": { "families": [], "ids": ["workflow.trigger.run_now"] },
   "targets": { "sessions": [], "machines": ["machine-id"] },
+  "automationIds": ["brief-automation-id"],
   "approve": false,
   "origins": [],
   "models": null,
@@ -818,10 +819,12 @@ POST to `/v1/actions/workflow.trigger.run_now` with that token:
 }
 ```
 
-Reuse `idempotencyKey` for retries of the same manual occurrence. The token grant
-scopes Actions and machine/Session targets; it has no automation-ID selector.
-Have the trusted backend select the intended `automationId`, and do not describe
-this grant as authorizing exactly one Automation. Granting an Action does not
+Reuse `idempotencyKey` for retries of the same manual occurrence. In the current
+0.3 development source, `automationIds` restricts `workflow.trigger.run_now` to
+the listed exact IDs in addition to the Action and machine/Session restrictions.
+Another or missing Automation ID is refused with `credential_scope_denied`.
+Omitting `automationIds` or setting it to `null` leaves Automation selection
+unrestricted; it does not grant other workflow Actions. Granting an Action does not
 waive its approval policy. An unattended integration needs an owner-configured
 policy permitting this effect; it cannot use `approve: false` to approve itself.
 See [Email agent recipes](/extending/email-agent-recipes) for scheduled briefs

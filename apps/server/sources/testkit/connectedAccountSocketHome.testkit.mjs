@@ -8,6 +8,7 @@ import { registerQualifiedConnectedAccountCredentialRoutesV4 } from '../app/api/
 import { registerConnectedAccountAttemptTransactionRoutes } from '../app/api/routes/connect/connectedAccountAttemptTransactions/registerConnectedAccountAttemptTransactionRoutes.ts';
 import { registerMachineAdmissionRoutes } from '../app/api/routes/machines/registerMachineAdmissionRoutes.ts';
 import { featuresRoutes } from '../app/api/routes/features/featuresRoutes.ts';
+import { accountRoutes } from '../app/api/routes/account/accountRoutes.ts';
 import { startSocket } from '../app/api/socket.ts';
 import { auth } from '../app/auth/auth.ts';
 import { db } from '../storage/db.ts';
@@ -31,6 +32,7 @@ export async function createConnectedAccountSocketHome() {
             // startSocket registers its Socket.IO/tunnel teardown with the
             // real server shutdown owner, not Fastify onClose. This harness
             // owns the server process in its isolated Vitest worker.
+            home.server.closeAllConnections();
             try { await initiateShutdown('connected-account-socket-fixture'); }
             finally { await home.close(); }
         } finally { await harness.close(); }
@@ -50,6 +52,7 @@ export async function createConnectedAccountSocketHome() {
         registerQualifiedConnectedAccountCredentialRoutesV4(home);
         registerConnectedAccountAttemptTransactionRoutes(home);
         registerMachineAdmissionRoutes(home);
+        accountRoutes(home);
         featuresRoutes(home);
         startSocket(home);
         await home.listen({ host: '127.0.0.1', port: 0 });

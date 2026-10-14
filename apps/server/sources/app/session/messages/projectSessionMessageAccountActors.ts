@@ -4,11 +4,7 @@ import {
 } from "@/app/account/profile/accountDisplayProfile";
 import { warn } from "@/utils/logging/log";
 import { inTx } from "@/storage/inTx";
-import {
-    SessionMessageAccountActorV1Schema,
-    deriveSessionMessageAuthorAccountIdV1,
-    type SessionMessageAccountActorV1,
-} from "@happier-dev/protocol";
+import { SessionMessageAccountActorV1Schema, deriveSessionMessageAuthorAccountIdV1, type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 /**
  * The transcript/Pending columns this projector reads. `authorAccountId` is the

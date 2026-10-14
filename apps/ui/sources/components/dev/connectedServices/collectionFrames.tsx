@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -541,18 +542,17 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     board: {
-        padding: 32,
+        padding: theme.space.s32,
         gap: 18,
     },
     boardRow: {
         flexDirection: 'row',
-        gap: 24,
+        gap: theme.space.s24,
         alignItems: 'flex-start',
     },
     boardTitle: {
         width: 200,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     boardCard: {
@@ -564,10 +564,10 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.sectionTint,
     },
     stale: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     widths: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     width720: { width: 680 },
     width460: { width: 460 },

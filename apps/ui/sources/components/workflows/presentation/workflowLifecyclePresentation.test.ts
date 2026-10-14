@@ -98,6 +98,14 @@ describe('describeWorkflowInvocationLifecycle', () => {
         expect([...attention].sort()).toEqual([...WORKFLOW_ATTENTION_LIFECYCLES].sort());
     });
 
+    it('lets only a Run-wide pending Stop be inherited by unsettled steps, keeping a standalone step Stop its own', () => {
+        expect(describeWorkflowInvocationLifecycle('cancel_requested', { runStopPending: true }).inheritsRunStop).toBe(true);
+        expect(describeWorkflowInvocationLifecycle('running', { runStopPending: true }).inheritsRunStop).toBe(true);
+        expect(describeWorkflowInvocationLifecycle('completed', { runStopPending: true }).inheritsRunStop).toBe(false);
+        expect(describeWorkflowInvocationLifecycle('cancel_requested', { runStopPending: false }).inheritsRunStop).toBe(false);
+        expect(describeWorkflowInvocationLifecycle('cancel_requested').inheritsRunStop).toBe(false);
+    });
+
     it('marks only settled lifecycles terminal, so a stopping row is not read as stopped', () => {
         expect(describeWorkflowInvocationLifecycle('cancel_requested').terminal).toBe(false);
         expect(describeWorkflowInvocationLifecycle('cancelled').terminal).toBe(true);

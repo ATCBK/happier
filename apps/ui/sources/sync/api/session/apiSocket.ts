@@ -317,7 +317,10 @@ class ApiSocket {
     //
 
     initialize(config: SyncSocketConfig, encryption: Encryption | null) {
-        if (this.config?.request || config.request) this.disconnect();
+        // Ingress and supervisor callbacks capture the applied configuration.
+        // Even the same endpoint/bearer must retire that transport before a
+        // replacement configuration becomes authoritative.
+        if (this.config || config.request) this.disconnect();
         this.requestConfigurationAbortController.abort('socket-reconfigured');
         this.requestConfigurationAbortController = new AbortController();
         this.config = config;

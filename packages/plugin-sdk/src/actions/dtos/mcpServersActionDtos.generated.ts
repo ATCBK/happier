@@ -41,10 +41,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -284,10 +284,10 @@ export type McpServersActionInputById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -602,10 +602,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -895,10 +895,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -1146,10 +1146,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -1411,63 +1411,7 @@ export type McpServersActionInputById = {
                 agentId?: string | undefined;
             }[];
         } | undefined;
-        values?: Record<string, {
-            t: 'literal';
-            v: string;
-        } | {
-            t: 'savedSecret';
-            secretId: string;
-        } | {
-            t: 'template';
-            template: string;
-            vars: Record<string, {
-                t: 'literal';
-                v: string;
-            } | {
-                t: 'savedSecret';
-                secretId: string;
-            }>;
-        } | {
-            t: 'sessionAttested';
-            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
-        } | {
-            name: string;
-            value: string;
-            t: 'createSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        } | {
-            name: string;
-            t: 'saveSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        }> | Record<string, Record<string, {
-            t: 'literal';
-            v: string;
-        } | {
-            t: 'savedSecret';
-            secretId: string;
-        } | {
-            t: 'template';
-            template: string;
-            vars: Record<string, {
-                t: 'literal';
-                v: string;
-            } | {
-                t: 'savedSecret';
-                secretId: string;
-            }>;
-        } | {
-            t: 'sessionAttested';
-            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
-        } | {
-            name: string;
-            value: string;
-            t: 'createSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        } | {
-            name: string;
-            t: 'saveSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        }>> | undefined;
+        values?: Record<string, any> | Record<string, Record<string, any>> | undefined;
     };
     readonly "mcp.servers.import": {
         source: {
@@ -1479,35 +1423,7 @@ export type McpServersActionInputById = {
         };
         dryRun: boolean;
         expectedRevision?: number | 'absent' | undefined;
-        values?: Record<string, {
-            t: 'literal';
-            v: string;
-        } | {
-            t: 'savedSecret';
-            secretId: string;
-        } | {
-            t: 'template';
-            template: string;
-            vars: Record<string, {
-                t: 'literal';
-                v: string;
-            } | {
-                t: 'savedSecret';
-                secretId: string;
-            }>;
-        } | {
-            t: 'sessionAttested';
-            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
-        } | {
-            name: string;
-            value: string;
-            t: 'createSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        } | {
-            name: string;
-            t: 'saveSecret';
-            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
-        }> | undefined;
+        values?: Record<string, any> | undefined;
         where?: {
             kind: 'write';
             write: {
@@ -1726,10 +1642,10 @@ export type McpServersActionResultById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -1992,10 +1908,10 @@ export type McpServersActionResultById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -2321,10 +2237,10 @@ export type McpServersActionResultById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {

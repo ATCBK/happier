@@ -57,7 +57,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
         }] });
         expect(unavailable.uncheckedMachineCount).toBe(0);
         const pendingRuns = new Map([['studio:happier-cli', { status: 'accepted' as const, baseline: '' }]]);
-        expect(buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" }, ...params, runs: pendingRuns }).groups[0]?.items).toHaveLength(1);
+        expect(buildMachineUpdateGroups({ ...params, runs: pendingRuns }).groups[0]?.items).toHaveLength(1);
         expect(pendingRuns.get('studio:happier-cli')).toEqual({ status: 'accepted', baseline: '' });
         recordMachineRequestSucceeded({ serverId: 'home-a', accountId: 'updates-account', machineId: studio.id, observedAtMs: 3 });
         expect(buildMachineUpdateGroups(params).groups[0]?.items[0]?.action.kind).toBe('run');

@@ -1209,6 +1209,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                         maxSerializedBytes,
                         ...invocation,
                         maxItems,
+                        ...(request.scanDeadlineAtMs === undefined ? {} : { scanDeadlineAtMs: request.scanDeadlineAtMs }),
                         ...(typeof cursor === 'string' ? { cursor } : {}),
                         ...(searchTerm === undefined ? {} : { searchTerm }),
                         ...(request.searchMode === undefined ? {} : { searchMode: request.searchMode }),
@@ -1303,7 +1304,6 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const terminal = terminalBeforeAdmission(request.signal);
             if (terminal) return terminal;
             if (request.projection !== undefined && request.projection !== 'terminal') return invalidRequest();
-            if (request.projection === 'terminal' && request.direction !== 'newer') return invalidRequest();
             const parsedSource = parseSource(request.source);
             const remoteSessionId = parseBoundedString(request.remoteSessionId, MAX_ID_CODE_UNITS);
             const maxItems = readMaxItems(request.maxItems);

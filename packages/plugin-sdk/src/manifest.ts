@@ -411,37 +411,6 @@ export type PluginContributionIdentity = Readonly<{
 /** The callable JSON-schema validator contract, without the AJV owner graph. */
 export type PluginJsonSchemaValidator = (value: unknown) => boolean;
 
-/** Public prompt-asset capability facts retained by manifest declarations. */
-export type PromptAssetCapabilities = Readonly<{
-  supportsCatalogInstall?: boolean;
-  supportsNestedNamespaces?: boolean;
-  supportsSymlinkInstall?: boolean;
-  [key: string]: unknown;
-}>;
-
-/** Public prompt-asset descriptor facts retained by manifest declarations. */
-export type PromptAssetTypeDescriptor = Readonly<{
-  id: string;
-  providerId: string;
-  title: string;
-  description: string;
-  libraryKind: 'doc' | 'bundle';
-  supportsScope: Readonly<{
-    user: boolean;
-    project: boolean;
-    [key: string]: unknown;
-  }>;
-  supportsFiles: boolean;
-  formatId: string;
-  defaultRoots: readonly Readonly<{
-    label: string;
-    scope: 'user' | 'project';
-    pathTemplate: string;
-    [key: string]: unknown;
-  }>[];
-  capabilities: PromptAssetCapabilities;
-  [key: string]: unknown;
-}>;
 
 // Preserve canonical runtime identity while making every declaration-facing
 // type local to this public SDK boundary.
@@ -655,33 +624,6 @@ export interface PluginManifest {
         agent: string | Readonly<{ pluginId: string; localId: string }>;
       }>;
       priority?: number;
-      adapterDescriptor?: Readonly<{
-        id: string;
-        providerId: string;
-        title: string;
-        description: string;
-        libraryKind: 'doc' | 'bundle';
-        supportsScope: Readonly<{
-          user: boolean;
-          project: boolean;
-          [key: string]: unknown;
-        }>;
-        supportsFiles: boolean;
-        formatId: string;
-        defaultRoots: readonly Readonly<{
-          label: string;
-          scope: 'user' | 'project';
-          pathTemplate: string;
-          [key: string]: unknown;
-        }>[];
-        capabilities: Readonly<{
-          supportsCatalogInstall?: boolean;
-          supportsNestedNamespaces?: boolean;
-          supportsSymlinkInstall?: boolean;
-          [key: string]: unknown;
-        }>;
-        [key: string]: unknown;
-      }>;
       availability?: unknown;
       metadata?: Readonly<Record<string, JsonValue>>;
     }>)[];

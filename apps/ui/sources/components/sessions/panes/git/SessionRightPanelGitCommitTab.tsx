@@ -1227,7 +1227,7 @@ const ChangeGroupHeaderRow = React.memo((props: Readonly<{
                     variant="plain"
                     size={28}
                     accessibilityRole="checkbox"
-                    checked={state === 'checked'}
+                    checked={state === 'mixed' ? 'mixed' : state === 'checked'}
                     selectedBackground={false}
                     accessibilityLabel={t('sessionGitPane.groups.selectGroup', { group: group.title })}
                     icon={<ScmCommitSelectionCheckGlyph state={state} />}

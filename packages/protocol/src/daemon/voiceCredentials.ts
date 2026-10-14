@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedAccountHttpHeadersRequestSchema } from '../connect/connectedAccountPurposes.js';
 import {
@@ -24,16 +24,16 @@ import { DaemonPluginReactNativeBundleCacheIdentityV1Schema } from './contributi
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { VoiceRealtimeJsonValueSchema } from '../voice/realtime/events.js';
 
-export const DaemonVoiceClientCredentialSelectionV1Schema = lazyZodSchema(() => z.object({
+export const DaemonVoiceClientCredentialSelectionV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   platform: z.enum(['web', 'ios', 'android']),
   cacheIdentity: DaemonPluginReactNativeBundleCacheIdentityV1Schema,
-}).strict());
+}));
 export type DaemonVoiceClientCredentialSelectionV1 = z.infer<
   typeof DaemonVoiceClientCredentialSelectionV1Schema
 >;
 
-export const DaemonVoiceClientRawCredentialMaterializeRequestV1Schema = lazyZodSchema(() => z.object({
+export const DaemonVoiceClientRawCredentialMaterializeRequestV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   platform: z.enum(['web', 'ios', 'android']),
   cacheIdentity: DaemonPluginReactNativeBundleCacheIdentityV1Schema,
@@ -43,9 +43,9 @@ export const DaemonVoiceClientRawCredentialMaterializeRequestV1Schema = lazyZodS
    * compatibility, but it is source-neutral and never identifies a secret or
    * Connected Account to the caller.
    */
-  expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema.nullable().optional(),
+  expectedCredentialRevision: z.optional(z.nullable(ConnectedServiceCredentialRevisionV1Schema)),
   request: ConnectedAccountHttpHeadersRequestSchema,
-}).strict());
+}));
 export type DaemonVoiceClientRawCredentialMaterializeRequestV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialMaterializeRequestV1Schema
 >;
@@ -57,19 +57,19 @@ const DaemonVoiceCredentialErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 ]));
 
 export const DaemonVoiceClientRawCredentialMaterializeResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
-    materialization: z.object({
+    materialization: z.strictObject({
       kind: z.literal('httpHeaders'),
       headers: z.record(z.string(), z.string()),
-    }).strict(),
+    }),
     /** Source-neutral host-private receipt; public Voice access never exposes it. */
-    credentialRevision: ConnectedServiceCredentialRevisionV1Schema.nullable().optional(),
-  }).strict(),
-  z.object({
+    credentialRevision: z.optional(z.nullable(ConnectedServiceCredentialRevisionV1Schema)),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: DaemonVoiceCredentialErrorCodeV1Schema,
-  }).strict(),
+  }),
 ]));
 export type DaemonVoiceClientRawCredentialMaterializeResponseV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialMaterializeResponseV1Schema
@@ -81,24 +81,24 @@ export type DaemonVoiceClientRawCredentialMaterializeResponseV1 = z.infer<
  * current registered declaration, exact operation/phase, binding and lifecycle.
  */
 export const DaemonVoiceClientMediatedCredentialDeclarationAuthorityV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('projected'),
     cacheIdentity: DaemonPluginReactNativeBundleCacheIdentityV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('bundled'),
-  }).strict(),
+  }),
 ]));
 export type DaemonVoiceClientMediatedCredentialDeclarationAuthorityV1 = z.infer<
   typeof DaemonVoiceClientMediatedCredentialDeclarationAuthorityV1Schema
 >;
 
-export const DaemonVoiceClientAccountOperationRequestV1Schema = lazyZodSchema(() => z.object({
+export const DaemonVoiceClientAccountOperationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   platform: z.enum(['web', 'ios', 'android']),
   phase: z.enum(['settings', 'prepare', 'connection']),
   operationId: asProtocolZod(PluginContributionLocalIdSchema),
-  parameters: z.record(z.string(), VoiceRealtimeJsonValueSchema).default({}),
+  parameters: z._default(z.record(z.string(), VoiceRealtimeJsonValueSchema), {}),
   declarationAuthority: DaemonVoiceClientMediatedCredentialDeclarationAuthorityV1Schema,
   /**
    * The Connected Account selection the caller captured with the credential
@@ -108,65 +108,65 @@ export const DaemonVoiceClientAccountOperationRequestV1Schema = lazyZodSchema(()
    * internally consistent while minting with the wrong account's credentials.
    */
   expectedSelection: QualifiedConnectedAccountPurposeBindingTargetV1Schema,
-}).strict());
+}));
 export type DaemonVoiceClientAccountOperationRequestV1 = z.infer<
   typeof DaemonVoiceClientAccountOperationRequestV1Schema
 >;
 
 export const DaemonVoiceClientAccountOperationResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
-    response: z.object({
-      status: z.number().int().min(200).max(299),
-      finalUrl: z.string().url(),
+    response: z.strictObject({
+      status: z.number().check(z.int(), z.minimum(200), z.maximum(299)),
+      finalUrl: z.string().check(z.url()),
       headers: z.record(z.string(), z.string()),
       bodyBase64: z.string(),
-    }).strict(),
-  }).strict(),
-  z.object({
+    }),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: DaemonVoiceCredentialErrorCodeV1Schema,
-  }).strict(),
+  }),
 ]));
 export type DaemonVoiceClientAccountOperationResponseV1 = z.infer<
   typeof DaemonVoiceClientAccountOperationResponseV1Schema
 >;
 
-export const DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema = lazyZodSchema(() => z.object({
+export const DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   rawGrant: VoiceRawCredentialGrantDeclarationSchema,
-}).strict());
+}));
 export type DaemonVoiceClientRawCredentialAuthorizationRequestV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema
 >;
 
 const DaemonVoiceClientRawCredentialDisclosureSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('savedSecret'),
     secretKinds: z.array(z.enum(['apiKey', 'token', 'password', 'other'])),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('connectedAccount'),
     service: asProtocolZod(PluginContributionIdentityV1Schema),
-  }).strict(),
+  }),
 ]));
 
-export const DaemonVoiceClientRawCredentialDisclosureV1Schema = lazyZodSchema(() => z.object({
+export const DaemonVoiceClientRawCredentialDisclosureV1Schema = lazyZodSchema(() => z.strictObject({
   sourceClass: DaemonVoiceClientRawCredentialDisclosureSourceV1Schema,
   realm: z.enum(['web', 'ios', 'android', 'daemon']),
   phase: VoiceCredentialAccessPhaseSchema,
   materialization: z.enum(['httpHeaders', 'environment', 'files']),
-  origin: z.string().url().optional(),
-  destination: z.string().trim().min(1),
-}).strict());
+  origin: z.optional(z.string().check(z.url())),
+  destination: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type DaemonVoiceClientRawCredentialDisclosureV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialDisclosureV1Schema
 >;
 
-export const DaemonVoiceClientRawCredentialAuthorizationV1Schema = lazyZodSchema(() => z.object({
-  pluginId: z.string().trim().min(1),
+export const DaemonVoiceClientRawCredentialAuthorizationV1Schema = lazyZodSchema(() => z.strictObject({
+  pluginId: z.string().check(z.trim(), z.minLength(1)),
   capability: PluginPermissionCapabilityV1Schema,
-  targetScope: z.object({ kind: z.literal('account') }).strict(),
+  targetScope: z.strictObject({ kind: z.literal('account') }),
   subject: PluginPermissionSubjectV1Schema,
   /**
    * The machine installation this authorization belongs to. Grants and pending
@@ -175,48 +175,48 @@ export const DaemonVoiceClientRawCredentialAuthorizationV1Schema = lazyZodSchema
    */
   authoritySource: PluginPermissionGrantAuthoritySourceV1Schema,
   disclosures: z.array(DaemonVoiceClientRawCredentialDisclosureV1Schema),
-}).strict());
+}));
 export type DaemonVoiceClientRawCredentialAuthorizationV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialAuthorizationV1Schema
 >;
 
-export const DaemonVoiceClientRawCredentialReviewV1Schema = lazyZodSchema(() => z.object({
-  plugin: z.object({
-    id: z.string().trim().min(1),
-    name: z.string().trim().min(1),
-    version: z.string().trim().min(1),
-  }).strict(),
-  package: z.object({
-    identity: z.string().trim().min(1),
-  }).strict(),
+export const DaemonVoiceClientRawCredentialReviewV1Schema = lazyZodSchema(() => z.strictObject({
+  plugin: z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    version: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  package: z.strictObject({
+    identity: z.string().check(z.trim(), z.minLength(1)),
+  }),
   distribution: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('bundled') }).strict(),
-    z.object({ kind: z.literal('unavailable') }).strict(),
-    z.object({ kind: z.literal('path'), development: z.boolean() }).strict(),
-    z.object({ kind: z.literal('archive') }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('bundled') }),
+    z.strictObject({ kind: z.literal('unavailable') }),
+    z.strictObject({ kind: z.literal('path'), development: z.boolean() }),
+    z.strictObject({ kind: z.literal('archive') }),
+    z.strictObject({
       kind: z.literal('npm'),
-      packageName: z.string().trim().min(1),
-      registryOrigin: z.string().url(),
-    }).strict(),
+      packageName: z.string().check(z.trim(), z.minLength(1)),
+      registryOrigin: z.string().check(z.url()),
+    }),
   ]),
   publisher: z.union([
-    z.object({
+    z.strictObject({
       status: z.literal('bundled_first_party'),
       identity: z.literal('Happier'),
-    }).strict(),
-    z.object({ status: z.literal('unavailable') }).strict(),
+    }),
+    z.strictObject({ status: z.literal('unavailable') }),
   ]),
-  contribution: z.object({
+  contribution: z.strictObject({
     identity: asProtocolZod(PluginContributionIdentityV1Schema),
-    name: z.string().trim().min(1),
-  }).strict(),
-  credentialSlot: z.object({
-    id: z.string().trim().min(1),
-    name: z.string().trim().min(1),
-    purpose: z.string().trim().min(1),
-  }).strict(),
-}).strict());
+    name: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  credentialSlot: z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    purpose: z.string().check(z.trim(), z.minLength(1)),
+  }),
+}));
 export type DaemonVoiceClientRawCredentialReviewV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialReviewV1Schema
 >;
@@ -229,31 +229,31 @@ const DaemonVoiceCredentialAuthorizationErrorCodeV1Schema = lazyZodSchema(() => 
 ]));
 
 export const DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     authorization: DaemonVoiceClientRawCredentialAuthorizationV1Schema,
     review: DaemonVoiceClientRawCredentialReviewV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: DaemonVoiceCredentialAuthorizationErrorCodeV1Schema,
-  }).strict(),
+  }),
 ]));
 export type DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema
 >;
 
 export const DaemonVoiceClientRawCredentialAuthorizationRequestResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     authorization: DaemonVoiceClientRawCredentialAuthorizationV1Schema,
     review: DaemonVoiceClientRawCredentialReviewV1Schema,
     pendingRequest: PluginPermissionGrantRequestV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: DaemonVoiceCredentialAuthorizationErrorCodeV1Schema,
-  }).strict(),
+  }),
 ]));
 export type DaemonVoiceClientRawCredentialAuthorizationRequestResponseV1 = z.infer<
   typeof DaemonVoiceClientRawCredentialAuthorizationRequestResponseV1Schema

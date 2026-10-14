@@ -199,7 +199,7 @@ describe("Machine preset relational owner", () => {
         expect((await requestPreset(accountId, "create", input)).json()).toEqual({ kind: "refused", code: "credential_unavailable" });
         const ref = { service: { pluginId: recipe.provider.pluginId, localId: "native-account" }, accountId: "native-profile" };
         const written = await mutateQualifiedConnectedServiceCredential({ accountId, ref, expectedCredentialRevision: null,
-            authenticationModeId: "api-key", content: { t: "plain", v: { token: "must-not-disclose" } }, metadata: { displayName: "Native profile" } });
+            authenticationModeId: "api-key", content: { t: "plain", v: { token: "must-not-disclose" } }, metadata: { displayName: "Native profile", scopes: [] } });
         expect(written.status).toBe("written");
         expect(await listQualifiedConnectedAccounts({ accountId, service: ref.service })).toMatchObject([{ ref, status: "connected", revisionSemantics: "revisioned" }]);
         const selected = { ...recipe, credentials: [{ purpose: { consumer: recipe.provider, purpose: "acquire-authentication" }, account: ref }] };
@@ -209,7 +209,7 @@ describe("Machine preset relational owner", () => {
         expect(saved.body).not.toContain("must-not-disclose");
         const reviewed = { selection: { kind: "preset" as const, homeId, id: input.id, revision: 0 }, controller, retention: { kind: "until-delete" as const }, wakeOnAcceptedMessage: false };
         if (written.status !== "written") throw new Error("Credential fixture was not written");
-        expect(await deleteQualifiedConnectedServiceCredential({ accountId, ref, expectedCredentialRevision: written.credentialRevision })).toMatchObject({ status: "deleted" });
+        expect(await deleteQualifiedConnectedServiceCredential({ accountId, ref, expectedCredentialRevision: written.credentialRevision, expectedStorageMode: 'plain', cleanupGroupReferences: false })).toMatchObject({ status: "deleted" });
         expect((await requestPreset(accountId, "create", { ...input, id: "preset-removed-profile", recipe: selected })).json()).toEqual({ kind: "refused", code: "credential_unavailable" });
         await expect(admitManagedAcquire({ custodianAccountId: accountId, requesterAccountId: accountId, requestEnvelopeDigest: "verified-removed-profile", input: { input: reviewed, requestId: "removed-profile", continuationPresent: false } }))
             .rejects.toMatchObject({ code: "credential_unavailable" });
@@ -226,7 +226,7 @@ describe("Machine preset relational owner", () => {
             account: { service: { pluginId: recipe.provider.pluginId, localId: 'native-account' }, accountId: `native-${purpose}` } }));
         const written = await Promise.all(credentials.map(credential => mutateQualifiedConnectedServiceCredential({ accountId, ref: credential.account,
             expectedCredentialRevision: null, authenticationModeId: 'api-key', content: { t: 'plain', v: { token: `private-${credential.account.accountId}` } },
-            metadata: { displayName: credential.account.accountId } })));
+            metadata: { displayName: credential.account.accountId, scopes: [] } })));
         const selected = { ...recipe, credentials };
         const definition = { id: 'preset-plural-credential', homeId, owner: { kind: 'account', accountId }, name: 'Plural recipe', recipe: selected, controller };
         expect((await requestPreset(accountId, 'create', { ...definition, recipe: { ...selected, credentials: credentials.slice(0, 1) } })).json())
@@ -241,7 +241,7 @@ describe("Machine preset relational owner", () => {
         expect(admitted.machine.launch.credentials).toEqual(credentials);
         const secondary = written[1];
         if (secondary?.status !== 'written') throw new Error('Secondary credential fixture was not written');
-        await deleteQualifiedConnectedServiceCredential({ accountId, ref: credentials[1]!.account, expectedCredentialRevision: secondary.credentialRevision });
+        await deleteQualifiedConnectedServiceCredential({ accountId, ref: credentials[1]!.account, expectedCredentialRevision: secondary.credentialRevision, expectedStorageMode: 'plain', cleanupGroupReferences: false });
         await expect(admitManagedAcquire({ custodianAccountId: accountId, requesterAccountId: accountId,
             requestEnvelopeDigest: 'plural-removed', input: { input: reviewed, requestId: 'plural-after-removal', continuationPresent: false } }))
             .rejects.toMatchObject({ code: 'credential_unavailable' });

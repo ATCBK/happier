@@ -1,13 +1,6 @@
-import {
-    buildReviewCommentTextSnapshotHashes,
-    ReviewCommentSnapshotV1Schema,
-    StoredJsonContentEnvelopeSchema,
-    reviewCommentTextSnapshotHasBidiControlsV1,
-    reviewCommentTextSnapshotIsLikelyMinifiedV1,
-    type ReviewCommentSnapshotContentV1,
-    type ReviewCommentSnapshotV1,
-    type ReviewCommentTextSnapshotLinesV1,
-} from "@happier-dev/protocol";
+import { buildReviewCommentTextSnapshotHashes, reviewCommentTextSnapshotHasBidiControlsV1, reviewCommentTextSnapshotIsLikelyMinifiedV1, type ReviewCommentTextSnapshotLinesV1 } from '@happier-dev/protocol/reviews/comments/snapshots';
+import { ReviewCommentSnapshotV1Schema, type ReviewCommentSnapshotContentV1, type ReviewCommentSnapshotV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 
 export type ReviewCommentTextSnapshotLines = ReviewCommentTextSnapshotLinesV1;
 

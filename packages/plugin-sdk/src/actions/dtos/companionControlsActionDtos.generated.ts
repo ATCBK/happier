@@ -7,7 +7,5 @@ export type CompanionControlsActionInputById = {
     readonly "ui.pet.choose": Record<string, never>;
 };
 export type CompanionControlsActionResultById = {
-    readonly "ui.pet.choose": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "ui.pet.choose": JsonValue;
 };

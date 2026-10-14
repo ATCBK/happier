@@ -1,4 +1,4 @@
-import { addUsageCostForMode, createEmptyUsageCost } from '@happier-dev/protocol/usage/usageAggregation';
+import { addUsageCostForMode, aggregateUsageContributionCosts, createEmptyUsageCost } from '@happier-dev/protocol/usage/usageAggregation';
 import { resolveUsageCostBasis } from '@happier-dev/protocol/usage/usageCostFacts';
 import { type RepositoryCheckpointCommitEvidence, type UsageObservationCost } from '@happier-dev/protocol';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
@@ -126,11 +126,15 @@ const byAmount = <T extends { amount: number | null }>(left: T, right: T) =>
   (right.amount ?? -1) - (left.amount ?? -1);
 const addAmount = (left: number | null, right: number | null) =>
   left === null || right === null ? null : left + right;
-type AmountAccumulator = { amount: number | null; cost?: UsageObservationCost; moneyBasis: UsageWorkMoneyBasis | null };
+type AmountAccumulator = { amount: number | null; cost?: UsageObservationCost;
+  contributions?: UsageWorkAllocation['contribution'][]; moneyBasis: UsageWorkMoneyBasis | null };
 const newAmount = (): AmountAccumulator => ({ amount: 0, moneyBasis: null });
 function accumulate(target: AmountAccumulator, allocation: Pick<UsageWorkAllocation, 'contribution'>, basis: UsageWorkAmount): void {
   if (basis.metric !== 'cost') { target.amount = addAmount(target.amount, allocation.contribution.tokens.total); return; }
-  target.cost = addUsageCostForMode(target.cost ?? createEmptyUsageCost(), allocation.contribution.cost, basis.costBasis);
+  (target.contributions ??= []).push(allocation.contribution);
+  target.cost = allocation.contribution.cost.reportedTotalContributionIds
+    ? aggregateUsageContributionCosts(target.contributions, basis.costBasis)
+    : addUsageCostForMode(target.cost ?? createEmptyUsageCost(), allocation.contribution.cost, basis.costBasis);
   const selected = resolveUsageCostBasis(target.cost, basis.costBasis);
   target.amount = selected?.amountUsd ?? null;
   target.moneyBasis = selected ? { kind: selected.kind, currency: selected.currency } : null;
@@ -473,9 +477,14 @@ export function summarizeUsageWorkSession(
     .sort((left, right) => left.observedAtMs - right.observedAtMs || left.contributionId.localeCompare(right.contributionId));
   const allocations = new Map(work.allocations.map(row => [row.contribution.id, row]));
   let cumulativeCost = createEmptyUsageCost();
+  const cumulativeRows: UsageWorkAllocation['contribution'][] = [];
   let costTimelineBasis: UsageWorkSessionAutopsy['costTimelineBasis'] = null;
   const costTimeline = turns.map(turn => {
-    cumulativeCost = addUsageCostForMode(cumulativeCost, allocations.get(turn.contributionId)!.contribution.cost, basis.costBasis);
+    const contribution = allocations.get(turn.contributionId)!.contribution;
+    cumulativeRows.push(contribution);
+    cumulativeCost = contribution.cost.reportedTotalContributionIds
+      ? aggregateUsageContributionCosts(cumulativeRows, basis.costBasis)
+      : addUsageCostForMode(cumulativeCost, contribution.cost, basis.costBasis);
     const selected = resolveUsageCostBasis(cumulativeCost, basis.costBasis);
     if (selected) costTimelineBasis = { kind: selected.kind, currency: selected.currency };
     return { id: turn.contributionId, observedAtMs: turn.observedAtMs,

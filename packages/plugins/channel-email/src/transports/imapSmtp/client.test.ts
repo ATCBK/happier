@@ -3,7 +3,9 @@ import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import imapkit, { type IMAPServer } from 'imapkit';
 import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile, stat } from 'node:fs/promises';
+import { ImapFlow } from 'imapflow';
 import type { ConnectedAccountAuthenticationContext, ConnectedAccountCredentialStore, ConnectedAccountReadContext } from '@happier-dev/plugin-sdk/connected-accounts';
 import type { JsonValue, PluginInvocationContext, PluginServices } from '@happier-dev/plugin-sdk';
 import type { SessionHandle, SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk/sessions';
@@ -28,6 +30,8 @@ import { createCurrentConversationConnectionFixture } from '../../../../channels
 import { createConversationSessionProjectionFrontierRow } from '../../../../channels/src/sessionProjection';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../channels/src/collections';
 import { EMAIL_CONFIG_SCHEMA } from '../../config';
+import { textPdf } from '../../../../channels/src/testkit/textPdf';
+import { ChannelFileValueV1Schema } from '../../../../channels/src/channelAttachment';
 
 const mailbox = 'wilson@example.com';
 const raw = (id: string) => Buffer.from(`From: sales@example.com\r\nTo: ${mailbox}\r\nMessage-ID: <${id}@example.com>\r\nSubject: Meubles\r\n\r\nBonjour.\r\n`);
@@ -172,14 +176,21 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     const admitted: Extract<SessionSendRequest, { kind: 'userText' }>[] = [];
     const transcript: SessionTranscriptGetExternalShareableResultV1['items'][number][] = [];
     const sessionId = 'email-seam-session';
-    const summary = { id: sessionId, state: 'idle', runtimeAvailability: { status: 'available' },
+    const summary = { id: sessionId, machineId: 'email-seam-machine', state: 'idle', runtimeAvailability: { status: 'available' },
       storagePolicy: 'optional', encryptionMode: 'plain', updatedAtMs: 1 } satisfies SessionSummary;
     // The Session host is an external boundary for the plugin. The separate
     // CLI-owned Channels journey runs real admission; this boundary validates
     // its wire request and returns schema-produced transcript pages.
+    const materializedBytes: Buffer[] = [];
+    const stagedPaths: string[] = [];
     const sessions = { async get(id: string) {
       if (id !== sessionId) return null;
-      return { async summary() { return summary; }, async send(request: SessionSendRequest) {
+      return { async summary() { return summary; }, async materializeAttachment(request: Parameters<SessionHandle['materializeAttachment']>[0]) {
+        stagedPaths.push(request.sourcePath);
+        const bytes = await readFile(request.sourcePath);
+        materializedBytes.push(bytes);
+        return { path: `.happier/uploads/${request.name}`, bytes };
+      }, async send(request: SessionSendRequest) {
         if (request.kind !== 'userText') throw new Error('Email ingress must send user text');
         const { kind: _kind, text, ...fields } = request;
         const sendSpec = getActionSpec('session.message.send');
@@ -303,6 +314,36 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         code: 'providerPermissionMissing',
       } });
       expect(imap.control.listMessages('INBOX').every(message => !message.flags.includes('\\Seen'))).toBe(true);
+      const pdfs = ['First lead', 'Second lead', 'Third lead'].map(textPdf);
+      const mime = Buffer.from([
+        'From: sales@example.com', `To: ${mailbox}`, 'Message-ID: <pdf-batch@example.com>', 'References: <root@example.com>', trusted,
+        'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary=pdfs', '', '--pdfs', 'Content-Type: text/plain', '', 'Three leads',
+        ...pdfs.flatMap((bytes, index) => ['--pdfs', 'Content-Type: application/pdf', `Content-Disposition: attachment; filename=lead-${index}.pdf`,
+          'Content-Transfer-Encoding: base64', '', Buffer.from(bytes).toString('base64')]), '--pdfs--', '',
+      ].join('\r\n'));
+      imap.control.addMessage('INBOX', { raw: mime });
+      const pdfUid = imap.control.getMailbox('INBOX').uidnext - 1;
+      const fetchOne = vi.spyOn(ImapFlow.prototype, 'fetchOne');
+      try {
+        await journey.poll();
+        expect(admitted).toHaveLength(3);
+        expect(fetchOne.mock.calls.filter(call => call[0] === pdfUid && call[1].source)).toHaveLength(1);
+        const attachments = admitted[2]!.attachments!;
+        expect(attachments).toHaveLength(3);
+        const dispatch = { sessionId, localId: 'email-local-3', attachments: attachments.map((attachment, index) => ({
+          instanceId: `pdf-${index}`, key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
+        })) };
+        fetchOne.mockClear();
+        const resolved = await journey.resolveAttachments(dispatch);
+        expect(fetchOne.mock.calls.filter(call => call[1].source)).toHaveLength(1);
+        for (const text of ['First lead', 'Second lead', 'Third lead']) expect(JSON.stringify(resolved)).toContain(text);
+        expect(materializedBytes).toEqual(pdfs.map(bytes => Buffer.from(bytes)));
+        for (const path of stagedPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+        fetchOne.mockClear();
+        await journey.resolveAttachments(dispatch);
+        expect(fetchOne.mock.calls.filter(call => call[1].source)).toHaveLength(1);
+        for (const path of stagedPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally { fetchOne.mockRestore(); }
     } finally { await journey.dispose(); }
     // This composed protocol journey opens real TLS connections for baseline,
     // ingress, SMTP, replay and UIDVALIDITY recovery; it exceeds Vitest's 5s unit

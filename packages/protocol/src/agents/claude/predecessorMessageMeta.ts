@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import {
     CLAUDE_REMOTE_DEBUG_CATEGORIES,
     CLAUDE_SETTING_SOURCES_V2,
@@ -42,27 +42,27 @@ type ClaudeDebugCategories = readonly (typeof CLAUDE_REMOTE_DEBUG_CATEGORIES)[nu
  */
 export function createClaudePredecessorMessageMetaShape(zod: typeof z) {
     return {
-        claudeRemoteAgentSdkEnabled: zod.boolean().optional(),
-        claudeUnifiedTerminalEnabled: zod.boolean().optional(),
-        claudeUnifiedTerminalHost: zod.enum(CLAUDE_UNIFIED_TERMINAL_HOSTS).optional(),
-        claudeUnifiedTerminalResumeChoice: zod.enum(CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES).optional(),
-        claudeRemoteSettingSourcesV2: zod.array(zod.enum(CLAUDE_SETTING_SOURCES_V2)).optional(),
-        claudeRemoteSettingSources: zod.enum(['project', 'user_project', 'none']).optional(),
-        claudeCodeExperimentalAgentTeamsEnabled: zod.boolean().optional(),
-        claudeLocalPermissionBridgeEnabled: zod.boolean().optional(),
-        claudeLocalPermissionBridgeWaitIndefinitely: zod.boolean().optional(),
-        claudeLocalPermissionBridgeTimeoutSeconds: zod.number().optional(),
-        claudeRemoteEnableFileCheckpointing: zod.boolean().optional(),
-        claudeRemoteMaxThinkingTokens: zod.number().nullable().optional(),
-        claudeRemoteDisableTodos: zod.boolean().optional(),
-        claudeRemoteStrictMcpServerConfig: zod.boolean().optional(),
-        claudeRemoteDebugEnabled: zod.boolean().optional(),
-        claudeRemoteVerboseEnabled: zod.boolean().optional(),
-        claudeRemoteDebugCategories: zod.array(zod.enum(CLAUDE_REMOTE_DEBUG_CATEGORIES)).optional(),
-        claudeRemoteAdvancedOptionsJson: zod.string().optional(),
+        claudeRemoteAgentSdkEnabled: zod.optional(zod.boolean()),
+        claudeUnifiedTerminalEnabled: zod.optional(zod.boolean()),
+        claudeUnifiedTerminalHost: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_HOSTS)),
+        claudeUnifiedTerminalResumeChoice: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES)),
+        claudeRemoteSettingSourcesV2: zod.optional(zod.array(zod.enum(CLAUDE_SETTING_SOURCES_V2))),
+        claudeRemoteSettingSources: zod.optional(zod.enum(['project', 'user_project', 'none'])),
+        claudeCodeExperimentalAgentTeamsEnabled: zod.optional(zod.boolean()),
+        claudeLocalPermissionBridgeEnabled: zod.optional(zod.boolean()),
+        claudeLocalPermissionBridgeWaitIndefinitely: zod.optional(zod.boolean()),
+        claudeLocalPermissionBridgeTimeoutSeconds: zod.optional(zod.number()),
+        claudeRemoteEnableFileCheckpointing: zod.optional(zod.boolean()),
+        claudeRemoteMaxThinkingTokens: zod.optional(zod.nullable(zod.number())),
+        claudeRemoteDisableTodos: zod.optional(zod.boolean()),
+        claudeRemoteStrictMcpServerConfig: zod.optional(zod.boolean()),
+        claudeRemoteDebugEnabled: zod.optional(zod.boolean()),
+        claudeRemoteVerboseEnabled: zod.optional(zod.boolean()),
+        claudeRemoteDebugCategories: zod.optional(zod.array(zod.enum(CLAUDE_REMOTE_DEBUG_CATEGORIES))),
+        claudeRemoteAdvancedOptionsJson: zod.optional(zod.string()),
         // The declaration producer and predecessor reader own effort semantics;
         // this projection retains their named string without a second level catalog.
-        reasoningEffort: zod.string().optional(),
+        reasoningEffort: zod.optional(zod.string()),
     };
 }
 

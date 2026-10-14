@@ -827,11 +827,11 @@ describe('sectioned composer suggestions (EU-3)', () => {
     describe('Account mentions (a human discussion)', () => {
         const ALICE = {
             accountId: 'account-alice',
-            profile: { firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null },
+            profile: { firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null, name: 'Alice Ng' },
             accessHint: 'view' as const,
         };
         function person(index: number) {
-            return { ...ALICE, accountId: `account-${index}`, profile: { ...ALICE.profile, firstName: `Person ${index}`, username: null } };
+            return { ...ALICE, accountId: `account-${index}`, profile: { ...ALICE.profile, firstName: `Person ${index}`, name: `Person ${index}`, username: null } };
         }
 
         it('carries the chosen Account as the row identity behind the name the author sees', async () => {

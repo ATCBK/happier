@@ -1,7 +1,7 @@
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserEventV1Schema, BrowserTitleChangedEventV1Schema } from '@happier-dev/protocol/browser/events/v1';
 import { BrowserHttpUrlV1Schema } from '@happier-dev/protocol/browser/url';
-import type { BrowserEventV1, BrowserCommandDispatchResultV1, BrowserCommandErrorCodeV1, BrowserCommandV1, BrowserSidecarErrorCodeV1, BrowserProfileV1, BrowserViewTargetV1, BrowserPlatformV1 } from '@happier-dev/protocol';
+import type { BrowserEventV1, BrowserCommandDispatchResultV1, BrowserCommandErrorCodeV1, BrowserCommandV1, BrowserSidecarErrorCodeV1, BrowserProfileV1, BrowserViewTargetV1, BrowserPlatformV1, MachineVitalsSampleV1 } from '@happier-dev/protocol';
 import type { SurfaceInputControl } from '../../surfaces/inputControl';
 import { isBrowserSidecarCdpCommandNotDispatched } from './cdpTransport';
 import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
@@ -75,6 +75,7 @@ export type BrowserSidecarViewLifecycleSubscriber = (event: BrowserSidecarViewLi
 
 export type BrowserSidecarControlAdapterFactoryInput = Readonly<{
     machineId: string;
+    readMachineMemory?: () => MachineVitalsSampleV1['memory'] | null;
     resolveInputControl?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => SurfaceInputControl | undefined;
     readSessionIdle?: (browserSessionId: string) => Readonly<{ idle: boolean; settledAt?: number }>;
 }>;
@@ -418,7 +419,10 @@ export function createBrowserSidecarCdpControlAdapter(
             return failed(command, 'view_not_found', 'Browser sidecar does not own this view.');
         }
 
+        let issued = false;
         try {
+            scope.signal?.throwIfAborted();
+            issued = true;
             const response = await input.transport.dispatchBrowserCommand({
                 ...scope,
                 method,
@@ -440,7 +444,7 @@ export function createBrowserSidecarCdpControlAdapter(
             }
             return dispatchState(command);
         } catch (error) {
-            return cdpFailure(command, isBrowserSidecarCdpCommandNotDispatched(error) ? 'known' : 'unknown');
+            return cdpFailure(command, !issued || isBrowserSidecarCdpCommandNotDispatched(error) ? 'known' : 'unknown');
         }
     }
 

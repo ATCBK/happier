@@ -103,7 +103,7 @@ function ChangedFilesReviewRows(props: ChangedFilesReviewIndexProps & Readonly<{
                         onPress={() => props.onFocusPath(file.fullPath)}
                         leadingElement={props.renderCommitToggle ? props.renderCommitToggle(file) : null}
                         pathAccessory={props.renderRowAccessory?.(file.fullPath) ?? null}
-                        trailingElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        trailingElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                             <ChangedFilesReviewFindCount model={props.findModel} path={file.fullPath} />
                             {comments > 0 ? (
                             <View style={styles.comments} accessibilityLabel={t('detailsSurface.review.comments', { count: comments })}>
@@ -227,29 +227,27 @@ const ChangedFilesReviewRailTree = React.memo(function ChangedFilesReviewRailTre
 
 const stylesheet = StyleSheet.create((theme) => ({
     index: {
-        paddingTop: 6,
-        paddingBottom: 10,
-        paddingHorizontal: 8,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s10,
+        paddingHorizontal: theme.space.s8,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.subtle,
     },
     caption: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 6,
-        paddingBottom: 4,
-        paddingLeft: 12,
-        paddingRight: 8,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s4,
+        paddingLeft: theme.space.s12,
+        paddingRight: theme.space.s8,
     },
     captionTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     captionCount: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     grow: {
@@ -259,14 +257,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         paddingHorizontal: SCM_COMPARISON_RAIL_INSET_PX,
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     railScroll: {
         flex: 1,
         minHeight: 0,
     },
     railRows: {
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
     },
     comments: {
         flexDirection: 'row',
@@ -274,8 +272,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 3,
     },
     count: {
-        ...Typography.default(),
-        fontSize: 11.5,
+        ...Typography.variant('micro'),
         fontVariant: ['tabular-nums'],
     },
 }));

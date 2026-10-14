@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { WidgetInstanceActionInputSchemasV1, WidgetInstanceActionOutputSchemasV1 } from '../../widgets/actionsV1.js';
 import type { WidgetSurfaceRefV1 } from '../../widgets/widgetInstanceV1.js';
@@ -8,39 +8,39 @@ import { ActionExecuteFailureSchema, ActionApprovalRequestCreatedResultSchema } 
 import { WidgetAreaLayoutV1Schema, WidgetAreaPresetUndoV1Schema } from '../../widgets/widgetSurfaceArtifactV1.js';
 
 const input = WidgetInstanceActionInputSchemasV1;
-const [widgetSizeInput, groupWidthInput] = input['widgets.item.size.set'].options;
-const instanceId = z.string().trim().min(1);
-const layoutId = z.string().trim().min(1);
+const [widgetSizeInput, groupWidthInput] = input['widgets.item.size.set']._zod.def.options;
+const instanceId = z.string().check(z.trim(), z.minLength(1));
+const layoutId = z.string().check(z.trim(), z.minLength(1));
 // A reset's saved content is portable within this declared area; its routing is always host-owned.
-const localUndo = lazyZodSchema(() => WidgetAreaPresetUndoV1Schema.omit({ surface: true }).extend({
-    layoutId: layoutId.optional(), previousLayout: WidgetAreaLayoutV1Schema.omit({ surface: true }),
-}).strict());
+const localUndo = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(WidgetAreaPresetUndoV1Schema, { surface: true }), {
+    layoutId: z.optional(layoutId), previousLayout: z.omit(WidgetAreaLayoutV1Schema, { surface: true }),
+})));
 /** Authors name an area/instance, never a Home, Account, page, machine or access callback. */
 export const PluginUiWidgetAreaOperationV1Schema = z.union([
-    z.object({ actionId: z.literal('widgets.area.layout.list') }).strict(),
-    input['widgets.area.layout.create'].omit({ surface: true, fromSurface: true }).extend({ actionId: z.literal('widgets.area.layout.create'), fromLayoutId: layoutId.nullable().optional() }).strict(),
-    z.object({ actionId: z.literal('widgets.area.layout.select'), layoutId: layoutId.nullable().optional() }).strict(),
-    input['widgets.area.layout.rename'].omit({ surface: true }).extend({ actionId: z.literal('widgets.area.layout.rename') }).strict(),
-    input['widgets.area.layout.reorder'].omit({ surface: true }).extend({ actionId: z.literal('widgets.area.layout.reorder') }).strict(),
-    input['widgets.area.layout.delete'].omit({ surface: true }).extend({ actionId: z.literal('widgets.area.layout.delete') }).strict(),
-    input['widgets.area.layout.reset'].omit({ surface: true }).extend({ actionId: z.literal('widgets.area.layout.reset') }).strict(),
-    z.object({ actionId: z.literal('widgets.area.layout.undo'), capture: localUndo }).strict(),
-    input['widgets.catalog.list'].omit({ surface: true }).extend({ actionId: z.literal('widgets.catalog.list') }).strict(),
-    z.object({ actionId: z.literal('widgets.item.list') }).strict(),
-    input['widgets.item.add'].omit({ surface: true, placement: true }).extend({ actionId: z.literal('widgets.item.add') }).strict(),
-    input['widgets.group.add'].omit({ surface: true }).extend({ actionId: z.literal('widgets.group.add') }).strict(),
-    input['widgets.group.create'].omit({ surface: true }).extend({ actionId: z.literal('widgets.group.create') }).strict(),
-    z.object({ actionId: z.literal('widgets.group.ungroup'), instanceId }).strict(),
-    input['widgets.group.set'].omit({ ref: true }).extend({ actionId: z.literal('widgets.group.set'), instanceId }).strict(),
-    input['widgets.group.inputs.set'].omit({ ref: true }).extend({ actionId: z.literal('widgets.group.inputs.set'), instanceId }).strict(),
-    ...(['widgets.item.remove', 'widgets.item.inputs.get', 'widgets.item.inputs.reset', 'widgets.item.refresh'] as const).map(actionId => z.object({ actionId: z.literal(actionId), instanceId }).strict()),
-    z.object({ actionId: z.literal('widgets.item.move'), instanceId, toIndex: z.number().int().nonnegative().safe(), area: WidgetProjectAreaV1Schema.optional(), groupId: instanceId.nullable().optional() }).strict(),
-    input['widgets.item.rename'].omit({ ref: true }).extend({ actionId: z.literal('widgets.item.rename'), instanceId }).strict(),
-    widgetSizeInput.omit({ ref: true }).extend({ actionId: z.literal('widgets.item.size.set'), instanceId }).strict(),
-    groupWidthInput.omit({ ref: true }).extend({ actionId: z.literal('widgets.item.size.set'), instanceId }).strict(),
-    input['widgets.item.frame.set'].omit({ ref: true }).extend({ actionId: z.literal('widgets.item.frame.set'), instanceId }).strict(),
-    input['widgets.item.inputs.validate'].omit({ ref: true }).extend({ actionId: z.literal('widgets.item.inputs.validate'), instanceId }).strict(),
-    input['widgets.item.inputs.set'].omit({ ref: true }).extend({ actionId: z.literal('widgets.item.inputs.set'), instanceId }).strict(),
+    z.strictObject({ actionId: z.literal('widgets.area.layout.list') }),
+    z.strictObject(z.extend(z.omit(input['widgets.area.layout.create'], { surface: true, fromSurface: true }), { actionId: z.literal('widgets.area.layout.create'), fromLayoutId: z.optional(z.nullable(layoutId)) }).shape),
+    z.strictObject({ actionId: z.literal('widgets.area.layout.select'), layoutId: z.optional(z.nullable(layoutId)) }),
+    z.strictObject(z.extend(z.omit(input['widgets.area.layout.rename'], { surface: true }), { actionId: z.literal('widgets.area.layout.rename') }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.area.layout.reorder'], { surface: true }), { actionId: z.literal('widgets.area.layout.reorder') }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.area.layout.delete'], { surface: true }), { actionId: z.literal('widgets.area.layout.delete') }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.area.layout.reset'], { surface: true }), { actionId: z.literal('widgets.area.layout.reset') }).shape),
+    z.strictObject({ actionId: z.literal('widgets.area.layout.undo'), capture: localUndo }),
+    z.strictObject(z.extend(z.omit(input['widgets.catalog.list'], { surface: true }), { actionId: z.literal('widgets.catalog.list') }).shape),
+    z.strictObject({ actionId: z.literal('widgets.item.list') }),
+    z.strictObject(z.extend(z.omit(input['widgets.item.add'], { surface: true, placement: true }), { actionId: z.literal('widgets.item.add') }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.group.add'], { surface: true }), { actionId: z.literal('widgets.group.add') }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.group.create'], { surface: true }), { actionId: z.literal('widgets.group.create') }).shape),
+    z.strictObject({ actionId: z.literal('widgets.group.ungroup'), instanceId }),
+    z.strictObject(z.extend(z.omit(input['widgets.group.set'], { ref: true }), { actionId: z.literal('widgets.group.set'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.group.inputs.set'], { ref: true }), { actionId: z.literal('widgets.group.inputs.set'), instanceId }).shape),
+    ...(['widgets.item.remove', 'widgets.item.inputs.get', 'widgets.item.inputs.reset', 'widgets.item.refresh'] as const).map(actionId => z.strictObject({ actionId: z.literal(actionId), instanceId })),
+    z.strictObject({ actionId: z.literal('widgets.item.move'), instanceId, toIndex: z.number().check(z.int(), z.nonnegative(), z.int()), area: z.optional(WidgetProjectAreaV1Schema), groupId: z.optional(z.nullable(instanceId)) }),
+    z.strictObject(z.extend(z.omit(input['widgets.item.rename'], { ref: true }), { actionId: z.literal('widgets.item.rename'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(widgetSizeInput, { ref: true }), { actionId: z.literal('widgets.item.size.set'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(groupWidthInput, { ref: true }), { actionId: z.literal('widgets.item.size.set'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.item.frame.set'], { ref: true }), { actionId: z.literal('widgets.item.frame.set'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.item.inputs.validate'], { ref: true }), { actionId: z.literal('widgets.item.inputs.validate'), instanceId }).shape),
+    z.strictObject(z.extend(z.omit(input['widgets.item.inputs.set'], { ref: true }), { actionId: z.literal('widgets.item.inputs.set'), instanceId }).shape),
 ]);
 export type PluginUiWidgetAreaOperationV1 = z.infer<typeof PluginUiWidgetAreaOperationV1Schema>;
 
@@ -83,17 +83,17 @@ const outwardEffects = {
 export function pluginUiWidgetAreaOperationHasOutwardEffectV1(operation: PluginUiWidgetAreaOperationV1): boolean {
     return outwardEffects[operation.actionId];
 }
-export const PluginUiWidgetAreaRequestV1Schema = z.object({
-    area: z.string().trim().min(1), layoutId: layoutId.optional(), context: z.record(z.string(), StrictJsonValueSchema).optional(), operation: PluginUiWidgetAreaOperationV1Schema,
-}).strict();
+export const PluginUiWidgetAreaRequestV1Schema = z.strictObject({
+    area: z.string().check(z.trim(), z.minLength(1)), layoutId: z.optional(layoutId), context: z.optional(z.record(z.string(), StrictJsonValueSchema)), operation: PluginUiWidgetAreaOperationV1Schema,
+});
 export type PluginUiWidgetAreaRequestV1 = z.infer<typeof PluginUiWidgetAreaRequestV1Schema>;
 const outputs = WidgetInstanceActionOutputSchemasV1;
 export const PluginUiWidgetAreaResultV1Schema = z.union([ActionExecuteFailureSchema,
-    z.object({ ok: z.literal(true), result: z.union([
+    z.strictObject({ ok: z.literal(true), result: z.union([
         outputs['widgets.catalog.list'], outputs['widgets.item.list'], outputs['widgets.item.add'],
         outputs['widgets.item.inputs.get'], outputs['widgets.item.inputs.validate'], outputs['widgets.item.refresh'],
         outputs['widgets.area.layout.list'], outputs['widgets.area.layout.create'], outputs['widgets.area.layout.delete'], outputs['widgets.area.layout.reset'],
         ActionApprovalRequestCreatedResultSchema,
-    ]) }).strict(),
+    ]) }),
 ]);
 export type PluginUiWidgetAreaResultV1 = z.infer<typeof PluginUiWidgetAreaResultV1Schema>;

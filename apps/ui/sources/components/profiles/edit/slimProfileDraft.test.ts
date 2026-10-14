@@ -29,6 +29,17 @@ describe('buildSlimProfileSave', () => {
         } });
     });
 
+    it('saves the Skills this Profile adds, and an emptied list removes them instead of keeping the old seeds', () => {
+        const profile = { ...base, skillSeeds: ['lint-id', 'review-id'] } satisfies AiLaunchProfile;
+        const draft = { name: 'Profile A', description: '', extraEnvironmentVariables: [] };
+        expect(buildSlimProfileSave(profile, { ...draft, skillSeeds: ['review-id', 'docs-id'] }, () => 10))
+            .toMatchObject({ status: 'success', profile: { skillSeeds: ['review-id', 'docs-id'] } });
+        expect(buildSlimProfileSave(profile, { ...draft, skillSeeds: [] }, () => 10))
+            .toMatchObject({ status: 'success', profile: { skillSeeds: [] } });
+        expect(buildSlimProfileSave(profile, draft, () => 10))
+            .toMatchObject({ status: 'success', profile: { skillSeeds: ['lint-id', 'review-id'] } });
+    });
+
     it('retains admitted stored environment rows beyond the new-profile authoring bound', () => {
         const profile = { ...StoredLaunchProfileV2Schema.parse({ ...base,
             extraEnvironmentVariables: Array.from({ length: 257 }, (_, index) => ({ name: `SAFE_${index}`, value: '1' })),

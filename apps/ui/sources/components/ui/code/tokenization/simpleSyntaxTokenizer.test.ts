@@ -31,6 +31,13 @@ describe('simpleSyntaxTokenizer', () => {
         expect(tokens.filter((t) => t.type === 'number').map((t) => t.text)).toEqual(['2222']);
     });
 
+    it('keeps signed and listed numbers as numbers outside shell languages', () => {
+        const yaml = tokenizeSimpleSyntaxText({ text: 'ports:\n- 8080\nscale: -1', language: 'yaml' });
+        expect(yaml.filter((t) => t.type === 'number').map((t) => t.text)).toEqual(['8080', '1']);
+        const r = tokenizeSimpleSyntaxText({ text: 'x <- -2', language: 'r' });
+        expect(r.filter((t) => t.type === 'number').map((t) => t.text)).toEqual(['2']);
+    });
+
     it('does not highlight generic programming keywords inside markdown text', () => {
         const tokens = tokenizeSimpleSyntaxText({
             text: 'This is a doc line for people.',

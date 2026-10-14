@@ -1,64 +1,64 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NonEmptyVersionSchema = lazyZodSchema(() => z.string().trim().min(1));
-const AuthoringDependencySchema = lazyZodSchema(() => z.object({
-  packageName: z.string().trim().min(1),
+const NonEmptyVersionSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const AuthoringDependencySchema = lazyZodSchema(() => z.strictObject({
+  packageName: z.string().check(z.trim(), z.minLength(1)),
   /** The exact package.json spec emitted for an external author project. */
   dependencySpec: NonEmptyVersionSchema,
   /** The exact resolved package version that the source candidate verified. */
   resolvedVersion: NonEmptyVersionSchema,
-}).strict());
+}));
 
 /**
  * The generated public authoring packet. It intentionally carries exact
  * release/runtime values, not semver ranges copied into templates.
  */
-export const PublicToolchainCompatibilityV1Schema = lazyZodSchema(() => z.object({
+export const PublicToolchainCompatibilityV1Schema = lazyZodSchema(() => z.strictObject({
   schemaVersion: z.literal(1),
-  host: z.object({
+  host: z.strictObject({
     /** Exact source/build provenance; it is not a compatibility range. */
-    buildIdentity: z.string().trim().min(1),
+    buildIdentity: z.string().check(z.trim(), z.minLength(1)),
     /**
      * An optional release-owned broad compatibility fact. Generated author
      * projects must not synthesize this from `buildIdentity`; an author that
      * owns a compatible range declares it in their manifest instead.
      */
-    enginesHappier: z.string().trim().min(1).optional(),
-  }).strict(),
-  pluginSdk: z.object({
+    enginesHappier: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  pluginSdk: z.strictObject({
     version: NonEmptyVersionSchema,
-  }).strict(),
-  pluginUi: z.object({
+  }),
+  pluginUi: z.strictObject({
     version: NonEmptyVersionSchema,
     pluginSdkVersion: NonEmptyVersionSchema,
-  }).strict(),
-  framework: z.object({
+  }),
+  framework: z.strictObject({
     react: NonEmptyVersionSchema,
     reactNative: NonEmptyVersionSchema,
     reactNativeWeb: NonEmptyVersionSchema,
     expo: NonEmptyVersionSchema,
     runtime: NonEmptyVersionSchema,
-  }).strict(),
-  ui: z.object({
-    artifactGrammarVersion: z.number().int().positive(),
+  }),
+  ui: z.strictObject({
+    artifactGrammarVersion: z.number().check(z.int(), z.positive()),
     hostApiVersion: NonEmptyVersionSchema,
-  }).strict(),
+  }),
   /**
    * Generated project dependencies that are neither the SDK/plugin-ui pair nor
    * one of the framework-version fields above. Keeping their emitted package
    * spec beside the resolved source fact prevents scaffolds from carrying a
    * second hand-maintained dependency table.
    */
-  authoringDependencies: z.object({
+  authoringDependencies: z.strictObject({
     nodeTypes: AuthoringDependencySchema,
     reactDom: AuthoringDependencySchema,
     reactTypes: AuthoringDependencySchema,
     /** Project-local TypeScript 5 compiler API used to load TypeScript build configuration. */
     typescript: AuthoringDependencySchema,
     typescriptNative: AuthoringDependencySchema,
-  }).strict(),
-}).strict());
+  }),
+}));
 export type PublicToolchainCompatibilityV1 = z.infer<typeof PublicToolchainCompatibilityV1Schema>;
 
 /**

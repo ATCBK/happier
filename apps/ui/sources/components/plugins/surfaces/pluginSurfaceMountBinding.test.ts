@@ -488,6 +488,8 @@ describe('readPluginSurfaceEphemeralMountBinding', () => {
             source: { kind: 'artifact', artifact: 'repository-picker' },
             requiredHostMethods: [],
         });
+        const origin = surface.executionOrigin;
+        if (!('materializationRef' in origin)) throw new Error('Expected a materialized setup fixture');
         expect(readPluginSurfaceEphemeralMountBinding({
             ...surface,
             selectedRenderer: {
@@ -498,9 +500,9 @@ describe('readPluginSurfaceEphemeralMountBinding', () => {
         expect(readPluginSurfaceEphemeralMountBinding({
             ...surface,
             executionOrigin: {
-                ...surface.executionOrigin,
+                ...origin,
                 materializationRef: {
-                    ...surface.executionOrigin.materializationRef,
+                    ...origin.materializationRef,
                     pluginId: 'acme.other',
                 },
             },

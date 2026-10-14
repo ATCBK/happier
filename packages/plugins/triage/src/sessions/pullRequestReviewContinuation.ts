@@ -7,6 +7,7 @@ import {
     type TriageStartPullRequestReviewResultV1,
 } from '../actions/entrySessionProtocol.js';
 import type { TriagePendingPullRequestReviewV1 } from './entrySessionStartController.js';
+import { resolveTriageConfiguredActionForExecutionV1 } from './actionResolution.js';
 
 export type TriagePullRequestReviewContinuationHostV1 = Readonly<{
     executeAction(action: string, input: JsonValue, options?: PluginCancellationOptions): Promise<unknown>;
@@ -40,6 +41,11 @@ export async function continueTriagePullRequestReviewV1(
         } catch { return { kind: current() ? 'unavailable' : 'cancelled' }; }
     }
     if (!current()) return { kind: 'cancelled' };
+    // Selection can remain open while the configured row changes elsewhere.
+    const resolved = await resolveTriageConfiguredActionForExecutionV1(host, pending.actionId, 'pullRequest', cancellation);
+    if (!current()) return { kind: 'cancelled' };
+    if (resolved.status !== 'resolved' || resolved.action.target.kind !== 'reviewStart'
+        || resolved.action.workspaceMode !== 'pull_request') return { kind: 'unavailable' };
     let raw: unknown;
     try {
         raw = await host.executeAction(TRIAGE_START_PULL_REQUEST_REVIEW_ACTION_LOCAL_ID_V1, {

@@ -1,10 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-
-import { assertHostedMcpHandlerSpec, registerHostedMcpHandlers } from './handlers';
 import type { PluginHostedMcpServerSpec } from './runtimeTypes';
 import type { HostedMcpRuntimeEndpoint } from '../runtimeTypes';
 
@@ -30,6 +26,11 @@ export async function startPluginHostedMcpLoopbackServer(params: Readonly<{
     spec: PluginHostedMcpServerSpec;
     toolNameSource?: 'mcpServer';
 }>): Promise<PluginHostedMcpLoopbackServer> {
+    const [{ McpServer }, { StreamableHTTPServerTransport }, { assertHostedMcpHandlerSpec, registerHostedMcpHandlers }] = await Promise.all([
+        import('@modelcontextprotocol/sdk/server/mcp.js'),
+        import('@modelcontextprotocol/sdk/server/streamableHttp.js'),
+        import('./handlers'),
+    ]);
     assertHostedMcpHandlerSpec(params);
     const requestCleanups = new Set<() => Promise<void>>();
     const server = createServer(async (req, res) => {

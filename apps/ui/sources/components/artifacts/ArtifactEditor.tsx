@@ -3,7 +3,7 @@ import { View, type LayoutChangeEvent } from 'react-native';
 import { HAPPIER_FIELD_BOX_METRICS, HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
@@ -16,6 +16,9 @@ import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
+import { runUnsavedChangesGuard, type ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
+import { promptUnsavedChangesAlert } from '@/utils/ui/promptUnsavedChangesAlert';
 
 import { artifactViewRoute } from './artifactBrowserModel';
 import { useArtifactActionsClient, type ArtifactQuota } from './artifactActionsClient';
@@ -28,6 +31,7 @@ import { ArtifactView } from './ArtifactView';
  */
 export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | null; mode: 'new' | 'edit' }>): React.ReactElement {
     const router = useRouter();
+    const navigation = useNavigation();
     const { artifact, mode } = props;
     const client = useArtifactActionsClient();
     const scope = useActiveServerAccountScope();
@@ -43,18 +47,27 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
     const editorRef = React.useRef<CodeEditorHandle | null>(null);
     // A new document starts with the cursor in its source, as the field did.
     React.useEffect(() => { if (mode === 'new') editorRef.current?.focus?.(); }, [mode]);
-    const changed = mode === 'new'
+    const draftChanged = React.useCallback((title: string, body: string) => mode === 'new'
         ? title.trim().length > 0 || body.trim().length > 0
-        : title !== (opening?.title ?? '') || body !== (opening?.body ?? '');
+        : title !== (opening?.title ?? '') || body !== (opening?.body ?? ''), [mode, opening]);
+    const changed = draftChanged(title, body);
+    const isDirtyRef = React.useRef(changed);
+    isDirtyRef.current = changed;
+    const ignoreRef = React.useRef(false);
+    const prepareGuard = React.useCallback(async () => {
+        await editorRef.current?.flushPendingChange();
+        isDirtyRef.current = draftChanged(title, editorRef.current?.getValue() ?? bodyRef.current);
+    }, [draftChanged, title]);
 
     const save = React.useCallback(async () => {
-        if (saving || !changed) return;
+        if (saving) return false;
         // The editor may still hold a debounced keystroke: save what is on screen.
         await editorRef.current?.flushPendingChange();
         const body = editorRef.current?.getValue() ?? bodyRef.current;
+        if (!draftChanged(title, body)) return false;
         if (!title.trim() && !body.trim()) {
             await Modal.alert(t('common.error'), t('artifacts.emptyFieldsError'));
-            return;
+            return false;
         }
         setSaving(true);
         setQuota(null);
@@ -68,28 +81,49 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
                 : await client.updateArtifact({ artifactId: opening!.id, header, body: body.trim(),
                     expectedRevision: { headerVersion: opening!.headerVersion, bodyVersion: opening!.bodyVersion! } });
             if ('approvalId' in outcome) {
-                if (scope) router.push(`/inbox/approvals/${encodeURIComponent(outcome.approvalId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
-                return;
+                if (scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(outcome.approvalId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
+                return false;
             }
             if (!outcome.ok) {
-                if (outcome.failure.quota) { setQuota(outcome.failure.quota); return; }
-                if (outcome.failure.code === 'version_mismatch') { setConflict(true); return; }
+                if (outcome.failure.quota) { setQuota(outcome.failure.quota); return false; }
+                if (outcome.failure.code === 'version_mismatch') { setConflict(true); return false; }
                 throw new Error(outcome.failure.code);
             }
+            ignoreRef.current = true;
+            isDirtyRef.current = false;
             if (mode === 'new') router.replace(artifactViewRoute(outcome.value.artifactId) as never);
             else safeRouterBack({ router, fallbackHref: '/artifacts' });
+            return true;
         } catch {
             await Modal.alert(t('common.error'), mode === 'new' ? t('artifacts.createError') : t('artifacts.updateError'));
+            return false;
         } finally {
             setSaving(false);
         }
-    }, [opening, changed, client, mode, router, saving, scope, title]);
+    }, [opening, draftChanged, client, mode, router, saving, scope, title]);
 
-    const cancel = React.useCallback(async () => {
-        if (changed && !(await Modal.confirm(t('artifacts.discardChanges'), t('artifacts.discardChangesDescription'),
-            { cancelText: t('common.keepEditing'), confirmText: t('common.discard'), destructive: true }))) return;
+    const leave = React.useCallback(() => {
         safeRouterBack({ router, fallbackHref: '/artifacts' });
-    }, [changed, router]);
+    }, [router]);
+    const requestDecision = React.useCallback(() => promptUnsavedChangesAlert(
+        (title, message, buttons) => Modal.alert(title, message, buttons), {
+            title: t('common.discardChanges'), message: t('common.unsavedChangesWarning'),
+            discardText: t('common.discard'), saveText: t('common.save'), keepEditingText: t('common.keepEditing'),
+        }), []);
+    const discard = React.useCallback(() => { ignoreRef.current = true; }, []);
+    const guard = React.useMemo<ActiveUnsavedChangesGuard>(() => ({
+        isDirtyRef, ignoreRef, prepareGuard, requestDecision, onDiscard: discard, onSave: save,
+        continueOnSave: false, onHistoryLeave: leave, tag: 'ArtifactEditor.beforeRemove',
+    }), [discard, leave, prepareGuard, requestDecision, save]);
+    const continueNavigation = React.useCallback((action: unknown) => {
+        const dispatch = (navigation as Readonly<{ dispatch?: (action: unknown) => void }>).dispatch;
+        if (action && typeof dispatch === 'function') dispatch(action);
+        else leave();
+    }, [leave, navigation]);
+    useUnsavedChangesBeforeRemoveGuard({ ...guard, ignoreRef, isDirty: changed, interceptWhenClean: true,
+        enabled: mode !== 'edit' || typeof opening?.body !== 'object' || opening.body === null,
+        onContinue: continueNavigation });
+    const cancel = React.useCallback(async () => { await runUnsavedChangesGuard(guard, leave); }, [guard, leave]);
 
     // The source fills the window from its own top down (lab A8p) and scrolls inside, as an editor does.
     const [viewportHeight, setViewportHeight] = React.useState<number | null>(null);

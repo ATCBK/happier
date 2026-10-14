@@ -51,6 +51,24 @@ describe('Connected service index read diagnostics', () => {
         expect(index.sheets[0]).toMatchObject({ statusLine: result.primary, supportDetails: result.supportDetails, canAdd: false });
     });
 
+    it.each(['blocked', 'disabled'] as const)('keeps a conflict headline and every safe %s availability fact in Details', (state) => {
+        const entry: ConnectedServiceRegistryEntry = {
+            serviceId: 'custom-service', service: { pluginId: 'acme.service', localId: 'custom-service' },
+            connectCommand: '', supportsOauth: false, executable: false, projectionStatus: 'stale',
+            projectionConflicts: [{ kind: 'identity_divergence', descriptorIdentity: 'owner-id', serviceIds: ['custom-service'] }],
+            availability: { state, reason: 'unresolved' }, diagnostics: ['plugin_unavailable', 'missing_runtime', 'untrusted https://private.example'],
+        };
+        const result = presentConnectedServiceIndexDiagnostics({ entry });
+        expect(result.primary).toBe(t('connectedServicesSettings.identityConflict'));
+        expect(result.supportDetails?.split('\n')).toEqual([
+            t('connectedServicesSettings.identityConflict'),
+            t(state === 'blocked' ? 'common.blocked' : 'common.disabled'),
+            presentConnectedServiceRegistryReadFailure(null),
+            t('connectedServicesSettings.runtimeNotLoaded'),
+        ]);
+        expect(JSON.stringify(result)).not.toContain('private.example');
+    });
+
     it('keeps an ordinary saved identity quiet while no machine has supplied a descriptor', () => {
         expect(presentConnectedServiceIndexDiagnostics({ entry: {
             serviceId: 'custom-service', connectCommand: '', supportsOauth: false,

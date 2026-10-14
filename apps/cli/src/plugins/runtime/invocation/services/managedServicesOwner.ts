@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
+import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { Buffer } from 'node:buffer';
 import { isAbsolute, join } from 'node:path';
@@ -275,6 +277,7 @@ function translateError(error: unknown): never {
             error.code.startsWith('plugin_managed_service_')
             || error.code === 'plugin_managed_server_termination_incomplete'
             || error.code === 'plugin_operation_aborted'
+            || error.code === 'native_tool_unavailable'
         ) return error.code;
         switch (error.code) {
             case 'plugin_managed_server_id_invalid':
@@ -293,10 +296,10 @@ function translateError(error: unknown): never {
         }
     })();
     if (code === 'plugin_managed_service_establishment_failed') {
-        return fail(
-            code,
-            'Managed service establishment failed',
-        );
+        const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(error.details && typeof error.details === 'object'
+            && !Array.isArray(error.details) ? error.details.establishmentFailure : undefined);
+        throw new PluginError({ code, message: 'Managed service establishment failed',
+            ...(failure.success ? { details: { establishmentFailure: failure.data } } : {}) });
     }
     throw new PluginError({
         code,
@@ -4037,6 +4040,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 })().finally(() => {
                     entry.establishmentSettled = true;
                     notifyActivity();
+                    invalidateProcessLaunchDiscovery();
                 }).catch((error) => {
                     entry.terminal = true;
                     if (
@@ -4111,6 +4115,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             requester,
             cwd: request.cwd,
             serviceId: request.serviceId,
+            ...(request.execution ? { execution: request.execution } : {}),
         });
         const entryKey = JSON.stringify([
             'project-service', workspace.serverId, workspace.machineId,
@@ -4198,6 +4203,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 : { ...commonSpec, mode: request.processSpec.mode };
             const processSupervisor = input.processSupervisorHost.bind({
                 kind: 'project',
+                projectRoot: workspace.rootPath,
                 isOccurrenceCurrent: isCurrent,
             });
             const process = await processSupervisor.supervise(processSpec, {
@@ -4285,6 +4291,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         })().finally(() => {
             entry.establishmentSettled = true;
             notifyActivity();
+            invalidateProcessLaunchDiscovery();
         }).catch((error) => {
             entry.terminal = true;
             if (!entry.processHandle && !entry.establishmentCleanup) {

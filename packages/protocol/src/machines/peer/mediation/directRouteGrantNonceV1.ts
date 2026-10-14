@@ -1,17 +1,17 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PeerFlowKindV1Schema } from './flowKind.js';
 import { AuthorizedPeerEndpointRouteKindV1Schema } from './routeKind.js';
 
-const Base64UrlSchema = lazyZodSchema(() => z.string().regex(/^[A-Za-z0-9_-]+$/));
+const Base64UrlSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9_-]+$/)));
 
 export const PeerRouteNonceProofV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
-  grantId: z.string().min(1),
+  grantId: z.string().check(z.minLength(1)),
   routeKind: AuthorizedPeerEndpointRouteKindV1Schema,
   flowKind: PeerFlowKindV1Schema,
-  endpointFingerprint: z.string().min(1).optional(),
+  endpointFingerprint: z.optional(z.string().check(z.minLength(1))),
   nonceBase64Url: Base64UrlSchema,
   signatureBase64Url: Base64UrlSchema,
 }));

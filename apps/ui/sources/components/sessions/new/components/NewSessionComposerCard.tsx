@@ -184,6 +184,7 @@ export function NewSessionComposerCard(input: Readonly<{
                         allowedPermissionModes={props.allowedPermissionModes}
                         onPermissionModeChange={props.handlePermissionModeChange}
                         modelMode={props.modelMode}
+                        modelPickerPresentation={props.modelPickerPresentation}
                         onModelModeChange={props.setModelMode}
                         modelOptionsOverride={props.modelOptions}
                         modelOptionsOverrideProbe={props.modelOptionsProbe}

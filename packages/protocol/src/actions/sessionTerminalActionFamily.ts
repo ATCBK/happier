@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionTerminalTargetV1Schema, SessionTerminalWorkspaceV1Schema } from '../terminal/workspace.js';
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from './actionSpecs.js';
 
@@ -8,30 +8,30 @@ export const SESSION_TERMINAL_ACTION_IDS = [
   'session.terminals.rename', 'session.terminals.list_view', 'session.terminals.run_script', 'session.terminals.detach', 'session.terminals.reorder',
 ] as const;
 export type SessionTerminalActionId = typeof SESSION_TERMINAL_ACTION_IDS[number];
-const id = z.string().trim().min(1);
-const scope = z.object({ scopeId: id }).strict();
-const terminal = scope.extend({ terminalId: id }).strict();
+const id = z.string().check(z.trim(), z.minLength(1));
+const scope = z.strictObject({ scopeId: id });
+const terminal = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { terminalId: id }));
 export const SESSION_TERMINAL_ACTION_INPUT_SCHEMAS = {
   'session.terminals.list': scope,
-  'session.terminals.open': scope.extend({ target: SessionTerminalTargetV1Schema, title: id.optional() }).strict(),
-  'session.terminals.split': scope.extend({ tabId: id.optional(), target: SessionTerminalTargetV1Schema, title: id.optional() }).strict(),
+  'session.terminals.open': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { target: SessionTerminalTargetV1Schema, title: z.optional(id) })),
+  'session.terminals.split': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: z.optional(id), target: SessionTerminalTargetV1Schema, title: z.optional(id) })),
   'session.terminals.focus': terminal,
   'session.terminals.restart': terminal,
   'session.terminals.open_in_details': terminal,
   'session.terminals.close': terminal,
-  'session.terminals.close_tab': scope.extend({ tabId: id }).strict(),
-  'session.terminals.close_others': scope.extend({ tabId: id }).strict(),
-  'session.terminals.resize': scope.extend({ tabId: id, splitId: id, ratio: z.number().finite().min(0).max(1) }).strict(),
+  'session.terminals.close_tab': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: id })),
+  'session.terminals.close_others': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: id })),
+  'session.terminals.resize': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: id, splitId: id, ratio: z.number().check(z.minimum(0), z.maximum(1)) })),
   'session.terminals.detach': terminal,
-  'session.terminals.reorder': scope.extend({ tabId: id, index: z.number().int().nonnegative() }).strict(),
-  'session.terminals.rename': terminal.extend({ title: id.nullable() }).strict(),
-  'session.terminals.list_view': scope.extend({ showList: z.boolean() }).strict(),
-  'session.terminals.run_script': scope.extend({ machineId: id, cwd: id, runTargetId: id, title: id.optional() }).strict(),
+  'session.terminals.reorder': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: id, index: z.number().check(z.int(), z.nonnegative()) })),
+  'session.terminals.rename': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(terminal, { title: z.nullable(id) })),
+  'session.terminals.list_view': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { showList: z.boolean() })),
+  'session.terminals.run_script': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { machineId: id, cwd: id, runTargetId: id, title: z.optional(id) })),
 } as const;
-const mutation = z.object({ ok: z.literal(true) }).strict();
-const opened = mutation.extend({ terminalId: id }).strict();
+const mutation = z.strictObject({ ok: z.literal(true) });
+const opened = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(mutation, { terminalId: id }));
 export const SESSION_TERMINAL_ACTION_OUTPUT_SCHEMAS = {
-  'session.terminals.list': mutation.extend({ workspace: SessionTerminalWorkspaceV1Schema }).strict(),
+  'session.terminals.list': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(mutation, { workspace: SessionTerminalWorkspaceV1Schema })),
   'session.terminals.open': opened,
   'session.terminals.split': opened,
   'session.terminals.focus': mutation,

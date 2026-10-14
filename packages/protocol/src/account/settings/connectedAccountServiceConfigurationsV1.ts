@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BoundedLegacyJsonValueSchema } from './catalog/legacyJson.js';
 
@@ -12,35 +12,33 @@ const MAX_CONFIGURATION_IDENTITY_LENGTH = 256;
 const MAX_SECRET_REFERENCE_LENGTH = 512;
 const MAX_FIELD_ID_LENGTH = 64 * 1024;
 
-const BoundedConfigurationIdentitySchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(MAX_CONFIGURATION_IDENTITY_LENGTH));
+const BoundedConfigurationIdentitySchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_CONFIGURATION_IDENTITY_LENGTH)));
 
 const ConnectedAccountServiceConfigurationValuesV1Schema = lazyZodSchema(() => z
-  .record(z.string().max(MAX_FIELD_ID_LENGTH), BoundedLegacyJsonValueSchema));
+  .record(z.string().check(z.maxLength(MAX_FIELD_ID_LENGTH)), BoundedLegacyJsonValueSchema));
 
 const ConnectedAccountServiceConfigurationSecretRefsV1Schema = lazyZodSchema(() => z
   .record(
-    z.string().max(MAX_FIELD_ID_LENGTH),
-    z.string().min(1).max(MAX_SECRET_REFERENCE_LENGTH),
+    z.string().check(z.maxLength(MAX_FIELD_ID_LENGTH)),
+    z.string().check(z.minLength(1), z.maxLength(MAX_SECRET_REFERENCE_LENGTH)),
   ));
 
-export const ConnectedAccountServiceConfigurationEntryV1Schema = lazyZodSchema(() => z.object({
-  service: z.object({
+export const ConnectedAccountServiceConfigurationEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  service: z.strictObject({
     pluginId: BoundedConfigurationIdentitySchema,
     localId: BoundedConfigurationIdentitySchema,
-  }).strict(),
+  }),
   modeId: BoundedConfigurationIdentitySchema,
   revision: BoundedConfigurationIdentitySchema,
   values: ConnectedAccountServiceConfigurationValuesV1Schema,
   secretRefs: ConnectedAccountServiceConfigurationSecretRefsV1Schema,
-}).strict());
+}));
 
 /** The domain catalog has one row; its transport owns the encoded size boundary. */
-export const ConnectedAccountServiceConfigurationCatalogV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedAccountServiceConfigurationCatalogV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   entries: z.array(ConnectedAccountServiceConfigurationEntryV1Schema),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   const targets = new Set<string>();
   value.entries.forEach((entry, index) => {
     const target = JSON.stringify([
@@ -50,7 +48,7 @@ export const ConnectedAccountServiceConfigurationCatalogV1Schema = lazyZodSchema
     ]);
     if (targets.has(target)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['entries', index],
         message: 'Connected Account service configuration target is duplicated',
       });
@@ -58,13 +56,12 @@ export const ConnectedAccountServiceConfigurationCatalogV1Schema = lazyZodSchema
     }
     targets.add(target);
   });
-}));
+})));
 
 /** Retained Settings source only; current catalog writes use the domain schema. */
 export const ConnectedAccountServiceConfigurationsV1Schema = lazyZodSchema(() =>
-  ConnectedAccountServiceConfigurationCatalogV1Schema.safeExtend({
-    entries: z.array(ConnectedAccountServiceConfigurationEntryV1Schema)
-      .max(CONNECTED_ACCOUNT_SERVICE_CONFIGURATION_MAX_ENTRIES),
+  z.safeExtend(ConnectedAccountServiceConfigurationCatalogV1Schema, {
+    entries: z.array(ConnectedAccountServiceConfigurationEntryV1Schema).check(z.maxLength(CONNECTED_ACCOUNT_SERVICE_CONFIGURATION_MAX_ENTRIES)),
   }));
 
 export type ConnectedAccountServiceConfigurationEntryV1 = z.infer<

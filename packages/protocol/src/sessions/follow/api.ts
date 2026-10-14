@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   AccountSessionFollowCapabilitiesV1Schema,
@@ -24,9 +24,7 @@ export type SessionFollowErrorCodeV1 = typeof SESSION_FOLLOW_ERROR_CODES_V1[numb
 
 export const SessionFollowErrorCodeV1Schema = lazyZodSchema(() => z.enum(SESSION_FOLLOW_ERROR_CODES_V1));
 
-export const SessionFollowErrorResponseSchema = lazyZodSchema(() => z
-  .object({ error: SessionFollowErrorCodeV1Schema })
-  .strict());
+export const SessionFollowErrorResponseSchema = lazyZodSchema(() => z.strictObject({ error: SessionFollowErrorCodeV1Schema }));
 export type SessionFollowErrorResponse = z.infer<typeof SessionFollowErrorResponseSchema>;
 
 /**
@@ -42,14 +40,12 @@ export type SessionFollowErrorResponse = z.infer<typeof SessionFollowErrorRespon
  * neither the persisted frontier nor acknowledgement authority; it only lets a
  * refreshed editor stop claiming that the initial current snapshot is pending.
  */
-export const GetSessionFollowResponseSchema = lazyZodSchema(() => z
-  .object({
-    follow: AccountSessionFollowV1Schema.nullable(),
+export const GetSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject({
+    follow: z.nullable(AccountSessionFollowV1Schema),
     isSessionOwner: z.boolean(),
     capabilities: AccountSessionFollowCapabilitiesV1Schema,
     voiceInitialSnapshotPending: z.boolean(),
-  })
-  .strict());
+  }));
 export type GetSessionFollowResponse = z.infer<typeof GetSessionFollowResponseSchema>;
 
 /**
@@ -58,46 +54,40 @@ export type GetSessionFollowResponse = z.infer<typeof GetSessionFollowResponseSc
  * replacement, not a hidden read-modify-write, and `following` is never a
  * client-supplied field: `DELETE` is the explicit Unfollow.
  */
-export const SetSessionFollowRequestSchema = lazyZodSchema(() => z
-  .object({
+export const SetSessionFollowRequestSchema = lazyZodSchema(() => z.strictObject({
     notificationLevel: SessionFollowNotificationLevelSchema,
     includeInVoice: z.boolean(),
-  })
-  .strict());
+  }));
 export type SetSessionFollowRequest = z.infer<typeof SetSessionFollowRequestSchema>;
 
-export const SetSessionFollowResponseSchema = lazyZodSchema(() => z
-  .object({
+export const SetSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject({
     changed: z.boolean(),
     follow: AccountSessionFollowV1Schema,
     voiceInitialSnapshotPending: z.boolean(),
-  })
-  .strict());
+  }));
 export type SetSessionFollowResponse = z.infer<typeof SetSessionFollowResponseSchema>;
 
 /**
  * `DELETE /v2/sessions/:sessionId/follow` records an explicit Unfollow rather
  * than erasing the only evidence that suppresses future automatic following.
  */
-export const RemoveSessionFollowResponseSchema = lazyZodSchema(() => z
-  .object({ changed: z.boolean() })
-  .strict());
+export const RemoveSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject({ changed: z.boolean() }));
 export type RemoveSessionFollowResponse = z.infer<typeof RemoveSessionFollowResponseSchema>;
 
 /** Exact-Home replacement of the authenticated Account's Include in Voice set. */
-export const ReplaceSessionVoiceInclusionsRequestSchema = lazyZodSchema(() => z.object({
-  sessionIds: z.array(z.string().trim().min(1)),
-}).strict());
+export const ReplaceSessionVoiceInclusionsRequestSchema = lazyZodSchema(() => z.strictObject({
+  sessionIds: z.array(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type ReplaceSessionVoiceInclusionsRequest = z.infer<typeof ReplaceSessionVoiceInclusionsRequestSchema>;
 
-export const ReplaceSessionVoiceInclusionsResponseSchema = lazyZodSchema(() => z.object({
+export const ReplaceSessionVoiceInclusionsResponseSchema = lazyZodSchema(() => z.strictObject({
   changed: z.boolean(),
-  sessionIds: z.array(z.string().min(1)),
-}).strict());
+  sessionIds: z.array(z.string().check(z.minLength(1))),
+}));
 export type ReplaceSessionVoiceInclusionsResponse = z.infer<typeof ReplaceSessionVoiceInclusionsResponseSchema>;
 
 /** `GET /v2/account/session-follow-preferences` takes no input. */
-export const GetSessionAutoFollowPreferencesRequestSchema = lazyZodSchema(() => z.object({}).strict());
+export const GetSessionAutoFollowPreferencesRequestSchema = lazyZodSchema(() => z.strictObject({}));
 export type GetSessionAutoFollowPreferencesRequest = z.infer<
   typeof GetSessionAutoFollowPreferencesRequestSchema
 >;

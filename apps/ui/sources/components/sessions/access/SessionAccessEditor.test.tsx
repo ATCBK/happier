@@ -433,8 +433,7 @@ describe('SessionAccessEditor', () => {
 
     it('pages the diagnostic and lets a manager reprepare structurally prepared recipients', async () => {
         const intent = actions();
-        const screen = await renderScreen(<SessionAccessEditor
-            model={model({ encryption: {
+        const diagnostic = model({ encryption: {
                 statusKey: 'needs_attention',
                 summaryLabel: '4 prepared · 2 pending',
                 accessibilityLabel: 'Encrypted access: 4 prepared · 2 pending',
@@ -454,11 +453,27 @@ describe('SessionAccessEditor', () => {
                     hasMore: true,
                     loading: false,
                 },
-            } })}
+            } });
+        const render = (value: SessionAccessEditorModel) => <SessionAccessEditor
+            model={value}
             actions={intent}
             presentation="full"
-        />);
+        />;
+        const screen = await renderScreen(render(diagnostic));
         expect(screen.findByTestId('session-access-recipient-account-pending')).toBeTruthy();
+        const prepare = screen.findByTestId('session-access-reprepare-account-pending')!;
+        // Disabled is inherited by assistive technology: an enabled child cannot override it.
+        for (let node: typeof prepare | null = prepare; node; node = node.parent) {
+            expect(node.props['aria-disabled']).not.toBe(true);
+            expect(node.props.accessibilityState?.disabled).not.toBe(true);
+        }
+        await screen.update(render({ ...diagnostic, encryption: {
+            ...diagnostic.encryption!, progressLabel: 'Preparing encrypted access',
+        } }));
+        const busyButton = screen.root.findAll((node) => typeof node.type === 'string'
+            && node.props.testID === 'session-access-reprepare-account-pending').at(-1)!;
+        expect(busyButton.props.accessibilityState.disabled).toBe(true);
+        await screen.update(render(diagnostic));
         // The row model decides the affordance: this fixture gives the delivered row none.
         await screen.pressByTestIdAsync('session-access-reprepare-account-pending');
         expect(intent.prepareAccess).toHaveBeenCalledWith('account-pending');

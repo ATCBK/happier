@@ -94,6 +94,21 @@ Subpath exports are available for narrower imports:
 import { usePluginHostApi, usePluginResource } from '@happier-dev/plugin-ui';
 ```
 
+### Memory facts (0.3 development source)
+
+Import `HappierMemoryFactRow` and its props from `@happier-dev/plugin-ui/components`
+to compose a remembered fact, a caller-formatted metadata line, an optional source
+link and independent trailing actions. A source without `onPress` stays plain
+text. `expired` and `archived` draw retired text; archived facts retain their full
+text. The caller supplies allowed actions, arrival feedback and any source
+navigation. Document reads, clocks, expiry decisions and memory writes stay with
+the caller; this component introduces no memory service or contribution family.
+
+The [typed memory surface](fixtures/external-authoring/src/memoryFactsSurface.tsx)
+uses only public package imports. Compose topic navigation with existing `Item`
+rows and state with `EmptyState` or `ErrorState`. Happier core binds the same fact
+owner to its existing Item and text through `HappierMemoryFactRowHost`.
+
 ### Responsive composition
 
 Use `ListDetailLayout` for a collection and its selected detail in a bounded
@@ -192,7 +207,8 @@ anatomy through the same presentation owners Happier's own settings use:
 `PageHeader` (title, purpose, identity mark, meta line, actions; the host places
 its back arrow and hides the title under a native header), `ItemGroup` with a
 sentence-case `title`, `description` and optional section `action` (one hairline
-sheet, rows divided by full-width hairlines), `Item` rows with one control in
+sheet, rows divided by full-width hairlines), `ItemAddRow` for a sheet's add
+action (a leading plus, optional controlled `expanded` state, no chevron), `Item` rows with one control in
 `accessory`, `Toggle`, `Select` with `presentation="segmented"` or `"field"`,
 `TextField presentation="field"` (typed in place, saved on leaving with `onCommit`),
 `SelectionTiles`, `SettingRow` with `SettingValueSlot` and `SettingStatusLine`

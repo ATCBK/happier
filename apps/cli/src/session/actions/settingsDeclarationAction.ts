@@ -26,9 +26,11 @@ import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { createCliAutomationSettingsDeclarationAction } from './automationSettingsAction';
-import { readPortableAccountSettingBindingV1 } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { readPortableAccountSettingBindingV1, machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { MachineTerminalHostSettingKeySchema, MachineTerminalHostSettingChangeSchema,
   readMachineTerminalHostSetting, buildMachineTerminalHostSettingMutation } from '@happier-dev/protocol/actions/settings/machineTerminalHostSetting';
+import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
+  readMachineOfflineAlertSetting, buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
 
 const refuse = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
 class RejectedSettingMutation extends Error {
@@ -85,28 +87,38 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     const parsed = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
     const declaration = readBuiltInSettingDeclarationV1(parsed.anchor);
     if (!declaration) return refuse('setting_not_found');
-    if (parsed.anchor === 'machines.terminal.host') {
+    const keyedOwner = parsed.anchor === 'machines.terminal.host' ? {
+      key: MachineTerminalHostSettingKeySchema, value: MachineTerminalHostSettingChangeSchema,
+      read: readMachineTerminalHostSetting,
+      mutate: (settings: AccountSettings, key: string, value: unknown) => buildMachineTerminalHostSettingMutation(
+        settings, key, MachineTerminalHostSettingChangeSchema.parse(value)),
+    } : parsed.anchor === 'machines.connection.direct' ? machineDirectConnectionStorage : parsed.anchor === 'notifications.machineOffline' ? {
+      key: MachineOfflineAlertSettingKeySchema, value: MachineOfflineAlertSettingChangeSchema,
+      read: readMachineOfflineAlertSetting, mutate: buildMachineOfflineAlertSettingMutation,
+    } : null;
+    if (keyedOwner) {
       if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
-      const key = MachineTerminalHostSettingKeySchema.safeParse('key' in parsed ? parsed.key : undefined);
+      if ((parsed.anchor === 'notifications.machineOffline' || parsed.anchor === 'machines.connection.direct') && 'target' in parsed && parsed.target) return refuse('setting_target_mismatch');
+      const key = keyedOwner.key.safeParse('key' in parsed ? parsed.key : undefined);
       if (!key.success) return refuse('setting_key_required');
       if (lacksCurrentAccountMaterial(context, params.credentials)) return refuse('requester_account_material_unavailable');
       if (!params.credentials) return refuse('not_authenticated');
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
       if (actionId === 'settings.get') {
-        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force' });
+        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
         if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
-        return { anchor: parsed.anchor, value: readMachineTerminalHostSetting(accountSettingsParse(current.rawSettings), key.data) };
+        return { anchor: parsed.anchor, value: keyedOwner.read(accountSettingsParse(current.rawSettings), key.data) };
       }
       const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
       if (requested.reversal || requested.expectedSettingsVersion !== undefined) return refuse('setting_conditional_mutation_unsupported');
-      const change = MachineTerminalHostSettingChangeSchema.safeParse(requested.value);
+      const change = keyedOwner.value.safeParse(requested.value);
       if (!change.success) return refuse('invalid_setting_value');
       try {
         const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials, signal: context.signal,
           prepareMutation: async raw => {
             context.signal?.throwIfAborted();
             if (params.isCredentialCurrent && !await params.isCredentialCurrent()) throw new RejectedSettingMutation('credential_scope_retired');
-            const patch = buildMachineTerminalHostSettingMutation(accountSettingsParse(raw), key.data, change.data);
+            const patch = keyedOwner.mutate(accountSettingsParse(raw), key.data, change.data);
             if (!patch) throw new RejectedSettingMutation();
             return AccountSettingMutationV1Schema.parse({ operations: Object.entries(patch).map(([key, value]) => ({ op: 'set', key, value })) });
           },
@@ -200,7 +212,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent });
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
-      const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' }) : undefined;
+      const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal }) : undefined;
       if (initial && (initial.source === 'none' || !initial.rawSettings)) return refuse('account_settings_content_unavailable');
       const catalogServices = createCliSettingsCatalogServices({ credentials, signal: context.signal, serverId: params.serverId,
         expectedAccountId: readAccountIdFromToken(credentials.token) ?? undefined, voiceOwner: voiceContext?.owner,
@@ -260,7 +272,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     }
     const versioned = 'includeVersion' in parsed && parsed.includeVersion;
     const current = versioned ? await readAccountSettingsV2Raw({ credentials, signal: context.signal })
-      : await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
+      : await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
     context.signal?.throwIfAborted();
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
     if (!isCatalogCurrent()) return refuse('setting_value_unavailable');

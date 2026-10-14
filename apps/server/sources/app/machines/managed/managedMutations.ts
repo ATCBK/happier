@@ -1,19 +1,12 @@
-import {
-    ManagedControllerCurrentnessV1Schema, ManagedControllerReportV1Schema,
-    ManagedControllerSubmitInputV1Schema, type ManagedControllerSubmitInputV1,
-    ManagedEnrollmentCorrelationV1Schema, ManagedBootstrapCredentialCreateV1Schema,
-    ManagedMachineV1Schema,
-    type ManagedControllerCurrentnessV1, type ManagedControllerReportV1,
-    type ManagedEnrollmentCorrelationV1, type ManagedBootstrapCredentialCreateV1,
-    ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema,
-    type ManagedControlAdmissionInputV1, type ManagedControllerIntentReportV1,
-    ProviderObservationV1Schema, createStoredReadSchema,
-    ManagedPolicyAdmissionInputV1Schema,
-    type ManagedPolicyAdmissionInputV1, type ManagedPolicyPurposeV1,
-    type ExternalActionExecutionAuthorizationV1,
-    MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, verifyMachineInstallationProof,
-    isMachineRetentionPolicySupportedV1,
-} from "@happier-dev/protocol";
+import { ManagedControllerCurrentnessV1Schema, ManagedControllerReportV1Schema, ManagedControllerSubmitInputV1Schema, type ManagedControllerSubmitInputV1, ManagedEnrollmentCorrelationV1Schema, ManagedBootstrapCredentialCreateV1Schema, type ManagedControllerCurrentnessV1, type ManagedControllerReportV1, type ManagedEnrollmentCorrelationV1, type ManagedBootstrapCredentialCreateV1, ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, type ManagedControlAdmissionInputV1, type ManagedControllerIntentReportV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { ProviderObservationV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ManagedPolicyAdmissionInputV1Schema, type ManagedPolicyAdmissionInputV1, type ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { isMachineRetentionPolicySupportedV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
 import { validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";

@@ -1,4 +1,5 @@
-import { z, type output as ZodOutput, type ZodTypeAny } from 'zod';
+import { z, type output as ZodOutput, ZodMiniType as ZodTypeAny } from 'zod/mini';
+import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 
 import type { SessionAuthoringFieldDefinitionMap } from './fieldDefinition.js';
 
@@ -23,11 +24,11 @@ type SyncedSessionAuthoringFieldShape<TDefinitions extends SessionAuthoringField
 export type SessionAuthoringFieldArtifacts<TDefinitions extends SessionAuthoringFieldDefinitionMap> = Readonly<{
   definitions: TDefinitions;
   shape: SessionAuthoringFieldShape<TDefinitions>;
-  valueSchema: z.ZodObject<SessionAuthoringFieldShape<TDefinitions>>;
+  valueSchema: z.ZodMiniObject<SessionAuthoringFieldShape<TDefinitions>>;
   defaults: SessionAuthoringFieldDefaults<TDefinitions>;
   syncedFieldIds: ReadonlyArray<SyncedSessionAuthoringFieldKey<TDefinitions>>;
   syncedShape: SyncedSessionAuthoringFieldShape<TDefinitions>;
-  syncedValueSchema: z.ZodObject<SyncedSessionAuthoringFieldShape<TDefinitions>>;
+  syncedValueSchema: z.ZodMiniObject<SyncedSessionAuthoringFieldShape<TDefinitions>>;
 }>;
 
 function parseFieldDefault<TDefinition extends SessionAuthoringFieldDefinitionMap[string]>(
@@ -49,7 +50,6 @@ export function buildSessionAuthoringFieldArtifacts<TDefinitions extends Session
   definitions: TDefinitions,
 ): SessionAuthoringFieldArtifacts<TDefinitions> {
   const shape = {} as SessionAuthoringFieldShape<TDefinitions>;
-  const defaults = {} as SessionAuthoringFieldDefaults<TDefinitions>;
   const syncedFieldIds: Array<SyncedSessionAuthoringFieldKey<TDefinitions>> = [];
   const syncedShape = {} as SyncedSessionAuthoringFieldShape<TDefinitions>;
 
@@ -61,19 +61,26 @@ export function buildSessionAuthoringFieldArtifacts<TDefinitions extends Session
       syncedFieldIds.push(syncedKey);
       syncedShape[syncedKey] = (definition.draftSchema ?? definition.schema) as SyncedSessionAuthoringFieldShape<TDefinitions>[typeof syncedKey];
     }
-    const parsedDefault = parseFieldDefault(String(key), definition);
-    if (parsedDefault !== undefined) {
-      defaults[key] = parsedDefault;
-    }
   }
+
+  // Catalog identity and draft membership do not need admitted defaults. Keep
+  // their validation/normalization with the first consumer of that artifact.
+  const defaults = lazyDefinition(() => {
+    const result = {} as SessionAuthoringFieldDefaults<TDefinitions>;
+    for (const key of Object.keys(definitions) as Array<keyof TDefinitions>) {
+      const parsedDefault = parseFieldDefault(String(key), definitions[key]);
+      if (parsedDefault !== undefined) result[key] = parsedDefault;
+    }
+    return result;
+  });
 
   return {
     definitions,
     shape,
-    valueSchema: z.object(shape).passthrough() as z.ZodObject<SessionAuthoringFieldShape<TDefinitions>>,
+    valueSchema: lazyZodSchema(() => z.looseObject(shape)),
     defaults,
     syncedFieldIds,
     syncedShape,
-    syncedValueSchema: z.object(syncedShape).strict() as z.ZodObject<SyncedSessionAuthoringFieldShape<TDefinitions>>,
+    syncedValueSchema: lazyZodSchema(() => z.strictObject(syncedShape)),
   };
 }

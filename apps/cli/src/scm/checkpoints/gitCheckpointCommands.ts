@@ -11,6 +11,8 @@ export type GitCheckpointCommandOptions = Readonly<{
     maxOutputBytes?: number;
     env?: Record<string, string | undefined>;
     signal?: AbortSignal;
+    stdoutConsumer?: Parameters<typeof runScmCommand>[0]['stdoutConsumer'];
+    stdoutFilePath?: string;
 }>;
 
 export type GitCheckpointTemporaryIndex = GitTemporaryIndex;
@@ -28,8 +30,11 @@ export function runGitCheckpointCommand(input: GitCheckpointCommandOptions): Pro
         timeoutMs: input.timeoutMs,
         stdin: input.stdin,
         maxOutputBytes: input.maxOutputBytes,
-        env: input.env,
+        // Checkpoints bind actual object identities, never mutable replacement refs.
+        env: { ...input.env, GIT_NO_REPLACE_OBJECTS: '1' },
         signal: input.signal,
+        stdoutConsumer: input.stdoutConsumer,
+        stdoutFilePath: input.stdoutFilePath,
     });
 }
 

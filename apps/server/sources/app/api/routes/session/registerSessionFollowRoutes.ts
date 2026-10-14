@@ -1,13 +1,5 @@
-import {
-    GetSessionFollowResponseSchema,
-    SetSessionFollowRequestSchema,
-    SetSessionFollowResponseSchema,
-    RemoveSessionFollowResponseSchema,
-    SessionFollowErrorResponseSchema,
-    SessionAutoFollowPreferencesV1Schema,
-    ReplaceSessionVoiceInclusionsRequestSchema,
-    ReplaceSessionVoiceInclusionsResponseSchema,
-} from "@happier-dev/protocol";
+import { GetSessionFollowResponseSchema, SetSessionFollowRequestSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, SessionFollowErrorResponseSchema, ReplaceSessionVoiceInclusionsRequestSchema, ReplaceSessionVoiceInclusionsResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
+import { SessionAutoFollowPreferencesV1Schema } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { z } from "zod";
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";

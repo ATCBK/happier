@@ -15,6 +15,7 @@ import { PageHeader } from './PageHeader.js';
 import { PluginUiProviderInternal } from './PluginUiProvider.js';
 import { EmptyState } from './State.js';
 import { Select } from './Form.js';
+import * as PublicUi from './index.public.js';
 
 /**
  * Configuration-surfaces U9: a plugin page composes the same anatomy as
@@ -63,6 +64,63 @@ function textOf(element: Element | null | undefined): string {
 }
 
 describe('plugin page anatomy through the shared page owners', () => {
+  it('exposes one add row with a leading plus, controlled expansion and disabled activation', async () => {
+    const onPress = vi.fn();
+    const renderIcon = vi.fn(({ name }: { name: string }) => <span data-testid={`mark-${name}`} />);
+    expect(PublicUi).toHaveProperty('ItemAddRow');
+    const AddRow = PublicUi.ItemAddRow;
+    function Harness() {
+      const [expanded, setExpanded] = useState(false);
+      return <PublicUi.ItemGroup title="Variables">
+        <AddRow testID="add" title="Add variable" expanded={expanded} onPress={() => { onPress(); setExpanded(true); }} />
+        <AddRow testID="disabled-add" title="Add model" disabled onPress={onPress} />
+      </PublicUi.ItemGroup>;
+    }
+    const mount = mountPage(<Harness />, { renderIcon });
+    try {
+      const row = mount.container.querySelector<HTMLElement>('[data-testid="add"]')!;
+      expect(row.getAttribute('aria-expanded')).toBe('false');
+      expect(row.querySelector('[data-testid="mark-plus"]')).not.toBeNull();
+      expect(row.querySelector('[data-testid="mark-chevron-right"]')).toBeNull();
+      await act(async () => row.click());
+      expect(onPress).toHaveBeenCalledTimes(1);
+      expect(row.getAttribute('aria-expanded')).toBe('true');
+      const disabled = mount.container.querySelector<HTMLElement>('[data-testid="disabled-add"]')!;
+      expect(disabled.getAttribute('aria-disabled')).toBe('true');
+      await act(async () => disabled.click());
+      expect(onPress).toHaveBeenCalledTimes(1);
+      expect(mount.container.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    } finally { mount.unmount(); }
+  });
+
+  it.each([
+    { title: 'Advanced', row: 358, detail: 260, titleWidth: 65, icon: false, beneath: true },
+    { title: 'Advanced', row: 358, detail: 44, titleWidth: 65, icon: false, beneath: false },
+    { title: 'Role', row: 340, detail: 150, titleWidth: 32, icon: false, beneath: false },
+    { title: 'Advanced', row: 356, detail: 215, titleWidth: 65, icon: true, beneath: true },
+  ])('fits page detail using the label and row chrome ($row/$detail/$title)', ({ title, row: rowWidth, detail: detailWidth, titleWidth, icon, beneath }) => {
+    const value = 'Service identity and diagnostics';
+    const mount = mountPage(<PublicUi.ItemGroup title="Account">
+      <PublicUi.Item testID="detail-row" title={title} detail={value} icon={icon ? <View /> : undefined} />
+    </PublicUi.ItemGroup>);
+    try {
+      const row = mount.container.querySelector<HTMLElement>('[data-testid="detail-row"]')!;
+      const handler = (node: Element) => (node as unknown as { __reactLayoutHandler?: (event: HappierLayoutChangeEvent) => void }).__reactLayoutHandler;
+      const layout = (node: Element, width: number) => act(() => handler(node)!({ nativeEvent: { layout: { x: 0, y: 0, width, height: 52 } } }));
+      layout(row, rowWidth);
+      const measurements = Array.from(row.querySelectorAll<HTMLElement>('[aria-hidden="true"]')).filter(node => handler(node));
+      expect(measurements, 'natural title and detail measurements come from the real page row').toHaveLength(2);
+      for (const node of measurements) layout(node, node.textContent === title ? titleWidth : detailWidth);
+      const visible = (text: string) => Array.from(row.querySelectorAll<HTMLElement>('div')).find(node => node.textContent === text && node.children.length === 0 && !node.closest('[aria-hidden="true"]'))!;
+      expect(visible(value).parentElement === visible(title).parentElement).toBe(beneath);
+      if (!beneath && title === 'Role') expect(Number.parseFloat(getComputedStyle(visible(value)).maxWidth)).toBeGreaterThanOrEqual(detailWidth);
+      // Resizing uses the same mounted row and returns a long detail to the trailing column.
+      layout(row, 820);
+      expect(visible(value).parentElement === visible(title).parentElement).toBe(false);
+      expect(mount.container.querySelector('[data-testid="detail-row"]')).toBe(row);
+    } finally { mount.unmount(); }
+  });
+
   it('keeps a compact identity glyph on the same title edge as a standard page-row glyph', () => {
     const mount = mountPage(
       <ItemGroup title="Devices">

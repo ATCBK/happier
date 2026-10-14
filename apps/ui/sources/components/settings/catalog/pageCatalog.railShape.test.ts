@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { isFeatureId } from '@happier-dev/protocol/features/catalog';
 
-import { PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextSettings';
-
-import { SETTINGS_PAGE_CATALOG, readSettingsPageGate } from './pageCatalog';
+// Match the app's runtime-first composition before inspecting the catalog projection.
+await import('./runtime/useResolvedSettingsPageCatalog');
+const { PROMPTS_CONTEXT_ROUTE } = await import('@/components/settings/prompts/context/promptsContextSettings');
+const { SETTINGS_PAGE_CATALOG, readSettingsPageGate } = await import('./pageCatalog');
 
 type CatalogNode = Readonly<{
     id: string;
     route?: string;
+    gate?: Readonly<{ featureId?: string }>;
     children?: readonly CatalogNode[];
 }>;
 
@@ -31,6 +34,30 @@ function walk(
  * here instead of being left as an implicit assumption inside the renderer.
  */
 describe('settings catalog rail shape', () => {
+    it('passes every page gate to the canonical FeatureId consumer before boot', () => {
+        const unknownGates = (nodes: readonly CatalogNode[]) => walk(nodes)
+            .filter(({ node }) => node.gate?.featureId && !isFeatureId(node.gate.featureId))
+            .map(({ node }) => `${node.id}:${node.gate?.featureId}`);
+        // A retired gate must be caught even when an older transpiled node still carries it.
+        expect(unknownGates([{ id: 'promptsAssets', gate: { featureId: 'prompts.assets.external' } }]))
+            .toEqual(['promptsAssets:prompts.assets.external']);
+        expect(unknownGates(catalog)).toEqual([]);
+    });
+    it('offers Skills before MCP and keeps retired asset and registry pages out of Prompts', () => {
+        const tools = (catalog[0]?.children ?? []).find(group => group.id === 'groupToolsAndModels');
+        const ids = tools?.children?.map(page => page.id) ?? [];
+        expect(ids.indexOf('skills')).toBeGreaterThanOrEqual(0);
+        expect(ids.indexOf('skills')).toBeLessThan(ids.indexOf('mcp'));
+        const prompts = tools?.children?.find(page => page.id === 'prompts');
+        expect(prompts?.children?.map(page => page.id)).toEqual([
+            'promptsTemplates', 'promptsFolders', 'promptsStacks', 'promptsLibrary',
+        ]);
+    });
+    it('keeps MCP servers reachable as a core settings destination', () => {
+        const mcp = walk(catalog).find(({ node }) => node.id === 'mcp')?.node;
+        expect(mcp?.route).toBe('/settings/mcp');
+        expect(readSettingsPageGate('mcp')).toBeUndefined();
+    });
     it('gates conversations independently while keeping Dictation reachable when conversations are disabled', () => {
         const voice = walk(catalog).find(({ node }) => node.id === 'voice')?.node;
         expect(readSettingsPageGate('voice')).toBeUndefined();

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { LaunchProfileIdV2Schema } from './v2/profileId.js';
 import { LaunchProfileV2Schema } from './v2/schema.js';
@@ -24,130 +24,130 @@ export { PROFILE_ACTION_IDS_V1, isProfileActionIdV1, type ProfileActionIdV1 } fr
 
 export const ProfileActionIdV1Schema = lazyZodSchema(() => z.enum(PROFILE_ACTION_IDS_V1));
 
-const Address = lazyZodSchema(() => z.object({ id: ProfileRecordIdV1Schema }).strict());
-const EditAddress = lazyZodSchema(() => Address.extend({ expectedRevision: ProfileRowRevisionV1Schema }).strict());
-const CapturedRowAddress = lazyZodSchema(() => Address.extend({ expectedRevision: ProfileReferenceGuardRevisionV1Schema }).strict());
-const EditorInput = lazyZodSchema(() => CapturedRowAddress.extend({
-  expectedArtifactRevision: ArtifactRevisionV1Schema.optional(),
-}).strict());
-const RowUpdatedResult = lazyZodSchema(() => z.object({ status: z.literal('updated'), id: ProfileRecordIdV1Schema,
-  revision: ProfileRowRevisionV1Schema }).strict());
+const Address = lazyZodSchema(() => z.strictObject({ id: ProfileRecordIdV1Schema }));
+const EditAddress = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, { expectedRevision: ProfileRowRevisionV1Schema })));
+const CapturedRowAddress = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, { expectedRevision: ProfileReferenceGuardRevisionV1Schema })));
+const EditorInput = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CapturedRowAddress, {
+  expectedArtifactRevision: z.optional(ArtifactRevisionV1Schema),
+})));
+const RowUpdatedResult = lazyZodSchema(() => z.strictObject({ status: z.literal('updated'), id: ProfileRecordIdV1Schema,
+  revision: ProfileRowRevisionV1Schema }));
 const RefusalResult = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('conflict'), id: ProfileRecordIdV1Schema, revision: z.number().int().min(-1) }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict(),
-  z.object({ status: z.literal('invalid'), reason: z.enum([
+  z.strictObject({ status: z.literal('conflict'), id: ProfileRecordIdV1Schema, revision: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.string().check(z.minLength(1)) }),
+  z.strictObject({ status: z.literal('invalid'), reason: z.enum([
     'duplicate-id', 'duplicate-name', 'profile-not-found', 'read-only', 'legacy-creation-unsupported', 'invalid-definition',
     'entry_conflict', 'entry_not_found', 'invalid_parameters',
-  ]), id: ProfileRecordIdV1Schema.optional() }).strict(),
+  ]), id: z.optional(ProfileRecordIdV1Schema) }),
 ]));
 const MutationResult = lazyZodSchema(() => z.union([RowUpdatedResult, RefusalResult]));
 const DeleteResult = lazyZodSchema(() => z.union([
-  RowUpdatedResult.extend({ authoringMemoryCleanup: z.object({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RowUpdatedResult, { authoringMemoryCleanup: z.optional(z.strictObject({
     status: z.literal('unavailable'), reason: z.literal('authoring_memory_cleanup_failed'),
-  }).strict().optional() }).strict(),
+  })) })),
   RefusalResult,
 ]));
 const EnabledResult = lazyZodSchema(() => z.union([RowUpdatedResult, RefusalResult,
-  z.object({ status: z.literal('preference-updated'), id: ProfileRecordIdV1Schema, enabled: z.boolean(),
-    settingsVersion: ProfileRowRevisionV1Schema }).strict(),
+  z.strictObject({ status: z.literal('preference-updated'), id: ProfileRecordIdV1Schema, enabled: z.boolean(),
+    settingsVersion: ProfileRowRevisionV1Schema }),
 ]));
 const ReadResult = lazyZodSchema(() => {
-  const opened = z.object({ status: z.literal('present'), profile: AiLaunchProfileV1Schema }).strict();
+  const opened = z.strictObject({ status: z.literal('present'), profile: AiLaunchProfileV1Schema });
   const membership = { record: ProfileRecordV1Schema, revision: ProfileRowRevisionV1Schema };
-  const artifact = opened.extend({ location: ArtifactRevisionV1Schema.extend({
-    kind: z.literal('artifact'), artifactId: z.string().min(1), access: ArtifactCallerAccessV1Schema,
-  }).strict() }).strict();
+  const artifact = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(opened, { location: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactRevisionV1Schema, {
+    kind: z.literal('artifact'), artifactId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema,
+  })) }));
   return z.union([
     RefusalResult,
-    opened.extend({ location: z.object({ kind: z.literal('builtin') }).strict() }).strict(),
-    opened.extend({ ...membership, location: z.object({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(opened, { location: z.strictObject({ kind: z.literal('builtin') }) })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(opened, { ...membership, location: z.strictObject({
       kind: z.literal('account_row'), revision: ProfileRowRevisionV1Schema,
-    }).strict() }).strict(),
+    }) })),
     artifact,
-    artifact.extend(membership).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(artifact, membership)),
   ]);
 });
 const SearchResult = lazyZodSchema(() => z.union([MutationResult,
-  z.object({ status: z.literal('listed'), records: z.array(z.object({ record: ProfileRecordV1Schema,
-    revision: ProfileRowRevisionV1Schema }).strict()), profiles: z.array(z.object({
+  z.strictObject({ status: z.literal('listed'), records: z.array(z.strictObject({ record: ProfileRecordV1Schema,
+    revision: ProfileRowRevisionV1Schema })), profiles: z.array(z.strictObject({
       profile: LaunchProfileListItemV1Schema,
       location: z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('builtin') }).strict(),
-        z.object({ kind: z.literal('account_row'), revision: ProfileRowRevisionV1Schema }).strict(),
-        z.object({ kind: z.literal('artifact'), artifactId: z.string().min(1),
-          headerVersion: ProfileRowRevisionV1Schema, bodyVersion: ProfileRowRevisionV1Schema }).strict(),
+        z.strictObject({ kind: z.literal('builtin') }),
+        z.strictObject({ kind: z.literal('account_row'), revision: ProfileRowRevisionV1Schema }),
+        z.strictObject({ kind: z.literal('artifact'), artifactId: z.string().check(z.minLength(1)),
+          headerVersion: ProfileRowRevisionV1Schema, bodyVersion: ProfileRowRevisionV1Schema }),
       ]),
-    }).strict()), complete: z.literal(true) }).strict(),
+    })), complete: z.literal(true) }),
 ]));
-const CreateInput = lazyZodSchema(() => z.object({
+const CreateInput = lazyZodSchema(() => z.strictObject({
   profile: LaunchProfileV2Schema, expectedRevision: z.literal('absent'),
-}).strict());
-const SaveInput = lazyZodSchema(() => CapturedRowAddress.extend({
-  profile: AiLaunchProfileV1Schema,
-  secretBindings: ProfileSecretBindingOverridesV1Schema.optional(),
-  skillSeeds: z.array(z.string().min(1)).optional(),
-  legacyCloneSource: ProfileLegacyCloneSourceV1Schema.optional(),
-  expectedArtifactRevision: ArtifactRevisionV1Schema.optional(),
-}).strict().superRefine((input, context) => {
-  if (input.id !== input.profile.id) context.addIssue({ code: 'custom', path: ['profile', 'id'], message: 'Profile identity must match addressed row' });
 }));
-const SelectInput = lazyZodSchema(() => z.object({ id: ProfileRecordIdV1Schema.nullable() }).strict());
+const SaveInput = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CapturedRowAddress, {
+  profile: AiLaunchProfileV1Schema,
+  secretBindings: z.optional(ProfileSecretBindingOverridesV1Schema),
+  skillSeeds: z.optional(z.array(z.string().check(z.minLength(1)))),
+  legacyCloneSource: z.optional(ProfileLegacyCloneSourceV1Schema),
+  expectedArtifactRevision: z.optional(ArtifactRevisionV1Schema),
+})).check(z.superRefine((input, context) => {
+  if (input.id !== input.profile.id) context.addIssue({ code: 'custom', path: ['profile', 'id'], message: 'Profile identity must match addressed row' });
+})));
+const SelectInput = lazyZodSchema(() => z.strictObject({ id: z.nullable(ProfileRecordIdV1Schema) }));
 // The incumbent favorites preference uses '' for the machine environment option.
 const FavoriteId = lazyZodSchema(() => z.union([ProfileRecordIdV1Schema, z.literal('')]));
-const FavoriteInput = lazyZodSchema(() => z.object({ id: FavoriteId, favorite: z.boolean() }).strict());
-const DraftId = lazyZodSchema(() => z.string().min(1));
+const FavoriteInput = lazyZodSchema(() => z.strictObject({ id: FavoriteId, favorite: z.boolean() }));
+const DraftId = lazyZodSchema(() => z.string().check(z.minLength(1)));
 const EditorResult = lazyZodSchema(() => z.union([MutationResult,
-  z.object({ status: z.literal('opened'), id: ProfileRecordIdV1Schema, draftId: DraftId }).strict(),
+  z.strictObject({ status: z.literal('opened'), id: ProfileRecordIdV1Schema, draftId: DraftId }),
 ]));
 const SelectResult = lazyZodSchema(() => z.union([MutationResult,
-  z.object({ status: z.literal('selected'), id: ProfileRecordIdV1Schema.nullable() }).strict(),
+  z.strictObject({ status: z.literal('selected'), id: z.nullable(ProfileRecordIdV1Schema) }),
 ]));
 const FavoriteResult = lazyZodSchema(() => z.union([MutationResult,
-  z.object({ status: z.literal('updated'), id: FavoriteId, favorite: z.boolean() }).strict(),
+  z.strictObject({ status: z.literal('updated'), id: FavoriteId, favorite: z.boolean() }),
 ]));
-const DiscardInput = lazyZodSchema(() => z.object({ draftId: DraftId }).strict());
+const DiscardInput = lazyZodSchema(() => z.strictObject({ draftId: DraftId }));
 const DiscardResult = lazyZodSchema(() => z.union([MutationResult,
-  z.object({ status: z.literal('discarded'), draftId: DraftId }).strict(),
+  z.strictObject({ status: z.literal('discarded'), draftId: DraftId }),
 ]));
-const ResourceId = lazyZodSchema(() => z.string().refine(resourceId => {
+const ResourceId = lazyZodSchema(() => z.string().check(z.refine(resourceId => {
   // This field carries the immutable Resource id, not its encoded binding reference.
   if (resourceId.startsWith(SHARED_SAVED_SECRET_REF_V1_PREFIX)) return false;
   try { formatSharedSavedSecretRefV1(resourceId); return true; }
   catch { return false; }
-}, 'Saved-secret Resource id must fit its canonical shared reference'));
+}, 'Saved-secret Resource id must fit its canonical shared reference')));
 const SecretSelection = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('none') }).strict(),
-  z.object({ kind: z.literal('resource'), resourceId: ResourceId,
-    expectedResourceRevision: ProfileRowRevisionV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('none') }),
+  z.strictObject({ kind: z.literal('resource'), resourceId: ResourceId,
+    expectedResourceRevision: ProfileRowRevisionV1Schema }),
 ]));
-const NamedSecretSelection = lazyZodSchema(() => z.object({
+const NamedSecretSelection = lazyZodSchema(() => z.strictObject({
   envName: EnvVarRequirementSchema.shape.name, selection: SecretSelection,
-}).strict());
+}));
 
 /** Strict semantic ingress; saved credentials cross this boundary only as captured references. */
 export const PROFILE_ACTION_INPUT_SCHEMAS_V1 = {
   'launch_profiles.read': Address,
-  'launch_profiles.search': lazyZodSchema(() => z.object({ query: z.string().optional() }).strict()),
+  'launch_profiles.search': lazyZodSchema(() => z.strictObject({ query: z.optional(z.string()) })),
   'launch_profiles.select': SelectInput,
   'launch_profiles.create': CreateInput,
   'launch_profiles.edit': EditorInput,
   'launch_profiles.save': SaveInput,
-  'launch_profiles.duplicate': lazyZodSchema(() => EditAddress.extend({
+  'launch_profiles.duplicate': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(EditAddress, {
     newProfileId: LaunchProfileIdV2Schema, name: LaunchProfileV2Schema.shape.name,
-    now: z.number().finite().nonnegative(),
-  }).strict()),
+    now: z.number().check(z.nonnegative()),
+  }))),
   'launch_profiles.enabled.set': lazyZodSchema(() => z.union([
-    EditAddress.extend({ enabled: z.boolean() }).strict(),
-    z.object({ subject: z.object({ kind: z.literal('builtin'),
-      id: ProfileRecordIdV1Schema.refine(isHistoricalBuiltInAiLaunchProfileIdV1, 'Subject must be an incumbent builtin Profile'),
-    }).strict(), expectedSettingsVersion: ProfileRowRevisionV1Schema, enabled: z.boolean() }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(EditAddress, { enabled: z.boolean() })),
+    z.strictObject({ subject: z.strictObject({ kind: z.literal('builtin'),
+      id: ProfileRecordIdV1Schema.check(z.refine(isHistoricalBuiltInAiLaunchProfileIdV1, 'Subject must be an incumbent builtin Profile')),
+    }), expectedSettingsVersion: ProfileRowRevisionV1Schema, enabled: z.boolean() }),
   ])),
   'launch_profiles.favorite.set': FavoriteInput,
   'launch_profiles.delete': EditAddress,
-  'launch_profiles.prompt_stack.update': lazyZodSchema(() => CapturedRowAddress.extend({ intent: PromptStackIntentV1Schema }).strict()),
+  'launch_profiles.prompt_stack.update': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CapturedRowAddress, { intent: PromptStackIntentV1Schema }))),
   'launch_profiles.secrets.select': lazyZodSchema(() => z.union([
-    CapturedRowAddress.extend(NamedSecretSelection.shape).strict(),
-    CapturedRowAddress.extend({ selections: z.array(NamedSecretSelection) }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CapturedRowAddress, NamedSecretSelection.shape)),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CapturedRowAddress, { selections: z.array(NamedSecretSelection) })),
   ])),
   'launch_profiles.legacy.preview': DaemonProviderProfileMigrationPreviewRequestV1Schema,
   'launch_profiles.legacy.convert': DaemonProviderProfileMigrationConfirmRequestV1Schema,

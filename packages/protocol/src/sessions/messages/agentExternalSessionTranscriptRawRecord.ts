@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { JsonValue } from '../../json/strictJsonValue.js';
 import { AgentRuntimeJsonValueV1Schema } from '../../runtime/agentSessionV1.js';
@@ -8,12 +8,12 @@ import { resolveTranscriptBodySemanticEvent } from './sessionMessageRole.js';
 function snapshotStructuralDto(
   value: unknown,
   allowedKeys: ReadonlySet<string>,
-  context: z.RefinementCtx,
+  context: z.core.ParsePayload<unknown>,
 ): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const keys = Reflect.ownKeys(value);
   if (keys.some((key) => typeof key !== 'string' || !allowedKeys.has(key))) {
-    context.addIssue({ code: 'custom', message: 'External Session DTO contains an unknown field' });
+    context.issues.push({ code: 'custom', input: context.value, message: 'External Session DTO contains an unknown field' });
     return z.NEVER;
   }
   const snapshot = Object.create(null) as Record<string, unknown>;
@@ -30,7 +30,7 @@ function snapshotStructuralDto(
       }
     }
   } catch {
-    context.addIssue({ code: 'custom', message: 'External Session DTO property read failed' });
+    context.issues.push({ code: 'custom', input: context.value, message: 'External Session DTO property read failed' });
     return z.NEVER;
   }
   return Object.freeze(snapshot);
@@ -39,16 +39,12 @@ function snapshotStructuralDto(
 const USER_CONTENT_KEYS = new Set(['type', 'text']);
 const RAW_RECORD_KEYS = new Set(['role', 'content']);
 
-const AgentExternalSessionUserContentSchema = lazyZodSchema(() => z.preprocess(
-  (value, context) => snapshotStructuralDto(value, USER_CONTENT_KEYS, context),
-  z.object({
+const AgentExternalSessionUserContentSchema = lazyZodSchema(() => z.pipe(z.transform((value, context) => snapshotStructuralDto(value, USER_CONTENT_KEYS, context)), z.strictObject({
     type: z.literal('text'),
     text: z.string(),
-  }).strict(),
-));
+  })));
 
-const AgentExternalSessionAgentContentSchema = lazyZodSchema(() => AgentRuntimeJsonValueV1Schema.superRefine(
-  (content, context) => {
+const AgentExternalSessionAgentContentSchema = lazyZodSchema(() => AgentRuntimeJsonValueV1Schema.check(z.superRefine((content, context) => {
     if (!content || typeof content !== 'object' || Array.isArray(content)) {
       context.addIssue({
         code: 'custom',
@@ -93,8 +89,7 @@ const AgentExternalSessionAgentContentSchema = lazyZodSchema(() => AgentRuntimeJ
         message: 'Agent External Session content is not a supported semantic event',
       });
     }
-  },
-));
+  })));
 
 /**
  * Producer-supplied classification for a current user transcript row. The
@@ -128,21 +123,18 @@ export type AgentExternalSessionTranscriptRawRecord =
 const AgentExternalSessionTranscriptRawRecordUnionSchema = lazyZodSchema(() => z.discriminatedUnion(
   'role',
   [
-    z.object({
+    z.strictObject({
       role: z.literal('user'),
       content: AgentExternalSessionUserContentSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       role: z.literal('agent'),
       content: AgentExternalSessionAgentContentSchema,
-    }).strict(),
+    }),
   ],
 ));
 
-export const AgentExternalSessionTranscriptRawRecordSchema: z.ZodType<
+export const AgentExternalSessionTranscriptRawRecordSchema: z.ZodMiniType<
   AgentExternalSessionTranscriptRawRecord,
   unknown
-> = lazyZodSchema(() => z.preprocess(
-  (value, context) => snapshotStructuralDto(value, RAW_RECORD_KEYS, context),
-  AgentExternalSessionTranscriptRawRecordUnionSchema,
-));
+> = lazyZodSchema(() => z.pipe(z.transform((value, context) => snapshotStructuralDto(value, RAW_RECORD_KEYS, context)), AgentExternalSessionTranscriptRawRecordUnionSchema));

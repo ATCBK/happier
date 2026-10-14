@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionEffectiveAccessV1Schema } from '../access/sessionEffectiveAccessV1.js';
 import { V2SessionRecordSchema } from '../control/contract.js';
@@ -16,10 +16,10 @@ export { SessionListMetadataUpgradeRequiredCountSchema } from '../control/listRe
  * carry the complete responsibility pair so omission cannot be mistaken for
  * an authoritative unassigned value.
  */
-export const SessionCurrentProjectionRecordV1Schema = lazyZodSchema(() => V2SessionRecordSchema.safeExtend({
+export const SessionCurrentProjectionRecordV1Schema = lazyZodSchema(() => z.safeExtend(V2SessionRecordSchema, {
   effectiveAccess: SessionEffectiveAccessV1Schema,
-  responsibleAccountId: z.string().min(1).nullable(),
-  responsibleAccount: V2SessionRecordSchema.shape.responsibleAccount.unwrap(),
+  responsibleAccountId: z.nullable(z.string().check(z.minLength(1))),
+  responsibleAccount: V2SessionRecordSchema.shape.responsibleAccount._zod.def.innerType,
 }));
 
 export type SessionCurrentProjectionRecordV1 = Readonly<z.infer<typeof SessionCurrentProjectionRecordV1Schema>>;
@@ -29,15 +29,15 @@ export type SessionCurrentProjectionRecordV1 = Readonly<z.infer<typeof SessionCu
  * established V2 projection policy; pagination authority stays explicit at
  * this boundary so consumers cannot lose either independent continuation.
  */
-export const SessionListQueryResponseV1Schema = lazyZodSchema(() => z.object({
-  sessions: z.array(SessionCurrentProjectionRecordV1Schema.safeExtend({
+export const SessionListQueryResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  sessions: z.array(z.safeExtend(SessionCurrentProjectionRecordV1Schema, {
     viewer: SessionViewerProjectionV1Schema,
   })),
-  nextCursor: z.string().nullable(),
+  nextCursor: z.nullable(z.string()),
   hasNext: z.boolean(),
-  attentionNextCursor: z.string().nullable(),
+  attentionNextCursor: z.nullable(z.string()),
   attentionHasNext: z.boolean(),
-  metadataUpgradeRequiredCount: SessionListMetadataUpgradeRequiredCountSchema.optional(),
-}).strict());
+  metadataUpgradeRequiredCount: z.optional(SessionListMetadataUpgradeRequiredCountSchema),
+}));
 
 export type SessionListQueryResponseV1 = Readonly<z.infer<typeof SessionListQueryResponseV1Schema>>;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -181,12 +181,12 @@ export function isCompleteLegacyNotificationChannelSourceV1(raw: Readonly<Record
 export type NotificationChannelCatalogDiagnosticV1 = Readonly<{ channelId: string; reason: 'invalid-stored-content' | 'secret-unavailable' }>;
 const storedCatalogContainer = lazyZodSchema(() => z.object({ v: z.literal(1), channels: z.array(z.unknown()) }));
 const StoredNotificationChannelRecordV1Schema = createStoredReadSchema(NotificationChannelRecordV1Schema);
-const storedLegacyNotifications = createStoredReadSchema(NotificationsSettingsV1Schema.unwrap());
+const storedLegacyNotifications = createStoredReadSchema(NotificationsSettingsV1Schema._zod.def.innerType);
 const legacyChannelSource = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ ...ExpoPushNotificationChannelV1Schema.shape,
-    topics: NotificationChannelTopicsStrictV1Schema.default(DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1) }),
+    topics: z._default(NotificationChannelTopicsStrictV1Schema, DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1) }),
   z.strictObject({ ...WebhookNotificationChannelV1Schema.shape,
-    topics: NotificationChannelTopicsStrictV1Schema.default(DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1) }),
+    topics: z._default(NotificationChannelTopicsStrictV1Schema, DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1) }),
 ]));
 const storedLegacyChannel = createStoredReadSchema(legacyChannelSource);
 function readChannelEntries<T extends Readonly<{ id: string }>>(values: readonly unknown[],

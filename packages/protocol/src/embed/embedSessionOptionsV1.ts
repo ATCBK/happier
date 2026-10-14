@@ -1,17 +1,17 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionOwnerMetadataV1Schema } from '../sessions/metadata/sessionMetadataSchemasV1.js';
 
 /** The input consumed by the existing Session model/config-option readers, never a complete owner view. */
-export const ComposerOptionsInputV1Schema = lazyZodSchema(() => SessionOwnerMetadataV1Schema.shape.runtime.unwrap().pick({
+export const ComposerOptionsInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.pick(SessionOwnerMetadataV1Schema.shape.runtime._zod.def.innerType, {
     sessionModelsV1: true,
     acpSessionModelsV1: true,
     modelSelectionIntentV1: true,
     modelOverrideV1: true,
     sessionConfigOptionOverridesV1: true,
     acpConfigOptionOverridesV1: true,
-}).strict());
+})));
 
 export type ComposerOptionsInputV1 = z.infer<typeof ComposerOptionsInputV1Schema>;
 
@@ -28,10 +28,10 @@ export function projectComposerOptionsInputV1(metadata: unknown): ComposerOption
 }
 
 /** Closed V1 frame projection. Session binding is checked again after authenticated opening. */
-export const EmbedSessionOptionsV1Schema = lazyZodSchema(() => z.object({
+export const EmbedSessionOptionsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sessionId: z.string().trim().min(1),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     owner: ComposerOptionsInputV1Schema,
-}).strict());
+}));
 
 export type EmbedSessionOptionsV1 = z.infer<typeof EmbedSessionOptionsV1Schema>;

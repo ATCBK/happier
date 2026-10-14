@@ -11,7 +11,7 @@ export const registrySourcesProjectionFamily = definePluginProjectionFamilyV2({
                 pluginVersion: entry.pluginVersion, definition: entry.definition });
             const origin = pluginExecutionOriginsByPluginId?.[entry.pluginId];
             return [[declaration.id, Object.freeze({ ...declaration,
-                ...(origin ? { serverIdentityId: origin.serverIdentityId, materializationRef: origin.materializationRef } : {}) })]];
+                ...(origin ? { executionOrigin: origin } : {}) })]];
         }))),
     }),
 });

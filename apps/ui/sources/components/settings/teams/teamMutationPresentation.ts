@@ -22,7 +22,10 @@ export function teamReadFailureLabel(failure: HomeDomainFailure<string> | Scoped
     return teamMutationFailureLabel({ ...failure, code: failure.code ?? null });
 }
 
-export function teamMutationFailureLabel(failure: HomeDomainFailure<string>): string {
+export function teamMutationFailureLabel(failure: HomeDomainFailure<string>, context?: 'authentication_policy'): string {
+    if (failure.code === 'team_authentication_required') return context === 'authentication_policy'
+        ? t('teams.authentication.policy.authenticationRequired')
+        : t('teams.errors.authenticationRequired');
     if (failure.code === 'team_owner_transfer_required') return t('teams.members.lastOwnerBlocked');
     if (failure.code === 'managed_by_directory') return t('teams.members.managedReadOnly');
     if (failure.code === 'management_conflict') return t('teams.members.managementConflict');

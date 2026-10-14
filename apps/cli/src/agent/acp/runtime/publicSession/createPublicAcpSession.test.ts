@@ -49,6 +49,9 @@ import { requestAcpHistoryExtension } from '@/agent/acp/history/acpHistoryExtens
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import { createAgentSessionTurnInvariant } from '@/agent/runtime/session/turn/agentSessionTurnInvariant';
+import { createRuntimeFailureTranscriptProjector } from '@/agent/runtime/session/transcripts/runtimeFailureTranscript';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import { TranscriptRawAgentContentV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withCursorEmptyResponseFailure } from '../../../../../../../packages/plugins/cursor/src/agent/runtime/emptyResponse';
@@ -158,6 +161,7 @@ function writePublicComposerAgent(dir: string): string {
       let selectedModelRequest = null;
       let initialModelSelected = false;
       let historyPromptCount = 0;
+      let recoveryPromptCount = 0;
       let permissionAfterSteerPromptCount = 0;
       let grokInterjectPromptCount = 0;
       let historyForkedOnThisConnection = false;
@@ -684,12 +688,32 @@ function writePublicComposerAgent(dir: string): string {
               ok(request.id, { stopReason: 'end_turn' });
             } else if (scenario === 'refused') {
               ok(request.id, { stopReason: 'refusal' });
-            } else if (scenario === 'prompt-rejected-before-effect') {
+            } else if (scenario === 'prompt-rejected-before-effect' || scenario === 'prompt-connection-rejected' || scenario === 'prompt-long-rejected') {
               send({
                 jsonrpc: '2.0',
                 id: request.id,
-                error: { code: -32602, message: 'prompt rejected before effect' },
+                error: scenario !== 'prompt-rejected-before-effect'
+                  ? { code: -32603, message: scenario === 'prompt-long-rejected'
+                      ? 'Cannot connect to API ' + 'x'.repeat(9_000)
+                      : 'Cannot connect to API Authorization: Bearer private-api-token',
+                      data: { service: 'session', errorName: 'APIError', secret: 'private-error-data' } }
+                  : { code: -32602, message: 'prompt rejected before effect' },
               });
+            } else if (scenario.startsWith('prompt-recovery-')) {
+              recoveryPromptCount += 1;
+              if (recoveryPromptCount === 1) {
+                if (scenario === 'prompt-recovery-refused') {
+                  ok(request.id, { stopReason: 'refusal' });
+                } else {
+                  if (scenario === 'prompt-recovery-after-output') update(sessionId, 'output before provider failure');
+                  send({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'provider unavailable' } });
+                }
+              } else {
+                // ACP does not require a user-message echo. Stream the entire reply
+                // before returning the successor prompt's request-scoped response.
+                update(sessionId, 'recovered reply');
+                ok(request.id, { stopReason: 'end_turn' });
+              }
             } else if (scenario === 'prompt-rejected-after-update') {
               update(sessionId, 'provider output before rejected response');
               send({
@@ -1271,9 +1295,9 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('projects ACP uncertainty through an Execution Run without creating a Session identity', async () => {
+  it.each(['completed', 'prompt-effect-unobserved'] as const)('projects witnessed ACP consumption through an Execution Run without creating a Session identity (%s)', async scenario => {
     await withTempDir('happier-public-acp-execution-run-', async (dir) => {
-      const fixture = createFixture(dir, 'completed');
+      const fixture = createFixture(dir, scenario);
       const run = await createPublicAcpExecutionRun({
         kind: 'create',
         runId: 'execution-run-1',
@@ -1287,15 +1311,19 @@ describe('createPublicAcpSession', () => {
       try {
         await vi.waitFor(() => {
           expect(
-            events.some((event) => event.kind === 'run-failed'),
+            events.some((event) => event.kind === (scenario === 'completed' ? 'run-complete' : 'run-failed')),
             JSON.stringify(events),
           ).toBe(true);
         });
         expect(events.map((event) => event.kind)).toContain('checkpoint');
-        expect(events).toContainEqual(expect.objectContaining({
-          kind: 'run-failed',
-          diagnostic: expect.objectContaining({ code: 'acp_input_custody_unknown' }),
-        }));
+        if (scenario === 'completed') {
+          expect(events).toContainEqual(expect.objectContaining({ kind: 'output-delta', text: 'hello from ACP' }));
+          expect(events.some(event => event.kind === 'run-failed')).toBe(false);
+        } else {
+          expect(events).toContainEqual(expect.objectContaining({
+            kind: 'run-failed', diagnostic: expect.objectContaining({ code: 'acp_input_custody_unknown' }),
+          }));
+        }
         expect(events.every((event) => event.runId === 'execution-run-1')).toBe(true);
         expect(events.every((event) => !('sessionId' in event))).toBe(true);
       } finally {
@@ -3439,7 +3467,7 @@ describe('createPublicAcpSession', () => {
 
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'turn-complete',
@@ -3450,7 +3478,7 @@ describe('createPublicAcpSession', () => {
             providerSessionId: 'provider-created',
           }),
           expect.objectContaining({
-            kind: 'input-custody-unknown',
+            kind: 'input-accepted',
             inputIds: ['input-1'],
           }),
           expect.objectContaining({
@@ -3461,8 +3489,8 @@ describe('createPublicAcpSession', () => {
         ]));
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'host-session' });
         expect(events.map((event) => invariant.observe(event).status)).toEqual(events.map(() => 'accepted'));
-        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
-        expect(events.filter((event) => event.kind === 'input-accepted')).toHaveLength(0);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'host' }));
+        expect(events.filter((event) => event.kind === 'input-accepted')).toHaveLength(1);
       } finally {
         subscription.dispose();
         await session.dispose();
@@ -3470,9 +3498,9 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('maps a request-scoped prompt rejection before provider effect to input-rejected', async () => {
+  it.each(['prompt-rejected-before-effect', 'prompt-connection-rejected', 'prompt-long-rejected'])('maps a request-scoped prompt rejection before provider effect to input-rejected (%s)', async scenario => {
     await withTempDir('happier-public-acp-prompt-rejected-', async (dir) => {
-      const fixture = createFixture(dir, 'prompt-rejected-before-effect');
+      const fixture = createFixture(dir, scenario);
       const session = await createPublicAcpSession({
         kind: 'create',
         sessionId: 'host-prompt-rejected',
@@ -3494,11 +3522,26 @@ describe('createPublicAcpSession', () => {
           retryable: true,
           diagnostic: expect.objectContaining({
             code: 'acp_input_rejected_before_effect',
-            message: 'prompt rejected before effect',
+            message: scenario !== 'prompt-rejected-before-effect'
+              ? expect.stringContaining('Cannot connect to API') : 'prompt rejected before effect',
           }),
         }));
         expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
         expect(events.some((event) => event.kind === 'turn-start')).toBe(false);
+        expect(JSON.stringify(events)).not.toMatch(/private-api-token|private-error-data/u);
+        const history: Array<{ body: ACPMessageData; meta?: Record<string, unknown> }> = [];
+        const project = createRuntimeFailureTranscriptProjector({ provider: 'test-agent', providerName: 'Test Agent', session: {
+          sessionId: 'host-prompt-rejected', enqueueAgentMessageCommitted: async (provider, body, options) => {
+            TranscriptRawAgentContentV1Schema.parse({ type: 'acp', agentId: provider, data: body });
+            history.push({ body, meta: options.meta });
+            return { persisted: true, delivered: false };
+          },
+        } });
+        for (const event of events) await project(event);
+        expect(history).toMatchObject([{ body: { type: 'message', message: expect.stringContaining(
+          scenario !== 'prompt-rejected-before-effect' ? 'Cannot connect to API' : 'prompt rejected before effect') },
+          meta: { runtimeIssueCode: 'acp_input_rejected_before_effect', runtimeIssueRequestErrorCode: scenario !== 'prompt-rejected-before-effect' ? -32603 : -32602 } }]);
+        expect(history.some(row => row.body.type === 'turn_failed')).toBe(false);
       } finally {
         subscription.dispose();
         await session.dispose();
@@ -3506,7 +3549,7 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('maps a rejected prompt response after provider output to unknown custody and releases buffered output', async () => {
+  it('settles consumed input before publishing a failed turn after provider output', async () => {
     await withTempDir('happier-public-acp-prompt-ambiguous-', async (dir) => {
       const fixture = createFixture(dir, 'prompt-rejected-after-update');
       const session = await createPublicAcpSession({
@@ -3526,7 +3569,7 @@ describe('createPublicAcpSession', () => {
 
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'turn-failed',
@@ -3536,10 +3579,57 @@ describe('createPublicAcpSession', () => {
           turnId: 'turn-prompt-ambiguous',
           text: 'provider output before rejected response',
         }));
-        expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
+        expect(events).toContainEqual(expect.objectContaining({
+          kind: 'input-accepted', inputIds: ['input-prompt-ambiguous'],
+          delivery: { kind: 'newTurn', turnId: 'turn-prompt-ambiguous' },
+        }));
+        expect(events.some((event) => event.kind === 'input-custody-unknown')).toBe(false);
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'host-prompt-ambiguous' });
         expect(events.map((event) => invariant.observe(event).status)).toEqual(events.map(() => 'accepted'));
-        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'host' }));
+        const history: ACPMessageData[] = [];
+        const project = createRuntimeFailureTranscriptProjector({ provider: 'test-agent', providerName: 'Test Agent', session: {
+          sessionId: 'host-prompt-ambiguous', enqueueAgentMessageCommitted: async (provider, body) => {
+            TranscriptRawAgentContentV1Schema.parse({ type: 'acp', agentId: provider, data: body });
+            history.push(body);
+            return { persisted: true, delivered: false };
+          },
+        } });
+        for (const event of events) await project(event);
+        expect(history).toContainEqual({ type: 'message', message: expect.stringContaining('prompt response lost after output') });
+        expect(history).toContainEqual({ type: 'turn_failed', id: 'turn-prompt-ambiguous' });
+      } finally {
+        subscription.dispose();
+        await session.dispose();
+      }
+    });
+  });
+
+  it.each(['after-output', 'before-effect', 'refused'] as const)('streams a successor reply after a settled prompt failure (%s)', async failurePhase => {
+    await withTempDir('happier-public-acp-recovery-', async dir => {
+      const fixture = createFixture(dir, `prompt-recovery-${failurePhase}`);
+      const sessionId = 'host-prompt-recovery';
+      const session = await createPublicAcpSession({ kind: 'create', sessionId, cwd: dir }, fixture.options, fixture.dependencies);
+      const events: AgentSessionRuntimeEvent[] = [];
+      const invariant = createAgentSessionTurnInvariant({ sessionId });
+      const subscription = session.watch(event => {
+        events.push(event);
+        expect(invariant.observe(event).status).toBe('accepted');
+      });
+      try {
+        await session.send({ inputIds: ['failed-input'], input: { text: 'first prompt' },
+          delivery: { kind: 'newTurn', turnId: 'failed-turn' } });
+        await collectUntil(events, failurePhase === 'before-effect' ? 'input-rejected' : 'turn-failed');
+        await session.send({ inputIds: ['resend-input'], input: { text: 'resend after recovery' },
+          delivery: { kind: 'newTurn', turnId: 'recovered-turn' } });
+        await collectUntil(events, 'turn-complete');
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId: 'recovered-turn', text: 'recovered reply' }));
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'input-accepted', inputIds: ['resend-input'],
+          delivery: { kind: 'newTurn', turnId: 'recovered-turn' } }));
+        expect(events.filter(event => event.kind === 'input-custody-unknown')).toEqual([]);
+        expect(events.filter(event => event.kind === 'turn-complete')).toEqual([
+          expect.objectContaining({ turnId: 'recovered-turn' }),
+        ]);
       } finally {
         subscription.dispose();
         await session.dispose();
@@ -3668,8 +3758,9 @@ describe('createPublicAcpSession', () => {
         );
         expect(completedEvents).toEqual(expect.arrayContaining([
           expect.objectContaining({
-            kind: 'input-custody-unknown',
+            kind: 'input-accepted',
             inputIds: ['input-follow-up'],
+            delivery: { kind: 'followUp', turnId: 'turn-follow-up' },
           }),
           expect.objectContaining({
             kind: 'turn-start',
@@ -4968,7 +5059,7 @@ describe('createPublicAcpSession', () => {
         expect(evidenceResults).toEqual([true]);
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'message-delta',

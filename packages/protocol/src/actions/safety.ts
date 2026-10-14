@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ACTION_ID_FAMILIES_V1, type RuntimeActionIdV1 } from './actionIds.js';
 import { RUNTIME_SIDE_EFFECT_DANGER_ACTION_IDS } from './danger.js';

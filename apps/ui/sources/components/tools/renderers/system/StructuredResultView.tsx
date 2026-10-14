@@ -212,13 +212,13 @@ export const StructuredResultView = React.memo<ToolViewProps>(({ tool, messageId
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 10,
+        gap: theme.space.s10,
     },
     block: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     label: {
         fontSize: 12,

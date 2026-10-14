@@ -97,15 +97,6 @@ function dispatchFailure(status: string, code: string): TriageSourceFailureV1 {
 
 type ExecuteResult = Readonly<{ status: string; result?: unknown; code?: string }>;
 
-function useLocalRef(input: TriageDetailSurfaceInputV1) {
-  const { entryRef } = input.observation;
-  return useMemo(() => ({
-    kindId: entryRef.kindId,
-    collisionScope: entryRef.collisionScope,
-    entryId: entryRef.entryId,
-  }), [entryRef.collisionScope, entryRef.entryId, entryRef.kindId]);
-}
-
 /** The source-private route the target observed for this entry, if it has one. */
 export function useGithubRoutingToken(input: TriageDetailSurfaceInputV1): string | null {
   return input.observation.locator.routingToken ?? null;
@@ -202,9 +193,8 @@ export function useGithubOverview(
     localId: GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readOverview,
   }), []);
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
   const { active, activeSignal } = useTabPanelActivity();
   const [state, setState] = useState<Readonly<{
     value: GithubOverviewValueV1 | null;
@@ -474,9 +464,8 @@ export function useGithubTimeline(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
 
   const readPage: PageReader<GithubProjectedTimelineRowV1> = useCallback(async (
     continuation,
@@ -520,9 +509,8 @@ export function useGithubChangedFiles(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
 
   const readPage: PageReader<GithubProjectedChangedFileRowV1> = useCallback(async (
     continuation,
@@ -589,9 +577,8 @@ function useGithubFeedbackConnection<TRow>(
   const [reviewDecision, setReviewDecision] = useState<
     'approved' | 'changes-requested' | 'review-required' | null
   >(null);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
 
   const readPage: PageReader<TRow> = useCallback(async (continuation, signal) => {
     const execution = await execute({
@@ -706,9 +693,8 @@ export function useGithubFeedbackThreadReplies(
     localId: GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readFeedback,
   }), []);
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
   const readPage: PageReader<GithubFeedbackCommentV1> = useCallback(async (continuation, signal) => {
     const execution = await execute({
       v: 1,
@@ -876,9 +862,8 @@ export function useGithubChecks(
   );
   const { execute } = useExecutePluginAction(action);
   const { active, activeSignal } = useTabPanelActivity();
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { instance } = input;
   const read: GithubSettledReader<GithubChecksViewV1> = useCallback(async (signal) => {
     if (routingToken === null) {
       return { kind: 'failed', failure: ROUTE_UNAVAILABLE };

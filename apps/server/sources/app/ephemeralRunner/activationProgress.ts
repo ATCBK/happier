@@ -1,4 +1,4 @@
-import { pluginJsonValuesEqual } from "@happier-dev/protocol";
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { verifyRunnerConsentV1, type RunnerConsentV1 } from "@happier-dev/protocol/ephemeralRunner/consent";
 import { type RunnerReadinessV1 } from "@happier-dev/protocol/ephemeralRunner/readiness";
 import { RunnerActivationReviewV1Schema, type RunnerActivationReviewV1 } from "@happier-dev/protocol/ephemeralRunner/review";

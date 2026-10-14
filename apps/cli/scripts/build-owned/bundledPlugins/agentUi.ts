@@ -601,7 +601,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   lines.push('});');
   lines.push('');
   lines.push('/** Declared machine kinds and billing; these facts do not grant controller availability or execution. */');
-  lines.push('export const BUNDLED_MACHINE_PROVISIONER_DECLARATIONS: Readonly<Record<string, Readonly<{ contribution: PluginContributionIdentityV1; descriptor: MachineProvisionerContributionV1 }>>> = Object.freeze({');
+  lines.push('export const BUNDLED_MACHINE_PROVISIONER_DECLARATIONS: Readonly<Record<string, Readonly<{ contribution: PluginContributionIdentityV1; descriptor: MachineProvisionerContributionV1 }>>> = Object.freeze<Record<string, Readonly<{ contribution: PluginContributionIdentityV1; descriptor: MachineProvisionerContributionV1 }>>>({');
   for (const entry of params.pluginPackages) {
     for (const descriptor of entry.manifest.contributes.machineProvisioners ?? []) {
       const contribution = { pluginId: entry.pluginId, localId: descriptor.id };

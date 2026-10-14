@@ -104,19 +104,15 @@ export type OperationOutputActionResultById = {
                         targetMachineId: string;
                     } | undefined;
                 } | {
+                    reviewedEffect: JsonValue;
+                    reviewedEffectDigest: string;
                     kind: 'pendingApproval';
                     code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    reviewedEffectDigest: string;
                     consentScope?: 'thisTime' | 'untilChanged' | undefined;
                 } | {
                     kind: 'pendingApproval';
                     code: 'project_script_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    reviewedEffect: JsonValue;
                     reviewedEffectDigest: string;
                 } | undefined;
             } | undefined;
@@ -294,12 +290,10 @@ export type OperationOutputActionResultById = {
                 code: string;
             } | undefined;
             setupReview?: {
+                reviewedEffect: JsonValue;
+                reviewedEffectDigest: string;
                 kind: 'pendingApproval';
                 code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
-                reviewedEffectDigest: string;
                 consentScope?: 'thisTime' | 'untilChanged' | undefined;
             } | undefined;
         }[];
@@ -353,19 +347,15 @@ export type OperationOutputActionResultById = {
                         targetMachineId: string;
                     } | undefined;
                 } | {
+                    reviewedEffect: JsonValue;
+                    reviewedEffectDigest: string;
                     kind: 'pendingApproval';
                     code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    reviewedEffectDigest: string;
                     consentScope?: 'thisTime' | 'untilChanged' | undefined;
                 } | {
                     kind: 'pendingApproval';
                     code: 'project_script_effect_changed';
-                    reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
+                    reviewedEffect: JsonValue;
                     reviewedEffectDigest: string;
                 } | undefined;
             } | undefined;
@@ -543,12 +533,10 @@ export type OperationOutputActionResultById = {
                 code: string;
             } | undefined;
             setupReview?: {
+                reviewedEffect: JsonValue;
+                reviewedEffectDigest: string;
                 kind: 'pendingApproval';
                 code: 'project_setup_consent_required' | 'project_setup_effect_changed';
-                reviewedEffect: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null;
-                reviewedEffectDigest: string;
                 consentScope?: 'thisTime' | 'untilChanged' | undefined;
             } | undefined;
         };

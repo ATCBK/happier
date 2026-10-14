@@ -1,14 +1,8 @@
-import {
-    AutomationTriggerDefinitionBindingV1Schema,
-    AutomationStoredContentEnvelopeV1ReadSchema,
-    validateAutomationRunFailureDetailStoredEnvelopeOuterForModeV1,
-    normalizeAutomationTemplateEnvelopeStoredRead,
-    parseAutomationRunExecutionRecipeV1,
-    validateAutomationTriggerDefinitionStoredEnvelopeOuterForModeV1,
-    openAutomationTriggerDefinitionStoredEnvelopeV1,
-    type AutomationTriggerDefinitionBindingV1,
-    type AutomationStoredContentEnvelopeV1,
-} from "@happier-dev/protocol";
+import { AutomationTriggerDefinitionBindingV1Schema, validateAutomationTriggerDefinitionStoredEnvelopeOuterForModeV1, openAutomationTriggerDefinitionStoredEnvelopeV1, type AutomationTriggerDefinitionBindingV1 } from '@happier-dev/protocol/automations/automationTriggerDefinitionStoredContent';
+import { AutomationStoredContentEnvelopeV1ReadSchema, type AutomationStoredContentEnvelopeV1 } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
+import { validateAutomationRunFailureDetailStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/automationRunFailureDetailStoredContent';
+import { normalizeAutomationTemplateEnvelopeStoredRead } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
+import { parseAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 
 export class AutomationStoredContentReadError extends Error {
     constructor(kind: "contentInvalid" | "modeMismatch") {

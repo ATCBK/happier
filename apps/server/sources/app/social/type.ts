@@ -1,7 +1,8 @@
 import { getPublicUrl, ImageRef } from "@/storage/blob/files";
 import type { RelationshipStatus } from "@/storage/prisma";
 import * as privacyKit from "privacy-kit";
-import { projectAccountNameToLegacyFieldsV1, type UserProfile } from "@happier-dev/protocol";
+import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { type UserProfile } from '@happier-dev/protocol/social/friends';
 import {
     describeLinkedIds,
     describeLinkedIdsInTx,

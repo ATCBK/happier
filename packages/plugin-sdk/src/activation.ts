@@ -31,6 +31,7 @@ import type {
     PluginConnectedAccountRegistrationApi,
 } from './services/index.js';
 import type { HttpMethod } from './services/io.js';
+import type { DetectedMcpServerV1 } from './mcp.js';
 import type {
     PluginMcpDiscoveredServer,
     PluginMcpGetPromptResult,
@@ -44,7 +45,6 @@ import type {
     PluginNotificationSendResult as NotificationSendResult,
     PluginDynamicResourceRuntime,
 } from './services/resources.js';
-import type { PromptAssetAdapter } from './resources.js';
 import type { AgentExternalSessionsContribution } from './externalSessions.js';
 import type { AgentExternalSessionObservationContribution } from './externalSessionObservation.js';
 import type {
@@ -308,6 +308,8 @@ export type PluginMcpDiscoveryResult = Readonly<{
     items: readonly PluginMcpDiscoveredServer[];
     nextCursor?: string;
     endpoints?: readonly PluginMcpDiscoveredEndpoint[];
+    /** Native configuration for Found/adoption; values are never returned. */
+    detectedServers?: readonly DetectedMcpServerV1[];
     warnings?: readonly Readonly<{
         code: 'read_failed' | 'parse_failed' | 'unsupported';
         path?: string;
@@ -339,10 +341,6 @@ export type PluginRequestInterceptor = (request: PluginInterceptedRequest, conte
 export interface PluginInterceptorRegistrationApi { register(id: string, interceptor: PluginRequestInterceptor): void }
 
 export interface ResourcesRegistrationApi {
-    registerPromptAssetAdapter(
-        localId: PluginContributionLocalId,
-        adapter: PromptAssetAdapter,
-    ): void;
     /**
      * Bind the runtime producer for one manifest-declared dynamic resource
      * (`contributes.resources[].source === 'dynamic'`). Packaged resources are

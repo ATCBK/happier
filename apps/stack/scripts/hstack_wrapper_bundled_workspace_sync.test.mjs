@@ -193,7 +193,8 @@ test('runtime activation publishes stored components without preparing source wo
   const repoRoot = coerceHappyMonorepoRootFromPath(rootDir);
   const fixture = await createRuntimeSnapshotFixture(t);
   await writeManagedRuntimeSnapshotLayout({ stackDir: fixture.stackDir, snapshotId: 'stored' });
-  const { loaderPath, markerPath } = createSourceWorkspaceReadBoundary(fixture.root, repoRoot);
+  const gitHead = 'a'.repeat(40);
+  const { loaderPath, markerPath } = createSourceWorkspaceReadBoundary(fixture.root, repoRoot, { gitHead });
   writeFileSync(join(fixture.stackDir, 'env'), [
     `HAPPIER_STACK_STACK=${fixture.stackName}`, `HAPPIER_STACK_REPO_DIR=${repoRoot}`,
     `HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK=${fixture.stackName}`,
@@ -208,6 +209,8 @@ test('runtime activation publishes stored components without preparing source wo
   assert.ok(selected.snapshotId);
   const manifest = JSON.parse(readFileSync(join(selected.snapshotPath, 'manifest.json'), 'utf8'));
   assert.equal(manifest.components.daemon.artifactFingerprint, 'daemon-stored');
+  assert.equal(manifest.source.commitSha, gitHead);
+  assert.equal(manifest.source.dirtyHash, 'clean');
 });
 
 function bundledWorkspaceFailureEnv({ fixtureDir, loaderPath, storageDir }) {
@@ -222,10 +225,39 @@ function bundledWorkspaceFailureEnv({ fixtureDir, loaderPath, storageDir }) {
   });
 }
 
-function createSourceWorkspaceReadBoundary(fixtureDir, repoRoot, { rejectPublicationLock = false } = {}) {
+function createSourceWorkspaceReadBoundary(fixtureDir, repoRoot, { rejectPublicationLock = false, gitHead } = {}) {
   const markerPath = join(fixtureDir, 'source-workspace-read.txt');
   const loaderPath = join(fixtureDir, 'source-workspace-read-loader.mjs');
   const stubPaths = new Map();
+  if (gitHead) {
+    // Git provenance is an external process boundary. The moving worker mirror
+    // can report untracked tsconfigs; hashing those bytes is not source preparation.
+    const gitPath = join(fixtureDir, 'git-provenance.mjs');
+    writeFileSync(gitPath, [
+      `const responses = ${JSON.stringify([
+        { args: ['-c', 'core.fsmonitor=false', 'rev-parse', 'HEAD'], output: `${gitHead}\n` },
+        { args: ['-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--binary', 'HEAD', '--'], output: '' },
+        { args: ['-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'], output: '' },
+      ])};`,
+      'const result = responses.find(response => JSON.stringify(response.args) === JSON.stringify(process.argv.slice(2)));',
+      'if (!result) process.exit(9);',
+      'process.stdout.write(result.output);',
+      '',
+    ].join('\n'), 'utf8');
+    const processBoundaryPath = join(fixtureDir, 'git-process-boundary.mjs');
+    stubPaths.set('node:child_process', pathToFileURL(processBoundaryPath).href);
+    writeFileSync(processBoundaryPath, [
+      "import * as real from 'node:child_process';",
+      "export * from 'node:child_process';",
+      'export function spawn(command, args, options) {',
+      `  return /(^|[\\\\/])git(?:\\.exe)?$/i.test(String(command))`,
+      `    ? real.spawn(process.execPath, [${JSON.stringify(gitPath)}, ...args], options)`,
+      '    : real.spawn(command, args, options);',
+      '}',
+      'export default { ...real, spawn };',
+      '',
+    ].join('\n'), 'utf8');
+  }
   // Source execution needs package export metadata; compilation/build
   // preparation must still fail at its real source-input filesystem boundary.
   for (const [specifier, functionName] of [['node:fs', 'readFileSync'], ['node:fs/promises', 'readFile']]) {

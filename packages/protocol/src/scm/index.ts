@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export { resolveScmBackendCapabilities } from './resolveScmBackendCapabilities.js';
 export { scmPathMatchesScopePath } from './pathScope.js';
@@ -164,123 +164,131 @@ export type ScmBackendDescribeRequest = z.infer<typeof ScmBackendDescribeRequest
 
 export const ScmBackendDescribeResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  backendId: ScmBackendIdSchema.optional(),
-  repoMode: ScmRepoModeSchema.optional(),
-  isRepo: z.boolean().optional(),
-  capabilities: ScmCapabilitiesSchema.optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  backendId: z.optional(ScmBackendIdSchema),
+  repoMode: z.optional(ScmRepoModeSchema),
+  isRepo: z.optional(z.boolean()),
+  capabilities: z.optional(ScmCapabilitiesSchema),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmBackendDescribeResponse = z.infer<typeof ScmBackendDescribeResponseSchema>;
 
-export const ScmStatusSnapshotRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  includeWorktreeStatus: z.boolean().optional(),
-  operationStateVersion: z.literal(1).optional(),
+export const ScmStatusSnapshotRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  includeWorktreeStatus: z.optional(z.boolean()),
+  operationStateVersion: z.optional(z.literal(1)),
 }));
 export type ScmStatusSnapshotRequest = z.infer<typeof ScmStatusSnapshotRequestSchema>;
 
 export const SCM_WORKTREES_ENRICHMENT_MAX_PATHS = 64;
 
-export const ScmWorktreesEnrichmentRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmWorktreesEnrichmentRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   worktreePaths: z
-    .array(z.string().min(1))
-    .min(0)
-    .max(SCM_WORKTREES_ENRICHMENT_MAX_PATHS),
+    .array(z.string().check(z.minLength(1))).check(z.minLength(0), z.maxLength(SCM_WORKTREES_ENRICHMENT_MAX_PATHS)),
 }));
 export type ScmWorktreesEnrichmentRequest = z.infer<typeof ScmWorktreesEnrichmentRequestSchema>;
 
 export const ScmWorktreeEnrichmentEntrySchema = lazyZodSchema(() => z.object({
   path: z.string(),
-  changeCount: z.number().int().nonnegative().optional(),
-  lastActivityAt: z.number().int().nonnegative().optional(),
-  ahead: z.number().int().nonnegative().optional(),
-  upstream: z.string().nullable().optional(),
-  upstreamGone: z.boolean().optional(),
-  mergedIntoDefault: z.boolean().optional(),
-  isLocked: z.boolean().optional(),
-  lockReason: z.string().optional(),
-  headOid: z.string().optional(),
-  hasSubmodules: z.boolean().optional(),
+  changeCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  lastActivityAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  ahead: z.optional(z.number().check(z.int(), z.nonnegative())),
+  upstream: z.optional(z.nullable(z.string())),
+  upstreamGone: z.optional(z.boolean()),
+  mergedIntoDefault: z.optional(z.boolean()),
+  isLocked: z.optional(z.boolean()),
+  lockReason: z.optional(z.string()),
+  headOid: z.optional(z.string()),
+  hasSubmodules: z.optional(z.boolean()),
+  // SCM-owned proof and loss facts consumed by Storage's existing review/Trash lifecycle.
+  retention: z.optional(z.strictObject({
+    kind: z.enum(['main', 'orphan']), commonDirPath: z.string().check(z.minLength(1)), fingerprint: z.string().check(z.minLength(1)),
+    losses: z.optional(z.strictObject({
+      unpushedBranches: z.array(z.strictObject({ name: z.string(), ahead: z.number().check(z.int(), z.nonnegative()) })),
+      stashes: z.array(z.strictObject({ name: z.string(), oid: z.string() })),
+      changes: z.array(z.strictObject({ path: z.string(), untracked: z.boolean(), worktreePath: z.string() })),
+      dependentWorktrees: z.array(z.string()),
+    })),
+  })),
 }));
 export type ScmWorktreeEnrichmentEntry = z.infer<typeof ScmWorktreeEnrichmentEntrySchema>;
 
 export const ScmWorktreesEnrichmentResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  worktrees: z.array(ScmWorktreeEnrichmentEntrySchema).optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  worktrees: z.optional(z.array(ScmWorktreeEnrichmentEntrySchema)),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmWorktreesEnrichmentResponse = z.infer<typeof ScmWorktreesEnrichmentResponseSchema>;
 
 export const ScmStatusSnapshotResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  snapshot: ScmWorkingSnapshotSchema.optional(),
-  freshness: VcsLocalStateFreshnessSchema.optional(),
-  refreshPolicy: ProviderRefreshPolicySchema.optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  snapshot: z.optional(ScmWorkingSnapshotSchema),
+  freshness: z.optional(VcsLocalStateFreshnessSchema),
+  refreshPolicy: z.optional(ProviderRefreshPolicySchema),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmStatusSnapshotResponse = z.infer<typeof ScmStatusSnapshotResponseSchema>;
 export type ScmStatusSnapshotTransportResponse = Omit<z.input<typeof ScmStatusSnapshotResponseSchema>, 'snapshot'> & {
   snapshot?: ScmWorkingSnapshotInput;
 };
 
-export const ScmDiffFileRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmDiffFileRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   path: z.string(),
-  area: ScmDiffAreaSchema.optional(),
+  area: z.optional(ScmDiffAreaSchema),
 }));
 export type ScmDiffFileRequest = z.infer<typeof ScmDiffFileRequestSchema>;
 
 export const ScmDiffFileResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  diff: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  diff: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmDiffFileResponse = z.infer<typeof ScmDiffFileResponseSchema>;
 
-export const ScmDiffCommitRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmDiffCommitRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
   commit: z.string(),
   /** Explicit immutable tree comparison; commit is the recorded after tree in this mode. */
-  beforeTreeOid: ScmCommitOidSchema.optional(),
-}).strict().superRefine((request, context) => {
+  beforeTreeOid: z.optional(ScmCommitOidSchema),
+})).check(z.superRefine((request, context) => {
   if (request.beforeTreeOid !== undefined && !ScmCommitOidSchema.safeParse(request.commit).success) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['commit'], message: 'Tree comparison requires an immutable after tree OID' });
+    context.addIssue({ code: "custom", path: ['commit'], message: 'Tree comparison requires an immutable after tree OID' });
   }
-}));
+})));
 export type ScmDiffCommitRequest = z.infer<typeof ScmDiffCommitRequestSchema>;
 
 export const ScmDiffCommitResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  diff: z.string().optional(),
+  diff: z.optional(z.string()),
   /** The read owner verified these tree objects; missing witnesses never attest an exact hook delta. */
-  beforeTreeOid: ScmCommitOidSchema.optional(),
-  afterTreeOid: ScmCommitOidSchema.optional(),
+  beforeTreeOid: z.optional(ScmCommitOidSchema),
+  afterTreeOid: z.optional(ScmCommitOidSchema),
   /** Literal Git inventory identities paired with the corresponding immutable patch sections. */
-  files: z.array(z.object({
-    path: z.string().min(1),
-    previousPath: z.string().min(1).optional(),
-    changeKind: z.string().min(1),
+  files: z.optional(z.array(z.strictObject({
+    path: z.string().check(z.minLength(1)),
+    previousPath: z.optional(z.string().check(z.minLength(1))),
+    changeKind: z.string().check(z.minLength(1)),
     unifiedDiff: z.string(),
-  }).strict()).optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  }))),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmDiffCommitResponse = z.infer<typeof ScmDiffCommitResponseSchema>;
 
-export const ScmChangeApplyRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  paths: z.array(ScmSelectedMutationPathSchema).optional(),
-  patch: z.string().optional(),
+export const ScmChangeApplyRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  paths: z.optional(z.array(ScmSelectedMutationPathSchema)),
+  patch: z.optional(z.string()),
 }));
 export type ScmChangeApplyRequest = z.infer<typeof ScmChangeApplyRequestSchema>;
 
 export const ScmChangeApplyResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmChangeApplyResponse = z.infer<typeof ScmChangeApplyResponseSchema>;
 
@@ -290,57 +298,56 @@ export const ScmChangeDiscardEntrySchema = lazyZodSchema(() => z.object({
 }));
 export type ScmChangeDiscardEntry = z.infer<typeof ScmChangeDiscardEntrySchema>;
 
-export const ScmChangeDiscardRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  entries: z.array(ScmChangeDiscardEntrySchema).min(1),
+export const ScmChangeDiscardRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  entries: z.array(ScmChangeDiscardEntrySchema).check(z.minLength(1)),
 }));
 export type ScmChangeDiscardRequest = z.infer<typeof ScmChangeDiscardRequestSchema>;
 
 export const ScmChangeDiscardResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmChangeDiscardResponse = z.infer<typeof ScmChangeDiscardResponseSchema>;
 
-export const ScmCommitPatchSchema = lazyZodSchema(() => z.object({
+export const ScmCommitPatchSchema = lazyZodSchema(() => z.strictObject({
   path: ScmSelectedMutationPathSchema,
-  patch: z.string().min(1).max(SCM_COMMIT_PATCH_MAX_LENGTH),
-}).strict());
+  patch: z.string().check(z.minLength(1), z.maxLength(SCM_COMMIT_PATCH_MAX_LENGTH)),
+}));
 export type ScmCommitPatch = z.infer<typeof ScmCommitPatchSchema>;
 
-const scmOrdinaryCommitMessageSchema = lazyZodSchema(() => z.string().max(SCM_COMMIT_MESSAGE_MAX_LENGTH));
+const scmOrdinaryCommitMessageSchema = lazyZodSchema(() => z.string().check(z.maxLength(SCM_COMMIT_MESSAGE_MAX_LENGTH)));
 
-export const ScmCommitCreateRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmCommitCreateRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
   message: z.string(),
-  mode: z.enum(['commit', 'amend']).optional(),
-  signOff: z.boolean().optional(),
-  allowPublishedAmend: z.boolean().optional(),
-  expectedHeadOid: ScmCommitOidSchema.nullable().optional(),
-  expectedRef: ScmCommitExpectedRefSchema.optional(),
-  expectedCandidateTreeOid: ScmCommitOidSchema.optional(),
-  preparedTreeOid: ScmCommitOidSchema.optional(),
-  expectedIndexTreeOid: ScmCommitOidSchema.optional(),
-  acceptedHookTreeOid: ScmCommitOidSchema.optional(),
-  scope: z
+  mode: z.optional(z.enum(['commit', 'amend'])),
+  signOff: z.optional(z.boolean()),
+  allowPublishedAmend: z.optional(z.boolean()),
+  expectedHeadOid: z.optional(z.nullable(ScmCommitOidSchema)),
+  expectedRef: z.optional(ScmCommitExpectedRefSchema),
+  expectedCandidateTreeOid: z.optional(ScmCommitOidSchema),
+  preparedTreeOid: z.optional(ScmCommitOidSchema),
+  expectedIndexTreeOid: z.optional(ScmCommitOidSchema),
+  acceptedHookTreeOid: z.optional(ScmCommitOidSchema),
+  scope: z.optional(z
     .union([
-      z.object({
+      z.strictObject({
         kind: z.literal('all-pending'),
-      }).strict(),
-      z.object({
+      }),
+      z.strictObject({
         kind: z.literal('paths'),
-        include: z.array(ScmSelectedMutationPathSchema).min(1),
-        exclude: z.array(ScmSelectedMutationPathSchema).optional(),
-      }).strict(),
-    ])
-    .optional(),
-  patches: z.array(ScmCommitPatchSchema).min(1).max(SCM_COMMIT_PATCH_MAX_COUNT).optional(),
-}).strict().superRefine((request, context) => {
+        include: z.array(ScmSelectedMutationPathSchema).check(z.minLength(1)),
+        exclude: z.optional(z.array(ScmSelectedMutationPathSchema)),
+      }),
+    ])),
+  patches: z.optional(z.array(ScmCommitPatchSchema).check(z.minLength(1), z.maxLength(SCM_COMMIT_PATCH_MAX_COUNT))),
+})).check(z.superRefine((request, context) => {
   if (request.preparedTreeOid !== undefined) {
     if (!request.message.trim()) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['message'], message: 'A prepared-plan commit requires a nonblank message' });
+      context.addIssue({ code: "custom", path: ['message'], message: 'A prepared-plan commit requires a nonblank message' });
     }
   } else {
     const message = scmOrdinaryCommitMessageSchema.safeParse(request.message);
@@ -349,65 +356,65 @@ export const ScmCommitCreateRequestSchema = lazyZodSchema(() => ScmRequestBaseSc
     }
   }
   if (request.expectedIndexTreeOid !== undefined && request.preparedTreeOid === undefined) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedIndexTreeOid'], message: 'Expected index authority requires a host-prepared safe-plan tree' });
+    context.addIssue({ code: "custom", path: ['expectedIndexTreeOid'], message: 'Expected index authority requires a host-prepared safe-plan tree' });
   }
   if (request.preparedTreeOid !== undefined && (request.preparedTreeOid !== request.expectedCandidateTreeOid || request.scope !== undefined || request.patches !== undefined)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['preparedTreeOid'], message: 'A host-prepared tree requires the exact expected tree and cannot be combined with scope or patches' });
+    context.addIssue({ code: "custom", path: ['preparedTreeOid'], message: 'A host-prepared tree requires the exact expected tree and cannot be combined with scope or patches' });
   }
   if (request.expectedCandidateTreeOid !== undefined && (request.expectedHeadOid === undefined || request.expectedRef === undefined || request.mode === 'amend')) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedCandidateTreeOid'], message: 'Safe-plan commits require an explicit parent and ref and cannot amend' });
+    context.addIssue({ code: "custom", path: ['expectedCandidateTreeOid'], message: 'Safe-plan commits require an explicit parent and ref and cannot amend' });
   }
   if (request.acceptedHookTreeOid !== undefined && request.expectedCandidateTreeOid === undefined) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['acceptedHookTreeOid'], message: 'Hook inclusion requires the exact original candidate tree' });
+    context.addIssue({ code: "custom", path: ['acceptedHookTreeOid'], message: 'Hook inclusion requires the exact original candidate tree' });
   }
   if (request.allowPublishedAmend === true && request.mode !== 'amend') {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['allowPublishedAmend'], message: 'Published-head acknowledgment requires explicit amend mode' });
+    context.addIssue({ code: "custom", path: ['allowPublishedAmend'], message: 'Published-head acknowledgment requires explicit amend mode' });
   }
-}));
+})));
 export type ScmCommitCreateRequest = z.infer<typeof ScmCommitCreateRequestSchema>;
 
 export const ScmCommitCreateResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  publication: ScmCommitPublicationSchema.optional(),
-  hookContentChanges: ScmCommitHookContentChangesSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  commitSha: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  publication: z.optional(ScmCommitPublicationSchema),
+  hookContentChanges: z.optional(ScmCommitHookContentChangesSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  commitSha: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmCommitCreateResponse = z.infer<typeof ScmCommitCreateResponseSchema>;
 
-export const ScmCommitResolveOutcomeRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmCommitResolveOutcomeRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
   candidateOid: ScmCommitOidSchema,
-  expectedHeadOid: ScmCommitOidSchema.nullable(),
+  expectedHeadOid: z.nullable(ScmCommitOidSchema),
   expectedRef: ScmCommitExpectedRefSchema,
-}).strict());
+})));
 export type ScmCommitResolveOutcomeRequest = z.infer<typeof ScmCommitResolveOutcomeRequestSchema>;
 
 /** Read-only object/ref evidence; pending index state does not authorize retry or the next step. */
-export const ScmCommitResolveOutcomeResponseSchema = lazyZodSchema(() => z.object({
+export const ScmCommitResolveOutcomeResponseSchema = lazyZodSchema(() => z.strictObject({
   success: z.boolean(),
   publication: ScmCommitPublicationSchema,
-  candidateTreeOid: ScmCommitOidSchema.optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
-}).strict());
+  candidateTreeOid: z.optional(ScmCommitOidSchema),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
+}));
 export type ScmCommitResolveOutcomeResponse = z.infer<typeof ScmCommitResolveOutcomeResponseSchema>;
 
-export const ScmCommitUndoLastRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  expectedHeadOid: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/),
-}).strict());
+export const ScmCommitUndoLastRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
+  expectedHeadOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)),
+})));
 export type ScmCommitUndoLastRequest = z.infer<typeof ScmCommitUndoLastRequestSchema>;
 
 export const ScmCommitUndoLastResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  undoneCommitSha: z.string().optional(),
-  headOid: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  undoneCommitSha: z.optional(z.string()),
+  headOid: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmCommitUndoLastResponse = z.infer<typeof ScmCommitUndoLastResponseSchema>;
 
@@ -538,69 +545,69 @@ export function isScmPatchBoundToPath(path: string, patch: string): boolean {
   return parsedPaths.every((parsedPath) => parsedPath === normalizedPath);
 }
 
-export const ScmLogEntrySchema = lazyZodSchema(() => z.object({
+export const ScmLogEntrySchema = lazyZodSchema(() => z.strictObject({
   sha: z.string(),
   shortSha: z.string(),
   authorName: z.string(),
   authorEmail: z.string(),
-  timestamp: z.number().int(),
+  timestamp: z.number().check(z.int()),
   subject: z.string(),
   body: z.string(),
-}).strict());
+}));
 export type ScmLogEntry = z.infer<typeof ScmLogEntrySchema>;
 
-export const ScmLogListRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  limit: z.number().int().min(1).max(500).optional(),
-  skip: z.number().int().min(0).optional(),
+export const ScmLogListRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(500))),
+  skip: z.optional(z.number().check(z.int(), z.minimum(0))),
   /**
    * Bounded commit search over the repository addressed by `cwd` (the explicit workspace
    * scope), matching SHA prefixes, subject/body text, and author name/email. The current
    * routing envelope is closed; older daemons may ignore this new optional field, which is
    * why the response carries `queryApplied`.
    */
-  query: z.string().max(SCM_LOG_QUERY_MAX_LENGTH).optional(),
-  range: z.literal('incoming').optional(),
-}).strict());
+  query: z.optional(z.string().check(z.maxLength(SCM_LOG_QUERY_MAX_LENGTH))),
+  range: z.optional(z.literal('incoming')),
+})));
 export type ScmLogListRequest = z.infer<typeof ScmLogListRequestSchema>;
 
-export const ScmLogListResponseSchema = lazyZodSchema(() => z.object({
+export const ScmLogListResponseSchema = lazyZodSchema(() => z.strictObject({
   success: z.boolean(),
-  entries: z.array(ScmLogEntrySchema).optional(),
+  entries: z.optional(z.array(ScmLogEntrySchema)),
   /**
    * Echoed `true` only by producers that honored a request `query`. Absence means the
    * producer did not apply the query (an older daemon ignored it and returned a recent
    * page), so a consumer must never present that page as query matches.
    */
-  queryApplied: z.boolean().optional(),
-  rangeApplied: z.boolean().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
-}).strict());
+  queryApplied: z.optional(z.boolean()),
+  rangeApplied: z.optional(z.boolean()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
+}));
 export type ScmLogListResponse = z.infer<typeof ScmLogListResponseSchema>;
 
-export const ScmCommitBackoutRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmCommitBackoutRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   commit: z.string(),
 }));
 export type ScmCommitBackoutRequest = z.infer<typeof ScmCommitBackoutRequestSchema>;
 
 export const ScmCommitBackoutResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmCommitBackoutResponse = z.infer<typeof ScmCommitBackoutResponseSchema>;
 
-export const ScmRemoteRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  remote: z.string().optional(),
-  branch: z.string().optional(),
+export const ScmRemoteRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
+  remote: z.optional(z.string()),
+  branch: z.optional(z.string()),
   ...ScmRemotePolicyFields,
-}).strict().superRefine((request, ctx) => {
+})).check(z.superRefine((request, ctx) => {
   const error = validateScmRemoteLeaseAuthority(request);
-  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, path: ['pushMode'] });
-}));
+  if (error) ctx.addIssue({ code: "custom", message: error, path: ['pushMode'] });
+})));
 export type ScmRemoteRequest = z.infer<typeof ScmRemoteRequestSchema>;
 
 export type ScmRemoteTarget = {
@@ -665,72 +672,72 @@ export type ScmRemoteMutationResult =
   | { ok: true }
   | { ok: false; reason: ScmRemoteMutationReason };
 
-export const ScmRemoteAddRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmRemoteAddRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   name: ScmRemoteManagementNameSchema,
   fetchUrl: ScmRemoteUrlSchema,
-  pushUrl: ScmRemoteUrlSchema.optional(),
+  pushUrl: z.optional(ScmRemoteUrlSchema),
 }));
 export type ScmRemoteAddRequest = z.infer<typeof ScmRemoteAddRequestSchema>;
 
-export const ScmRemoteSetUrlRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmRemoteSetUrlRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   name: ScmRemoteManagementNameSchema,
-  fetchUrl: ScmRemoteUrlSchema.optional(),
-  pushUrl: ScmRemoteUrlSchema.nullable().optional(),
-}).superRefine((value, ctx) => {
+  fetchUrl: z.optional(ScmRemoteUrlSchema),
+  pushUrl: z.optional(z.nullable(ScmRemoteUrlSchema)),
+}).check(z.superRefine((value, ctx) => {
   if (value.fetchUrl === undefined && value.pushUrl === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'At least one remote URL field is required',
       path: ['fetchUrl'],
     });
   }
-}));
+})));
 export type ScmRemoteSetUrlRequest = z.infer<typeof ScmRemoteSetUrlRequestSchema>;
 
-export const ScmRemoteRemoveRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmRemoteRemoveRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   name: ScmRemoteManagementNameSchema,
 }));
 export type ScmRemoteRemoveRequest = z.infer<typeof ScmRemoteRemoveRequestSchema>;
 
 export const ScmRemoteManagementResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  remotes: z.array(ScmRemoteInfoSchema).optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  remotes: z.optional(z.array(ScmRemoteInfoSchema)),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmRemoteManagementResponse = z.infer<typeof ScmRemoteManagementResponseSchema>;
 
-export const ScmBranchIntegrationRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmBranchIntegrationRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   sourceRef: ScmBranchSourceRefSchema,
 }));
 export type ScmBranchIntegrationRequest = z.infer<typeof ScmBranchIntegrationRequestSchema>;
 
-export const ScmBranchOperationControlRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmBranchOperationControlRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   operation: ScmRepositoryOperationKindSchema,
 }));
 export type ScmBranchOperationControlRequest = z.infer<typeof ScmBranchOperationControlRequestSchema>;
 
 export const ScmBranchIntegrationResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  operationState: ScmOperationStateSchema.nullable().optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  operationState: z.optional(z.nullable(ScmOperationStateSchema)),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmBranchIntegrationResponse = z.infer<typeof ScmBranchIntegrationResponseSchema>;
 
-export const ScmConflictAcceptSideRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+export const ScmConflictAcceptSideRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   path: ScmSelectedMutationPathSchema,
   side: z.enum(['ours', 'theirs']),
 }));
 export type ScmConflictAcceptSideRequest = z.infer<typeof ScmConflictAcceptSideRequestSchema>;
-export const ScmConflictMarkResolvedRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  paths: z.array(ScmSelectedMutationPathSchema).min(1),
+export const ScmConflictMarkResolvedRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  paths: z.array(ScmSelectedMutationPathSchema).check(z.minLength(1)),
 }));
 export type ScmConflictMarkResolvedRequest = z.infer<typeof ScmConflictMarkResolvedRequestSchema>;
 export const ScmConflictAcceptSideResponseSchema = ScmBranchIntegrationResponseSchema;

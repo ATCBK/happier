@@ -305,9 +305,11 @@ export function createExternalSessionRpcActionExecutor(
             ok: true,
             result: await executeExternalSessionCandidatesListAction(
               input,
-              executionContext?.signal
-                ? { signal: executionContext.signal }
-                : undefined,
+              {
+                ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
+                ...(executionContext?.deadlineAtMs === undefined ? {} : { deadlineAtMs: executionContext.deadlineAtMs }),
+                ...(executionContext?.requestStartedAtMs === undefined ? {} : { requestStartedAtMs: executionContext.requestStartedAtMs }),
+              },
             ),
           };
         case 'sessions.external.candidate.delete':

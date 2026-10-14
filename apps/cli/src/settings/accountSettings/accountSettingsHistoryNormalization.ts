@@ -2,13 +2,19 @@ import { randomBytes } from 'node:crypto';
 import axios from 'axios';
 
 import { normalizeAccountSettingsHistoryClientV1,
-  type AccountSettingsHistoryCleanupResultV1, type AccountSettingsHistorySavedSecretRecoveryV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
+  type AccountSettingsHistoryCleanupResultV1, type AccountSettingsHistorySavedSecretRecoveryV1,
+  type AccountSettingsHistoryNormalizationCheckpointV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
 import type { AccountSettingsHistoryDestinationAuthorityV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryRestoreV1';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import type { StoredCredentials } from '@/persistence';
 import { parseSettingsFromContent, sealAccountSettingsV2RawContent } from './updateAccountSettingsV2WithRetry';
+import { resolveAccountSettingsScopeKey } from './accountSettingsScopeKey';
+
+// Keep Protocol's completion evidence with the captured credential lifetime, Account and Home.
+// Protocol still recaptures head/destination authority; this never caches admission.
+const historyCheckpoints = new WeakMap<StoredCredentials, Map<string, AccountSettingsHistoryNormalizationCheckpointV1>>();
 
 class AccountSettingsHistoryUnavailableError extends Error {
   constructor(readonly status: number, message: string) {
@@ -29,6 +35,17 @@ export async function normalizeCliAccountSettingsHistoryAfterTransfer(input: Rea
   authorizeRequest?: (request: Readonly<{ method: string; path: string; body?: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<AccountSettingsHistoryCleanupResultV1> {
   const serverBaseUrl = input.serverBaseUrl.replace(/\/+$/, '');
+  const checkpointKey = `${serverBaseUrl}\0${resolveAccountSettingsScopeKey(input.credentials)}`;
+  let checkpoints = historyCheckpoints.get(input.credentials);
+  if (!checkpoints) {
+    checkpoints = new Map();
+    historyCheckpoints.set(input.credentials, checkpoints);
+  }
+  let checkpoint = checkpoints.get(checkpointKey);
+  if (!checkpoint) {
+    checkpoint = {};
+    checkpoints.set(checkpointKey, checkpoint);
+  }
   const headersFor = (request: Readonly<{ method: string; path: string; body?: unknown }>) => {
     const authorization = input.authorizeRequest ? input.authorizeRequest(request)
       : { Authorization: `Bearer ${input.credentials.token}` };
@@ -39,7 +56,7 @@ export async function normalizeCliAccountSettingsHistoryAfterTransfer(input: Rea
   const unavailable = (status: number, message: string): never => {
     throw new AccountSettingsHistoryUnavailableError(status, message);
   };
-  return normalizeAccountSettingsHistoryClientV1({ destinationAuthority: input.destinationAuthority,
+  return normalizeAccountSettingsHistoryClientV1({ checkpoint, destinationAuthority: input.destinationAuthority,
     ...(input.savedSecretRecovery ? { savedSecretRecovery: input.savedSecretRecovery } : {}),
     ...(input.expectedProfileTransferRevision === undefined ? {} : { expectedProfileTransferRevision: input.expectedProfileTransferRevision }), ports: {
     isCurrent,

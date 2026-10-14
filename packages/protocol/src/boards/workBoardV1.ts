@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionListFilterV1Schema, type SessionListFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
 import { WidgetInstanceRefV1Schema as InstanceRefSchema, WidgetInstanceV1Schema as InstanceSchema, WidgetInputBindingsV1Schema as BindingsSchema, resetWidgetInputBindingsV1, setWidgetInputBindingsV1, type WidgetInstanceRefV1 } from '../widgets/widgetInstanceV1.js';
@@ -35,17 +35,17 @@ export type WorkBoardSectionV1 = typeof WORK_BOARD_SECTIONS_V1[number];
 export const WORK_BOARD_MODES_V1 = ['canvas', 'by_status'] as const;
 export type WorkBoardModeV1 = typeof WORK_BOARD_MODES_V1[number];
 
-const IdentifierSchema = lazyZodSchema(() => z.string().trim().min(1));
+const IdentifierSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 /** A typed reference to one item on a Home. The same id on two Homes is two items. */
-export const BoardItemRefV1Schema = lazyZodSchema(() => z.object({
+export const BoardItemRefV1Schema = lazyZodSchema(() => z.strictObject({
     kind: z.enum(WORK_BOARD_ITEM_KINDS_V1),
-    qualifiedId: z.object({
+    qualifiedId: z.strictObject({
         /** The Home's portable identity (its server identity id, or its profile id when it has none). */
         serverId: IdentifierSchema,
         id: IdentifierSchema,
-    }).strict(),
-}).strict());
+    }),
+}));
 const StoredBoardItemRefV1Schema = createStoredReadSchema(BoardItemRefV1Schema);
 export type BoardItemRefV1 = Readonly<{
     kind: WorkBoardItemKindV1;
@@ -72,19 +72,18 @@ export function readWorkBoardItemKeyV1(key: string): BoardItemRefV1 | null {
     return ref.success ? ref.data : null;
 }
 
-export const WorkBoardPositionV1Schema = lazyZodSchema(() => z.object({
-    x: z.number().finite(),
-    y: z.number().finite(),
-}).strict());
+export const WorkBoardPositionV1Schema = lazyZodSchema(() => z.strictObject({
+    x: z.number(),
+    y: z.number(),
+}));
 export type WorkBoardPositionV1 = Readonly<{ x: number; y: number }>;
 
 export const WorkBoardWidgetSizeV1Schema = lazyZodSchema(() => WidgetGridSizeV1Schema);
-export const WorkBoardWidgetPlacementV1Schema = lazyZodSchema(() => z.object({
+export const WorkBoardWidgetPlacementV1Schema = lazyZodSchema(() => z.strictObject({
     kind: z.literal('widget'), ref: WidgetInstanceRefV1Schema,
-    instance: WidgetInstanceV1Schema, size: WorkBoardWidgetSizeV1Schema.default(WIDGET_SIZE_POLICY_V1.workBoard.defaultSize),
-    frameStyle: z.enum(['card', 'plain']).optional(),
-}).strict().refine(value => value.ref.surface.owner.kind === 'workBoard' && value.ref.instanceId === value.instance.id,
-    'Widget placement must name its configured WorkBoard instance'));
+    instance: WidgetInstanceV1Schema, size: z._default(WorkBoardWidgetSizeV1Schema, WIDGET_SIZE_POLICY_V1.workBoard.defaultSize),
+    frameStyle: z.optional(z.enum(['card', 'plain'])),
+}).check(z.refine(value => value.ref.surface.owner.kind === 'workBoard' && value.ref.instanceId === value.instance.id, 'Widget placement must name its configured WorkBoard instance')));
 export type WorkBoardWidgetPlacementV1 = z.infer<typeof WorkBoardWidgetPlacementV1Schema>;
 
 /** Qualified widget keys coexist with, and never change, existing work reference keys. */
@@ -107,12 +106,12 @@ export class WorkBoardWidgetMutationErrorV1 extends Error {
     }
 }
 
-export const WorkBoardSourceV1Schema = lazyZodSchema(() => z.object({
-    sections: z.array(z.enum(WORK_BOARD_SECTIONS_V1)).optional(),
+export const WorkBoardSourceV1Schema = lazyZodSchema(() => z.strictObject({
+    sections: z.optional(z.array(z.enum(WORK_BOARD_SECTIONS_V1))),
     /** An inline Sessions filter (there is no separate saved-filter entity). */
-    filter: SessionListFilterV1Schema.optional(),
-    picked: z.array(BoardItemRefV1Schema).default([]),
-}).strict());
+    filter: z.optional(SessionListFilterV1Schema),
+    picked: z._default(z.array(BoardItemRefV1Schema), []),
+}));
 export type WorkBoardSourceV1 = Readonly<{
     sections?: readonly WorkBoardSectionV1[];
     filter?: SessionListFilterV1;
@@ -131,15 +130,15 @@ export type WorkBoardUnknownSourceV1 = Readonly<{ sections?: readonly string[]; 
  * aside in `unknown` (and re-tried there on every read), so a newer app's board still shows what this
  * version can draw.
  */
-const StoredWorkBoardSourceV1Schema = createStoredReadSchema(z.object({
-    sections: z.array(z.string()).optional(),
-    filter: SessionListFilterV1Schema.optional(),
-    picked: z.array(z.unknown()).default([]),
-    unknown: z.object({
-        sections: z.array(z.string()).optional(),
-        picked: z.array(z.unknown()).optional(),
-    }).strict().optional(),
-}).strict().transform((source): WorkBoardSourceV1 => {
+const StoredWorkBoardSourceV1Schema = createStoredReadSchema(z.pipe(z.strictObject({
+    sections: z.optional(z.array(z.string())),
+    filter: z.optional(SessionListFilterV1Schema),
+    picked: z._default(z.array(z.unknown()), []),
+    unknown: z.optional(z.strictObject({
+        sections: z.optional(z.array(z.string())),
+        picked: z.optional(z.array(z.unknown())),
+    })),
+}), z.transform((source): WorkBoardSourceV1 => {
     const known = new Set<string>(WORK_BOARD_SECTIONS_V1);
     const sections: WorkBoardSectionV1[] = [];
     const unknownSections: string[] = [];
@@ -166,7 +165,7 @@ const StoredWorkBoardSourceV1Schema = createStoredReadSchema(z.object({
         picked,
         ...(Object.keys(unknown).length > 0 ? { unknown } : {}),
     };
-}));
+})));
 
 export type WorkBoardV1 = Readonly<{
     id: string;
@@ -241,24 +240,24 @@ function normalizeWorkBoardV1(board: WorkBoardV1): WorkBoardV1 {
     };
 }
 
-const WorkBoardFieldsV1Schema = lazyZodSchema(() => z.object({
+const WorkBoardFieldsV1Schema = lazyZodSchema(() => z.strictObject({
     id: IdentifierSchema,
-    name: z.string().trim().min(1),
-    source: WorkBoardSourceV1Schema.extend({
-        unknown: z.object({
-            sections: z.array(z.string()).optional(),
-            picked: z.array(z.unknown()).optional(),
-        }).strict().optional(),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    source: z.extend(WorkBoardSourceV1Schema, {
+        unknown: z.optional(z.strictObject({
+            sections: z.optional(z.array(z.string())),
+            picked: z.optional(z.array(z.unknown())),
+        })),
     }),
-    mode: z.enum(WORK_BOARD_MODES_V1).default('canvas'),
-    snap: z.boolean().default(true),
-    positionsByItemRef: z.record(z.string(), WorkBoardPositionV1Schema).default({}),
-    pinnedInSessions: z.boolean().default(false),
-    widgets: z.array(WorkBoardWidgetPlacementV1Schema).optional(),
-    itemOrder: z.array(z.string()).optional(),
-}).strict());
+    mode: z._default(z.enum(WORK_BOARD_MODES_V1), 'canvas'),
+    snap: z._default(z.boolean(), true),
+    positionsByItemRef: z._default(z.record(z.string(), WorkBoardPositionV1Schema), {}),
+    pinnedInSessions: z._default(z.boolean(), false),
+    widgets: z.optional(z.array(WorkBoardWidgetPlacementV1Schema)),
+    itemOrder: z.optional(z.array(z.string())),
+}));
 
-function validateWorkBoardWidgetsV1(board: Pick<WorkBoardV1, 'id' | 'widgets'>, context: z.RefinementCtx): void {
+function validateWorkBoardWidgetsV1(board: Pick<WorkBoardV1, 'id' | 'widgets'>, context: z.core.$RefinementCtx): void {
     const keys = new Set<string>();
     for (const placement of board.widgets ?? []) {
         if (placement.ref.surface.owner.kind !== 'workBoard' || placement.ref.surface.owner.boardId !== board.id) {
@@ -271,14 +270,9 @@ function validateWorkBoardWidgetsV1(board: Pick<WorkBoardV1, 'id' | 'widgets'>, 
     }
 }
 /** Closed output contract over the canonical normalized Board shape. */
-export const WorkBoardV1StrictSchema = lazyZodSchema(() => WorkBoardFieldsV1Schema
-    .superRefine(validateWorkBoardWidgetsV1)
-    .transform((board): WorkBoardV1 => normalizeWorkBoardV1(board)));
+export const WorkBoardV1StrictSchema = lazyZodSchema(() => z.pipe(WorkBoardFieldsV1Schema.check(z.superRefine(validateWorkBoardWidgetsV1)), z.transform((board): WorkBoardV1 => normalizeWorkBoardV1(board))));
 /** Stored Board reads drop extra fields while retaining the canonical validation and normalization. */
-export const WorkBoardV1Schema = createStoredReadSchema(WorkBoardFieldsV1Schema
-    .extend({ source: StoredWorkBoardSourceV1Schema })
-    .superRefine(validateWorkBoardWidgetsV1)
-    .transform((board): WorkBoardV1 => normalizeWorkBoardV1(board)));
+export const WorkBoardV1Schema = createStoredReadSchema(lazyZodSchema(() => z.pipe(z.extend(WorkBoardFieldsV1Schema, { source: StoredWorkBoardSourceV1Schema }).check(z.superRefine(validateWorkBoardWidgetsV1)), z.transform((board): WorkBoardV1 => normalizeWorkBoardV1(board)))));
 
 export function resolveWorkBoardItemOrderV1(board: WorkBoardV1): string[] {
     const keys = [...board.source.picked.map(buildWorkBoardItemKeyV1), ...(board.widgets ?? []).map(item => buildWorkBoardWidgetKeyV1(item.ref))];
@@ -293,11 +287,11 @@ export function resolveWorkBoardItemOrderV1(board: WorkBoardV1): string[] {
  * the collection. It is kept in `unreadable` exactly as stored — not shown, written back
  * untouched, and re-tried on every read — and is never reinterpreted as "no boards".
  */
-export const WorkBoardsV1Schema = lazyZodSchema(() => z.object({
-    v: z.literal(1).default(1),
-    boards: z.array(z.unknown()).default([]),
-    unreadable: z.array(z.unknown()).optional(),
-}).strip().transform((value): WorkBoardsV1 => {
+export const WorkBoardsV1Schema = lazyZodSchema(() => z.pipe(z.object({
+    v: z._default(z.literal(1), 1),
+    boards: z._default(z.array(z.unknown()), []),
+    unreadable: z.optional(z.array(z.unknown())),
+}), z.transform((value): WorkBoardsV1 => {
     const boards: WorkBoardV1[] = [];
     const unreadable: unknown[] = [];
     for (const candidate of [...value.boards, ...(value.unreadable ?? [])]) {
@@ -310,7 +304,7 @@ export const WorkBoardsV1Schema = lazyZodSchema(() => z.object({
         boards: dedupeBy(boards, (board) => board.id),
         ...(unreadable.length > 0 ? { unreadable } : {}),
     };
-}));
+})));
 export type WorkBoardsV1 = Readonly<{
     v: 1;
     boards: readonly WorkBoardV1[];
@@ -409,57 +403,57 @@ export type WorkBoardIntentV1 =
         membership?: WorkBoardMembershipV1;
     }>;
 
-const WorkBoardMembershipV1Schema = lazyZodSchema(() => z.object({
+const WorkBoardMembershipV1Schema = lazyZodSchema(() => z.strictObject({
     liveItemKeys: z.array(z.string()),
     unavailableServerIds: z.array(IdentifierSchema),
-}).strict());
+}));
 
 const widgetTarget = { boardId: IdentifierSchema, ref: WidgetInstanceRefV1Schema };
 export const WorkBoardWidgetIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ ...widgetTarget, kind: z.literal('widget_add'), instance: WidgetInstanceV1Schema,
-        size: WorkBoardWidgetSizeV1Schema.optional(), frameStyle: z.enum(['card', 'plain']).optional(),
-        toIndex: z.number().int().nonnegative().optional(), nativeIndex: z.number().int().nonnegative().optional(),
-        position: WorkBoardPositionV1Schema.optional() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_remove'), expectedInstance: WidgetInstanceV1Schema.optional(),
-        expectedPresentation: WidgetExpectedPresentationV1Schema.optional() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_move'), toIndex: z.number().int().nonnegative().optional(),
-        nativeIndex: z.number().int().nonnegative().optional() }).strict().refine(value => (value.toIndex === undefined) !== (value.nativeIndex === undefined)),
-    z.object({ ...widgetTarget, kind: z.literal('widget_size'), size: WorkBoardWidgetSizeV1Schema }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_frame'), frameStyle: z.enum(['card', 'plain']).nullable() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_rename'), displayName: IdentifierSchema.nullable() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_inputs'), bindings: WidgetInputBindingsV1Schema, paths: z.array(InputPathSchema).optional() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_inputs_reset'), paths: z.array(InputPathSchema).optional() }).strict(),
-    z.object({ ...widgetTarget, kind: z.literal('widget_network'), network: UiSurfaceNetworkRequestV1Schema }).strict(),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_add'), instance: WidgetInstanceV1Schema,
+        size: z.optional(WorkBoardWidgetSizeV1Schema), frameStyle: z.optional(z.enum(['card', 'plain'])),
+        toIndex: z.optional(z.number().check(z.int(), z.nonnegative())), nativeIndex: z.optional(z.number().check(z.int(), z.nonnegative())),
+        position: z.optional(WorkBoardPositionV1Schema) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_remove'), expectedInstance: z.optional(WidgetInstanceV1Schema),
+        expectedPresentation: z.optional(WidgetExpectedPresentationV1Schema) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_move'), toIndex: z.optional(z.number().check(z.int(), z.nonnegative())),
+        nativeIndex: z.optional(z.number().check(z.int(), z.nonnegative())) }).check(z.refine(value => (value.toIndex === undefined) !== (value.nativeIndex === undefined))),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_size'), size: WorkBoardWidgetSizeV1Schema }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_frame'), frameStyle: z.nullable(z.enum(['card', 'plain'])) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_rename'), displayName: z.nullable(IdentifierSchema) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_inputs'), bindings: WidgetInputBindingsV1Schema, paths: z.optional(z.array(InputPathSchema)) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_inputs_reset'), paths: z.optional(z.array(InputPathSchema)) }),
+    z.strictObject({ ...widgetTarget, kind: z.literal('widget_network'), network: UiSurfaceNetworkRequestV1Schema }),
 ]));
 export type WorkBoardWidgetIntentV1 = z.infer<typeof WorkBoardWidgetIntentV1Schema>;
 
 /** Wire validation shares the UI owner's intent vocabulary, rather than a second edit model. */
 export const WorkBoardIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    ...WorkBoardWidgetIntentV1Schema.options,
-    z.object({ kind: z.literal('create'), board: z.object({
-        id: IdentifierSchema, name: z.string().trim().min(1),
-    }).strict() }).strict(),
-    z.object({ kind: z.literal('delete'), boardId: IdentifierSchema }).strict(),
-    z.object({ kind: z.literal('update'), boardId: IdentifierSchema, patch: z.object({
-        name: z.string().trim().min(1).optional(), mode: z.enum(WORK_BOARD_MODES_V1).optional(),
-        snap: z.boolean().optional(), pinnedInSessions: z.boolean().optional(),
+    ...WorkBoardWidgetIntentV1Schema._zod.def.options,
+    z.strictObject({ kind: z.literal('create'), board: z.strictObject({
+        id: IdentifierSchema, name: z.string().check(z.trim(), z.minLength(1)),
+    }) }),
+    z.strictObject({ kind: z.literal('delete'), boardId: IdentifierSchema }),
+    z.strictObject({ kind: z.literal('update'), boardId: IdentifierSchema, patch: z.strictObject({
+        name: z.optional(z.string().check(z.trim(), z.minLength(1))), mode: z.optional(z.enum(WORK_BOARD_MODES_V1)),
+        snap: z.optional(z.boolean()), pinnedInSessions: z.optional(z.boolean()),
         // Do not apply the persisted source's picked default to a partial edit.
-        source: z.object({
-            sections: WorkBoardSourceV1Schema.shape.sections.nullable(),
-            filter: WorkBoardSourceV1Schema.shape.filter.nullable(),
-            picked: z.array(BoardItemRefV1Schema).optional(),
-        }).strict().optional(),
-    }).strict() }).strict(),
-    z.object({ kind: z.literal('add_items'), boardId: IdentifierSchema, refs: z.array(BoardItemRefV1Schema),
-        positionsByItemRef: z.record(z.string(), WorkBoardPositionV1Schema).optional(),
-    }).strict(),
-    z.object({ kind: z.literal('remove_item'), boardId: IdentifierSchema, ref: BoardItemRefV1Schema,
-        membership: WorkBoardMembershipV1Schema.optional(),
-    }).strict(),
-    z.object({ kind: z.literal('set_positions'), boardId: IdentifierSchema,
+        source: z.optional(z.strictObject({
+            sections: z.nullable(WorkBoardSourceV1Schema.shape.sections),
+            filter: z.nullable(WorkBoardSourceV1Schema.shape.filter),
+            picked: z.optional(z.array(BoardItemRefV1Schema)),
+        })),
+    }) }),
+    z.strictObject({ kind: z.literal('add_items'), boardId: IdentifierSchema, refs: z.array(BoardItemRefV1Schema),
+        positionsByItemRef: z.optional(z.record(z.string(), WorkBoardPositionV1Schema)),
+    }),
+    z.strictObject({ kind: z.literal('remove_item'), boardId: IdentifierSchema, ref: BoardItemRefV1Schema,
+        membership: z.optional(WorkBoardMembershipV1Schema),
+    }),
+    z.strictObject({ kind: z.literal('set_positions'), boardId: IdentifierSchema,
         positionsByItemRef: z.record(z.string(), WorkBoardPositionV1Schema),
-        membership: WorkBoardMembershipV1Schema.optional(),
-    }).strict(),
+        membership: z.optional(WorkBoardMembershipV1Schema),
+    }),
 ]));
 
 export type WorkBoardIntentResultV1 =

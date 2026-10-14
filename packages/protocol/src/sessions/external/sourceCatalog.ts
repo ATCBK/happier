@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z, type ZodRawShape, type ZodType, type ZodTypeAny } from 'zod';
+import { z, z as zodMiniCore0, ZodMiniType as ZodType, ZodMiniType as ZodTypeAny } from 'zod/mini';
 
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
 import {
@@ -98,15 +98,15 @@ function buildExternalSessionFieldSchema(field: ExternalSessionSchemaFieldDeclar
   } else {
     let stringSchema = z.string();
     if (typeof field.min === 'number') {
-      stringSchema = stringSchema.min(field.min);
+      stringSchema = stringSchema.check(z.minLength(field.min));
     }
     if (typeof field.max === 'number') {
-      stringSchema = stringSchema.max(field.max);
+      stringSchema = stringSchema.check(z.maxLength(field.max));
     }
     schema = stringSchema;
   }
-  if (field.nullish) return schema.nullish();
-  if (field.optional) return schema.optional();
+  if (field.nullish) return z.nullish(schema);
+  if (field.optional) return z.optional(schema);
   return schema;
 }
 
@@ -116,7 +116,7 @@ function externalSessionConditionMatches(value: Record<string, unknown>, when: E
 
 function applyExternalSessionRefinements(
   value: Record<string, unknown>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
   refinements: readonly ExternalSessionSchemaRefinementDeclaration[],
 ): void {
   for (const refinement of refinements) {
@@ -148,15 +148,15 @@ function buildExternalSessionSourceSchema(
 ): ExternalSessionSourceSchemaOption {
   const shape = Object.fromEntries(
     declaration.schema.fields.map((field) => [field.name, buildExternalSessionFieldSchema(field)]),
-  ) as ZodRawShape;
-  const schema = z.object(shape).strict();
+  ) as zodMiniCore0.core.$ZodShape;
+  const schema = z.strictObject(shape);
   const refinements = declaration.schema.refinements ?? [];
   if (refinements.length === 0) {
     return schema as ExternalSessionSourceSchemaOption;
   }
-  return schema.superRefine((value, ctx) => {
+  return schema.check(z.superRefine((value, ctx) => {
     applyExternalSessionRefinements(value, ctx, refinements);
-  }) as ExternalSessionSourceSchemaOption;
+  })) as ExternalSessionSourceSchemaOption;
 }
 
 function resolveExternalSessionKeySegment(
@@ -229,13 +229,7 @@ export const EXTERNAL_SESSIONS_AGENT_IDS = Object.freeze(
 export const ExternalSessionAgentIdSchema = AgentIdV1Schema;
 export type ExternalSessionAgentId = z.infer<typeof ExternalSessionAgentIdSchema>;
 
-export const ExternalSessionSourceIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(2_000)
-  .refine(
-    (value) => value === value.trim(),
-    'External-session source id must already be trimmed.',
-  ));
+export const ExternalSessionSourceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(2_000), z.refine((value) => value === value.trim(), 'External-session source id must already be trimmed.')));
 export type ExternalSessionSourceId = z.infer<typeof ExternalSessionSourceIdSchema>;
 
 /**
@@ -244,13 +238,13 @@ export type ExternalSessionSourceId = z.infer<typeof ExternalSessionSourceIdSche
  * bound is measured on the preserved bytes rather than on a trimmed
  * projection of them.
  */
-const ExternalSessionRemoteSessionIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.max(2_000));
+const ExternalSessionRemoteSessionIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)));
 
-export const ExternalSessionRefSchema = lazyZodSchema(() => z.object({
+export const ExternalSessionRefSchema = lazyZodSchema(() => z.strictObject({
   agentId: ExternalSessionAgentIdSchema,
   sourceId: ExternalSessionSourceIdSchema,
   remoteSessionId: ExternalSessionRemoteSessionIdSchema,
-}).strict());
+}));
 export type ExternalSessionRef = z.infer<typeof ExternalSessionRefSchema>;
 
 export const ExternalSessionsAgentIdSchema = ExternalSessionAgentIdSchema;
@@ -266,26 +260,20 @@ export type ExternalSessionsSource = PluginAgentExternalSessionLinkData & Readon
  */
 export const MAX_EXTERNAL_SESSIONS_SOURCE_KIND_CODE_UNITS = 128;
 
-export const ExternalSessionsSourceSchema = z.unknown().transform((value, ctx) => {
+export const ExternalSessionsSourceSchema = z.pipe(z.unknown(), z.transform((value, ctx) => {
   const parsed = PluginAgentExternalSessionLinkDataSchema.safeParse(value);
   if (!parsed.success) {
-    ctx.addIssue({ code: 'custom', message: 'External-session source must be a bounded JSON object.' });
+    ctx.issues.push({ code: 'custom', message: 'External-session source must be a bounded JSON object.', input: ctx.value });
     return z.NEVER;
   }
-  const kind = z.string()
-    .min(1)
-    .max(MAX_EXTERNAL_SESSIONS_SOURCE_KIND_CODE_UNITS)
-    .refine(
-      (value) => value === value.trim(),
-      'External-session source kind must already be trimmed.',
-    )
+  const kind = z.string().check(z.minLength(1), z.maxLength(MAX_EXTERNAL_SESSIONS_SOURCE_KIND_CODE_UNITS), z.refine((value) => value === value.trim(), 'External-session source kind must already be trimmed.'))
     .safeParse(parsed.data.kind);
   if (!kind.success) {
-    ctx.addIssue({ code: 'custom', path: ['kind'], message: 'External-session source kind is invalid.' });
+    ctx.issues.push({ code: 'custom', path: ['kind'], message: 'External-session source kind is invalid.', input: ctx.value });
     return z.NEVER;
   }
   return parsed.data as ExternalSessionsSource;
-}) as ZodType<ExternalSessionsSource>;
+})) as ZodType<ExternalSessionsSource>;
 
 export function parseExternalSessionsSourceForDeclaration(
   declaration: Pick<PluginBackendExternalSessionSourceDeclarationV1, 'sourceKind' | 'schema' | 'key'>,

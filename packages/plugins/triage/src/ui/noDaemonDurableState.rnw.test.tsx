@@ -30,7 +30,7 @@ import {
     createTestkitAccountKv,
     type TestkitAccountKv,
 } from '../settings/testkit/accountKv.test-support.js';
-import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../settings/actions.js';
+import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, mutateTriageAction } from '../settings/actions.js';
 import { TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1 } from '../settings/savedViews.js';
 import { readTriageEntryDetail } from '../actions/readEntryDetail.js';
 import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
@@ -155,6 +155,7 @@ const durableProbeSurface = defineUiSurface(() => {
     const sources = useTriageConfiguredSources();
     const detail = useTriageEntryDetail(DETAIL_SOURCE);
     const [unlinked, setUnlinked] = React.useState<string>('unlink:idle');
+    const [actionResolution, setActionResolution] = React.useState('action-resolution:idle');
 
     const firstPin = pins.pins[0];
     // The exact selection the cockpit row makes, over the exact factories it
@@ -187,6 +188,11 @@ const durableProbeSurface = defineUiSurface(() => {
                     ? 'actions:unavailable'
                     : `actions:${actions.loaded ? 'loaded' : 'reading'}:[${actions.actions.map((action) => action.label).join(',')}]`}
             />
+            <Text value={actionResolution} />
+            <Button title="probe-resolve-action" onPress={async () => {
+                const result = await actions.resolveForExecution('ask', []);
+                setActionResolution(`action-resolution:${result.status}`);
+            }} />
             <Text
                 value={sources.unavailableReason !== null
                     ? 'sources:unavailable'
@@ -379,9 +385,19 @@ describe('durable Account state with no daemon reachable', () => {
             .resolves.toEqual({ content: 'pins:[Replace the duplicated normalizer]' });
         await expect(fixture.getByText('views:parsed:[Needs me]'))
             .resolves.toEqual({ content: 'views:parsed:[Needs me]' });
-        await expect(fixture.getByText('actions:loaded:[Discuss]'))
-            .resolves.toEqual({ content: 'actions:loaded:[Discuss]' });
+        await expect(fixture.getByText('actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]'))
+            .resolves.toEqual({ content: 'actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]' });
         // The whole point: not one of those reads went near a daemon.
+        expect(harness.actionCalls).toEqual([]);
+    });
+
+    it('does not resolve a deleted built-in for execution when the mount has no known subjects', async () => {
+        const harness = createDurableHarness();
+        expect(await mutateTriageAction({ catalog: harness.accountKv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused' },
+            { kind: 'delete', actionId: 'ask', expectedRevision: 'absent' })).toMatchObject({ status: 'applied' });
+        const fixture = await mountProbe(harness);
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'probe-resolve-action' })); });
+        expect(document.body.textContent).toContain('action-resolution:missing');
         expect(harness.actionCalls).toEqual([]);
     });
 

@@ -142,6 +142,13 @@ export function isMachineDaemonFiniteTransferApplicationSupported(daemonState: u
     return declared?.supported.import === true && declared.supported.export === true;
 }
 
+/** Iroh's fixed loopback application is optional even when prepared Home RPC is declared. */
+export function isMachineDaemonIrohTransferApplicationSupported(daemonState: unknown): boolean {
+    const declared = readMachineDaemonTransferState({ daemonState });
+    return declared?.supported.import === true && declared.supported.export === true
+        && declared.listenerClasses.loopback_http.enabled && declared.listenerClasses.loopback_http.configured;
+}
+
 export function readMachineDaemonTransferState(input: Readonly<{
     daemonState?: unknown | null;
 }> | null | undefined): MachineDaemonTransferState | null {

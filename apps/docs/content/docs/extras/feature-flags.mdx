@@ -18,8 +18,8 @@ clear answer about whether a feature is available, it treats it as unavailable.
 That is why a feature can seem to vanish when a server is unreachable, and why
 a misconfigured self-hosted server hides features rather than half-enabling them.
 
-There are 143 features in the catalog. 22 of them have a switch you can
-reach; the other 121 are decided before you get there.
+There are 141 features in the catalog. 22 of them have a switch you can
+reach; the other 119 are decided before you get there.
 
 ## Features you can turn on yourself
 
@@ -136,14 +136,12 @@ behaviour but still needs the server to advertise the capability.
 | `machines.tunnel` | Machine TCP tunnel control plane. | client | `machines` | — |
 | `machines.tunnel.directPeer` | Direct peer machine TCP tunnel capability. | server | `machines.tunnel` | `HAPPIER_FEATURE_MACHINES_TUNNEL_DIRECT_PEER__ENABLED` |
 | `machines.tunnel.serverRouted` | Server-routed machine TCP tunnel fallback capability. | server | `machines.tunnel` | `HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED` |
-| `mcp.servers` | MCP servers management and injection support. | client | — | — |
 | `pets.sync` | Synced account pet library and cross-device pet package references. | server | — | `HAPPIER_FEATURE_PETS_SYNC__ENABLED` |
 | `plugins` | Plugin platform surfaces and contribution projection. | server | — | `HAPPIER_FEATURE_PLUGINS__ENABLED` |
 | `plugins.ui` | Plugin UI descriptor and executable UI tier projection. | server | `plugins` | `HAPPIER_FEATURE_PLUGINS_UI__ENABLED` |
 | `plugins.ui.hostedWeb` | Hosted web plugin UI surfaces embedded through host-owned preview frames and bridges. | server | `plugins.ui` | `HAPPIER_FEATURE_PLUGINS_UI_HOSTED_WEB__ENABLED` |
 | `plugins.ui.reactNativeBundles` | Trusted React Native plugin UI bundle execution with compatibility and fallback policy. | server | `plugins.ui` | `HAPPIER_FEATURE_PLUGINS_UI_REACT_NATIVE_BUNDLES__ENABLED` |
 | `plugins.webhooks` | Durable public webhook ingress for plugin-contributed Actions. | server | `plugins` | `HAPPIER_FEATURE_PLUGINS_WEBHOOKS__ENABLED` |
-| `prompts.assets.external` | External prompt assets import/export surfaces and daemon adapters. | client | `prompts.library` | — |
 | `prompts.library` | Prompt library (docs + skills bundles) stored as artifacts. | client | — | — |
 | `providers` | First-class model-provider connections, catalogs, and agent bindings. | server | — | `HAPPIER_FEATURE_PROVIDERS__ENABLED` |
 | `providers.localDiscovery` | Machine-local provider discovery through the local-services listener inventory. | server | `providers`, `localServices.inventory` | `HAPPIER_FEATURE_PROVIDERS_LOCAL_DISCOVERY__ENABLED` |

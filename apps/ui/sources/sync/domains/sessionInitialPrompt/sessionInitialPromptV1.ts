@@ -1,3 +1,4 @@
+import { omit } from 'zod/mini';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
@@ -15,7 +16,7 @@ export type SessionInitialPromptV1 = Readonly<{
     source?: Omit<SessionDiscussionSelectionSourceV1, 'draftCorrelationId'>;
 }>;
 
-const SessionInitialPromptDiscussionSourceV1Schema = SessionDiscussionSelectionSourceV1Schema.omit({
+const SessionInitialPromptDiscussionSourceV1Schema = omit(SessionDiscussionSelectionSourceV1Schema, {
     draftCorrelationId: true,
 });
 

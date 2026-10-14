@@ -31,15 +31,6 @@ export type WorkspaceLayoutActionInputById = {
                 rootPath: string;
                 path: string;
                 anchor?: {
-                    kind: 'range';
-                    filePath: string;
-                    startLine: number;
-                    endLine: number;
-                    side?: 'before' | 'after' | undefined;
-                    startLineHash?: `lh1:${string}` | undefined;
-                    endLineHash?: `lh1:${string}` | undefined;
-                    selectedTextHash?: `lh1:${string}` | undefined;
-                } | {
                     kind: 'fileLine';
                     startLine: number;
                     lineHash?: `lh1:${string}` | undefined;
@@ -56,6 +47,15 @@ export type WorkspaceLayoutActionInputById = {
                     line: number;
                     side?: 'before' | 'after' | undefined;
                     lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'range';
+                    filePath: string;
+                    startLine: number;
+                    endLine: number;
+                    side?: 'before' | 'after' | undefined;
+                    startLineHash?: `lh1:${string}` | undefined;
+                    endLineHash?: `lh1:${string}` | undefined;
+                    selectedTextHash?: `lh1:${string}` | undefined;
                 } | undefined;
             };
             options?: {

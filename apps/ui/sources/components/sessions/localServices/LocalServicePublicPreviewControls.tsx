@@ -13,7 +13,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { INSTRUMENT_SPRINGS, useMotionPreferences } from '@/components/instrument';
 import { QRCode } from '@/components/qr/QRCode';
 import { Text } from '@/components/ui/text/Text';
@@ -153,11 +153,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     /**
-     * The countdown. `Typography.timestamp()` already carries tabular numerals, which is what keeps
+     * The countdown's micro role carries tabular numerals, which is what keeps
      * the row from twitching sideways once a second as the digits change width.
      */
     clock: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
     /**
@@ -491,7 +491,7 @@ function ExposureRow(props: Readonly<{
     const { exposure } = props;
     const countdown = useExposureCountdown(exposure);
     const entrance = useExposureEntrance();
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const [revealed, setRevealed] = React.useState(false);
     // Q2/F0-C3: the small plain controls grow a real box-model press frame (react-native-web ignores
     // `hitSlop`, and the desktop app IS the web bundle) bounded by the declared neighbour gap.

@@ -1,8 +1,4 @@
-import {
-    SessionOrganizationContentEnvelopeSchema,
-    SessionOrganizationContentEnvelopeStoredSchema,
-    type SessionOrganizationContentEnvelope,
-} from "@happier-dev/protocol";
+import { SessionOrganizationContentEnvelopeSchema, SessionOrganizationContentEnvelopeStoredSchema, type SessionOrganizationContentEnvelope } from '@happier-dev/protocol/sessions/organization/content';
 
 import {
     deriveAccountEncryptionCurrentnessFromRow,

@@ -6,7 +6,7 @@ import type { JsonValue } from '../../identity.js';
 export type SessionPermissionsActionInputById = {
     readonly "session.permission.respond": {
         [x: string]: unknown;
-        decision: 'abort' | 'allow' | 'deny' | 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied';
+        decision: 'allow' | 'deny' | 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
         sessionId?: string | undefined;
         requestId?: string | undefined;
         turnId?: string | undefined;
@@ -202,7 +202,5 @@ export type SessionPermissionsActionResultById = {
     readonly "session.user_action.answer": {
         ok: true;
     };
-    readonly "session.mode.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.mode.set": JsonValue;
 };

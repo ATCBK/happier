@@ -86,6 +86,32 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
 }
 
 describe('Session RPC owner Home Settings custody', () => {
+  it('keeps an attached agentDefault start Account refusal typed without caller Machine context', async () => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    const sessionId = 'default-child-owner-session';
+    const metadata = createTestMetadata({});
+    delete metadata.machineId;
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+    const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager: rpc, token: accountToken('unavailable-owner'), serverId: 'session-owner-home', serverUrl: 'http://owner.invalid',
+      readOwnerAccountCredentials: async () => null,
+      metadataPath: metadata.path, metadata, sessionId, getSessionMetadata: () => metadata,
+      enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+      enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    try {
+      const result = await rpc.handleRequest({ method: `${sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`,
+        params: ExecutionRunStartRequestSchema.parse({ intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          instructions: 'Delegate with the Agent default.', childSelection: 'agentDefault', permissionMode: 'read_only',
+          retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' }), callerAuthority: 'present_user' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'provider_authorization_changed',
+        details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+    } finally { await registration.dispose(); }
+  });
   it('sets a live Session role from its private owner without borrowing the focused Account catalog', async () => {
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_TTL_MS', '0');
@@ -209,7 +235,8 @@ describe('Session RPC owner Home Settings custody', () => {
           credentialsCurrent = false;
           const ownerRequestCount = owner.requests.length;
           await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, request,
-            { verifiedPeerAuthority: 'account_automation' })).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+            { verifiedPeerAuthority: 'account_automation' })).resolves.toMatchObject({ ok: false,
+              errorCode: 'provider_authorization_changed', details: { executionRunStart: { runCreation: 'noRunCreated' } } });
           expect(owner.requests).toHaveLength(ownerRequestCount);
           expect(focused.requests).toEqual([]);
         });
@@ -279,7 +306,7 @@ describe('Session RPC owner Home Settings custody', () => {
           });
           // Observe the actual boundary response rather than guessing a delay
           // or accepting a missing owner-route witness.
-          const expectedErrorCode = disabled ? 'action_disabled' : 'execution_run_failed';
+          const expectedErrorCode = disabled ? 'action_disabled' : 'execution_run_contribution_snapshot_unavailable';
           expect(result).toMatchObject({ ok: false, errorCode: expectedErrorCode });
           await Promise.race([owner.settingsRead, focused.settingsRead]);
           expect({ result, ownerRequests: owner.requests, focusedRequests: focused.requests,

@@ -8,6 +8,23 @@ import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/session
 import { readCapabilityLaunchRestartFromMetadataV1, resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 describe('mergeSessionMetadataForStartup', () => {
+    it('retires old plain-runner absence evidence when a new runner starts without a terminal', () => {
+        const merged = mergeSessionMetadataForStartup({ mode: 'attach', nowMs: 2,
+            current: createTestMetadata({ hostPid: 1, terminal: { mode: 'plain', controlServiceabilityV1: {
+                v: 1, state: 'unknown', observedAt: 1, retired: true, reason: 'attachment_retired',
+            } } }), next: createTestMetadata({ hostPid: 2 }),
+        });
+        expect(merged.terminal).toBeUndefined();
+    });
+    it.each(['same-runner', 'hosted-attachment'] as const)('preserves %s terminal evidence during startup merge', kind => {
+        const terminal = { mode: 'plain' as const, controlServiceabilityV1: { v: 1 as const, state: 'unknown' as const,
+            observedAt: 1, retired: true, ...(kind === 'hosted-attachment' ? { attachmentId: 'retained-host' } : {}) } };
+        const merged = mergeSessionMetadataForStartup({ mode: 'attach', nowMs: 2,
+            current: createTestMetadata({ hostPid: 1, terminal }),
+            next: createTestMetadata({ hostPid: kind === 'same-runner' ? 1 : 2 }),
+        });
+        expect(merged.terminal).toEqual(terminal);
+    });
     it('uses the current terminal launch instead of retained daemon eligibility on manual attach', () => {
         const sessionRunnerRuntimeV1 = SessionRunnerRuntimeStateV1Schema.parse({
             v: 1, sessionId: 'session', observedAtMs: 1,

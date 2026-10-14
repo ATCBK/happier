@@ -327,7 +327,7 @@ function describeDiagnostic(
   bytes: string,
 ): string {
   if (diagnostic.offset === undefined)
-    return diagnostic.path.length
+    return diagnostic.path.length && !diagnostic.message.startsWith(`${diagnostic.path.join('.')}:`)
       ? `${diagnostic.path.join('.')}: ${diagnostic.message}`
       : diagnostic.message;
   const line = bytes.slice(0, diagnostic.offset).split('\n').length;

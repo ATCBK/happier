@@ -14,7 +14,7 @@ import { createWorkflowAccountRunActionOwner, type WorkflowAccountRunActionDeps 
 import { WorkflowRunSummaryV1Schema } from '../workflows/workflowProgressV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '../workflows/workflowStoredContentV1.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
-import type { ExternalActionTargetV1 } from './externalActionApi.js';
+import type { ExternalActionExecutionAuthorizationV1, ExternalActionTargetV1 } from './externalActionApi.js';
 import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { SessionAgentSpawnPolicyV1Schema } from '../account/settings/accountSettings.js';
 import type { AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
@@ -56,7 +56,10 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
     }));
     expect(origin.machineId).toBe(reviewed ? input.machineId : undefined);
   });
-  it.each([true, false])('routes unsigned Account replay through the deciding profile only after Home verification (%s)', async (homeCurrent) => {
+  it.each([
+    { homeCurrent: true, surface: 'ui' }, { homeCurrent: false, surface: 'ui' },
+    { homeCurrent: true, surface: 'cli' }, { homeCurrent: false, surface: 'cli' },
+  ] as const)('routes unsigned Account replay through the deciding profile only after Home verification ($surface/$homeCurrent)', async ({ homeCurrent, surface }) => {
     let stored: ApprovalRequest | null = null;
     const contexts: ActionExecutorContext[] = [];
     const deps = {
@@ -81,11 +84,11 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       serverIdentityId: 'srv_same_home', runtimeAccountId: 'account', actionCaller: { kind: 'host' },
       actionRequestId: 'attach-request' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(await executor.execute('approval.request.decide', { artifactId: 'relation-approval', decision: 'approve' }, {
-      surface: 'ui', authority: 'present_user', serverId: 'app-profile',
+      surface, authority: 'present_user', serverId: 'app-profile',
       serverIdentityId: 'srv_same_home', runtimeAccountId: 'account',
     })).toMatchObject({ ok: true, result: { status: homeCurrent ? 'executed' : 'failed',
       execution: homeCurrent ? { ok: true } : { ok: false, errorCode: 'approval_stale' } } });
-    expect(contexts).toMatchObject(homeCurrent ? [{ serverId: 'app-profile', surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }] : []);
+    expect(contexts).toMatchObject(homeCurrent ? [{ serverId: 'app-profile', surface, authority: 'present_user', actionCaller: { kind: 'host' } }] : []);
     expect(stored).toMatchObject({ executionOriginV1: { serverId: 'cli-profile', requestId: 'attach-request' } });
   });
 
@@ -457,7 +460,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         target: admittedTarget,
         grant,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     let storedRequest: ApprovalRequest | null = null;
     const verifiedTargets: ExternalActionTargetV1[] = [];
     // Artifact persistence and the Home request are process boundaries. The
@@ -638,7 +641,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         target,
         grant,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     let storedRequest: ApprovalRequest | null = null;
     const executor = createActionExecutor({
       approvalsCreate: async ({ request }: { request: ApprovalRequest }) => {

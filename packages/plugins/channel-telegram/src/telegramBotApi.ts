@@ -1,4 +1,4 @@
-import { countConversationTextUnits, MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
+import { countConversationTextUnits } from '@happier-dev/channels-protocol/v1';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
 
 const TELEGRAM_BOT_API_BASE_URL = 'https://api.telegram.org';
@@ -145,9 +145,10 @@ function readSafeInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
 }
 
-function boundedTelegramRetryAfterMs(retryAfterSeconds: number | null): number | undefined {
+function telegramRetryAfterMs(retryAfterSeconds: number | null): number | undefined {
   if (retryAfterSeconds === null || retryAfterSeconds < 0) return undefined;
-  return Math.min(MAX_CONVERSATION_RETRY_AFTER_MS, retryAfterSeconds * 1_000);
+  const milliseconds = retryAfterSeconds * 1_000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 }
 
 function parseTelegramUser(value: unknown): TelegramUser | null {
@@ -173,7 +174,7 @@ function parseBotApiEnvelope(body: Uint8Array):
 
     const parameters = isRecord(parsed.parameters) ? parsed.parameters : null;
     const retryAfterSeconds = parameters ? readSafeInteger(parameters.retry_after) : null;
-    const retryAfterMs = boundedTelegramRetryAfterMs(retryAfterSeconds);
+    const retryAfterMs = telegramRetryAfterMs(retryAfterSeconds);
     return {
       ok: false,
       errorCode: readSafeInteger(parsed.error_code),

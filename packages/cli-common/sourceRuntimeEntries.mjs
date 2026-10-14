@@ -152,7 +152,6 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
     const transformed = await transform(await readFile(locatorPath, 'utf8'), { loader: 'ts', format: 'esm' });
     const generated = await import(`data:text/javascript;base64,${Buffer.from(transformed.code).toString('base64')}`);
     for (const locator of generated.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS) {
-      if (!locator.daemonEntryPath) continue;
       const packageName = locator.sourceSpec.locator;
       const pluginDir = join(repoDir, 'packages/plugins', packageName.slice('@happier-dev/plugins-'.length));
       const pluginManifest = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8'));
@@ -162,7 +161,11 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
       // Locators are locator-only; the manifest lives in the generated asset beside them.
       const pluginManifestDocument = locator.manifest
         ?? JSON.parse(await readFile(join(projectDir, locator.manifestRelativePath), 'utf8'));
-      entries[`${prefix}/${pluginManifestDocument.entrypoints.daemon.replace(/^\.\//, '').replace(/\.js$/, '')}`] = entries[key];
+      // Declaration-only plugins still own packaged Resources and a package
+      // root. A missing daemon contribution does not remove that closure.
+      if (locator.daemonEntryPath) {
+        entries[`${prefix}/${pluginManifestDocument.entrypoints.daemon.replace(/^\.\//, '').replace(/\.js$/, '')}`] = entries[key];
+      }
       for (const [importKey, declaration] of Object.entries(pluginManifest.imports ?? {})) {
         const source = sourceExport(declaration, `${packageName}:${importKey}`);
         const runtimeTarget = sourceConditionTarget({ ...declaration, [SOURCE_CONDITION]: undefined });

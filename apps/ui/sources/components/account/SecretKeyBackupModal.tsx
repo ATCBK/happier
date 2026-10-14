@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -10,7 +11,7 @@ import { formatRecoveryKeyForDisplay, maskRecoveryKeyForDisplay } from '@/auth/r
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Icon } from '@/components/ui/icons/Icon';
 import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
@@ -77,7 +78,7 @@ export function SecretKeyBackupModal(props: Props) {
     const styles = stylesheet;
 
     const [revealed, setRevealed] = React.useState(false);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     const formattedSecret = React.useMemo(() => formatRecoveryKeyForDisplay(props.secret), [props.secret]);
     const maskedSecret = React.useMemo(() => maskRecoveryKeyForDisplay(formattedSecret), [formattedSecret]);
@@ -144,7 +145,7 @@ export function SecretKeyBackupModal(props: Props) {
         closeButtonTestID: 'secret-key-backup-close',
         bodyScroll: 'auto' as const,
         footer,
-        dimensions: { width: 360, maxHeightRatio: 0.85, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow, maxHeightRatio: 0.85, size: 'dialog' as const },
     }), [footer]);
 
     useModalCardChrome(props.setChrome, chrome);

@@ -1,4 +1,4 @@
-import type { ServerConfigEnv } from "@happier-dev/protocol";
+import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { readHomeConfigEnv } from "./homeSettings";
 import { composeHomeConfigEnv, readHomeConfigEnvOrigin } from './homeConfigOverlay';

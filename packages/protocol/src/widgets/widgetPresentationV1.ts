@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionBoardTabIdSchema } from '../sessions/board/ids.js';
 import type { WidgetSurfaceRefV1 } from './widgetInstanceV1.js';
 
@@ -16,17 +16,17 @@ export function supportsWidgetGroupsV1(kind: WidgetSurfaceRefV1['owner']['kind']
 }
 export const WidgetGridSizeV1Schema = WidgetSizeV1Schema;
 export const WidgetSessionBoardSizeV1Schema = WidgetSizeV1Schema;
-export const WidgetSizeDeclarationV1Schema = lazyZodSchema(() => z.object({
-  sizes: z.array(WidgetSizeV1Schema).min(1), defaultSize: WidgetSizeV1Schema,
-}).strict().superRefine((declaration, context) => {
+export const WidgetSizeDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
+  sizes: z.array(WidgetSizeV1Schema).check(z.minLength(1)), defaultSize: WidgetSizeV1Schema,
+}).check(z.superRefine((declaration, context) => {
   if (new Set(declaration.sizes).size !== declaration.sizes.length) context.addIssue({ code: 'custom', path: ['sizes'], message: 'Duplicate widget size' });
   if (!declaration.sizes.includes(declaration.defaultSize)) context.addIssue({ code: 'custom', path: ['defaultSize'], message: 'Default widget size must be declared' });
-}));
+})));
 export type WidgetSizeDeclarationV1 = z.infer<typeof WidgetSizeDeclarationV1Schema>;
-export const WidgetSizeFootprintV1Schema = lazyZodSchema(() => z.object({
-  columns: z.number().int().positive(), columnSpan: z.number().int().positive(), rowSpan: z.number().int().positive(),
+export const WidgetSizeFootprintV1Schema = lazyZodSchema(() => z.strictObject({
+  columns: z.number().check(z.int(), z.positive()), columnSpan: z.number().check(z.int(), z.positive()), rowSpan: z.number().check(z.int(), z.positive()),
   height: z.enum(['compact', 'regular', 'tall']), width: WidgetWidthV1Schema,
-}).strict());
+}));
 export type WidgetSizeFootprintV1 = Readonly<z.infer<typeof WidgetSizeFootprintV1Schema>>;
 const gridFootprints = {
   small: { columns: 2, columnSpan: 1, rowSpan: 1, height: 'compact', width: 'half' },
@@ -65,9 +65,9 @@ export const WIDGET_SIZE_POLICY_V1 = {
   sessionBoard: { sizes: WIDGET_SIZE_ORDER_V1, defaultSize: 'medium', footprints: boardFootprints },
   project: linearPolicy, companion: linearPolicy,
 } as const;
-export const WidgetSurfacePresentationV1Schema = lazyZodSchema(() => z.object({
-  sizes: z.array(WidgetSizeV1Schema), defaultSize: WidgetSizeV1Schema.optional(),
-}).strict());
+export const WidgetSurfacePresentationV1Schema = lazyZodSchema(() => z.strictObject({
+  sizes: z.array(WidgetSizeV1Schema), defaultSize: z.optional(WidgetSizeV1Schema),
+}));
 export type WidgetSurfacePresentationV1 = z.infer<typeof WidgetSurfacePresentationV1Schema>;
 export function getWidgetSupportedSizesV1(kind: WidgetSurfaceRefV1['owner']['kind']): readonly WidgetSizeV1[] {
   return WIDGET_SIZE_POLICY_V1[kind].sizes;
@@ -87,6 +87,20 @@ export function resolveWidgetSizeChoicesV1(kind: WidgetSurfaceRefV1['owner']['ki
 export function normalizeWidgetSizeForSurfaceV1(kind: WidgetSurfaceRefV1['owner']['kind'], size?: WidgetSizeV1, declaration?: WidgetSizeDeclarationV1): WidgetSizeV1 | undefined {
   const choices = resolveWidgetSizeChoicesV1(kind, declaration);
   return size && choices.sizes.includes(size) ? size : choices.defaultSize;
+}
+/**
+ * The size a card presents at when it owns its whole row (nothing sits beside it): the same height
+ * spanning every column of the grid, when the widget declares one. The saved size is untouched; this is
+ * placement, so a Small left alone reads as its Wide (a Medium as its Full) instead of a stretched Small.
+ */
+export function resolveWidgetRowOwnerSizeV1(kind: WidgetSurfaceRefV1['owner']['kind'], size: WidgetSizeV1, declaration?: WidgetSizeDeclarationV1): WidgetSizeV1 {
+  const own = getWidgetSizeFootprintV1(kind, size);
+  if (!own || own.columnSpan >= own.columns) return size;
+  const sibling = resolveWidgetSizeChoicesV1(kind, declaration).sizes.find(candidate => {
+    const footprint = getWidgetSizeFootprintV1(kind, candidate);
+    return footprint !== undefined && footprint.columnSpan === footprint.columns && footprint.rowSpan === own.rowSpan;
+  });
+  return sibling ?? size;
 }
 export function stepWidgetSizeV1(sizes: readonly WidgetSizeV1[], current: WidgetSizeV1 | undefined, step: -1 | 1): WidgetSizeV1 | undefined {
   const ordered = WIDGET_SIZE_ORDER_V1.filter(size => sizes.includes(size));
@@ -110,12 +124,12 @@ export const WidgetFrameStyleV1Schema = lazyZodSchema(() => z.enum(['card', 'pla
 export const WidgetProjectAreaV1Schema = lazyZodSchema(() => z.enum(['main', 'aside']));
 export type WidgetProjectAreaV1 = z.infer<typeof WidgetProjectAreaV1Schema>;
 /** Ephemeral native-owner facts used to refuse removal after a captured placement changes. */
-export const WidgetExpectedPresentationV1Schema = lazyZodSchema(() => z.object({
-  area: WidgetProjectAreaV1Schema.optional(),
-  groupId: z.string().trim().min(1).nullable().optional(),
-  size: WidgetSizeV1Schema.optional(), frameStyle: WidgetFrameStyleV1Schema.nullable(),
-  nativeIndex: z.number().int().nonnegative().safe(), tabId: SessionBoardTabIdSchema.optional(), hidden: z.boolean().optional(),
+export const WidgetExpectedPresentationV1Schema = lazyZodSchema(() => z.strictObject({
+  area: z.optional(WidgetProjectAreaV1Schema),
+  groupId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  size: z.optional(WidgetSizeV1Schema), frameStyle: z.nullable(WidgetFrameStyleV1Schema),
+  nativeIndex: z.number().check(z.int(), z.nonnegative(), z.int()), tabId: z.optional(SessionBoardTabIdSchema), hidden: z.optional(z.boolean()),
   /** WorkBoard's existing saved XY, captured only for conditional transfer removal. */
-  canvasPosition: z.tuple([z.number().finite(), z.number().finite()]).nullable().optional(),
-}).strict());
+  canvasPosition: z.optional(z.nullable(z.tuple([z.number(), z.number()]))),
+}));
 export type WidgetExpectedPresentationV1 = z.infer<typeof WidgetExpectedPresentationV1Schema>;

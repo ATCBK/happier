@@ -83,6 +83,8 @@ export type HappierReleasePreviewDensity = 'pointer' | 'touch';
  * keeps the phone list's larger corner.
  */
 const FLOATING_RADIUS = HAPPIER_RADIUS_V1.lg;
+/** A long destination wraps to two lines at most: "Move before qa-live-…-caption" never grows the card to three. */
+const OUTCOME_TITLE_MAX_LINES = 2;
 
 const METRICS = {
   pointer: {
@@ -219,7 +221,7 @@ export function HappierReleaseOutcomeStrip(props: Readonly<{
           : host.renderGlyph(outcome.tone === 'refused' ? 'refused' : (outcome.glyph ?? 'add'), markColor, metrics.glyph)}
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={{ ...metrics.outcomeTitle, color: colors.text }}>{outcome.title}</Text>
+        <Text numberOfLines={OUTCOME_TITLE_MAX_LINES} style={{ ...metrics.outcomeTitle, color: colors.text }}>{outcome.title}</Text>
         {outcome.detail ? <Text style={{ ...metrics.outcomeDetail, color: colors.textSecondary }}>{outcome.detail}</Text> : null}
       </View>
     </View>

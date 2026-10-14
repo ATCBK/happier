@@ -125,7 +125,7 @@ function FileEditorPanelImpl(props: Readonly<{
             {eligible && sharedOpen && find?.presentation === 'shared' && controller ?
                 <FileEditorFindBar find={find} controller={controller} inputRef={inputRef}
                     onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)} /> : null}
-            <Text style={{ marginTop: 8, color: props.theme.colors.text.secondary, ...Typography.rowMeta() }}>
+            <Text style={{ marginTop: 8, color: props.theme.colors.text.secondary, ...Typography.variant('meta') }}>
                 {t('files.fileEditor.experimentalHint')}
             </Text>
         </View>

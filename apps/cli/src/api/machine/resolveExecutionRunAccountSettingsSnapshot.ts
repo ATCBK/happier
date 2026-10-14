@@ -13,6 +13,8 @@ export function createExecutionRunAccountSettingsSnapshotResolver(input: Readonl
     isOwnerCurrent: () => boolean;
     onSettings: (settings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>>['settings'] | null) => void;
 }>) {
+    const machineId = input.machineId.trim();
+    const authorizationChanged = () => createProviderErrorV1('provider_authorization_changed', machineId ? { machineId } : {});
     let operation: SavedSecretOperationContextV1 | null = null;
     let disposed = false;
     const resolveSnapshot = async (demand?: Readonly<{ mcpServerCatalog?: boolean; secretReferenceOverlay?: import('@happier-dev/protocol').SecretReferenceOverlayV1;
@@ -20,7 +22,7 @@ export function createExecutionRunAccountSettingsSnapshotResolver(input: Readonl
         demand?.signal?.throwIfAborted();
         const unavailable = () => {
             input.onSettings(null);
-            return createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
+            return authorizationChanged();
         };
         const credentials = await input.readCredentials();
         if (!credentials || disposed) { await operation?.isCurrent(); throw unavailable(); }
@@ -54,11 +56,11 @@ export function createExecutionRunAccountSettingsSnapshotResolver(input: Readonl
             const captured = operation;
             if (captured?.readSnapshot()?.mcpServerCatalog === undefined) return;
             try {
-                if (!await captured.isCurrent()) throw createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
+                if (!await captured.isCurrent()) throw authorizationChanged();
                 await createCliMcpServerStoreForOperation({ operationContext: captured, signal }).readCatalogForOperation();
             } catch (error) {
                 const current = await captured.isCurrent();
-                if (!current) throw createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
+                if (!current) throw authorizationChanged();
                 await captured.commitMcpCatalog(projectMcpServerCatalogRefreshFailure({ error, current, signal }));
                 throw error;
             }

@@ -93,14 +93,14 @@ describe('ComputerScreenViewer', () => {
       <ComputerScreenViewer {...props({ inputDenied: true })} />,
     );
     const text = denied.getTextContent();
-    expect(text.split('computerUse.viewer.controlNotAllowed').length - 1).toBe(1);
+    expect(text.split('computerUse.presentation.controlNotAllowed').length - 1).toBe(1);
     expect(denied.findByTestId('v-presence-take-control')).toBeNull();
     expect(resolveComputerPresenceCapsule(props({ inputDenied: true })).onTakeControl).toBeUndefined();
 
     const granted = await renderScreen(
       <ComputerScreenViewer {...props({ inputDenied: false })} />,
     );
-    expect(granted.getTextContent()).not.toContain('computerUse.viewer.controlNotAllowed');
+    expect(granted.getTextContent()).not.toContain('computerUse.presentation.controlNotAllowed');
     expect(granted.findByTestId('v-presence-take-control')).toBeTruthy();
   });
 
@@ -128,17 +128,34 @@ describe('ComputerScreenViewer', () => {
       />,
     );
     expect(paused.findByTestId('v-paused-scrim')).toBeTruthy();
-    expect(paused.getTextContent()).toContain('computerUse.viewer.paused:{"time":');
+    expect(paused.getTextContent()).toContain('computerUse.presentation.paused:{"time":');
     await paused.pressByTestIdAsync('v-stalled-action');
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('names an unreachable machine with its one recovery and no fault code to look up', async () => {
+    const screen = await renderScreen(
+      <ComputerScreenViewer {...props({ shared: false, failure: 'machine_unreachable' })} />,
+    );
+    expect(screen.getTextContent()).toContain('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(screen.findByTestId('v-recovery-action')).toBeTruthy();
+    expect(screen.getTextContent()).not.toContain('common.details');
   });
 
   it('says the machine isn’t answering instead of a generic failure, and shows the missing permission in the picture', async () => {
     const offline = await renderScreen(
       <ComputerScreenViewer {...props({ machineOnline: false })} />,
     );
-    expect(offline.getTextContent()).toContain('computerUse.viewer.offlineTitle:{"machine":"mac-vm-1"}');
-    expect(offline.getTextContent()).not.toContain('computerUse.viewer.unavailableTitle');
+    expect(offline.getTextContent()).toContain('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(offline.getTextContent()).not.toContain('computerUse.presentation.unavailableTitle');
+
+    // Nothing to choose on a machine that cannot answer: no "No window is shared" before the failure arrives.
+    const unshared = await renderScreen(
+      <ComputerScreenViewer {...props({ shared: false, machineOnline: false })} />,
+    );
+    expect(unshared.getTextContent()).toContain('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(unshared.findByTestId('v-not-shared')).toBeNull();
+    expect(unshared.getTextContent()).toContain('computerUse.permission.checkAgain');
 
     const onOpenSettings = vi.fn();
     const denied = await renderScreen(

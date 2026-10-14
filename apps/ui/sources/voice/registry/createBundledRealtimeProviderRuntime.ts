@@ -52,7 +52,7 @@ function readRequest(value: VoiceRealtimeJsonValue): Readonly<Record<string, Voi
 export function readRequestedTargetSessionAddress(
   request: VoiceRealtimeJsonValue,
 ): SessionAddress | null {
-  if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
+  if (!request || typeof request !== 'object' || Array.isArray(request) || !('requestedTargetSessionAddress' in request)) return null;
   const target = request.requestedTargetSessionAddress;
   if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
   const targetRecord = target as Readonly<Record<string, VoiceRealtimeJsonValue>>;
@@ -518,7 +518,30 @@ export function createBundledRealtimeProviderRuntime(
         ensureInterruptionWordSegmentationAvailable();
       }
       const targetSessionAddress = readRequestedTargetSessionAddress(request);
-      if (config.execution.kind === 'direct_media') return;
+      if (config.execution.kind === 'direct_media') {
+        // Provider preparation needs the carrier's persistence authority, but
+        // must still precede microphone/audio acquisition. Keep carrier custody
+        // in this existing pre-media phase and its incumbent release owner.
+        const attempt = resourceAttempts.get(input.attemptId) ?? createResourceAttempt();
+        resourceAttempts.set(input.attemptId, attempt);
+        const acquiring = (async () => {
+          const acquired = await host.acquireDirectMediaConversation({
+            adapterId: providerId, controlSessionId: input.controlSessionId,
+            requestedTargetSessionAddress: targetSessionAddress,
+          });
+          attempt.directMediaConversation = Object.freeze({
+            controlSessionId: input.controlSessionId, conversationSessionId: acquired.conversationSessionId,
+            transcriptAttemptIdentity: beginTranscriptProjection(input).attemptIdentity,
+            targetSessionAddress, retiringTranscriptDrain: null,
+            bindingOwnership: acquired.bindingOwnership ?? null,
+          });
+          abortIfRequested(input.signal);
+        })();
+        attempt.preparePromise = acquiring;
+        try { await acquiring; }
+        finally { if (attempt.preparePromise === acquiring) attempt.preparePromise = null; }
+        return;
+      }
       await host.ensureBound({
         adapterId: providerId,
         controlSessionId: input.controlSessionId,
@@ -561,24 +584,6 @@ export function createBundledRealtimeProviderRuntime(
       // settles, so the claim cannot be written from inside that preparation.
       if (acquiresHostMicSession()) attempt.micRequested = true;
       const prepare = (async () => {
-        if (config.execution.kind === 'direct_media') {
-          const request = readRequest(input.request);
-          const targetSessionAddress = readRequestedTargetSessionAddress(request);
-          const acquired = await host.acquireDirectMediaConversation({
-            adapterId: providerId,
-            controlSessionId: input.controlSessionId,
-            requestedTargetSessionAddress: targetSessionAddress,
-          });
-          attempt.directMediaConversation = Object.freeze({
-            controlSessionId: input.controlSessionId,
-            conversationSessionId: acquired.conversationSessionId,
-            transcriptAttemptIdentity: beginTranscriptProjection(input).attemptIdentity,
-            targetSessionAddress,
-            retiringTranscriptDrain: null,
-            bindingOwnership: acquired.bindingOwnership ?? null,
-          });
-          abortIfRequested(input.signal);
-        }
         if (usesHostWebRtcMic) {
           host.machine.transitionToAcquiringMic(input.controlSessionId, providerId, input.attemptId);
           try {
@@ -1510,7 +1515,12 @@ export function createBundledRealtimeProviderRuntime(
 
   const sendEvents = async (events: readonly VoiceRealtimeJsonValue[]): Promise<void> => {
     for (const event of events) {
-      const sent = await runtime!.sendClientControl(event);
+      const sent = await runtime!.sendClientControl(event).catch(() => {
+        // Native SDK exceptions are not a public diagnostic channel. The
+        // failed promise alone cannot prove whether bytes reached the provider,
+        // so retain an ordinary unknown-outcome failure, not before-effect custody.
+        throw new Error('voice_service_unavailable');
+      });
       if (sent.status !== 'sent') throw new Error('voice_service_unavailable');
     }
   };
@@ -1692,17 +1702,23 @@ export function createBundledRealtimeProviderRuntime(
       activeStartAttempt = null;
       bargeInCoordinator?.reset();
       closeLevelWriters();
-      await runtime!.stop();
-      const transcriptAttemptIdentity = activeTranscriptAttempt === transcriptAttempt
-        ? transcriptAttempt?.attemptIdentity ?? null
-        : transcriptAttemptIdentityBeforeStop;
-      const transcriptRelease = transcriptAttemptIdentity
-        ? directMediaReleaseByAttemptIdentity.get(transcriptAttemptIdentity)
-        : null;
-      await transcriptRelease?.catch(() => {});
-      if (activeTranscriptAttempt !== transcriptAttempt) return;
-      activeTranscriptAttempt = null;
-      host.voiceHooks.onStopped();
+      try {
+        await runtime!.stop();
+      } finally {
+        // Native teardown failure does not retire accepted transcript custody.
+        // Join this attempt's carrier drain before propagating the stop result.
+        const transcriptAttemptIdentity = activeTranscriptAttempt === transcriptAttempt
+          ? transcriptAttempt?.attemptIdentity ?? null
+          : transcriptAttemptIdentityBeforeStop;
+        const transcriptRelease = transcriptAttemptIdentity
+          ? directMediaReleaseByAttemptIdentity.get(transcriptAttemptIdentity)
+          : null;
+        await transcriptRelease?.catch(() => {});
+        if (activeTranscriptAttempt === transcriptAttempt) {
+          activeTranscriptAttempt = null;
+          host.voiceHooks.onStopped();
+        }
+      }
     };
     if (!transcriptAttempt) return completeStop();
 

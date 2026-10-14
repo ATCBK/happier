@@ -35,6 +35,7 @@ vi.mock('@/plugins/runtime/context/pluginAccountSettingsChangeBroker', () => ({
 import {
   runSessionChangesSyncOnConnect,
 } from './sessionChangesSyncOnConnect';
+import { buildPromptLibraryPhysicalKeyV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 function createChangesCursorStore(initialCursor = 3): {
   readChangesCursor: (accountId: string) => Promise<number>;
@@ -52,6 +53,21 @@ function createChangesCursorStore(initialCursor = 3): {
 describe('runSessionChangesSyncOnConnect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('re-observes a changed skill-rules row before acknowledging the Account recovery cursor', async () => {
+    const events: string[] = [];
+    fetchChanges.mockResolvedValueOnce({ status: 'ok', response: { nextCursor: 4, changes: [
+      { cursor: 4, kind: 'account', entityId: buildPromptLibraryPhysicalKeyV1('skill-rules'), changedAt: 100 },
+    ] } });
+    await runSessionChangesSyncOnConnect({
+      reason: 'connect', token: 'token-1', sessionId: 's1', lastObservedMessageSeq: 0,
+      getAccountId: async () => 'account-1', readChangesCursor: async () => 3,
+      writeChangesCursor: async () => { events.push('cursor'); },
+      catchUpSessionMessages: async () => {}, syncSessionSnapshotFromServer: async () => true,
+      refreshDemandedAccountCatalogs: async () => { events.push('catalog'); }, onDebug: vi.fn(),
+    });
+    expect(events).toEqual(['catalog', 'cursor']);
   });
 
   it('refreshes the highest self-account settings version before publishing Pending and advancing the cursor', async () => {

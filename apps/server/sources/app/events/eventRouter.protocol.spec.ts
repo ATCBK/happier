@@ -15,9 +15,26 @@ import {
     buildSessionSharedUpdate,
     buildSessionShareRevokedUpdate,
     buildSessionShareUpdatedUpdate,
+    buildUpdateAccountUpdate,
 } from "./eventRouter";
 
 describe("eventRouter payloads (protocol container)", () => {
+    it("validates Account encryption facts and explicit invalidation through the update consumer", () => {
+        const currentness = {
+            mode: "plain" as const, version: 7, settingsVersion: 11,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 100,
+            recipientEnvelopeReadiness: { status: "unavailable" as const, reason: "plain_account" as const },
+        };
+        const update = buildUpdateAccountUpdate("account-1", {}, 7, "encryption-update", currentness);
+        expect(UpdateContainerSchema.parse(update).body).toMatchObject({ encryptionCurrentness: currentness });
+        expect(UpdateContainerSchema.parse(buildUpdateAccountUpdate("account-1", {}, 7, "invalidation", null)).body)
+            .toMatchObject({ encryptionCurrentness: null });
+        expect(UpdateContainerSchema.safeParse({
+            ...update,
+            body: { ...update.body, encryptionCurrentness: { ...currentness, contentPublicKey: "private-binding" } },
+        }).success).toBe(false);
+    });
+
     it("preserves the ready transcript local identity in the live projection", () => {
         const projection = {
             latestReadyEventSeq: 47,

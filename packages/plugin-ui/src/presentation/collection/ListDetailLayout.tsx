@@ -3,6 +3,7 @@ import { View, type ViewStyle } from 'react-native';
 
 import type { HappierLayoutChangeEvent, HappierStyleProp } from '../portableTypes.js';
 import {
+  HappierCollectionDetailWidthContext,
   HappierCollectionLayoutContext,
   resolveHappierCollectionLayoutState,
 } from './collectionLayout.js';
@@ -103,7 +104,9 @@ export function HappierListDetailLayout({
           importantForAccessibility={detailVisible ? 'auto' : 'no-hide-descendants'}
           style={[fillStyle, detailStyle, { flex: split ? 1 - split.listRatio : 1 }, !detailVisible && hiddenStyle]}
         >
-          {idle ? idleDetail : detail}
+          <HappierCollectionDetailWidthContext.Provider value={layout?.mode === 'split' ? layout.detailWidthPx : null}>
+            {idle ? idleDetail : detail}
+          </HappierCollectionDetailWidthContext.Provider>
         </View>
       </View>
     </HappierCollectionLayoutContext.Provider>

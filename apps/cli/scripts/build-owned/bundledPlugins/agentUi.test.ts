@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,16 +36,39 @@ function emittedMapKeys(source: string, name: string): string[] {
 
 describe('bundled Agent exclusion projections', () => {
     it('publishes declared provisioner kinds and billing without activating their runtimes', () => {
-        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.machine.lima');
+        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.machine.boat');
         const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
         if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
-        const pluginPackages: readonly BundledPluginPackage[] = [{ pluginPackageId: 'machine-lima', pluginId: parsed.manifest.id,
-            packageName: '@happier-dev/plugins-machine-lima', packageVersion: '0.0.0', manifest: parsed.manifest }];
+        const pluginPackages: readonly BundledPluginPackage[] = [{ pluginPackageId: 'machine-boat', pluginId: parsed.manifest.id,
+            packageName: '@happier-dev/plugins-machine-boat', packageVersion: '0.0.0', manifest: parsed.manifest }];
         const ui = renderUiBundledPluginEntriesTs({ packageNames: [], pluginPackages });
         expect(emittedMapKeys(ui, 'BUNDLED_MACHINE_PROVISIONER_DECLARATIONS')).toEqual(
             parsed.manifest.contributes.machineProvisioners!.map(descriptor => `${parsed.manifest.id}/${descriptor.id}`));
         expect(ui).toContain(`"descriptor":${JSON.stringify(parsed.manifest.contributes.machineProvisioners![0])}`);
-        expect(ui).not.toContain('from "@happier-dev/plugins-machine-lima');
+        expect(ui).not.toContain('from "@happier-dev/plugins-machine-boat');
+        const declaration = createSourceFile('projection.ts', ui, ScriptTarget.Latest, true, ScriptKind.TS).statements
+            .find(statement => isVariableStatement(statement) && statement.declarationList.declarations
+                .some(entry => isIdentifier(entry.name) && entry.name.text === 'BUNDLED_MACHINE_PROVISIONER_DECLARATIONS'));
+        if (!declaration) throw new Error('Missing machine provisioner projection');
+        const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+        const temporaryRoot = mkdtempSync(join(tmpdir(), 'bundled-provisioner-projection-'));
+        const generated = join(temporaryRoot, 'projection.ts');
+        writeFileSync(generated, [
+            `import type { PluginContributionIdentityV1 } from ${JSON.stringify(join(repoRoot, 'packages/protocol/src/plugins/contributionIdentity.js'))};`,
+            `import type { MachineProvisionerContributionV1 } from ${JSON.stringify(join(repoRoot, 'packages/protocol/src/plugins/contributions/machineProvisioners.js'))};`,
+            declaration.getText(),
+        ].join('\n'));
+        try {
+            execFileSync(process.execPath, [
+                'scripts/workspaces/runTypeScriptCli.mjs', '--strict', '--noEmit', '--target', 'ES2022',
+                '--module', 'ESNext', '--moduleResolution', 'Bundler', '--skipLibCheck', '--types', 'node', generated,
+            ], {
+                cwd: repoRoot, stdio: 'inherit',
+                // The isolated generated-output check uses this already admitted suite's capacity.
+                env: { ...process.env, CI: 'true', GITHUB_ACTIONS: 'true',
+                    HAPPIER_DEV_TARGET_EXECUTION: '0', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '' },
+            });
+        } finally { rmSync(temporaryRoot, { recursive: true, force: true }); }
     });
     it('projects the admitted contribution identity when its local id differs from the UI routing id', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.qwen');

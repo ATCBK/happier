@@ -37,9 +37,7 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.6,
     },
     label: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
-        lineHeight: 14,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
 }));

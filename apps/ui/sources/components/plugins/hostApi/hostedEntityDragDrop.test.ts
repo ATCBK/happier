@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PluginUiJsonValueV1, PluginUiEntityDragDropStateV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiJsonValueV1Schema, PluginUiUpdateEntityDragDropResultV1Schema, type PluginUiJsonValueV1, type PluginUiEntityDragDropStateV1 } from '@happier-dev/protocol/plugins/ui';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
+import type { EntityDragSourceDescription } from '@/components/ui/treeDragDrop/entityDragDropTypes';
 import { createPluginEntityDragDropBinding } from '../surfaces/entityDragDrop/pluginEntityDragDropBinding';
 import { createHostedEntityDragDropHandlers } from './hostedEntityDragDrop';
 import { createPluginSurfaceHostApi } from '../surfaces/createPluginSurfaceHostApi';
@@ -16,8 +17,10 @@ describe('hosted entity coordinates and mount retirement', () => {
         const started = new Promise<void>(resolve => { markStarted = resolve; });
         const descriptor = { id: 'board', title: 'Board', client: { artifactId: 'ui', exportName: 'activate' }, platforms: ['web' as const],
             acceptedKinds: ['plugin:acme.board/issue' as const], actions: [{ kind: 'plugin' as const, action: 'add' }] };
+        const renderMark = () => null;
+        let description: EntityDragSourceDescription | null = { title: 'Issue', subtitle: 'Board', renderMark };
         const source = { descriptor: { id: 'issue', title: 'Issue', client: descriptor.client, platforms: descriptor.platforms,
-            referenceSchema: { type: 'string' as const } }, describe: () => ({ title: 'Issue' }), isCurrent: () => true };
+            referenceSchema: { type: 'string' as const } }, describe: () => description, isCurrent: () => true };
         const target = { descriptor, isCurrent: () => true, resolve: () => refused
             ? { status: 'refused' as const, reason: { code: 'read_only', message: 'Read only' } }
             : { status: 'allowed' as const, effect: { actionId: 'plugin:acme.board/add', input: {}, preview: { verb: 'Add', target: 'Board' } } } };
@@ -32,6 +35,15 @@ describe('hosted entity coordinates and mount retirement', () => {
         await api.handleRequest(request('updateEntityDragDrop', { kind: 'mountTarget', mountId: 'target', targetId: 'board',
             bounds: { x: 0, y: 0, width: 100, height: 100 }, viewport: { width: 100, height: 100 } }), { getHostedFrameBounds: async () => ({ x: 0, y: 0, width: 100, height: 100 }) });
         expect(await api.handleRequest(request('updateEntityDragDrop', { kind: 'mountSource', mountId: 'source', sourceId: 'issue', reference: 'Issue 42' }))).toEqual({ accepted: true });
+        const readDestinations = () => api.handleRequest(request('updateEntityDragDrop', { kind: 'destinations', mountId: 'source' }));
+        const destinations = await readDestinations();
+        expect(PluginUiJsonValueV1Schema.safeParse(destinations).success).toBe(true);
+        expect(PluginUiUpdateEntityDragDropResultV1Schema.parse(destinations).description).toEqual({ title: 'Issue', subtitle: 'Board' });
+        expect(runtime.describeSource(binding.runtimeMountId('source'))?.renderMark).toBe(renderMark);
+        description = { title: 'Issue', renderMark };
+        expect(PluginUiUpdateEntityDragDropResultV1Schema.parse(await readDestinations()).description).toEqual({ title: 'Issue' });
+        description = null;
+        expect(PluginUiUpdateEntityDragDropResultV1Schema.parse(await readDestinations()).description).toBeNull();
         const states: PluginUiEntityDragDropStateV1[] = [];
         let unsubscribe: (() => void) | undefined;
         expect(await api.handleRequest(request('watchEntityDragDrop', { mountId: 'source' }), { entityDragDropSubscription: {

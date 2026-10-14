@@ -668,17 +668,18 @@ describe('multi-Home Session creation composition', () => {
         } finally { heldRead.resolve(); heldList.resolve(); await screen.unmount(); }
     });
 
-    it.each(['disabled', 'waived'] as const)('routes the composer delete through the %s Action policy', async policy => {
+    it.each(['disabled', 'waived', 'defaultApproved', 'defaultRejected', 'retargeted', 'pointerChanged'] as const)('routes the composer delete through the %s Action policy', async policy => {
         const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol');
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
         const features = createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } });
         const coreHttp = await createDraftSurfaceCoreHttpBoundary();
-        const draftId = policy === 'disabled'
-            ? '00000000-0000-4000-8000-000000000931'
-            : '00000000-0000-4000-8000-000000000932';
+        const draftId = '00000000-0000-4000-8000-000000000931';
         const address = { kind: 'newSession' as const, draftId };
+        const replacementDraftId = '00000000-0000-4000-8000-000000000932';
+        const heldDelete = createDeferred<void>();
+        const holdDeletion = policy === 'retargeted' || policy === 'pointerChanged';
         const mutations: unknown[] = [];
-        sessionHttpBoundary = (url, init) => {
+        sessionHttpBoundary = async (url, init) => {
             const path = new URL(url).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json({ ...features,
                 capabilities: { ...features.capabilities,
@@ -688,6 +689,7 @@ describe('multi-Home Session creation composition', () => {
             if (path === '/v2/account/session-drafts/mutate') {
                 const input: unknown = JSON.parse(String(init?.body));
                 mutations.push(input);
+                if (holdDeletion) await heldDelete.promise;
                 return Response.json({ status: 'updated', record: {
                     address, revision: 1, createdAt: 1, updatedAt: 2, content: null,
                 } });
@@ -696,11 +698,12 @@ describe('multi-Home Session creation composition', () => {
         };
         accountHttpSettings = { actionsSettingsV1: normalizeActionsSettingsV1(policy === 'disabled'
             ? { v: 1, actions: { 'session.draft.delete': { enabled: false } } }
-            : { v: 1, approvalWaivedSurfaces: { 'session.draft.delete': ['ui'] } }) };
+            : policy === 'waived' || holdDeletion ? { v: 1, approvalWaivedSurfaces: { 'session.draft.delete': ['ui'] } }
+                : { v: 1 }) };
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA(`composer-delete-${policy}`, { applyConnectionManager: true }));
         const { storage } = await import('@/sync/domains/state/storage');
         await storage.getState().activateSettingsScope({ serverId: homeAScopeId, accountId: 'account-a' });
-        routeBoundary.params = { draftId };
+        routeBoundary.params = { draftId, draftOrigin: 'ordinary' };
         const { NewSessionScreen } = await import('../NewSessionScreen');
         const { NewSessionDraftComposerActions } = await import('@/components/sessions/drafts/NewSessionDraftComposerActions');
         const { AgentInput } = await import('@/components/sessions/agentInput');
@@ -709,15 +712,37 @@ describe('multi-Home Session creation composition', () => {
             children: React.createElement(NewSessionScreen, { presentation: 'embedded' }) });
         const screen = await renderScreen(element());
         modalBoundary.confirm.mockClear();
-        modalBoundary.confirm.mockResolvedValue(false);
+        modalBoundary.confirm.mockResolvedValue(policy === 'defaultApproved');
         try {
             await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
             const scope = { serverId: homeAScopeId, accountId: 'account-a' };
             await act(async () => { writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Keep exact composer scope' } }); });
             await vi.waitFor(() => expect(screen.root.findAllByType(NewSessionDraftComposerActions)).toHaveLength(1));
+            if (holdDeletion) {
+                let deletion!: Promise<void>;
+                await act(async () => { deletion = screen.root.findByType(NewSessionDraftComposerActions).props.onDelete(); });
+                await vi.waitFor(() => expect(mutations).toHaveLength(1));
+                await act(async () => {
+                    storage.getState().applySettingsLocal({ newSessionOrdinaryEntryDraftId: replacementDraftId });
+                    if (policy === 'retargeted') {
+                        writeNewSessionDraft({ scope, draftId: replacementDraftId, materializationIntent: 'userEdit', patch: { text: 'Replacement composer' } });
+                        routeBoundary.params = { draftId: replacementDraftId, draftOrigin: 'ordinary' };
+                    }
+                });
+                if (policy === 'retargeted') await screen.update(element());
+                await act(async () => { heldDelete.resolve(); await deletion; });
+                expect(storage.getState().settings.newSessionOrdinaryEntryDraftId).toBe(replacementDraftId);
+                if (policy === 'retargeted') {
+                    expect(routeBoundary.replace).not.toHaveBeenCalled();
+                    expect(screen.root.findByType(AgentInput).props.value).toBe('Replacement composer');
+                } else expect(routeBoundary.replace).toHaveBeenCalledTimes(1);
+                expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+                return;
+            }
             await act(async () => { await screen.root.findByType(NewSessionDraftComposerActions).props.onDelete(); });
-            expect(modalBoundary.confirm).not.toHaveBeenCalled();
-            if (policy === 'disabled') {
+            if (policy === 'disabled' || policy === 'waived') expect(modalBoundary.confirm).not.toHaveBeenCalled();
+            else expect(modalBoundary.confirm).toHaveBeenCalledTimes(1);
+            if (policy === 'disabled' || policy === 'defaultRejected') {
                 expect(getSessionDraftSnapshot(scope, address)).not.toBeNull();
                 expect(mutations).toEqual([]);
                 expect(routeBoundary.replace).not.toHaveBeenCalled();
@@ -726,7 +751,7 @@ describe('multi-Home Session creation composition', () => {
                 expect(mutations).toMatchObject([{ address, content: null }]);
                 expect(routeBoundary.replace).toHaveBeenCalledTimes(1);
             }
-        } finally { await screen.unmount(); }
+        } finally { heldDelete.resolve(); await screen.unmount(); }
     });
 
     async function primeMachinePoolsFeature(serverIds: readonly string[], enabled: boolean) {

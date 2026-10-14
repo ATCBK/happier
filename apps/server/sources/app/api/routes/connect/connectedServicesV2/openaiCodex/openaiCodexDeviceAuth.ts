@@ -1,17 +1,10 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
-import {
-  BOX_BUNDLE_PUBLIC_KEY_BYTES,
-  OPENAI_CODEX_DEVICE_REDIRECT_URI,
-  OPENAI_CODEX_DEVICE_TOKEN_URL,
-  OPENAI_CODEX_DEVICE_USER_CODE_URL,
-  OPENAI_CODEX_DEVICE_VERIFICATION_URL,
-  decodeBase64,
-  encodeBase64,
-  isValidBoxBundlePublicKey,
-  sealBoxBundle,
-  type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { BOX_BUNDLE_PUBLIC_KEY_BYTES } from '@happier-dev/protocol/crypto/boxBundleFormat';
+import { OPENAI_CODEX_DEVICE_REDIRECT_URI, OPENAI_CODEX_DEVICE_TOKEN_URL, OPENAI_CODEX_DEVICE_USER_CODE_URL, OPENAI_CODEX_DEVICE_VERIFICATION_URL } from '@happier-dev/protocol/providers/codex/oauth';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { isValidBoxBundlePublicKey, sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import { assertNonEmptyString } from "../connectValueParsers";
 import {

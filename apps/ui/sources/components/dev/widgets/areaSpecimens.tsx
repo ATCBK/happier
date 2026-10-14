@@ -115,11 +115,11 @@ export const AREA_SPECIMEN_FRAMES: WidgetSpecimenFrames = {
 };
 
 const styles = StyleSheet.create((theme) => ({
-    page: { backgroundColor: theme.colors.background.canvas, padding: 16, gap: 16 },
+    page: { backgroundColor: theme.colors.background.canvas, padding: theme.space.s16, gap: theme.space.s16 },
     desk: { width: 1040 },
     aside: { width: 360 },
     phone: { width: 390 },
     pageTitle: { ...Typography.default('semiBold'), ...happierPageTextMetrics('pageTitle'), color: theme.colors.text.primary },
-    checkoutRow: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border.default },
+    checkoutRow: { paddingVertical: theme.space.s12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border.default },
     checkout: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
 }));

@@ -180,6 +180,33 @@ describe('SessionWidgetHost chrome', () => {
         expect(runtime.getSnapshot().phase).toBe('idle');
     });
 
+    it('does not name a record it has not read yet: no "Untitled widget" while loading', async () => {
+        const screen = await renderCard({ item: { itemId: 'note-1', revision: null, state: { kind: 'loading' } }, canEdit: false });
+        const title = screen.findHostByTestId('widget-title');
+        expect(title?.props.children).toBe('');
+        expect(title?.props.accessibilityLabel).toBe('Loading this widget');
+    });
+
+    it('fits an auto-height native card to what it draws, not to its fallback size', async () => {
+        const screen = await renderCard();
+        const bodyHeight = () => {
+            const style = screen.findHostByTestId('widget-body')?.props.style as unknown;
+            const flat = (Array.isArray(style) ? style : [style]).reduce<Record<string, unknown>>(
+                (merged, entry) => ({ ...merged, ...(entry && typeof entry === 'object' ? entry : {}) }), {});
+            return flat.height;
+        };
+        const measured = screen.tree.root.findAll(
+            (node) => typeof node.type === 'string' && typeof (node.props as { onLayout?: unknown }).onLayout === 'function'
+                && node.findAll((child) => child.props.testID === 'widget-declarative').length > 0
+                && node.props.testID !== 'widget-body',
+        ).at(-1);
+        expect(measured).toBeDefined();
+        await act(async () => {
+            (measured!.props as { onLayout: (event: unknown) => void }).onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 140 } } });
+        });
+        expect(bodyHeight()).toBe(140);
+    });
+
     it('names the reorder handle after the item it reorders', async () => {
         const screen = await renderCard({
             entityDrag: entityDrag(),
@@ -419,7 +446,7 @@ describe('SessionWidgetHost chrome', () => {
     });
 
     it('bleeds full-bleed content to the frame edge at every density, and keeps the inset otherwise', async () => {
-        const insetOf = async (density: 'full' | 'compact', frame: 'card' | 'full_bleed') => {
+        const insetOf = async (density: 'full' | 'compact', frame: 'card' | 'full_bleed' | 'frameless') => {
             const screen = await renderCard({ density, item: noteItem({ frame }) });
             const body = screen.findHostByTestId('widget.body');
             const style = ([] as unknown[])
@@ -440,6 +467,10 @@ describe('SessionWidgetHost chrome', () => {
             expect(bleed.paddingBottom).toBe(0);
             const inset = await insetOf(density, 'card');
             expect(inset.paddingLeft).toBe(HAPPIER_WIDGET_FRAME_METRICS.cardInsetPx);
+            // Frameless drops the item's own chrome, not the host card's inset: a table's text
+            // must never touch the card edge.
+            const frameless = await insetOf(density, 'frameless');
+            expect(frameless.paddingLeft).toBe(HAPPIER_WIDGET_FRAME_METRICS.cardInsetPx);
         }
     });
 });

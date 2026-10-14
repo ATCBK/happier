@@ -11,9 +11,14 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { useReachRulesCatalog } from '@/sync/store/useReachRulesCatalog';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
+import { resolveWorkspacePathBasenameV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveWorkspaceDisplayLabel } from '@/sync/domains/workspaces/workspaceLabel';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { readInstalledMachineAgentIds } from './installedMachineAgents';
+import { readInstalledMachineAgentInventory } from './installedMachineAgents';
+import { getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from '@/sync/store/settings/acpCatalogSnapshot';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
 import {
   readDaemonMergedProjectionSummary,
@@ -22,15 +27,48 @@ import {
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 
 export type ReachMachineProjection = Readonly<
-  ReachProjectionV1[number] & { offline: boolean; projectKey?: string }
+  ReachProjectionV1[number] & { offline: boolean; projectKey?: string; agentInventoryComplete?: boolean }
 >;
 const empty: readonly ReachMachineProjection[] = Object.freeze([]);
+const emptyProjects: readonly Readonly<{ projectKey: string; name: string; machineCount: number }>[] = Object.freeze([]);
+const emptyWorkspaceRefs: readonly WorkspaceRefV1[] = Object.freeze([]);
+
+/** Accepted Account Projects, from the same scoped rows and grouping owner as Projects and reach. */
+export function useReachProjects(serverId?: string | null) {
+  const scope = useAccountSettingsScope();
+  const rows = useProjectAccountRows();
+  return React.useMemo(() => {
+    if (!scope || !rows || !areServerAccountScopesEqual(scope, rows.scope)
+      || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+      return { projects: emptyProjects, workspaceRefs: emptyWorkspaceRefs };
+    }
+    const workspaceRefs = rows.workspaceRefs.filter(ref => areServerProfileIdentifiersEquivalent(ref.serverId, scope.serverId));
+    const grouped = projectProjectListV1({ serverId: scope.serverId, workspaceRefs,
+      organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier });
+    // Hidden Projects remain valid rule targets and must keep their names in existing rules.
+    const projects = [...grouped.projectGroups, ...grouped.hiddenProjectGroups].map(group => {
+      const ref = group.items[0]!;
+      const organization = rows.organizations.find(row => row.key.projectKey === group.projectKey.projectKey
+        && areServerProfileIdentifiersEquivalent(row.key.serverId, scope.serverId));
+      return { projectKey: group.projectKey.projectKey,
+        name: organization?.value.label ?? resolveWorkspaceDisplayLabel({ scope: ref, workspaceRef: ref,
+          fallbackPathLabel: resolveWorkspacePathBasenameV1(ref.rootPath) ?? ref.rootPath }),
+        machineCount: new Set(group.items.map(item => item.machineId)).size };
+    });
+    return { projects, workspaceRefs };
+  }, [scope, rows, serverId]);
+}
 
 /** One Account machine as reach sees it: published install facts and REACH's presence predicate. */
 export type ReachMachine = Readonly<{
   machineId: string;
   platform: 'win32' | 'posix' | null;
+  /** The machine's own published OS and CPU (`darwin`/`linux`/`win32`, `arm64`/`x64`): platform-fit facts, null while unknown. */
+  os?: string | null;
+  arch?: string | null;
   agentIds: readonly string[];
+  /** Configured instance inventory may still be unknown even while its factory is published. */
+  agentInventoryComplete?: boolean;
   /** Per-Machine declarations from the existing inert catalog cache; absent while cold. */
   agentDeclarationsById?: PluginProjectionV2['agentsById'] | null;
   /** Display name from the presence owner; null while unknown. */
@@ -91,23 +129,32 @@ export function useReachMachines(): Readonly<{
     return () => { for (const dispose of disposers) dispose(); };
   }, [machineIds, serverId]);
   const declarations = React.useSyncExternalStore(subscribeDeclarations, readDeclarations, readDeclarations);
+  const readAcp = React.useCallback(() => getAcpCatalogSnapshot(scope), [scope]);
+  const acp = React.useSyncExternalStore(subscribeAcpCatalogSnapshots, readAcp, readAcp);
+  const definitionIds = React.useMemo(() => acp?.data?.definitions.map(definition => definition.id), [acp?.data]);
   const reach = React.useMemo(
     () =>
-      machines.map((machine, index): ReachMachine => ({
-        machineId: machine.id,
-        platform:
-          machine.metadata?.platform === 'win32'
-            ? 'win32'
-            : machine.metadata?.platform
-              ? 'posix'
-              : null,
-        agentIds: readInstalledMachineAgentIds(machine.metadata?.agentInventory, installed.get(machine.id)),
-        agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
-        name: presence[index]?.name ?? null,
-        offline: presence[index]?.reachability === 'unreachable',
-        lastSeenAt: presence[index]?.lastSeenAt ?? null,
-      })),
-    [machines, installed, presence, declarations],
+      machines.map((machine, index): ReachMachine => {
+        const inventory = readInstalledMachineAgentInventory(machine.metadata?.agentInventory, installed.get(machine.id), definitionIds);
+        return {
+          machineId: machine.id,
+          platform:
+            machine.metadata?.platform === 'win32'
+              ? 'win32'
+              : machine.metadata?.platform
+                ? 'posix'
+                : null,
+          os: machine.metadata?.platform ?? null,
+          arch: machine.metadata?.arch ?? null,
+          agentIds: inventory.agentIds,
+          agentInventoryComplete: inventory.complete,
+          agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
+          name: presence[index]?.name ?? null,
+          offline: presence[index]?.reachability === 'unreachable',
+          lastSeenAt: presence[index]?.lastSeenAt ?? null,
+        };
+      }),
+    [machines, installed, presence, declarations, definitionIds],
   );
   return React.useMemo(() => ({ scope, machines: reach }), [scope, reach]);
 }
@@ -120,7 +167,8 @@ export function projectReachOnMachines(
   workspaceRefs: readonly WorkspaceRefV1[] = [],
 ): readonly ReachMachineProjection[] {
   const projected: ReachMachineProjection[] = projectReachForMachinesV1(rules, { projectKey, machines }).map(
-    (row, index) => ({ ...row, offline: machines[index]?.offline ?? false }),
+    (row, index) => ({ ...row, offline: machines[index]?.offline ?? false,
+      agentInventoryComplete: machines[index]?.agentInventoryComplete }),
   );
   if (projectKey) return projected;
   const projectKeys = new Set(rules.flatMap(rule => rule.target.t === 'project' ? [rule.target.projectKey] : []));
@@ -128,7 +176,8 @@ export function projectReachOnMachines(
     const machineIds = new Set(workspaceRefs.filter(ref => (ref.projectKey ?? ref.id) === key).map(ref => ref.machineId));
     const members = machines.filter(machine => machineIds.has(machine.machineId));
     projected.push(...projectReachForMachinesV1(rules, { projectKey: key, machines: members })
-      .map((row, index) => ({ ...row, projectKey: key, offline: members[index]?.offline ?? false })));
+      .map((row, index) => ({ ...row, projectKey: key, offline: members[index]?.offline ?? false,
+        agentInventoryComplete: members[index]?.agentInventoryComplete })));
   }
   return projected;
 }
@@ -141,14 +190,12 @@ export function useReachProjection(
 ): readonly ReachMachineProjection[] {
   const catalog = useReachRulesCatalog(kind, itemId);
   const { scope, machines } = useReachMachines();
-  const projects = useProjectAccountRows();
+  const { workspaceRefs } = useReachProjects(scope?.serverId);
   return React.useMemo(
     () =>
       !scope || !catalog.valueAvailable
         ? empty
-        : projectReachOnMachines(catalog.rules, machines, opts?.projectKey,
-          areServerAccountScopesEqual(scope, projects?.scope)
-            ? projects?.workspaceRefs.filter(ref => areServerProfileIdentifiersEquivalent(ref.serverId, scope.serverId)) : []),
-    [scope, catalog.valueAvailable, catalog.rules, opts?.projectKey, machines, projects],
+        : projectReachOnMachines(catalog.rules, machines, opts?.projectKey, workspaceRefs),
+    [scope, catalog.valueAvailable, catalog.rules, opts?.projectKey, machines, workspaceRefs],
   );
 }

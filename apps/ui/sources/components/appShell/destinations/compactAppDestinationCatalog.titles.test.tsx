@@ -62,6 +62,37 @@ afterEach(() => {
 });
 
 describe('Project destination instance titles', () => {
+    it('settles deleted Session identities without treating an uncached or other-Home Session as deleted', async () => {
+        const entries = ['/session/gone?serverId=home-a', '/session/gone/info?serverId=home-a',
+            '/session/gone?serverId=home-b', '/session/uncached?serverId=home-a'].map((href, index) => ({
+            key: String(index), ref: destination(href), fallbackTitle: 'Old name',
+        }));
+        const hook = await renderHook(() => useDestinationInstanceTitles(catalog, entries));
+        await act(async () => {
+            storage.setState({ isDataReady: true });
+            storage.getState().deleteSession('gone', 'home-a');
+        });
+        expect(entries.map(entry => readDestinationInstanceTitle(catalog, entry.ref, { fallbackTitle: entry.fallbackTitle })))
+            .toEqual([t('errors.sessionDeleted'), t('errors.sessionDeleted'), 'Old name', 'Old name']);
+        expect([...hook.getCurrent().values()]).toEqual([t('errors.sessionDeleted'), t('errors.sessionDeleted'), 'Old name', 'Old name']);
+        await hook.unmount();
+    });
+    it('settles missing Projects and Artifacts only after their own census completes', async () => {
+        storage.getState().setProjectAccountRowsStatusForScope(scope, 'loading');
+        const entries = ['/projects/gone?serverId=home-a', '/artifacts/gone', '/workflows/gone'].map((href, index) => ({
+            key: String(index), ref: destination(href),
+        }));
+        const hook = await renderHook(() => useDestinationInstanceTitles(catalog, entries));
+        expect(hook.getCurrent().size).toBe(0);
+        await act(async () => {
+            applyProjectAccountRowsFixture(storage, { workspaceRefs: [lumen, atlas] });
+            storage.getState().applyArtifacts([]);
+        });
+        const expected = [t('projects.detail.notFoundTitle'), t('artifacts.notFound'), t('common.unavailable')];
+        expect(entries.map(entry => readDestinationInstanceTitle(catalog, entry.ref))).toEqual(expected);
+        expect([...hook.getCurrent().values()]).toEqual(expected);
+        await hook.unmount();
+    });
     it('names a restored built-in Profile from the same declaration its detail uses without an Account row', () => {
         const builtin = getBuiltInProfile('azure-openai');
         if (!builtin) throw new Error('Expected canonical built-in Profile');
@@ -168,13 +199,14 @@ describe('Project destination instance titles', () => {
             .toBe(`Lumen · ${t('settings.terminal')}`);
     });
 
-    it('leaves unavailable or ambiguous identities unnamed for the existing saved-title placeholder', () => {
-        expect(readDestinationInstanceTitle(catalog, destination('/projects/not-loaded/code?serverId=home-a'))).toBeNull();
+    it('settles absent Projects while leaving ambiguous or another-Home identities unnamed', () => {
+        expect(readDestinationInstanceTitle(catalog, destination('/projects/not-loaded/code?serverId=home-a'))).toBe(t('projects.detail.notFoundTitle'));
         expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout'))).toBeNull();
         expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout?serverId=unknown-home'))).toBeNull();
     });
 
     it('updates retained and duplicate tab titles through rename and refresh without changing their keys', async () => {
+        storage.getState().setProjectAccountRowsStatusForScope(scope, 'loading');
         const ref = destination('/projects/checkout/code?serverId=home-a');
         const entries = [{ key: 'first', ref }, { key: 'explicit-duplicate', ref },
             { key: 'loading', ref: destination('/projects/not-loaded/code?serverId=home-a') }];

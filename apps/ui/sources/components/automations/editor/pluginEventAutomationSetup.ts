@@ -1,4 +1,4 @@
-import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { AutomationEventFilterV1 } from '@happier-dev/protocol/automations/automationEventFilterV1';
 import type { DaemonContributionRegistryProjectionAutomationEligibleEventV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginDiagnosticRemediationV1 } from '@happier-dev/protocol/daemon/pluginContributionIntrospection';
@@ -93,11 +93,7 @@ function sameSetupSurface(
             left.selectedRenderer.identity,
             right.selectedRenderer.identity,
         )
-        && left.executionOrigin.serverIdentityId === right.executionOrigin.serverIdentityId
-        && arePluginMachineMaterializationRefsEqual(
-            left.executionOrigin.materializationRef,
-            right.executionOrigin.materializationRef,
-        );
+        && arePluginMachineExecutionOriginsEqual(left.executionOrigin, right.executionOrigin);
 }
 
 export function getPluginEventAutomationEligibleSetupPresentationKey(
@@ -118,10 +114,7 @@ export function getPluginEventAutomationEligibleSetupPresentationKey(
             surface.projectionGeneration,
             surface.selectedRenderer.identity.pluginId,
             surface.selectedRenderer.identity.localId,
-            surface.executionOrigin.serverIdentityId,
-            surface.executionOrigin.materializationRef.machineId,
-            surface.executionOrigin.materializationRef.materializationId,
-            surface.executionOrigin.materializationRef.pluginId,
+            surface.executionOrigin,
         ] : null,
     ]);
 }
@@ -140,12 +133,8 @@ function hasExactCurrentSetupPresentation(
         arePluginContributionIdentitiesEqual(surface.contribution, event.event.identity)
         && surface.occurrenceId === event.event.occurrenceId
         && surface.selectedRenderer.identity.pluginId === event.event.identity.pluginId
-        && surface.executionOrigin.materializationRef.pluginId === event.event.identity.pluginId
-        && surface.executionOrigin.serverIdentityId === origin.origin.serverIdentityId
-        && arePluginMachineMaterializationRefsEqual(
-            surface.executionOrigin.materializationRef,
-            origin.origin.materializationRef,
-        )
+        && getPluginMachineExecutionOriginRef(surface.executionOrigin).pluginId === event.event.identity.pluginId
+        && arePluginMachineExecutionOriginsEqual(surface.executionOrigin, origin.origin)
     );
 }
 

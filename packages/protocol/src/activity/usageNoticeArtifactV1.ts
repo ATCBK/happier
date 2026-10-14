@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
@@ -9,15 +9,15 @@ const UsageNoticeV1Schema = lazyZodSchema(() => z.union([
 ]));
 
 export const USAGE_NOTICE_ARTIFACT_KIND_V1 = 'usage_notice.v1';
-export const UsageNoticeArtifactHeaderV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), kind: z.literal(USAGE_NOTICE_ARTIFACT_KIND_V1), title: z.string().min(1),
+export const UsageNoticeArtifactHeaderV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), kind: z.literal(USAGE_NOTICE_ARTIFACT_KIND_V1), title: z.string().check(z.minLength(1)),
   status: z.enum(['open', 'dismissed']), notice: UsageNoticeV1Schema,
   // The incumbent Artifact writer refreshes this body-derived encrypted preview.
-  excerpt: z.string().optional(),
-}).strict());
-export const UsageNoticeArtifactBodyV1Schema = lazyZodSchema(() => z.object({
+  excerpt: z.optional(z.string()),
+}));
+export const UsageNoticeArtifactBodyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), notice: UsageNoticeV1Schema,
-}).strict());
+}));
 export type UsageNoticeArtifactHeaderV1 = z.infer<typeof UsageNoticeArtifactHeaderV1Schema>;
 
 /** Content validation is not audience admission; readers retain Artifact access/mode checks. */

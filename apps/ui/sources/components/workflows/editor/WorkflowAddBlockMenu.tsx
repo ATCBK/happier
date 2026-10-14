@@ -218,7 +218,7 @@ function WorkflowAddBlockMenuPopover(props: Readonly<{
             subtitle: spec.description?.trim() || spec.plugin?.title,
             icon: () => <Icon name={spec.plugin ? resolvePluginContributedActionIconName(spec.plugin.icon) : spec.icon ?? 'lightning'}
                 size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
-            rightAccessory: <Text numberOfLines={1} style={{ ...Typography.rowMeta(), color: theme.colors.text.tertiary }}>
+            rightAccessory: <Text numberOfLines={1} style={{ ...Typography.variant('meta'), color: theme.colors.text.tertiary }}>
                 {spec.plugin?.title ?? spec.sourceLabel ?? t('workflows.actionTitles.host')}
             </Text>,
             onSelect: add({ kind: 'action', actionId: spec.id }),

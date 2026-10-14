@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { encodeBase64 } from '../crypto/base64.js';
@@ -8,13 +8,13 @@ import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js'
 import type { ConnectedServiceQuotaGetResultV1 } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { UsageFileResultSchema, type UsageFileResult } from './usageExport.js';
 
-export const UsageCalendarExportInputSchema = lazyZodSchema(() => z.object({
+export const UsageCalendarExportInputSchema = lazyZodSchema(() => z.strictObject({
   query: UsageQuerySchema,
   selectedEvents: z.array(z.discriminatedUnion('kind', [
-    z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), kind: z.literal('reset'), meterId: z.string().min(1) }).strict(),
-    z.object({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), kind: z.literal('renewal') }).strict(),
-  ])).min(1),
-}).strict());
+    z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), kind: z.literal('reset'), meterId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ account: asProtocolZod(QualifiedConnectedAccountRefSchema), kind: z.literal('renewal') }),
+  ])).check(z.minLength(1)),
+}));
 export type UsageCalendarExportInput = z.infer<typeof UsageCalendarExportInputSchema>;
 type CalendarAccount = UsageCalendarExportInput['selectedEvents'][number]['account'];
 export type UsageScheduledEvent = Readonly<{ key: string; account: CalendarAccount; kind: 'reset' | 'renewal' | 'ending' | 'credit_expiry';

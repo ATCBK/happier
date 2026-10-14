@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PeerRouteNonceProofV1Schema } from './directRouteGrantNonceV1.js';
 import { SignedDirectRouteGrantV1Schema } from './directRouteGrantV1.js';
@@ -9,21 +9,20 @@ import { isLiteralLoopbackHostname } from '../../../server/urls/loopbackHostname
 
 const MAX_LOOPBACK_ENDPOINT_URL_LENGTH = 2048;
 
-export const PeerLoopbackEndpointCandidateV1Schema = lazyZodSchema(() => z
+export const PeerLoopbackEndpointCandidateV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z
   .object({
     v: z.literal(1),
     routeKind: z.literal('loopback_direct'),
-    url: z.string().min(1).max(MAX_LOOPBACK_ENDPOINT_URL_LENGTH),
-    endpointFingerprint: z.string().min(1),
-    expiresAt: z.number().int().nonnegative(),
-  })
-  .superRefine((candidate, ctx) => {
+    url: z.string().check(z.minLength(1), z.maxLength(MAX_LOOPBACK_ENDPOINT_URL_LENGTH)),
+    endpointFingerprint: z.string().check(z.minLength(1)),
+    expiresAt: z.number().check(z.int(), z.nonnegative()),
+  }).check(z.superRefine((candidate, ctx) => {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(candidate.url);
     } catch {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['url'],
         message: 'Loopback endpoint candidates need an absolute URL',
       });
@@ -32,42 +31,39 @@ export const PeerLoopbackEndpointCandidateV1Schema = lazyZodSchema(() => z
 
     if (parsedUrl.protocol !== 'http:') {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['url'],
         message: 'Loopback endpoint candidates must use http:',
       });
     }
     if (!isLiteralLoopbackHostname(parsedUrl.hostname)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['url'],
         message: 'Loopback endpoint candidates must target a loopback host',
       });
     }
     if (parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['url'],
         message: 'Loopback endpoint candidates must not include URL secrets, query strings, or fragments',
       });
     }
     if (parsedUrl.pathname !== '/') {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['url'],
         message: 'Loopback endpoint candidates must publish the listener base URL',
       });
     }
-  })
-  .strict());
+  }))));
 
-export const PeerLoopbackProbeRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const PeerLoopbackProbeRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     grant: SignedDirectRouteGrantV1Schema,
     nonceProof: PeerRouteNonceProofV1Schema,
-  })
-  .strict());
+  }));
 
 export const PeerLoopbackProbeFallbackReasonCodeV1Schema = lazyZodSchema(() => z.enum([
   'grant_invalid',
@@ -87,24 +83,20 @@ export const PeerLoopbackProbeFallbackReasonCodeV1Schema = lazyZodSchema(() => z
 ]));
 
 export const PeerLoopbackProbeResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z
-    .object({
+  z.strictObject({
       v: z.literal(1),
       ok: z.literal(true),
       receipt: z.literal(PEER_MEDIATION_RECEIPTS.routeSelected),
       routeKind: z.literal('loopback_direct'),
       flowKind: PeerFlowKindV1Schema,
-      endpointFingerprint: z.string().min(1),
-    })
-    .strict(),
-  z
-    .object({
+      endpointFingerprint: z.string().check(z.minLength(1)),
+    }),
+  z.strictObject({
       v: z.literal(1),
       ok: z.literal(false),
       receipt: z.literal(PEER_MEDIATION_RECEIPTS.routeFallback),
       reasonCode: PeerLoopbackProbeFallbackReasonCodeV1Schema,
-    })
-    .strict(),
+    }),
 ]));
 
 export type PeerLoopbackEndpointCandidateV1 = z.output<typeof PeerLoopbackEndpointCandidateV1Schema>;

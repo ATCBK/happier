@@ -1,8 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import {
-    AccountEncryptionMigrateRequestBindingDigestV1Schema,
-    type AccountEncryptionMigrateRequestBindingDigestV1,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateRequestBindingDigestV1Schema, type AccountEncryptionMigrateRequestBindingDigestV1 } from '@happier-dev/protocol/account/encryptionMigrate';
 
 const SERVER_REPLAY_BINDING_PATTERN =
     /^aemrsb1_[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;

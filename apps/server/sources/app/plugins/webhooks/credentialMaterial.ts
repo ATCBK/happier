@@ -1,6 +1,6 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
-import { encodeBase64 } from "@happier-dev/protocol";
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
 export function createGeneratedPluginWebhookCredentialMaterialV1(_params?: Readonly<{
     randomBytes?: (length: number) => Uint8Array;

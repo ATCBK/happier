@@ -8,7 +8,6 @@ import {
   resolveAttachmentTransferConfigFromRequest,
   type AttachmentTransferConfig,
 } from './resolveAttachmentTransferTarget';
-import { resolvePromptAssetUploadTarget } from './resolvePromptAssetUploadTarget';
 import {
   resolveWorkspaceFileUploadTarget,
   type WorkspaceFinalizeFileOperationsFactory,
@@ -19,7 +18,6 @@ import {
   type ComposerMediaStageUploadTarget,
   type ComposerMediaStageUploadTargetDeps,
 } from './resolveComposerMediaStageUploadTarget';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { SessionAttachmentUploadInitRequestV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentUploadInitRequestV1';
 import type { SessionAttachmentUploadInitRequestV1 } from '@happier-dev/protocol';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
@@ -31,13 +29,7 @@ type WorkspaceLikeTransferUploadTarget = Extract<
   { success: true }
 >['target'];
 
-type PromptAssetTransferUploadTarget = Extract<
-  ReturnType<typeof resolvePromptAssetUploadTarget>,
-  { success: true }
->['target'];
-
 type ResolvedTransferUploadTarget = WorkspaceLikeTransferUploadTarget
-  | PromptAssetTransferUploadTarget
   | ComposerMediaStageUploadTarget;
 
 export type SessionFileUploadInitRequest = Readonly<{
@@ -50,20 +42,9 @@ export type SessionFileUploadInitRequest = Readonly<{
 
 export type SessionAttachmentUploadInitRequest = SessionAttachmentUploadInitRequestV1;
 
-export type PromptAssetUploadInitRequest = Readonly<{
-  t: 'prompt_asset_upload_v1';
-  sizeBytes: unknown;
-}>;
-
 export type { ComposerMediaStageUploadInitRequest } from './resolveComposerMediaStageUploadTarget';
 
 export type TransferUploadInitRequest =
-  | SessionFileUploadInitRequest
-  | SessionAttachmentUploadInitRequest
-  | PromptAssetUploadInitRequest
-  | ComposerMediaStageUploadInitRequest;
-
-export type NonPromptTransferUploadInitRequest =
   | SessionFileUploadInitRequest
   | SessionAttachmentUploadInitRequest
   | ComposerMediaStageUploadInitRequest;
@@ -71,10 +52,6 @@ export type NonPromptTransferUploadInitRequest =
 export type TransferUploadInitAttachmentDeps = Readonly<{
   pathAllowanceRegistry?: TransferPathAllowanceRegistry;
   resolveSessionWorkingDirectory: (sessionId: string) => Promise<string | null>;
-}>;
-
-export type TransferUploadInitPromptAssetDeps = Readonly<{
-  adapterRegistry: ReadonlyMap<string, PromptAssetAdapter>;
 }>;
 
 export type ResolveTransferUploadInitTargetResult =
@@ -89,57 +66,6 @@ export type ResolveTransferUploadInitTargetResult =
       error: string;
     }>;
 
-type ResolveTransferUploadInitTargetSuccess<TTarget extends ResolvedTransferUploadTarget> = Readonly<{
-  success: true;
-  target: TTarget;
-  sha256Expected?: string;
-  diagnosticContext: TransferLifecycleDiagnosticContext;
-}>;
-
-type ResolveTransferUploadInitTargetFailure = Readonly<{
-  success: false;
-  error: string;
-}>;
-
-export function resolveTransferUploadInitTarget(params: Readonly<{
-  workingDirectory: string;
-  accessPolicy?: FilesystemAccessPolicy;
-  request: PromptAssetUploadInitRequest;
-  tempUploadRoot: string;
-  additionalAllowedWriteDirs?: readonly string[];
-  sessionRpcTransferMaxBytes?: number | null;
-  attachmentUpload?: TransferUploadInitAttachmentDeps;
-  composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload: TransferUploadInitPromptAssetDeps;
-  finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
-}>): Promise<ResolveTransferUploadInitTargetSuccess<PromptAssetTransferUploadTarget> | ResolveTransferUploadInitTargetFailure>;
-
-export function resolveTransferUploadInitTarget(params: Readonly<{
-  workingDirectory: string;
-  accessPolicy?: FilesystemAccessPolicy;
-  request: NonPromptTransferUploadInitRequest;
-  tempUploadRoot: string;
-  additionalAllowedWriteDirs?: readonly string[];
-  sessionRpcTransferMaxBytes?: number | null;
-  attachmentUpload?: TransferUploadInitAttachmentDeps;
-  composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: TransferUploadInitPromptAssetDeps;
-  finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
-}>): Promise<ResolveTransferUploadInitTargetSuccess<WorkspaceLikeTransferUploadTarget | ComposerMediaStageUploadTarget> | ResolveTransferUploadInitTargetFailure>;
-
-export function resolveTransferUploadInitTarget(params: Readonly<{
-  workingDirectory: string;
-  accessPolicy?: FilesystemAccessPolicy;
-  request: TransferUploadInitRequest;
-  tempUploadRoot: string;
-  additionalAllowedWriteDirs?: readonly string[];
-  sessionRpcTransferMaxBytes?: number | null;
-  attachmentUpload?: TransferUploadInitAttachmentDeps;
-  composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: TransferUploadInitPromptAssetDeps;
-  finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
-}>): Promise<ResolveTransferUploadInitTargetResult>;
-
 export async function resolveTransferUploadInitTarget(params: Readonly<{
   workingDirectory: string;
   accessPolicy?: FilesystemAccessPolicy;
@@ -149,7 +75,6 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
   sessionRpcTransferMaxBytes?: number | null;
   attachmentUpload?: TransferUploadInitAttachmentDeps;
   composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: TransferUploadInitPromptAssetDeps;
   finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
 }>): Promise<ResolveTransferUploadInitTargetResult> {
   if (params.request.t === 'composer_media_stage_upload_v1') {
@@ -170,26 +95,6 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
       sha256Expected: target.sha256Expected,
       diagnosticContext: {
         transferKind: 'composer_media_stage',
-      },
-    };
-  }
-
-  if (params.request.t === 'prompt_asset_upload_v1') {
-    if (!params.promptAssetUpload) {
-      return { success: false, error: 'Prompt asset uploads are unavailable' };
-    }
-    const target = resolvePromptAssetUploadTarget({
-      adapterRegistry: params.promptAssetUpload.adapterRegistry,
-      sizeBytes: params.request.sizeBytes,
-    });
-    if (!target.success) {
-      return { success: false, error: target.error };
-    }
-    return {
-      success: true,
-      target: target.target,
-      diagnosticContext: {
-        transferKind: 'prompt_asset',
       },
     };
   }
@@ -272,7 +177,10 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
     };
   }
 
-  const fileRequest = params.request as SessionFileUploadInitRequest;
+  if (params.request.t !== undefined && params.request.t !== 'session_file_upload_v1') {
+    return { success: false, error: 'Unknown upload request type' };
+  }
+  const fileRequest = params.request;
   const target = resolveWorkspaceFileUploadTarget({
     workingDirectory: params.workingDirectory,
     accessPolicy: params.accessPolicy,

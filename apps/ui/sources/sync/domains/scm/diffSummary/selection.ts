@@ -81,7 +81,8 @@ export function selectScmWalkthroughKey(state: ScmDiffSummaryState,
             : entry.sessionId === null && entry.machineId === host.machineId && entry.input.cwd === host.cwd;
         if (!sameHost || !scmReviewComparisonMatchesSource(comparison, entry.input.source, captured)) continue;
         if (comparison.comparisonId && comparison.comparisonId !== (entry.latestOutput?.comparison?.id
-            ?? entry.finalSummary?.output.comparison?.id ?? entry.lastKnownSummary?.output.comparison?.id)) continue;
+            ?? entry.finalSummary?.output.comparison?.id ?? entry.lastKnownSummary?.output.comparison?.id
+            ?? entry.input.comparisonId)) continue;
         if (!(entry.input.outputs ?? ['summary']).includes(output)
             && !entry.latestOutput?.outputs?.[output]
             && !entry.finalSummary?.output.outputs?.[output]

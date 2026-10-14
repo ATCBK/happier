@@ -1,11 +1,5 @@
-import {
-    AutomationSessionLifecycleEventsSchema,
-    AutomationSessionLifecycleTriggerSchema,
-    canonicalizeAutomationSessionLifecycleEvents,
-    initialAutomationSessionLifecycleRemainingOccurrences,
-    type AutomationSessionLifecycleTrigger,
-    type AutomationSessionLifecycleTriggerInput,
-} from "@happier-dev/protocol";
+import { AutomationSessionLifecycleEventsSchema, canonicalizeAutomationSessionLifecycleEvents, initialAutomationSessionLifecycleRemainingOccurrences } from '@happier-dev/protocol/automations/automationSessionLifecycle';
+import { AutomationSessionLifecycleTriggerSchema, type AutomationSessionLifecycleTrigger, type AutomationSessionLifecycleTriggerInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 
 type SessionLifecycleConfigurationRow = Readonly<{
     sessionLifecycleEventsJson: string | null;

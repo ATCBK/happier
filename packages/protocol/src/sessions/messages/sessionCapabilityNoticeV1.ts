@@ -1,20 +1,20 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 export const SESSION_CAPABILITY_NOTICE_SIDECAR_KEY = 'capabilityNoticeV1';
 
-export const SessionCapabilityNoticeV1Schema = lazyZodSchema(() => z.object({
+export const SessionCapabilityNoticeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  items: z.array(z.object({
+  items: z.array(z.strictObject({
     kind: z.enum(['mcp_server', 'skill', 'prompt_library']),
-    name: z.string().min(1),
-    itemId: z.string().min(1).optional(),
-    code: z.string().min(1),
-    detail: z.string().min(1).optional(),
-  }).strict()),
-}).strict());
+    name: z.string().check(z.minLength(1)),
+    itemId: z.optional(z.string().check(z.minLength(1))),
+    code: z.string().check(z.minLength(1)),
+    detail: z.optional(z.string().check(z.minLength(1))),
+  })),
+}));
 export type SessionCapabilityNoticeV1 = z.infer<typeof SessionCapabilityNoticeV1Schema>;
 
 /** A malformed or future notice leaves the ordinary message text readable. */

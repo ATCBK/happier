@@ -29,6 +29,8 @@ test('source server launch executes nonexecutable emitted JS through its managed
   assert.equal(enabled.migration.mode, 'external');
   const disabled = resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch, migrationsEnabled: false });
   assert.deepEqual(disabled.migration, { mode: 'disabled' });
+  const retained = resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch: { ...sourceRuntimeLaunch, lastGreen: true }, migrationsEnabled: true });
+  assert.deepEqual(retained.migration, { mode: 'disabled' }, 'last-green startup must not run old migrations against retained data');
 });
 
 test('source bundle CLI launch uses its retained entry without native snapshot provenance', () => {

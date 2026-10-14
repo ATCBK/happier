@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Platform, ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -134,7 +135,7 @@ export function NpmRegistryProfileEditorModal(props: Readonly<{
             ? t('settingsPlugins.registriesAddTitle')
             : t('settingsPlugins.registriesEdit'),
         testID: 'settings.plugins.registries.editor',
-        dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' as const },
         footer,
     }), [footer, mode]);
 

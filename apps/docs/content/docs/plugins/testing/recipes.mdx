@@ -54,6 +54,14 @@ export async function invokesTheDeclaredAction(): Promise<void> {
 handed the testkit. A local id your manifest does not declare is rejected, so
 this recipe also proves the declaration and the registration agree.
 
+`invokeAction(..., { surface: 'agent' })` supplies that surface to the handler's
+invocation context. Direct testkit calls do not run the production host's
+surface admission, approval, or caller-provenance policy. Use them to test your
+handler's behavior; verify which callers may reach it through the real host in
+[manual QA](/plugins/testing/manual-qa). Plugin-to-plugin calls made by registered
+handlers through `context.services.actions`, with `actionTargets` supplied to
+the testkit, separately enforce declared plugin access.
+
 ## 2. Prove an undeclared registration is refused
 
 `createPluginTestkit` enforces the manifest as the registration authority: an

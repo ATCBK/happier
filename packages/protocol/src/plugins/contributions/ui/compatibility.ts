@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PluginUiPlatformV1Schema = lazyZodSchema(() => z.enum([
   'android',
@@ -17,9 +17,9 @@ export const PluginUiChannelV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type PluginUiChannelV1 = z.infer<typeof PluginUiChannelV1Schema>;
 
-export const PluginUiCompatibilityV1Schema = lazyZodSchema(() => z.object({
-  platforms: z.array(PluginUiPlatformV1Schema).min(1).optional(),
-  channels: z.array(PluginUiChannelV1Schema).min(1).optional(),
-  featureGate: z.string().trim().min(1).optional(),
-}).strict());
+export const PluginUiCompatibilityV1Schema = lazyZodSchema(() => z.strictObject({
+  platforms: z.optional(z.array(PluginUiPlatformV1Schema).check(z.minLength(1))),
+  channels: z.optional(z.array(PluginUiChannelV1Schema).check(z.minLength(1))),
+  featureGate: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type PluginUiCompatibilityV1 = z.infer<typeof PluginUiCompatibilityV1Schema>;

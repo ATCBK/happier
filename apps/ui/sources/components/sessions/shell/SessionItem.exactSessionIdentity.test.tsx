@@ -130,7 +130,7 @@ vi.mock('react-native-gesture-handler', () => ({
 }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
 // Real `@/constants/Typography` is used: it depends only on the mocked
-// `react-native` Platform, and the row corridor renders `Typography.rowMeta()`
+// `react-native` Platform, and the row corridor renders the meta type role
 // at stylesheet-creation time (browser/frame/styles.ts), so a partial mock
 // without `rowMeta` breaks module initialization.
 vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));

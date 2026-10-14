@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_AGENT_TRANSITION_CURRENT_VIEW_COMMITTED_CODES_V1,
@@ -38,7 +38,7 @@ import {
 } from './fork.js';
 import { createTranscriptRawRecordV1Schema } from './messages/transcriptRawRecordV1.js';
 
-function expectAllParse(schema: z.ZodTypeAny, group: Readonly<Record<string, unknown>>): void {
+function expectAllParse(schema: z.ZodMiniType, group: Readonly<Record<string, unknown>>): void {
   for (const [name, value] of Object.entries(group)) {
     const parsed = schema.safeParse(value);
     expect(parsed.success, `${name} should parse but failed: ${JSON.stringify(parsed.error?.issues)}`)
@@ -46,7 +46,7 @@ function expectAllParse(schema: z.ZodTypeAny, group: Readonly<Record<string, unk
   }
 }
 
-function expectAllReject(schema: z.ZodTypeAny, group: Readonly<Record<string, unknown>>): void {
+function expectAllReject(schema: z.ZodMiniType, group: Readonly<Record<string, unknown>>): void {
   for (const [name, value] of Object.entries(group)) {
     expect(schema.safeParse(value).success, `${name} should be rejected but parsed`).toBe(false);
   }
@@ -487,9 +487,7 @@ describe('session agent transition divider', () => {
 
   it('is not a new agent-event variant, so a released reader keeps rendering it', () => {
     // Exactly the shipped `type:'message'` arm as it existed before this feature.
-    const releasedMessageArm = z
-      .object({ type: z.literal('message'), message: z.string() })
-      .passthrough();
+    const releasedMessageArm = z.looseObject({ type: z.literal('message'), message: z.string() });
 
     const parsed = releasedMessageArm.safeParse(V.divider.agentEvent);
     expect(parsed.success).toBe(true);

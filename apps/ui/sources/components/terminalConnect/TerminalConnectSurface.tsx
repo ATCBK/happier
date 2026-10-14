@@ -45,16 +45,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     section: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     sectionTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     sectionBody: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     sectionLine: {
         ...Typography.default(),
@@ -63,36 +61,32 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     securityBlock: {
-        paddingTop: 6,
+        paddingTop: theme.space.s6,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
-        gap: 8,
+        gap: theme.space.s8,
     },
     securityRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     securityCopy: {
         flex: 1,
-        gap: 4,
+        gap: theme.space.s4,
     },
     securityTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     securitySubtitle: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     message: {
         alignItems: 'center',
-        gap: 12,
-        paddingVertical: 10,
+        gap: theme.space.s12,
+        paddingVertical: theme.space.s10,
     },
 }));
 

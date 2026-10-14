@@ -4,7 +4,7 @@ import {
 } from "@/app/encryption/accountContentKeyAdmission";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Tx } from "@/storage/inTx";
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import {
     resolveEffectiveLayout1SessionEncryptionMode,

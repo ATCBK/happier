@@ -8,6 +8,8 @@ import type { SessionDraftPresence } from '@/session/drafts/readSessionDraftPres
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { createStorageWorktreeOperations } from '../worktrees/storageWorktreeOperations';
 import type { SkillCachePaths } from '@/prompts/skills/store/skillStore';
+import type { createProjectWorkspaceRetirement } from '@/workspaces/projectWorkspaceRetirement';
+import type { ScmBackendRegistry } from '@/scm/registry';
 
 export type StorageCleanupItem = Omit<StorageItemV1, 'size'> & Readonly<{
     /** A disk-index item has no invented Happier category. */
@@ -24,6 +26,9 @@ export type StorageCleanupItem = Omit<StorageItemV1, 'size'> & Readonly<{
     ownFingerprint?: string;
     fingerprintRequired?: boolean;
     nestedWorktreePaths?: readonly string[];
+    /** A main checkout/common directory is moved whole, retaining its contained SCM bytes. */
+    retirementKind?: 'main' | 'common' | 'orphan';
+    referenceOwnerData?: JsonValue;
 }>;
 export type StorageCategoryItem = StorageCleanupItem & Readonly<{ categoryId: HappierStorageCategoryIdV1;
     /** Category lifecycle presentation, stripped from the public item DTO. */
@@ -45,7 +50,7 @@ export type StorageCategoryDiscoverySnapshot = Readonly<{
 }>;
 export type StorageWorktree = Readonly<{ path: string; repositoryRoot: string; title?: string;
     isMain?: boolean; facts?: ScmWorktreeEnrichmentEntry; pullRequestState?: 'open' | 'closed' | 'merged' | null;
-    retentionSupported?: boolean; fingerprint?: string }>;
+    retentionSupported?: boolean; fingerprint?: string; retentionKind?: 'main' | 'common' | 'orphan' }>;
 export type StorageCategoryCatalogDeps = Readonly<{
     happyHomeDir: string;
     activeServerDir: string;
@@ -55,7 +60,9 @@ export type StorageCategoryCatalogDeps = Readonly<{
     now?: () => number;
     readProjects?: () => StorageProjectFacts | Promise<StorageProjectFacts>;
     readWorktrees?: () => readonly StorageWorktree[] | Promise<readonly StorageWorktree[]>;
+    scmRegistry?: ScmBackendRegistry;
     worktreeOperations?: ReturnType<typeof createStorageWorktreeOperations>;
+    checkoutReferences?: ReturnType<typeof createProjectWorkspaceRetirement>;
     readSessionDraftPresence?: (sessionId: string) => Promise<SessionDraftPresence>;
     trashRoots?: () => readonly string[];
     readTrackedSessions?: () => readonly StorageTrackedSession[];

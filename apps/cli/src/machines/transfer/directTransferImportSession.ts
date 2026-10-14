@@ -12,7 +12,6 @@ import { TransferSessionStore } from '@happier-dev/transfers/node';
 import type { ComposerMediaStageUploadTargetDeps } from '@/transfers/targets/resolveComposerMediaStageUploadTarget';
 import {
   resolveTransferUploadInitTarget,
-  type TransferUploadInitPromptAssetDeps,
   type TransferUploadInitRequest,
   type TransferUploadInitAttachmentDeps,
 } from '@/transfers/targets/resolveTransferUploadInitTarget';
@@ -127,16 +126,12 @@ function fingerprintImportOpenAuthorizationScope(input: DirectTransferImportOpen
           vcsIgnoreStrategy: input.vcsIgnoreStrategy ?? null,
           vcsIgnoreWritesEnabled: input.vcsIgnoreWritesEnabled ?? null,
         }
-      : ('t' in input && input.t === 'prompt_asset_upload_v1'
-        ? {
-            sizeBytes: input.sizeBytes ?? null,
-          }
-        : {
+      : {
             path: input.path ?? null,
             sizeBytes: input.sizeBytes ?? null,
             overwrite: input.overwrite ?? null,
             sha256: input.sha256 ?? null,
-          }))),
+          })),
     additionalAllowedWriteDirs: input.additionalAllowedWriteDirs ? [...input.additionalAllowedWriteDirs] : null,
     sessionRpcTransferMaxBytes: input.sessionRpcTransferMaxBytes ?? null,
   });
@@ -151,7 +146,6 @@ export function createDirectTransferImportSessionManager(params?: Readonly<{
   onActivity?: () => void;
   attachmentUpload?: TransferUploadInitAttachmentDeps;
   composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: TransferUploadInitPromptAssetDeps;
   finalizeFileOperations?: WorkspaceFinalizeFileOperationsFactory;
 }>): DirectTransferImportSessionManager {
   const store = new TransferSessionStore({
@@ -320,7 +314,6 @@ export function createDirectTransferImportSessionManager(params?: Readonly<{
       sessionRpcTransferMaxBytes,
       ...(params?.attachmentUpload ? { attachmentUpload: params.attachmentUpload } : {}),
       ...(params?.composerMediaStage ? { composerMediaStage: params.composerMediaStage } : {}),
-      ...(params?.promptAssetUpload ? { promptAssetUpload: params.promptAssetUpload } : {}),
       ...(finalizeFileOperations
         ? { finalizeFileOperations }
         : {}),

@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { WorkflowMaterializedLeafV1 } from './workflowDefinitionV1.js';
 import type { WorkflowBlock, WorkflowDefinitionV1, WorkflowLeafV1, WorkflowStepExecutionSelection } from './workflowV1.js';
 import { listWorkflowBlockOrdinalsV1, workflowBlockReferenceLabel } from './workflowStepLabel.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Authored structure has one leaf traversal for admission and destination projections. */
 export function collectWorkflowLeavesV1(definition: WorkflowDefinitionV1): WorkflowLeafV1[] {
@@ -40,13 +40,13 @@ export function readWorkflowLeafTargetSessionIdsV1(selection: Pick<WorkflowStepE
  * `unresolvedWorkflowRefs`: a reference cannot be projected until its current definition has been read.
  * The type is the wire schema's, so a projection result is assignable wherever the schema's shape is.
  */
-export const WorkflowDestinationsV1Schema = lazyZodSchema(() => z.object({
-  targetSessionIds: z.array(z.string().min(1)), usesOriginSession: z.boolean(),
-  unresolvedWorkflowRefs: z.array(z.string().min(1)),
-  leaves: z.array(z.object({ sourceKey: z.string().min(1), blockId: z.string().min(1),
-    ordinal: z.number().int().positive().optional(), name: z.string().optional(),
-    sessionIds: z.array(z.string().min(1)) }).strict()),
-}).strict());
+export const WorkflowDestinationsV1Schema = lazyZodSchema(() => z.strictObject({
+  targetSessionIds: z.array(z.string().check(z.minLength(1))), usesOriginSession: z.boolean(),
+  unresolvedWorkflowRefs: z.array(z.string().check(z.minLength(1))),
+  leaves: z.array(z.strictObject({ sourceKey: z.string().check(z.minLength(1)), blockId: z.string().check(z.minLength(1)),
+    ordinal: z.optional(z.number().check(z.int(), z.positive())), name: z.optional(z.string()),
+    sessionIds: z.array(z.string().check(z.minLength(1))) })),
+}));
 
 export type WorkflowDestinationsV1 = z.infer<typeof WorkflowDestinationsV1Schema>;
 

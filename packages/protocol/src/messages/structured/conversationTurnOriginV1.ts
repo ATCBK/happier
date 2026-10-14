@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
@@ -8,10 +8,10 @@ import { PluginIdSchema } from '../../plugins/pluginId.js';
 
 export const CONVERSATION_TURN_ORIGIN_META_FIELD_V1 = 'conversationTurnOriginV1';
 
-const ConversationTurnOriginSourceV1Schema = lazyZodSchema(() => z.object({
+const ConversationTurnOriginSourceV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 
 /**
  * Generic message provenance for the two interaction channels that share the
@@ -19,18 +19,18 @@ const ConversationTurnOriginSourceV1Schema = lazyZodSchema(() => z.object({
  * channel/modality states from becoming persistence contracts accidentally.
  */
 export const ConversationTurnOriginV1Schema = lazyZodSchema(() => z.discriminatedUnion('channel', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     channel: z.literal('agent_thread'),
     modality: z.literal('text'),
-    source: ConversationTurnOriginSourceV1Schema.optional(),
-  }).strict(),
-  z.object({
+    source: z.optional(ConversationTurnOriginSourceV1Schema),
+  }),
+  z.strictObject({
     v: z.literal(1),
     channel: z.literal('realtime_conversation'),
     modality: z.literal('voice'),
-    source: ConversationTurnOriginSourceV1Schema.optional(),
-  }).strict(),
+    source: z.optional(ConversationTurnOriginSourceV1Schema),
+  }),
 ]));
 
 export type ConversationTurnOriginV1 = z.infer<typeof ConversationTurnOriginV1Schema>;

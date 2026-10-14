@@ -65,8 +65,8 @@ export function createLocalVoiceAdapter(
     await localVoiceRuntimeController.toggleTurn(opts.sessionId, capabilities.currentUiContext);
   };
 
-  const stop = async (_opts: Readonly<{ sessionId: string }>) => {
-    await localVoiceRuntimeController.stopSession();
+  const stop = async (opts: Parameters<VoiceAdapterController['stop']>[0]) => {
+    await localVoiceRuntimeController.stopSession(opts.reason);
   };
 
   const interrupt = async (opts: Readonly<{ sessionId: string }>) => {

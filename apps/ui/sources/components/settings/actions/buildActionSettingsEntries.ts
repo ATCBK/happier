@@ -8,7 +8,6 @@ import type { ActionSettingsActionId, ActionsSettingsV1 } from '@happier-dev/pro
 import {
     getActionSettingsTargetContext,
     getActionSettingsTargetSelected,
-    isMcpTarget,
     isRunScopedPlacement,
     isVoiceTargetId,
     listActionSettingsTargetDefinitions,
@@ -28,7 +27,6 @@ export type ActionSettingsAvailability = Readonly<{
     memorySearchEnabled: boolean;
     voiceEnabled: boolean;
     sessionHandoffEnabled: boolean;
-    mcpServersEnabled: boolean;
     voiceShareDeviceInventory: boolean;
 }>;
 
@@ -166,9 +164,6 @@ function getTargetAvailabilityReasonKey(params: Readonly<{
         if (!params.availability.voiceShareDeviceInventory && isInventoryPrivacyAction(params.actionId)) {
             return 'settingsActions.reasons.voiceInventoryPrivacy';
         }
-    }
-    if (isMcpTarget(params.targetId) && !params.availability.mcpServersEnabled) {
-        return 'settingsActions.reasons.mcpFeature';
     }
     if (isRunScopedPlacement(params.targetId) && !params.availability.executionRunsEnabled) {
         return 'settingsActions.reasons.executionRunsFeature';

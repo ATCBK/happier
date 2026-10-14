@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 import { ProviderModelDescriptorV1Schema } from '../../models/descriptor.js';
@@ -19,18 +19,16 @@ export type ProviderCatalogProbeModelV1 = Readonly<{
   capabilities?: ProviderModelDescriptorV1['capabilities'];
 }>;
 
-export const ProviderCatalogProbeModelV1Schema = z.object({
+export const ProviderCatalogProbeModelV1Schema = z.strictObject({
   id: ProviderModelDescriptorV1Schema.shape.id,
-  name: ProviderModelDescriptorV1Schema.shape.name.optional(),
+  name: z.optional(ProviderModelDescriptorV1Schema.shape.name),
   contextWindowTokens: ProviderModelDescriptorV1Schema.shape.contextWindowTokens,
   modelOptions: ProviderModelDescriptorV1Schema.shape.modelOptions,
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
-}).strict() satisfies z.ZodType<ProviderCatalogProbeModelV1>;
+}) satisfies z.ZodMiniType<ProviderCatalogProbeModelV1>;
 
-const ProviderRuntimeTimestampV1Schema = lazyZodSchema(() => z.number().finite().nonnegative());
-export const ProviderCatalogProbeModelsV1Schema = lazyZodSchema(() => z.array(ProviderCatalogProbeModelV1Schema)
-  .max(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)
-  .superRefine((models, ctx) => {
+const ProviderRuntimeTimestampV1Schema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const ProviderCatalogProbeModelsV1Schema = lazyZodSchema(() => z.array(ProviderCatalogProbeModelV1Schema).check(z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection), z.superRefine((models, ctx) => {
     const ids = new Set<string>();
     models.forEach((model, index) => {
       if (ids.has(model.id)) {
@@ -38,32 +36,31 @@ export const ProviderCatalogProbeModelsV1Schema = lazyZodSchema(() => z.array(Pr
       }
       ids.add(model.id);
     });
-  }));
+  })));
 
 export const ProviderCatalogSnapshotV1Schema = lazyZodSchema(() => z.discriminatedUnion('stale', [
-  z.object({
+  z.strictObject({
     models: ProviderCatalogProbeModelsV1Schema,
     observedAt: ProviderRuntimeTimestampV1Schema,
     stale: z.literal(false),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     models: ProviderCatalogProbeModelsV1Schema,
     observedAt: ProviderRuntimeTimestampV1Schema,
     stale: z.literal(true),
     staleAt: ProviderRuntimeTimestampV1Schema,
-  }).strict().superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     if (value.staleAt < value.observedAt) {
       ctx.addIssue({ code: 'custom', path: ['staleAt'], message: 'Catalog stale time cannot precede observation time' });
     }
-  }),
+  })),
 ]));
 export type ProviderCatalogSnapshotV1 = z.infer<typeof ProviderCatalogSnapshotV1Schema>;
 
-export const ProviderCatalogTransitionStateV1Schema = lazyZodSchema(() => z.object({
-  snapshot: ProviderCatalogSnapshotV1Schema.nullable(),
-  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema)
-    .max(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection),
-}).strict().superRefine((value, ctx) => {
+export const ProviderCatalogTransitionStateV1Schema = lazyZodSchema(() => z.strictObject({
+  snapshot: z.nullable(ProviderCatalogSnapshotV1Schema),
+  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema).check(z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)),
+}).check(z.superRefine((value, ctx) => {
   if (value.snapshot === null && value.staleProbeModels.length > 0) {
     ctx.addIssue({ code: 'custom', path: ['staleProbeModels'], message: 'A missing catalog snapshot cannot retain stale models' });
   }
@@ -78,7 +75,7 @@ export const ProviderCatalogTransitionStateV1Schema = lazyZodSchema(() => z.obje
     }
     staleIds.add(model.id);
   });
-}));
+})));
 export type ProviderCatalogTransitionStateV1 = z.infer<typeof ProviderCatalogTransitionStateV1Schema>;
 
 export type ProviderCatalogRefreshV1 =
@@ -93,17 +90,17 @@ export type ProviderMergedCatalogRowV1 = Readonly<{
   stale?: true;
 }>;
 
-export const ProviderMergedCatalogRowV1Schema = z.object({
+export const ProviderMergedCatalogRowV1Schema = z.strictObject({
   descriptor: ProviderModelDescriptorV1Schema,
-  sources: z.object({ manual: z.boolean(), static: z.boolean(), probe: z.boolean() }).strict(),
+  sources: z.strictObject({ manual: z.boolean(), static: z.boolean(), probe: z.boolean() }),
   confidence: z.enum(['manual', 'verified_static', 'probe', 'account_unverified']),
   catalogStale: z.boolean(),
-  stale: z.literal(true).optional(),
-}).strict().superRefine((value, ctx) => {
+  stale: z.optional(z.literal(true)),
+}).check(z.superRefine((value, ctx) => {
   if (value.stale && !value.catalogStale) {
     ctx.addIssue({ code: 'custom', path: ['catalogStale'], message: 'Stale rows require stale catalog presentation' });
   }
-}) satisfies z.ZodType<ProviderMergedCatalogRowV1>;
+})) satisfies z.ZodMiniType<ProviderMergedCatalogRowV1>;
 
 export class ProviderCatalogLimitError extends Error {
   readonly code = 'provider_catalog_limit_exceeded';
@@ -352,7 +349,7 @@ export function resolveProviderCatalogReferenceV1(input: Readonly<{
   }
   const displaySnapshot = input.displaySnapshot === undefined
     ? undefined
-    : z.object({ name: ProviderModelDescriptorV1Schema.shape.name }).strict().parse(input.displaySnapshot);
+    : z.strictObject({ name: ProviderModelDescriptorV1Schema.shape.name }).parse(input.displaySnapshot);
   return {
     status: 'not_currently_listed',
     descriptor: { id: modelId, name: displaySnapshot?.name ?? modelId },

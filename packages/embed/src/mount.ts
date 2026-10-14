@@ -40,7 +40,12 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
   frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox');
   frame.setAttribute('referrerpolicy', 'strict-origin');
   frame.style.cssText = 'display:block;width:100%;height:100%;border:0;opacity:0';
-  const url = new URL(currentId === null ? '/embed/new' : `/embed/session/${encodeURIComponent(currentId)}`, baseUrl);
+  // The supplied UI URL carries the selected Home. Replacing it with an
+  // origin-relative URL silently sent the credential to the device default
+  // Home instead, so change only the route and retain the selection query.
+  const url = new URL(baseUrl.href);
+  url.pathname = currentId === null ? '/embed/new' : `/embed/session/${encodeURIComponent(currentId)}`;
+  url.hash = '';
   url.searchParams.set('i', identity.instanceId);
   url.searchParams.set('n', identity.mountNonce);
   frame.src = url.href;

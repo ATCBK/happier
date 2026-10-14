@@ -1,15 +1,5 @@
 import { z } from "zod";
-import {
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    SessionMetadataActiveConflictV1Schema,
-    SessionMetadataInactiveModelIntentOwnerPatchV1Schema,
-    SessionMetadataInactiveModelIntentPatchSuccessV1Schema,
-    SessionMetadataInactiveModelIntentPatchV1Schema,
-    SessionMetadataInactiveModelIntentVersionConflictV1Schema,
-    SessionMetadataTuplePatchSuccessV1Schema,
-    SessionMetadataTuplePatchV1Schema,
-    SessionMetadataVersionConflictV1Schema,
-} from "@happier-dev/protocol";
+import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataInactiveModelIntentPatchSuccessV1Schema, SessionMetadataInactiveModelIntentPatchV1Schema, SessionMetadataInactiveModelIntentVersionConflictV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
     patchSession,
@@ -25,10 +15,7 @@ import {
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
-import {
-    SessionTeamCredentialBindingMetadataPatchV1Schema,
-    SessionTeamCredentialBindingMutationRejectionV1Schema,
-} from "@happier-dev/protocol/teams";
+import { SessionTeamCredentialBindingMetadataPatchV1Schema, SessionTeamCredentialBindingMutationRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 
 export function registerSessionPatchRoute(app: Fastify) {

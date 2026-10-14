@@ -57,6 +57,20 @@ by this path. This is cache custody, not another feature-decision owner or an av
 - Enforce dependencies through `applyFeatureDependencies(...)`.
 - Do not duplicate dependency logic at call sites.
 
+### Machine speech (0.3 development)
+
+The CLI local policy for `voice.daemonInference` defaults to enabled. Operators
+can opt out with `HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED=false` (or `0`).
+Daemon bootstrap and Machine RPC registration both consume the canonical CLI
+feature decision, including the catalog's `voice.agent` dependency and the Home's
+Voice enabled bit. An unavailable or disabled dependency still closes the path.
+
+Enabling the daemon policy creates the inference handle and registers its RPCs;
+it does not download speech models, load a native model or spawn an inference
+process. Model installation is explicit, and runtime loading remains demand-driven.
+The client-side **Voice daemon inference** experimental preference remains a
+separate, default-off user opt-in; it does not determine the daemon's local policy.
+
 ### Browser automation capability ids
 
 `browser.automation` is the server-owned automation availability decision. The development

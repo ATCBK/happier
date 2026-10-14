@@ -1,13 +1,4 @@
-import type {
-    UsageAnalyticsBreakdownDimension,
-    UsageAnalyticsBreakdownEntry,
-    UsageAnalyticsBreakdowns,
-    UsageAnalyticsQueryRequest,
-    UsageAnalyticsQueryResponse,
-    UsageAnalyticsSeriesBucket,
-    UsageAnalyticsTotals,
-    UsageObservationContext,
-} from "@happier-dev/protocol";
+import type { UsageAnalyticsBreakdownDimension, UsageAnalyticsBreakdownEntry, UsageAnalyticsBreakdowns, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageAnalyticsSeriesBucket, UsageAnalyticsTotals, UsageObservationContext } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { inTx, type Tx } from "@/storage/inTx";
 import {
     buildUsageActivity,
@@ -17,7 +8,12 @@ import {
     buildUsageModelTimeline,
     deriveEngineKey,
 } from "./query/buildUsagePremiumSections";
-import { buildUsageBreakdownList, resolveUsageBucketBounds as resolveBucketBounds, resolveUsageContributionDimensionKey, readUsageAccountingMetadata, resolveUsageTokenCategories, repriceUsageObservationCost, repriceUsageAnalyticsResponse } from "@happier-dev/protocol";
+import { buildUsageBreakdownList } from '@happier-dev/protocol/usage/usageLeaderProjection';
+import { resolveUsageBucketBounds as resolveBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
+import { resolveUsageContributionDimensionKey } from '@happier-dev/protocol/usage/usageCostFacts';
+import { readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
+import { repriceUsageObservationCost, repriceUsageAnalyticsResponse } from '@happier-dev/protocol/usage/usageCost';
 import { readUsageModelPriceCatalogInTx } from './usageModelPriceCatalog';
 import { loadUsageMessageStatsForQueryInTx } from "./query/loadUsageMessageStatsForQuery";
 import {
@@ -33,6 +29,7 @@ import { TEAM_CREDENTIAL_ONLY_USAGE_SOURCES } from "./usageSourceClassifier";
 import { buildUsageResultProjection } from "./query/buildUsageResultProjection";
 import { LegacyUsageReportDataSchema, legacyUsageReportCanonicalOrder, readLegacyUsageReportKey } from "./legacyUsageReportSchema";
 import { canonicalUsageModelPriceId } from "@happier-dev/protocol/usage/usageModelPriceCatalog";
+import { aggregateUsageContributionCosts } from '@happier-dev/protocol/usage/usageAggregation';
 
 function toPremiumEventRow(row: ScopedUsageContribution) {
     return row;
@@ -58,14 +55,13 @@ function resolveLatestContributionContext(
 
 function toUsageTotals(rows: ScopedUsageContribution[], costMode: UsageCostMode): UsageAnalyticsTotals {
     let tokens = createEmptyUsageTokens();
-    let cost = createEmptyUsageCost();
     const eventIds = new Set<string>();
 
     for (const row of rows) {
         tokens = addUsageTokens(tokens, row.tokens);
-        cost = addUsageCostForMode(cost, row.cost, costMode);
         for (const eventId of row.contributingEventIds) eventIds.add(eventId);
     }
+    const cost = aggregateUsageContributionCosts(rows, costMode);
 
     return {
         eventCount: eventIds.size,

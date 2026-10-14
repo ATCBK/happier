@@ -1,20 +1,11 @@
-import { ZodError } from "zod";
+import { z as zodMiniCore0 } from "zod/mini";
 
-import type {
-    BoundReviewCommentEventSensitiveEnvelopeV1,
-    ReviewCommentEventV1,
-    ReviewCommentEventSensitiveMigrationLayoutV1,
-    ReviewCommentSensitiveMigrationSourceV1,
-    ReviewCommentStructuralV1,
-    StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
-import {
-    BoundReviewCommentEventSensitiveEnvelopeV1Schema,
-    ReviewCommentEventV1Schema,
-    ReviewCommentSensitiveMigrationSourceV1Schema,
-    StoredJsonContentEnvelopeSchema,
-    reviewCommentEventSensitiveBindingMatchesV1,
-} from "@happier-dev/protocol";
+import type { BoundReviewCommentEventSensitiveEnvelopeV1, ReviewCommentEventSensitiveMigrationLayoutV1, ReviewCommentSensitiveMigrationSourceV1, ReviewCommentStructuralV1 } from '@happier-dev/protocol/reviews/comments/content';
+import type { ReviewCommentEventV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import type { StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { BoundReviewCommentEventSensitiveEnvelopeV1Schema, ReviewCommentSensitiveMigrationSourceV1Schema, reviewCommentEventSensitiveBindingMatchesV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { ReviewCommentEventV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 
 export type ReviewCommentAccountEncryptionMigrationStoredEvent = Readonly<{
     event: ReviewCommentEventV1;
@@ -60,7 +51,7 @@ export type ReviewCommentAccountEncryptionMigrationFailureStatus =
 export function classifyReviewCommentAccountEncryptionMigrationError(
     error: unknown,
 ): ReviewCommentAccountEncryptionMigrationFailureStatus | null {
-    if (error instanceof ZodError) return "invalid_content";
+    if (error instanceof zodMiniCore0.core.$ZodError) return "invalid_content";
     if (!(error instanceof Error)) return null;
     if (error.message === "review_comment_migration_inventory_not_empty") {
         return "not_empty";

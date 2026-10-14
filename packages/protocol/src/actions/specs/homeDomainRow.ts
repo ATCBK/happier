@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from '../actionSpecs.js';
 
@@ -27,8 +27,8 @@ export function homeDomainApprovalField(
  */
 type HomeDomainActionRowInput<
   TActionId extends PreNormalizedActionSpec['id'],
-  TInputSchema extends z.ZodTypeAny,
-  TOutputSchema extends z.ZodTypeAny,
+  TInputSchema extends z.ZodMiniType,
+  TOutputSchema extends z.ZodMiniType,
 > = Readonly<{
   id: TActionId;
   approval: PreNormalizedActionSpec['approval'];
@@ -68,8 +68,8 @@ type HomeDomainActionRowInput<
 
 export type HomeDomainActionRow<
   TActionId extends PreNormalizedActionSpec['id'],
-  TInputSchema extends z.ZodTypeAny,
-  TOutputSchema extends z.ZodTypeAny,
+  TInputSchema extends z.ZodMiniType,
+  TOutputSchema extends z.ZodMiniType,
   TRequiredAuthority extends NonNullable<PreNormalizedActionSpec['requiredAuthority']> = 'account_automation',
 > = Omit<PreNormalizedActionSpec, 'id' | 'inputSchema' | 'outputSchema' | 'requiredAuthority' | 'executionPlacement'> & Readonly<{
   id: TActionId;
@@ -81,8 +81,8 @@ export type HomeDomainActionRow<
 
 export function homeDomainActionRow<
   const TActionId extends PreNormalizedActionSpec['id'],
-  const TInputSchema extends z.ZodTypeAny,
-  const TOutputSchema extends z.ZodTypeAny,
+  const TInputSchema extends z.ZodMiniType,
+  const TOutputSchema extends z.ZodMiniType,
 >(spec: HomeDomainActionRowInput<TActionId, TInputSchema, TOutputSchema>): HomeDomainActionRow<
   TActionId,
   TInputSchema,

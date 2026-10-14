@@ -1,10 +1,10 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageAnalyticsCostFactValueSchema, type UsageAnalyticsCostFact } from './usageAnalyticsContracts.js';
 
 /** A total preserves every contributing source; it never impersonates one producer. */
-export const UsageCostFactTotalSchema = lazyZodSchema(() => UsageAnalyticsCostFactValueSchema.safeExtend({
-  sources: z.array(z.string().trim().min(1)).min(1),
+export const UsageCostFactTotalSchema = lazyZodSchema(() => z.safeExtend(UsageAnalyticsCostFactValueSchema, {
+  sources: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)),
 }));
 export type UsageCostFactTotal = z.infer<typeof UsageCostFactTotalSchema>;
 

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { ValueRefV1Schema, type ValueRefV1 } from '../../../valueRefs/valueRefV1.js';
 import { PERSONAL_SAVED_SECRET_ACTION_INPUT_SCHEMAS_V1, PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '../../../account/settings/personalSavedSecretActionsV1.js';
@@ -16,21 +16,21 @@ export const McpImportValueChoiceV1Schema = lazyZodSchema(() => z.union([
 export type McpImportValueChoiceV1 = z.infer<typeof McpImportValueChoiceV1Schema>;
 export const McpImportValuesV1Schema = lazyZodSchema(() => z.record(z.string(), McpImportValueChoiceV1Schema));
 export type McpImportValuesV1 = z.infer<typeof McpImportValuesV1Schema>;
-const identity = () => z.string().min(1);
-const importInputMetadata = lazyZodSchema(() => z.object({ inputId: identity(), title: z.string(), description: z.string().optional(),
-    secret: z.boolean(), suggestedEnvVarName: z.string() }).strict());
-const duplicate = lazyZodSchema(() => z.object({ name: z.string(), serverId: identity().optional(), duplicateOf: z.string().optional() }).strict());
-export const McpImportMovedSecretV1Schema = lazyZodSchema(() => z.object({ inputId: identity(), secretId: identity(), secretRef: identity() }).strict());
+const identity = () => z.string().check(z.minLength(1));
+const importInputMetadata = lazyZodSchema(() => z.strictObject({ inputId: identity(), title: z.string(), description: z.optional(z.string()),
+    secret: z.boolean(), suggestedEnvVarName: z.string() }));
+const duplicate = lazyZodSchema(() => z.strictObject({ name: z.string(), serverId: z.optional(identity()), duplicateOf: z.optional(z.string()) }));
+export const McpImportMovedSecretV1Schema = lazyZodSchema(() => z.strictObject({ inputId: identity(), secretId: identity(), secretRef: identity() }));
 export type McpImportMovedSecretV1 = z.infer<typeof McpImportMovedSecretV1Schema>;
-export const McpImportPreviewV1Schema = lazyZodSchema(() => z.object({
-    servers: z.array(z.object({ name: z.string(), title: z.string().optional(), transport: z.enum(['stdio', 'http', 'sse']),
-        envNames: z.array(z.string()), headerNames: z.array(z.string()) }).strict()),
-    inputs: z.array(importInputMetadata.extend({ suggestedValue: z.string().optional(), literalSecret: z.literal(true).optional() }).strict()),
+export const McpImportPreviewV1Schema = lazyZodSchema(() => z.strictObject({
+    servers: z.array(z.strictObject({ name: z.string(), title: z.optional(z.string()), transport: z.enum(['stdio', 'http', 'sse']),
+        envNames: z.array(z.string()), headerNames: z.array(z.string()) })),
+    inputs: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(importInputMetadata, { suggestedValue: z.optional(z.string()), literalSecret: z.optional(z.literal(true)) }))),
     missingValues: z.array(importInputMetadata), duplicates: z.array(duplicate),
-    movedSecrets: z.array(z.object({ inputId: identity() }).strict()), warnings: z.array(z.string()), errors: z.array(z.string()),
-}).strict());
-export const McpImportCommitV1Schema = lazyZodSchema(() => z.object({ ok: z.literal(true), revision: z.number().int().nonnegative(),
-    serverIds: z.array(identity()), duplicates: z.array(duplicate), movedSecrets: z.array(McpImportMovedSecretV1Schema) }).strict());
+    movedSecrets: z.array(z.strictObject({ inputId: identity() })), warnings: z.array(z.string()), errors: z.array(z.string()),
+}));
+export const McpImportCommitV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true), revision: z.number().check(z.int(), z.nonnegative()),
+    serverIds: z.array(identity()), duplicates: z.array(duplicate), movedSecrets: z.array(McpImportMovedSecretV1Schema) }));
 type Catalog = Readonly<{ servers: readonly McpServerCatalogEntryV1[] }>;
 export type McpImportDuplicateV1 = Readonly<{ name: string; serverId?: string; duplicateOf?: string }>;
 export type McpImportPreviewV1 = z.infer<typeof McpImportPreviewV1Schema>;

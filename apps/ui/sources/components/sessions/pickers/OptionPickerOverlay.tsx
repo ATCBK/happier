@@ -2,7 +2,6 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -429,18 +428,29 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
         && !optionKeys.has(selectedValueKey)
         ? selectedString
         : '';
-    const [customValue, setCustomValue] = React.useState(selectedCustomValue);
-    const [customEditorVisible, setCustomEditorVisible] = React.useState(selectedCustomValue.length > 0);
+    const customValueScopeKey = `${selectedValueKey}\u0000${selectedCustomValue.length > 0 ? 'custom' : 'listed'}`;
+    const [customDraft, setCustomDraft] = React.useState<Readonly<{
+        scopeKey: string;
+        value: string;
+    }>>({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+    const [customEditorIntent, setCustomEditorIntent] = React.useState<Readonly<{
+        scopeKey: string;
+        kind: 'manual' | 'dismissed';
+    }> | null>(null);
+    const customValue = customDraft.scopeKey === customValueScopeKey
+        ? customDraft.value
+        : selectedCustomValue;
+    const customEditorVisible = selectedCustomValue.length > 0
+        ? !(customEditorIntent?.scopeKey === customValueScopeKey && customEditorIntent.kind === 'dismissed')
+        : customEditorIntent?.scopeKey === customValueScopeKey && customEditorIntent.kind === 'manual';
     const customTriggerRef = React.useRef<React.ElementRef<typeof Pressable>>(null);
     const customInputRef = React.useRef<React.ElementRef<typeof TextInput>>(null);
     const focusCustomInputOnOpenRef = React.useRef(false);
     const returnFocusToCustomTriggerRef = React.useRef(false);
-    const customEditorOpenReasonRef = React.useRef<'selected-custom' | 'manual' | null>(
-        selectedCustomValue.length > 0 ? 'selected-custom' : null,
-    );
-    const dismissedSelectedCustomValueKeyRef = React.useRef<string | null>(null);
-    const lastCommittedCustomValueRef = React.useRef(selectedCustomValue);
-    const previousSelectedValueKeyRef = React.useRef(selectedValueKey);
+    const lastCommittedCustomValueRef = React.useRef({
+        scopeKey: customValueScopeKey,
+        value: selectedCustomValue,
+    });
     const selectionPressPendingRef = React.useRef(false);
     // A focused TextInput does not emit blur when its enclosing picker unmounts,
     // so cleanup needs the latest local draft and commit callback.
@@ -457,39 +467,9 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
             visible: false,
             value: '',
         };
-        lastCommittedCustomValueRef.current = '';
-        setCustomValue('');
-    }, []);
-
-    React.useEffect(() => {
-        const previousSelectedValueKey = previousSelectedValueKeyRef.current;
-        previousSelectedValueKeyRef.current = selectedValueKey;
-        if (selectedCustomValue.length > 0) {
-            setCustomValue(selectedCustomValue);
-            if (dismissedSelectedCustomValueKeyRef.current === selectedValueKey) {
-                customEditorOpenReasonRef.current = null;
-                lastCommittedCustomValueRef.current = selectedCustomValue;
-                return;
-            }
-            dismissedSelectedCustomValueKeyRef.current = null;
-            setCustomEditorVisible(true);
-            customEditorOpenReasonRef.current = 'selected-custom';
-            lastCommittedCustomValueRef.current = selectedCustomValue;
-            return;
-        }
-        if (!optionKeys.has(selectedValueKey)) return;
-        dismissedSelectedCustomValueKeyRef.current = null;
-        if (customEditorOpenReasonRef.current === 'selected-custom') {
-            customEditorOpenReasonRef.current = null;
-            setCustomEditorVisible(false);
-            abandonCustomDraft();
-            return;
-        }
-        if (customEditorVisible && previousSelectedValueKey === selectedValueKey) return;
-        customEditorOpenReasonRef.current = null;
-        setCustomEditorVisible(false);
-        abandonCustomDraft();
-    }, [abandonCustomDraft, customEditorVisible, optionKeys, selectedCustomValue, selectedValueKey]);
+        lastCommittedCustomValueRef.current = { scopeKey: customValueScopeKey, value: '' };
+        setCustomDraft({ scopeKey: customValueScopeKey, value: '' });
+    }, [customValueScopeKey]);
 
     React.useEffect(() => {
         if (customEditorVisible && focusCustomInputOnOpenRef.current) {
@@ -504,13 +484,17 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     }, [customEditorVisible]);
 
     const dismissCustomEditor = React.useCallback(() => {
-        customEditorOpenReasonRef.current = null;
-        dismissedSelectedCustomValueKeyRef.current = selectedCustomValue.length > 0
-            ? selectedValueKey
-            : null;
         returnFocusToCustomTriggerRef.current = true;
-        setCustomEditorVisible(false);
-    }, [selectedCustomValue, selectedValueKey]);
+        pendingCustomCommitRef.current = {
+            ...pendingCustomCommitRef.current,
+            visible: false,
+            value: '',
+        };
+        setCustomDraft({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+        setCustomEditorIntent(selectedCustomValue.length > 0
+            ? { scopeKey: customValueScopeKey, kind: 'dismissed' }
+            : null);
+    }, [customValueScopeKey, selectedCustomValue]);
     useEscapeLayer({
         enabled: Platform.OS === 'web' && customEditorVisible,
         // The input editor is nested inside popovers and can also appear inside
@@ -646,18 +630,24 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     const probe = props.probe;
     const shouldRenderProbeControl = probe ? typeof probe.onRefresh === 'function' || probe.phase !== 'idle' : false;
     const refreshAccessibilityLabel = probe?.refreshAccessibilityLabel ?? t('modelPickerOverlay.refreshModelsA11y');
-    const probeHintText = probe && probe.phase !== 'idle' && totalOptionCount <= 1 && !props.canEnterCustomValue
-        ? (probe.phase === 'loading'
-            ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
-            : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y')))
+    const probeInFlightLabel = probe?.phase === 'loading'
+        ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
+        : probe?.phase === 'refreshing'
+            ? (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))
+            : null;
+    const refreshControlLabel = probeInFlightLabel ?? refreshAccessibilityLabel;
+    const probeHintText = probeInFlightLabel && totalOptionCount <= 1 && !props.canEnterCustomValue
+        ? probeInFlightLabel
         : null;
 
     const commitCustomValue = React.useCallback((raw: string) => {
         const normalized = raw.trim();
-        if (!normalized || lastCommittedCustomValueRef.current === normalized) return;
-        lastCommittedCustomValueRef.current = normalized;
+        if (!normalized || normalized === selectedCustomValue) return;
+        if (lastCommittedCustomValueRef.current.scopeKey === customValueScopeKey
+            && lastCommittedCustomValueRef.current.value === normalized) return;
+        lastCommittedCustomValueRef.current = { scopeKey: customValueScopeKey, value: normalized };
         props.onSubmitCustomValue?.(normalized);
-    }, [props.onSubmitCustomValue]);
+    }, [customValueScopeKey, props.onSubmitCustomValue, selectedCustomValue]);
     React.useEffect(() => {
         pendingCustomCommitRef.current = {
             visible: customEditorVisible,
@@ -716,36 +706,25 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     <View style={styles.titleRowActions}>
                         {props.headerAccessory ? <View style={styles.headerAccessory}>{props.headerAccessory}</View> : null}
                         {shouldRenderProbeControl && probe ? (
-                            probe.phase === 'idle' && typeof probe.onRefresh === 'function' ? (
-                                <IconButton
-                                    testID={refreshTestID}
-                                    iconName="arrow-clockwise"
-                                    accessibilityLabel={refreshAccessibilityLabel}
-                                    tooltip={refreshAccessibilityLabel}
-                                    // Icon only: no border, no fill. The header already
-                                    // carries the surface this control sits on, so a
-                                    // second bordered circle only added weight.
-                                    variant="plain"
-                                    size={HEADER_GLYPH_BOX_PX}
-                                    iconSize={HEADER_GLYPH_SIZE_PX}
-                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                    interactiveTargetGapPx={TITLE_ROW_ACTION_GAP_PX}
-                                    onPress={probe.onRefresh}
-                                />
-                            ) : probe.phase !== 'idle' ? (
-                                <View testID={`${refreshTestID}-progress`} style={styles.refreshProgressSlot}>
-                                    <ActivitySpinner
-                                        // Without a border to sit in, the spinner reads as
-                                        // legible only if it matches the glyph it replaces:
-                                        // same box, same ink, same optical weight.
-                                        size={iconMatchedSpinnerSize(HEADER_GLYPH_SIZE_PX)}
-                                        color={theme.colors.text.secondary}
-                                        accessibilityLabel={probe.phase === 'loading'
-                                            ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
-                                            : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))}
-                                    />
-                                </View>
-                            ) : null
+                            <IconButton
+                                testID={refreshTestID}
+                                iconName="arrow-clockwise"
+                                accessibilityLabel={refreshControlLabel}
+                                tooltip={refreshControlLabel}
+                                // Icon only: no border, no fill. The header already
+                                // carries the surface this control sits on, so a
+                                // second bordered circle only added weight.
+                                variant="plain"
+                                size={HEADER_GLYPH_BOX_PX}
+                                iconSize={HEADER_GLYPH_SIZE_PX}
+                                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                interactiveTargetGapPx={TITLE_ROW_ACTION_GAP_PX}
+                                // While the catalog loads the same glyph stays put, held still:
+                                // the user's loading-style spinner (a dot grid) read as a
+                                // different control on the phone sheet.
+                                disabled={probe.phase !== 'idle'}
+                                onPress={() => probe.onRefresh?.()}
+                            />
                         ) : null}
                     </View>
                 ) : null}
@@ -766,7 +745,7 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                                 testID="model-picker-overlay-custom-input"
                                 accessibilityLabel={t('modelPickerOverlay.customInputA11y')}
                                 value={customValue}
-                                onChangeText={setCustomValue}
+                                onChangeText={(value) => setCustomDraft({ scopeKey: customValueScopeKey, value })}
                                 placeholder={t('agentInput.model.customPlaceholder')}
                                 placeholderTextColor={theme.colors.input.placeholder}
                                 autoCorrect={false}
@@ -792,11 +771,9 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                         accessibilityLabel={props.customLabel ?? t('modelPickerOverlay.customTitle')}
                         onPress={() => {
                             selectionPressPendingRef.current = false;
-                            dismissedSelectedCustomValueKeyRef.current = null;
-                            customEditorOpenReasonRef.current = selectedCustomValue.length > 0 ? 'selected-custom' : 'manual';
                             focusCustomInputOnOpenRef.current = true;
-                            setCustomEditorVisible(true);
-                            if (selectedCustomValue.length > 0) setCustomValue(selectedCustomValue);
+                            setCustomDraft({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+                            setCustomEditorIntent({ scopeKey: customValueScopeKey, kind: 'manual' });
                         }}
                         style={(state) => [
                             styles.customEntryRow,
@@ -811,10 +788,17 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     );
     // A grid reserves its status line below the scroll area. Notices can wrap without moving the cards'
     // starting position or clipping the message.
+    const hasFooterStatus = (props.multiColumn && notes.length > 0) || Boolean(props.footerContent);
     const notesNode = props.multiColumn || props.footerContent ? (
-        <View testID="model-picker-overlay-notes" style={styles.notesFooter} accessibilityLiveRegion="polite">
-            {props.multiColumn ? notes.map((note, index) => <Text key={`${index}:${note}`} style={styles.noteText}>{note}</Text>) : null}
-            {props.footerContent}
+        <View
+            testID="model-picker-overlay-notes"
+            style={[styles.notesFooter, hasFooterStatus ? styles.notesFooterFilled : null]}
+            accessibilityLiveRegion="polite"
+        >
+            <View style={styles.notesFooterBody}>
+                {props.multiColumn ? notes.map((note, index) => <Text key={`${index}:${note}`} style={styles.noteText}>{note}</Text>) : null}
+                {props.footerContent}
+            </View>
         </View>
     ) : null;
 
@@ -838,12 +822,12 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     onSelect={(id) => {
                         const option = optionByKey.get(id);
                         if (!option || option.disabled) return;
-                        customEditorOpenReasonRef.current = null;
-                        dismissedSelectedCustomValueKeyRef.current = null;
                         // Clear synchronously before the callback: the owner may unmount
                         // this picker inside onSelect, before passive effects can refresh.
                         abandonCustomDraft();
-                        setCustomEditorVisible(false);
+                        setCustomEditorIntent(selectedCustomValue.length > 0
+                            ? { scopeKey: customValueScopeKey, kind: 'dismissed' }
+                            : null);
                         if (option.onActivate) {
                             option.onActivate();
                             return;
@@ -919,14 +903,22 @@ const styles = StyleSheet.create((theme) => ({
      */
     title: { flex: 1, ...Typography.variant('body', 'semiBold'),   color: theme.colors.text.primary },
     effectiveBlock: { gap: 0 },
-    notesFooter: { flexShrink: 0, minHeight: Typography.rowMeta().lineHeight },
-    noteText: { fontSize: 11, color: theme.colors.text.tertiary },
     /**
-     * The loading twin of the refresh control's drawn box. Same square, so the
-     * header never reflows between idle and in-flight; no chrome, because the
-     * control it replaces has none either.
+     * The status footer closes the pane the way the search header opens it: a divider, then the line
+     * on the header's own text edge. The divider is only drawn once there is something to say; its
+     * space is reserved either way so a notice arriving never moves the list.
      */
-    refreshProgressSlot: { width: HEADER_GLYPH_BOX_PX, height: HEADER_GLYPH_BOX_PX, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+    notesFooter: {
+        flexShrink: 0,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s8,
+        paddingLeft: theme.space.s6,
+        borderTopWidth: 1,
+        borderTopColor: 'transparent',
+    },
+    notesFooterFilled: { borderTopColor: theme.colors.border.default },
+    notesFooterBody: { minHeight: Typography.variant('meta').lineHeight },
+    noteText: { fontSize: 11, color: theme.colors.text.tertiary },
     optionCardIconSlot: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     optionSelectionStatus: { alignItems: 'center', justifyContent: 'flex-start', gap: theme.space.s2 },
     optionSelectionMark: { width: 20, height: 14, alignItems: 'center', justifyContent: 'center' },

@@ -28,6 +28,13 @@ This is the standing reference for **0.3 development source / Developer Preview 
 
 ## Declaration, activation and projection
 
+In 0.3 development source, bundled client-only declarations receive the same
+process-local occurrence and source custody as other plugins. The executable
+registry census includes declarations with no daemon entrypoint; final policy
+admits their current declaration without synthesizing a daemon activation.
+Consumer retirement fences their Voice provider lifecycle through the existing
+occurrence owner.
+
 [`definePlugin`](../packages/plugin-sdk/src/definePlugin.ts) is the code-defined author path. It projects a portable manifest and compiles registration callbacks into the named `activate(api)` ABI declared in [`activation.ts`](../packages/plugin-sdk/src/activation.ts). Raw host-generated `contributes` is not an additional `definePlugin` author input.
 
 The canonical manifest schema and normalizer remain Protocol/platform-owned. [`manifest/v2.ts`](../packages/protocol/src/plugins/manifest/v2.ts) admits runtime API version 1 and an **optional** non-wildcard `engines.happier` range. Host/runtime ABI admission and package SemVer are separate contracts; do not infer a host compatibility range from a package version or source build identity. See [protocol evolution](compatibility.md#sdk-protocol-evolution).
@@ -47,6 +54,16 @@ session previews omit sources that declare `false`. Discovery can therefore find
 native configuration for adoption without claiming that a Happier Session loads
 it. The declaration schema owns the fact; the host does not infer it from an Agent
 id.
+
+Native MCP discovery in 0.3 development source returns `detectedServers` through
+the registered discovery contribution. Agent leaves read their native config
+files; the host keeps the declared Agent and `loadedInHappierSessions` authority
+and normalizes the rows for Found/adoption. Stdio commands/arguments, remote URLs,
+enabled state, source paths and env/header names survive; env/header values and
+unknown config fields do not. Credential-bearing remote URLs are refused through
+the canonical MCP URL schema. The existing remote `endpoints` projection remains
+available to discovery sources that publish remote endpoints rather than native
+configuration rows.
 
 Plugin-declared MCP servers in 0.3 development source project from the lazy
 contribution catalog, not a runner-owned manifest loader. Their metadata carries
@@ -69,6 +86,18 @@ policy changes use `AgentSessionConfigurationUpdate`, not a plugin-owned policy
 reader or a second permission engine. A declaration still requires proof through
 the actual Agent's launch and permission path.
 
+In 0.3 development source, OpenCode's session-scoped MCP namespace retains its
+isolation prefix and uses a compact digest. The remaining 64-character model
+tool-name budget is supplied to the host-owned Happier stdio transport. Its
+optional naming projection reads the actual admitted inventory on discovery
+and dispatch, including plugin-tool changes; the canonical HTTP inventory keeps
+original names. The native Agent MCP service's `resolveToolNaming` supplies that
+same current projection for original transcript and approval identities. It
+does not change `enabledTools` visibility or create another tool registry.
+Unresolved or removed aliases retain their raw evidence instead of acquiring a
+new canonical identity. The OpenCode V2 unsupported-registration path remains
+unchanged. These are development-source contracts, not release availability.
+
 Persistent MCP tool grants use the Account catalog Actions. The unpublished
 permission decision's unused `persistAllowRule` field and scope aliases have
 been removed in place; native Session permission updates retain their existing
@@ -85,6 +114,16 @@ host approval requires a real leaf call reaching the host before the server.
 The public testing barrel is published by the SDK's canonical API producer,
 and source declarations do not substitute for successful publication or vendor
 validation.
+
+For development-source MCP tool control, Claude, Codex and Gemini keep human
+display titles separate from permission identity. Gemini's plugin decodes its function-name correlation id
+and translates it to the host's canonical MCP name. Codex's plugin selects
+the native `requestUserInput` approval mode, whose item id joins the existing
+tool lifecycle projection. Codex 0.162.1's default tool-approval elicitation
+omits that identity and supplies a human title, so it cannot replace this
+correlated path. Actual server elicitation retains its existing handler.
+Injected Codex servers share the existing app-server startup budget for
+discovery before the first turn; they remain optional.
 
 In 0.3 development source, Happier-tool auto-approval is derived from safe
 Action specs by `tools/happierToolAutoApprovalV1.ts`. Native projections request
@@ -352,8 +391,33 @@ Surface-only Artifacts are acquired by mounted surfaces; client Action and Voice
 bundles also serve AppShell executable activation. This is source behavior,
 not a claim that an already-loaded client has received the change.
 
-In 0.3 development source, the install registry's materialization map supplies exact
-execution-origin stamps for daemon projections. A daemon-selected plugin's release-less Account
+In 0.3 development source, the app-preseed publisher retains one UI-only
+declaration per first-party plugin together with its exact compiled Artifact
+graphs. Account Availability admits those bundled Account destinations without
+a daemon report or a prior release-less Collection claim. Explicit Account
+disablement or a portable release selection takes precedence; a current trusted
+development source retains its existing authoring selection. AppShell publishes
+the selected host digests through the existing scoped cache projection owner and
+uses the canonical Plugin UI feature decision. Cache and app-package bytes still
+pass exact graph and digest verification. Machine Actions and Resources remain
+bound to Administration's admitted daemon origin; the host declaration grants
+neither machine execution nor a Collection writer.
+
+In 0.3 development source, the projection contract uses the canonical
+`executionOrigin` envelope for rows, package occurrences and embedded mounts.
+Installed releases use the install registry's materialization reference;
+bundled/development occurrences use exact runtime source custody. Administration
+stores the same identity, and Protocol equality does not equate a source with a
+materialization. The UI reads producer identity without reconstructing it from
+custody metadata. Projection and invocation share the CLI's canonical origin
+composer. The daemon producer and UI consumer must use the same envelope
+contract; a moving development UI paired with a pre-migration daemon rejects
+old flat artifact stamps as an invalid response until the daemon is reloaded.
+Availability materializations qualify source admission independently of source
+identity and do not require plugin activation. A targeted detail whose origin cannot be stamped
+returns the existing typed mount-unavailable result and a daemon diagnostic,
+rather than publishing its handle with no executable mount.
+A daemon-selected plugin's release-less Account
 declaration supplies server currentness for Collections, webhooks, Events and
 Machine provisioners. The daemon's Availability publication lifecycle claims
 these admitted declarations through the existing Account Data host after
@@ -427,8 +491,14 @@ and passes its exported `collectionMigrations` to Account Data's existing
 candidate executor. Data stages against source revisions; `transitionIntentTx`
 re-censuses and atomically promotes those rows with the writer. Empty Collections
 still advance immediately; failed preparation retains rows and the incumbent
-writer. Same-version/different-digest claims remain refused, lagging claims
-cannot lower versions, and portable Account release selections still outrank
+writer. A schema-proven compatible widening can adopt a different digest at the
+same schema version without rewriting payload bytes or row revisions. Data's
+Protocol predicate proves nested optional additions and wider value domains while
+preserving projection, index, query, relation, identity and quota semantics.
+New required fields and narrowed types remain typed contract conflicts; lagging
+claims cannot reclaim the writer. Retained compatible contracts receive read-only
+access through tolerant stored readers; mutations still require the exact current
+digest. Portable Account release selections still outrank
 daemon claims. This adds neither a migration registry nor a second executor.
 
 Portable Collection migration artifacts use the same captured canonical manifest
@@ -444,12 +514,16 @@ authoring contract or proof that an already-loaded artifact has been rebuilt.
 The CLI Account Data claim owner retains a typed
 `plugin_collection_contract_conflict` for the exact admitted manifest digest,
 Account lifetime, plugin occurrence and Availability change cursor. Repeated
-Collection operations return that refusal with a schema-version/migration remedy,
-without resending the manifest or presenting the Collection as empty. A changed
+Collection mutations return that refusal with a schema-version/migration remedy,
+without resending the manifest. Reads still ask the server to admit the caller's
+exact retained contract; compatible callers can read without reclaiming the writer.
+If reader admission fails, the typed claim refusal remains visible rather than
+presenting the Collection as empty. A changed
 declaration, occurrence, Account or Availability hint (including a changes-feed
 reset) permits a fresh claim; the hint grants no writer authority. Network and
 5xx failures retain the existing next-operation retry behavior. Dependency-owned
-JSON Schema changes are contract changes too and require versioned migrations.
+JSON Schema changes use the same compatibility decision. Incompatible changes require a new schema version and the existing
+candidate-preparation/migration path.
 
 App-scoped plugin UI does not use `plugins.home` as catalog authority. That named
 Administration target remains responsible for install, installation settings,
@@ -629,6 +703,42 @@ The fallback index contains delivered skill names and frontmatter descriptions,
 omitting skills marked `disable-model-invocation`; it does not paste bodies or
 truncate the item count. The safe `skills_read` tool reads full instructions and
 supporting file bytes through the same bundle validator as native delivery.
+
+The 0.3 Export retirement removes executable prompt-asset adapters and their
+registration/generator conventions. Static `promptAssets` system-prompt
+contributions remain declaration-owned. Native skills are read through the
+Agent catalog's `capabilities.skills.nativeRoots` and the host scanner;
+`skills.machine.install` is the explicit outside-Happier writer. The existing
+`daemon.promptAssets.download.*` ids remain the scanner-backed Found byte
+transport, rather than an adapter API. They do not restore asset-type discovery,
+upload or prompt-document-to-command export. Legacy receipts and stored generic
+bundle readers remain data compatibility, not competing delivery owners.
+The Protocol frontmatter owner decodes YAML before checking skill names and
+invocation flags; quoted scalars and block descriptions have their YAML meaning,
+and nested metadata cannot replace top-level fields. Create and Update edit that
+same YAML document, preserving retained metadata and the instruction body;
+frontmatter decoding, writing and cost projection share delimiter framing.
+The stored bundle reader first decodes YAML. On YAML syntax failure only, it
+uses the exact 0.2 `readSkillBundleFrontmatter` line projection for retained
+name/description, then validates those fields at the same owner. The 0.2 writer
+persisted Markdown verbatim, so unquoted description colons and unmatched scalar
+brackets are retained inputs, not whole-library failures. Valid YAML block
+scalars and nested metadata keep their decoded YAML meaning; semantic failure
+of valid YAML does not enable the fallback. Current imports and writes stay
+strict and `writeSkillFrontmatterV1` emits valid YAML. This read-only adapter
+remains while predecessor-written stored bundles are supported.
+New skill imports and writes require portable paths. Stored bundles retain the
+predecessor's safe relative POSIX paths, including Windows-reserved names; the
+Windows materializer refuses only that item through `materialize_failed`. Name
+catalogs omit malformed stored items while retaining healthy neighbours. Full
+`skills.list` reads expose those identities through `unavailableItems` with a
+public title when known and the item-level refusal reason, never invented
+description, trust or cost. The UI data hook retains these diagnostics alongside
+last-known healthy items through a failed refresh. Found joins native scans only
+to readable library content: a refused item supplies no membership or masking
+fact and does not withdraw unrelated native skills. A
+failed or incomplete inventory still withholds the whole catalog, and GC never
+sweeps after any unreadable content.
 Name reads require a Session and resolve against its current delivered identities
 and digests. UI and remote CLI name reads reach that Session's owner through the
 existing Session Action RPC; an explicit `skillId` without a Session reads the
@@ -909,6 +1019,12 @@ Home, Project and plugin areas retain their explicit Session-target pin flows.
 Declared `optionsSourceId: 'sessions'` uses the neutral options resolver and returns qualified `{ serverId, sessionId }` choices from current Session discovery. Setup previews resolve the same declared bindings as saved instances without writing them. The surface's `onRepairInputs` callback exposes its typed unresolved binding outcome to the existing setup composition, without creating another input writer.
 
 Widget Views can declare `resources` as qualified same-plugin Resource references at the existing manifest/Surface Registry owner. These references identify refresh dependencies, not permissions. The daemon projection retains each admitted Resource's actual `global`, `session` or `surface` scope; dynamic Resources have no fabricated packaged-file path. `widgets.item.refresh` admits the current instance and resolved target, then awaits each declared Resource's existing store read. The store's `refresh()` returns the settled snapshot, including a truthful error or retirement outcome; stale last-known content does not make a failed refresh successful.
+
+Same-realm widget mounts bind their ephemeral shared scope to the physical
+surface's admitted plugin occurrence, captured Account lifetime and execution
+origin. Targeted-contribution metadata is not required for sharing. The existing
+shared-scope owner reuses values across current mounts of that occurrence and
+refuses access after mount, occurrence or Account retirement.
 
 Native mounts, hosted read/watch bridges and this Action share the existing contextual Resource owner under the captured canonical Account and exact machine/occurrence/context. Declared global Resources share across physical hosts; Session Resources retain the selected Session identity. Final-consumer release or Account retirement disposes the store. Canceling an Action releases its wait rather than canceling another mount's shared read. Headless/client-only execution, missing declarations/scope or unavailable surface provenance returns typed unavailable, without child capability registries or current-UI routing. Native builtin definitions have no plugin Resource declaration; they retain their native data subscriptions/Retry and this Resource Refresh Action is unavailable for them.
 
@@ -1398,12 +1514,27 @@ escaped and NUL text retain decoded fallback. Client-backed sources can omit
 paths and ripgrep, as OpenCode does. Claude, Codex, Pi, OhMyPi and Antigravity
 use the file path; all six bundled Agents declare positive content search.
 Decoders still own branch/rollback selection and native item identity. The
-control inherits caller cancellation/deadline and yields cooperatively;
+control inherits caller cancellation and the cooperative scan deadline and yields;
 plugins publish partial coverage with a continuation for unfinished work.
+The decoder can report source-bound EOF through `isScanComplete`; the shared
+helper then assembles verified matches under cancellation without reopening the
+cooperative scan budget. A previously yielded decoder still yields. Forward and
+backward JSONL diagnostic callbacks preserve incomplete-source evidence before
+a consumed row yields.
 The canonical forward JSONL scanner can hand each parsed line to a decoder
 without retaining source bodies. Codex consumes that path and shares root-family
 discovery across its requested candidate page; complete native rollback selection
 still precedes publication of a match.
+
+Claude uses the existing backward JSONL scanner to retain in-transcript progress
+across equally budgeted candidate pages. Its continuation binds row locations and
+branch-selection progress to the observed file identity; returned text is decoded
+from the source, not trusted from the cursor. A native row is decoded and its progress
+retained before a cooperative yield, so a row can cross the scan deadline; native
+reads and finalization still observe cancellation. Recency continuations also bind the
+unvisited ordering suffix. A changed source or ordering invalidates that continuation
+and the host returns the existing `cursorReset` result instead of reporting complete
+coverage while skipping an unvisited file.
 
 Opt-in native indexing is a separate consumer of the same External Sessions
 contribution's existing `pageTranscript` / `readAfterTranscript` readers, not
@@ -1423,6 +1554,22 @@ budgets are optional for source and identity resolution, and required for paged
 candidate/transcript reads. Explicit caller paging budgets are preserved rather
 than clipped to a second host ceiling. Wire and persisted-data schemas still own
 their declared limits.
+
+For 0.3 content-candidate pages, optional `budgetMs` is charged from RPC receipt
+through source preparation and scanning. The host forwards it as
+`scanDeadlineAtMs`, separate from the invocation's hard `deadlineAtMs` and abort
+signal. Scan exhaustion yields partial coverage; it does not retire the invocation
+before decoding and terminal delivery finish. The client uses the existing
+operation-owned terminal wait and explicit cancellation, as filename search does.
+Other RPCs retain their full receipt-anchored hard lifetime; no global transport
+margin is deducted from valid work.
+
+Link/import annotation enriches an already-found candidate page. If cancellation
+interrupts its Account reads, the annotation owner stops further reads and retains
+the candidates, any verified positive annotations, and the native continuation;
+`annotationsIncomplete: true` prevents treating absent annotations as negative facts.
+Other annotation failures still propagate. Explicit client cancellation still stops
+the caller's wait and does not publish a cancelled result into the UI.
 
 External Sessions contributions can also declare optional `readAccounting` in
 0.3 development. This source-wide auxiliary read uses the same occurrence,
@@ -1833,14 +1980,41 @@ the host remains the filesystem-policy owner. Policy refusal returns
 
 The development storage catalog consumes this same SCM contribution's optional
 `worktree.retire` / `worktree.reinstate` handlers and `worktreeRetention` capability.
-Git retirement moves a registered checkout and locks it with its Trash entry
+Git retirement moves a registered linked checkout and locks it with its Trash entry
 identity; restore unlocks and moves it without replacing an occupied destination.
-Submodule worktrees support Delete now only. Nested registered checkouts settle
-child-first, each with its own Trash entry. The host-only
+Submodule linked worktrees support Delete now only. Nested registered linked checkouts
+settle child-first, each with its own Trash entry. In the 0.3 development implementation,
+main checkouts, their common Git directories and proved registration-gone orphans
+instead use SCM-owned, same-volume no-replace rename through the public SDK's host
+filesystem services. Orphans retain their exact `.git` back-reference, including
+relative paths; Undo resolves that reference at the retained original path without
+rewriting it. Orphans remain Caution and collectable. Main/common retirement preserves
+contained checkout bytes and registrations in one payload rather than retiring them
+independently. Indexed children of a common Git directory cannot bypass this whole-item
+SCM lifecycle. Dependent worktrees become unavailable while their common authority is
+in Trash; restoring the original path restores that authority.
+
+In development source, trusted folder-scan roots consult this same SCM owner even
+when no Project or Session census contains them. The detector's optional
+`includeRetainedWorktrees` read resolves a proved orphan to its live repository
+anchor; ordinary SCM detection remains unchanged. Storage binds the resulting
+enrichment and lifecycle adapter before review or effects. An absent or failed
+classifier leaves Git-marked roots at Check, rather than enabling filesystem cleanup.
+
+SCM enrichment supplies main/common loss facts: local unpushed branches, stashes,
+tracked/untracked changes and dependent worktrees. The existing Storage review carries
+these facts for explicit person confirmation; Agent callers use the existing per-Action
+approval policy. There is no separate approval or Trash path. Project/workspace
+references use the existing Account row/topology owner and CAS, scoped to the admitted
+custodian Account and Machine. Sync endpoints, including paused ones, refuse retirement. Reference
+receipts fence Undo/recovery by exact row revisions, and reference-bearing Undo must
+restore the original path. The host-only
 `context.beforeFilesystemMutation` callback revalidates captured facts inside the
 repository's mutation queue immediately before the filesystem effect.
 Interrupted Trash moves and deletions complete only through this trusted guard
-and the exact current worktree registration; recovery does not broadly prune
+and exact retained identity or current linked-worktree registration; the guarded
+`context.retainedSourcePath` supplies the original basis for relative orphan
+back-references during Empty. Recovery does not broadly prune
 registrations. Ordinary
 `scm.worktree.remove` approval and request semantics remain unchanged. Optional
 `read.ignoredPaths` supplies Git ignore evidence through the same contribution,
@@ -2487,6 +2661,16 @@ isolation and scoped routes stay with their existing host owners. These are
 presentation exports, not new trigger or sharing contribution families. Exact
 names and props come from the generated Plugin UI API reports.
 
+Memory fact rows also share one controlled Plugin UI content presenter in 0.3
+development source. The public `/components` export accepts fact text,
+caller-formatted metadata, optional source navigation, retired-state facts and
+trailing actions. Core's `MemoryDocumentBody` binds its existing Item and text
+leaves to that presenter. Qualified document reads, expiry decisions, arrival
+animation, topic navigation and memory Actions stay with their existing callers;
+the renderer introduces no memory service, parser or contribution family. The
+[typed author example](../packages/plugin-ui/fixtures/external-authoring/src/memoryFactsSurface.tsx)
+composes a fact and a topic row using public package imports.
+
 Share sheets, expanded grants, level controls and their help legend also use
 neutral Plugin UI presentation in 0.3 development source. Callers supply the
 roster body, supported levels in their domain order, translated labels,
@@ -2776,6 +2960,13 @@ virtual-store identity; the transient workspace config selects pnpm's native
 immediate orphan pruning when the closure changes. Both temporary package roots
 and the workspace config are released after preparation. Published registry
 resolution keeps its existing policy.
+
+In 0.3 development, a first-party plugin at its canonical source-workspace path
+uses that repository's installed dependencies. The author toolchain checks the
+declared package identities and versions without running a package manager or
+refreshing the shared dependency tree. Missing or incompatible required packages
+fail preparation. External author roots retain managed dependency preparation
+and the public-author package policy.
 
 The shared authoring source observer excludes that marker-owned configuration
 and remembers the last attempted input signatures separately from the adopted

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { InputHintsSchema, InputPathSchema } from '../inputs/inputFields.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
@@ -15,7 +15,7 @@ import { PluginHostedHtmlSourceV1Schema, type PluginHostedHtmlSourceV1 } from '.
 import { UiSurfaceCapabilityRequestV1Schema, UiSurfaceNetworkRequestV1Schema,
     normalizeUiSurfaceCapabilityRequestV1, type UiSurfaceNetworkRequestV1, type UiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 /** Explicit publication inherits resolved widget bindings, never a private static Resource expectation. */
 export function projectWidgetDefinitionForSharedPublicationV1(definition: WidgetDefinitionV1): WidgetDefinitionV1 {
     const copy = WidgetDefinitionV1Schema.parse(JSON.parse(JSON.stringify(definition)));
@@ -27,25 +27,25 @@ export function projectWidgetDefinitionForSharedPublicationV1(definition: Widget
     return WidgetDefinitionV1Schema.parse(copy);
 }
 /** Who made a definition: the person, their agent, or a trusted plugin acting for the Account. */
-export const WidgetDefinitionAuthorV1Schema = lazyZodSchema(() => z.object({ kind: z.enum(['person', 'agent', 'plugin']) }).strict());
+export const WidgetDefinitionAuthorV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.enum(['person', 'agent', 'plugin']) }));
 export type WidgetDefinitionAuthorV1 = z.infer<typeof WidgetDefinitionAuthorV1Schema>;
-export const WidgetDefinitionProvenanceV1Schema = lazyZodSchema(() => z.object({
-    authorAccountId: id.optional(),
+export const WidgetDefinitionProvenanceV1Schema = lazyZodSchema(() => z.strictObject({
+    authorAccountId: z.optional(id),
     /** Written when the definition is made; a definition saved before these facts existed has neither. */
-    author: WidgetDefinitionAuthorV1Schema.optional(),
-    createdAt: z.number().int().nonnegative().optional(),
+    author: z.optional(WidgetDefinitionAuthorV1Schema),
+    createdAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     source: z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('authored') }).strict(),
-        z.object({ kind: z.literal('session'), serverId: id, sessionId: id, itemId: id }).strict(),
+        z.strictObject({ kind: z.literal('authored') }),
+        z.strictObject({ kind: z.literal('session'), serverId: id, sessionId: id, itemId: id }),
     ]),
-}).strict());
+}));
 export type WidgetDefinitionProvenanceV1 = z.infer<typeof WidgetDefinitionProvenanceV1Schema>;
 
-const document = z.unknown().superRefine((value, context) => {
+const document = z.pipe(z.unknown().check(z.superRefine((value, context) => {
     const result = preflightPluginDeclarativeDocumentV1(value);
     if (!result.ok) context.addIssue({ code: 'custom', message: result.message });
-}).pipe(PluginDeclarativeDocumentV1Schema);
-export const WidgetInstalledDefinitionBodyV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('installed'), surface: asProtocolZod(PluginContributionIdentityV1Schema) }).strict());
+})), PluginDeclarativeDocumentV1Schema);
+export const WidgetInstalledDefinitionBodyV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('installed'), surface: asProtocolZod(PluginContributionIdentityV1Schema) }));
 export type WidgetDefinitionBodyV1 = Readonly<
     | { kind: 'declarative'; document: PluginDeclarativeDocumentV1 }
     | { kind: 'installed'; surface: PluginContributionIdentityV1 }
@@ -53,39 +53,39 @@ export type WidgetDefinitionBodyV1 = Readonly<
     | { kind: 'html'; source: PluginHostedHtmlSourceV1; requestedCapabilities?: UiSurfaceCapabilityRequestV1 }
 >;
 type WidgetDefinitionBodyV1Input = Exclude<WidgetDefinitionBodyV1, { kind: 'declarative' }> | Readonly<{ kind: 'declarative'; document: unknown }>;
-export const WidgetDefinitionBodyV1Schema: z.ZodType<WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input> = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('declarative'), document }).strict(),
+export const WidgetDefinitionBodyV1Schema: z.ZodMiniType<WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input> = lazyZodSchema(() => z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('declarative'), document }),
     WidgetInstalledDefinitionBodyV1Schema,
-    z.object({ kind: z.literal('builtin'), id: BuiltinWidgetIdV1Schema }).strict(),
-    z.object({ kind: z.literal('html'), source: PluginHostedHtmlSourceV1Schema,
-        requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.optional() }).strict(),
+    z.strictObject({ kind: z.literal('builtin'), id: BuiltinWidgetIdV1Schema }),
+    z.strictObject({ kind: z.literal('html'), source: PluginHostedHtmlSourceV1Schema,
+        requestedCapabilities: z.optional(UiSurfaceCapabilityRequestV1Schema) }),
 ]));
 const shape = {
     sizeDeclaration: z.lazy(() => WidgetSizeDeclarationV1Schema),
-    name: id, description: z.string().optional(), body: WidgetDefinitionBodyV1Schema,
+    name: id, description: z.optional(z.string()), body: WidgetDefinitionBodyV1Schema,
     inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema,
-    sessionInputPath: InputPathSchema.optional(),
-    connectedAccountPurposeBindings: z.array(WidgetConnectedAccountPurposeBindingV1Schema).optional(),
+    sessionInputPath: z.optional(InputPathSchema),
+    connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
     /** Copied guest egress, not installed-plugin authority; new instances capture this choice. */
-    networkOverride: UiSurfaceNetworkRequestV1Schema.optional(),
+    networkOverride: z.optional(UiSurfaceNetworkRequestV1Schema),
 };
-export const WidgetDefinitionDraftV1Schema = lazyZodSchema(() => z.object(shape).strict());
+export const WidgetDefinitionDraftV1Schema = lazyZodSchema(() => z.strictObject(shape));
 export type WidgetDefinitionDraftV1 = z.infer<typeof WidgetDefinitionDraftV1Schema>;
-export const WidgetDefinitionPatchV1Schema = lazyZodSchema(() => z.object({ ...shape,
-    description: z.string().nullable().optional(), sessionInputPath: InputPathSchema.nullable().optional(),
-    connectedAccountPurposeBindings: z.array(WidgetConnectedAccountPurposeBindingV1Schema).nullable().optional(),
-    networkOverride: UiSurfaceNetworkRequestV1Schema.nullable().optional(),
-}).partial().strict());
+export const WidgetDefinitionPatchV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.partial(z.object({ ...shape,
+    description: z.optional(z.nullable(z.string())), sessionInputPath: z.optional(z.nullable(InputPathSchema)),
+    connectedAccountPurposeBindings: z.optional(z.nullable(z.array(WidgetConnectedAccountPurposeBindingV1Schema))),
+    networkOverride: z.optional(z.nullable(UiSurfaceNetworkRequestV1Schema)),
+}))));
 export type WidgetDefinitionPatchV1 = z.infer<typeof WidgetDefinitionPatchV1Schema>;
-export const WidgetDefinitionV1Schema = lazyZodSchema(() => z.object({ v: z.literal(1), id, ...shape,
+export const WidgetDefinitionV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1), id, ...shape,
     provenance: WidgetDefinitionProvenanceV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
     if (value.sessionInputPath && !value.inputs.fields.some(field => field.path === value.sessionInputPath)) {
         context.addIssue({ code: 'custom', path: ['sessionInputPath'], message: 'Session input must be declared' });
     }
     const paths = value.inputs.fields.map(field => field.path);
     if (new Set(paths).size !== paths.length) context.addIssue({ code: 'custom', path: ['inputs'], message: 'Duplicate input path' });
-}));
+})));
 export type WidgetDefinitionV1 = z.infer<typeof WidgetDefinitionV1Schema>;
 export const WidgetDefinitionV1StoredSchema = createStoredReadSchema(WidgetDefinitionV1Schema);
 

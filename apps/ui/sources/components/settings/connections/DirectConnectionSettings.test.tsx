@@ -42,7 +42,7 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-import { AccountDirectConnectionsSection, MachineDirectConnectionSection } from './DirectConnectionSettings';
+import { AccountDirectConnectionsSection } from './DirectConnectionSettings';
 
 const DIRECT_FEATURES = [
     'machines.rpc.directPeer',
@@ -99,23 +99,5 @@ describe('Account › Connections', () => {
         const screen = await renderSettingsView(<AccountDirectConnectionsSection />);
 
         expect(screen.getTextContent()).not.toContain(t('settingsConnections.serverDenied'));
-    });
-});
-
-describe('Machine › Connection', () => {
-    it('writes a per-machine choice without touching the account default', async () => {
-        state.preferences = DEFAULT_PEER_MEDIATION_PREFERENCES_V1;
-        allowServer('enabled');
-        const screen = await renderSettingsView(<MachineDirectConnectionSection machineId="machine-a" machineName="MacBook Pro" />);
-
-        await act(async () => {
-            screen.findByTestId('machine-direct-connection:relay')?.props.onPress?.();
-        });
-
-        const written = lastWrite();
-        for (const flow of PeerMediationFlowKindV1Schema.options) {
-            expect(written.byMachineId['machine-a']?.flows[flow]?.direct).toBe('disabled');
-            expect(written.flows[flow]?.direct ?? 'inherit').toBe('inherit');
-        }
     });
 });

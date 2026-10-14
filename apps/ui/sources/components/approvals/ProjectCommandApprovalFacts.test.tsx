@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { ProjectPrepareInputV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ProjectSetupReviewV1Schema } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
+import { MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 installSessionSubagentCommonModuleMocks({
@@ -17,9 +20,12 @@ const {
   readProjectCommandApproval,
   readProjectServiceEffectApproval,
 } = await import('./ProjectCommandApprovalFacts');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const originalMachinePools = getStorage().getState().machinePoolListByServerId;
 
 afterEach(() => {
   standardCleanup();
+  getStorage().setState({ machinePoolListByServerId: originalMachinePools });
 });
 
 const workspace = {
@@ -30,6 +36,25 @@ const workspace = {
 };
 
 describe('Project command approval facts', () => {
+  it('names the requested pool from its current Home-scoped definition', async () => {
+    const poolId = '11111111-1111-4111-8111-111111111111';
+    const pool = MachinePoolViewV1Schema.parse({
+      pool: { id: poolId, name: 'Build workers', description: null, revision: 1,
+        createdAt: 1, updatedAt: 1, members: [] },
+      availability: { state: 'known', connectedCount: 0, enabledCount: 0 },
+    });
+    getStorage().setState({ machinePoolListByServerId: { home: [pool] } });
+    const presentation = readProjectCommandApproval({
+      actionId: 'projects.compute.exec',
+      actionArgs: { workspace, executable: 'tool', argv: [], cwd: workspace.rootPath,
+        choice: { kind: 'workers', destination: { kind: 'pool', poolId, selection: 'automatic' } } },
+    });
+    if (!presentation) throw new Error('Expected the pool request to parse');
+    const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={presentation} testID="facts" />);
+    expect(screen.getTextContent()).toContain('Build workers');
+    expect(screen.getTextContent()).not.toContain(poolId);
+  });
+
   it('discloses the same executable and argv boundaries for ad-hoc and service approval', async () => {
     const executable = 'C:\\Program Files\\tool.exe';
     const argv = ['', 'a b', 'say "hello"', 'tail'];
@@ -62,7 +87,7 @@ describe('Project command approval facts', () => {
       } as never,
     });
     expect(presentation).not.toBeNull();
-    expect(describeProjectCommandApprovalTitle(presentation!)).toBe(
+    expect(describeProjectCommandApprovalTitle(presentation!, 'devbox')).toBe(
       'Run this command on a worker?',
     );
     const screen = await renderScreen(
@@ -97,7 +122,7 @@ describe('Project command approval facts', () => {
       name: 'test',
       destination: { kind: 'primary' },
     });
-    expect(describeProjectCommandApprovalTitle(script!)).toBe('Run test?');
+    expect(describeProjectCommandApprovalTitle(script!, 'devbox')).toBe('Run test?');
     expect(
       readProjectCommandApproval({
         actionId: 'projects.compute.exec',
@@ -110,5 +135,55 @@ describe('Project command approval facts', () => {
         actionArgs: {} as never,
       }),
     ).toBeNull();
+  });
+
+  it('reads a setup request as its machine question and ignores teardown', () => {
+    const setup = readProjectCommandApproval({
+      actionId: 'projects.prepare',
+      actionArgs: { workspace, phase: 'setup' } as never,
+    });
+    expect(setup).toMatchObject({ kind: 'setup', destination: { kind: 'primary' } });
+    expect(describeProjectCommandApprovalTitle(setup!, 'devbox')).toBe('Run setup on devbox?');
+    expect(
+      readProjectCommandApproval({
+        actionId: 'projects.prepare',
+        actionArgs: { workspace, phase: 'teardown' } as never,
+      }),
+    ).toBeNull();
+  });
+
+  it('carries the canonical target review into setup facts only for the approved effect basis', () => {
+    const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffectDigest: 'reviewed', reviewedEffect: {
+      commands: [{ kind: 'command', command: 'echo setup', cwd: '.', os: 'linux' }],
+      configEnvironment: { MODE: 'development' },
+    } });
+    const actionArgs = ProjectPrepareInputV1Schema.parse({ workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope: 'thisTime' });
+    const input = { actionId: 'projects.prepare' as const, actionArgs, preview: { setupReview } };
+    expect(readProjectCommandApproval(input)).toMatchObject({ kind: 'setup', setupReview });
+    expect(readProjectCommandApproval({ ...input, actionArgs: { ...actionArgs, expectedEffectDigest: 'stale' } }))
+      .toMatchObject({ kind: 'setup', setupReview: null });
+  });
+  it('renders the reviewed setup steps with Where, Files and As, and says plainly when the steps could not be read', async () => {
+    const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffectDigest: 'reviewed', reviewedEffect: {
+      commands: [
+        { kind: 'command', command: 'mise install', cwd: '.', os: 'linux' },
+        { kind: 'command', command: 'yarn install --immutable', cwd: '.', os: 'linux' },
+      ],
+    } });
+    const actionArgs = ProjectPrepareInputV1Schema.parse({ workspace, phase: 'setup' });
+    const reviewed = readProjectCommandApproval({ actionId: 'projects.prepare', actionArgs, preview: { setupReview } });
+    const withSteps = await renderScreen(<ProjectCommandApprovalFacts presentation={reviewed!} testID="facts" />);
+    expect(withSteps.getTextContent()).toContain('mise install');
+    expect(withSteps.getTextContent()).toContain('yarn install --immutable');
+    expect(withSteps.getTextContent()).toContain('This checkout, as it is now.');
+    expect(withSteps.findByTestId('facts.stepsUnavailable')).toBeNull();
+    await withSteps.unmount();
+
+    const unread = readProjectCommandApproval({ actionId: 'projects.prepare', actionArgs });
+    const withoutSteps = await renderScreen(<ProjectCommandApprovalFacts presentation={unread!} testID="facts" />);
+    expect(withoutSteps.findByTestId('facts.stepsUnavailable')).not.toBeNull();
+    expect(withoutSteps.getTextContent()).not.toContain('mise install');
+    expect(withoutSteps.getTextContent()).toContain('This checkout, as it is now.');
+    await withoutSteps.unmount();
   });
 });

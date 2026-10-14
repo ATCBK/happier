@@ -15,10 +15,12 @@ export function useWorkspaceShellEnabled(): boolean {
 /**
  * Where the workspace owner runs: the desktop/tablet shell (it owns navigation), a phone (it owns
  * the open-tab set while the phone's stack keeps navigation), or nowhere (signed out, native
- * onboarding, public pages, the activity overlay). Deferred web presentation claims routes
- * without hosting them while onboarding releases its viewport.
+ * onboarding, the activity overlay). Authenticated public web pages retain only
+ * route entry, so their explicit destination goes through the workspace before
+ * its chrome appears. Deferred web presentation claims routes without hosting
+ * them while onboarding releases its viewport.
  */
-export function useWorkspacePresentation(): 'shell' | 'phone' | 'deferred' | null {
+export function useWorkspacePresentation(): 'shell' | 'phone' | 'entry' | 'deferred' | null {
     const auth = useAuth();
     const pathname = usePathname();
     const segments = useSegments();
@@ -29,7 +31,8 @@ export function useWorkspacePresentation(): 'shell' | 'phone' | 'deferred' | nul
     const publicNonHome = normalized.length > 0 && normalized[0] !== 'index'
         && isPublicRouteForUnauthenticated([...segments]);
     const bypass = Platform.OS === 'web' && (isTerminalConnectWebPathname(pathname) || publicNonHome);
-    if (!auth.isAuthenticated || overlay || bypass) return null;
+    if (!auth.isAuthenticated || overlay) return null;
+    if (bypass) return 'entry';
     if (onboarding) return Platform.OS === 'web' ? 'deferred' : null;
     return isTablet ? 'shell' : 'phone';
 }

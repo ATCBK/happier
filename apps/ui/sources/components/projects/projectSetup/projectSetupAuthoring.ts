@@ -10,11 +10,8 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { resolveCurrentProjectAuthoringReturn } from '@/components/projects/detail/projectRouteState';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
-import { describeProjectCommandSource, describeProjectEnvironment, joinProjectFiles } from './projectScriptPresentation';
+import { describeProjectCommandSource, joinProjectFiles } from './projectScriptPresentation';
 
 export type ProjectSetupAuthoringInput = Readonly<{
     workspace: WorkspaceAddressV1;
@@ -124,7 +121,7 @@ export type ProjectSetupAgentGuidanceResult = Awaited<ReturnType<typeof readProj
 export type ProjectSetupAgentGuidance = Extract<ProjectSetupAgentGuidanceResult, { kind: 'ready' }>['guidance'];
 
 /** The editable request contains a short observation, never the qualified inspection DTO. */
-function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance, machine: string): string {
+function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): string {
     const entries = guidance.detection?.entries ?? [];
     const scripts = entries.filter(entry => entry.usage === 'script');
     const services = entries.filter(entry => entry.usage === 'service');
@@ -138,20 +135,8 @@ function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance, machin
             ...(services.length > 0 ? [t('projects.authoring.servicesCount', { count: services.length })] : []),
             ...(files ? [t('projects.scripts.foundIn', { files })] : [])].join(' · '),
         ...(guidance.detection?.coverage === 'partial' ? [t('projects.scripts.definition.partial')] : []),
-        ...(guidance.detection?.environments ?? []).map(environment => {
-            const description = describeProjectEnvironment(environment);
-            return [description.title, description.config].filter(Boolean).join(' · ');
-        }),
-        ...(guidance.tools ?? []).map(tool => `${tool.tool}${tool.version ? ` ${tool.version}` : ''}: ${t(
-            tool.availability === 'available' ? 'projects.scripts.editor.toolAvailable'
-                : tool.availability === 'unavailable' ? 'projects.scripts.editor.toolUnavailable' : 'projects.scripts.editor.toolUnresolved',
-            { machine })}`),
-        ...(guidance.scripts ?? []).map(script => `${script.name}: ${t(
-            script.execution === 'portable' ? 'projectWorkers.guideWorker' : 'projectWorkers.guidePrimary')}`),
         ...('status' in guidance.workerPreferences && guidance.workerPreferences.status === 'ready'
-            ? [[t('projectWorkers.guideOther'), t(guidance.adHoc.resolution.status === 'resolved'
-                ? 'projectWorkers.guideAdHocOn' : 'projectWorkers.guideAdHocOff')].join(' ')]
-            : [t('projectWorkers.policyUnavailable')]),
+            ? [] : [t('projectWorkers.policyUnavailable')]),
     ].join('\n');
 }
 
@@ -182,7 +167,7 @@ export async function openProjectSetupAuthoring(input: ProjectSetupAuthoringInpu
         }
         const request: SessionAuthoringOpenV1 = { seed: {
             sessionName: t('projects.authoring.draftTitle', { project: resolveWorkspaceRefDisplayName(destination.workspaceRef) }),
-            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance, getMachineDisplayName(resolveServerScopedMachine(getStorage().getState(), input.workspace.serverId, input.workspace.machineId)) ?? input.workspace.machineId)}`,
+            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance)}`,
             placement: { kind: 'exactTarget', serverId: input.workspace.serverId,
                 machineId: input.workspace.machineId, directory: input.workspace.rootPath },
             origin,

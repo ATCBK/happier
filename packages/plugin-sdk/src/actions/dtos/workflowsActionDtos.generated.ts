@@ -16,7 +16,7 @@ export type WorkflowsActionInputById = {
         };
         inputs?: Record<string, unknown> | undefined;
         target?: {
-            machineId: string;
+            machineId: unknown;
         } | undefined;
     };
     readonly "workflow.run.start": {
@@ -31,10 +31,10 @@ export type WorkflowsActionInputById = {
                 roles?: unknown;
                 finalOutput?: unknown;
             };
-            sourceArtifactId?: string | undefined;
-            visibleTeamId?: string | undefined;
+            sourceArtifactId?: unknown;
+            visibleTeamId?: unknown;
             replay?: {
-                runId: string;
+                runId: unknown;
                 agentOverride?: {
                     sourceKey: string;
                     blockId: string;
@@ -68,12 +68,12 @@ export type WorkflowsActionInputById = {
             } | undefined;
         } | {
             kind: 'saved';
-            definitionId: string;
+            definitionId: unknown;
             revision: {
                 headerVersion: number;
                 bodyVersion: number;
             };
-            visibleTeamId?: string | undefined;
+            visibleTeamId?: unknown;
         } | {
             kind: 'catalog';
             workflow: string;
@@ -113,54 +113,54 @@ export type WorkflowsActionInputById = {
     readonly "workflow.run.list": {
         cursor?: string | undefined;
         limit?: number | undefined;
-        runId?: string | undefined;
-        runIds?: string[] | undefined;
+        runId?: unknown;
+        runIds?: unknown[] | undefined;
         invocationProvenance?: {
-            runId: string;
-            invocationRecordIds: string[];
+            runId: unknown;
+            invocationRecordIds: unknown[];
         }[] | undefined;
-        sourceArtifactId?: string | undefined;
+        sourceArtifactId?: unknown;
         origin?: 'automation' | 'direct' | undefined;
         states?: ('queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review')[] | undefined;
         attention?: 'required' | undefined;
-        originSessionId?: string | undefined;
-        targetSessionId?: string | undefined;
-        automationId?: string | undefined;
-        machineId?: string | undefined;
+        originSessionId?: unknown;
+        targetSessionId?: unknown;
+        automationId?: unknown;
+        machineId?: unknown;
     };
     readonly "workflow.run.summaries": {
-        sourceArtifactIds: string[];
+        sourceArtifactIds: unknown[];
         recent: number;
     };
     readonly "workflow.run.get": {
-        runId: string;
+        runId: unknown;
     };
     readonly "workflow.run.wait": {
-        runId: string;
+        runId: unknown;
         conditions?: ('paused' | 'attention' | 'terminal')[] | undefined;
         timeoutSeconds?: number | undefined;
     };
     readonly "workflow.run.pause": {
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
     };
     readonly "workflow.run.resume": {
         mode: 'boundary';
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
     } | {
         mode: 'recover';
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
         invocations: ({
             kind: 'reattach';
             invocation: {
-                recordId: string;
+                recordId: unknown;
             };
         } | {
             kind: 'continue';
             invocation: {
-                recordId: string;
+                recordId: unknown;
             };
             conversation: 'same_conversation' | 'fresh_agent';
             input: {
@@ -181,13 +181,13 @@ export type WorkflowsActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            typeLabel: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            typeLabel: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -199,7 +199,7 @@ export type WorkflowsActionInputById = {
         } | {
             kind: 'restore_workspace';
             invocation: {
-                recordId: string;
+                recordId: unknown;
             };
             conversation: 'same_conversation' | 'fresh_agent';
             input: {
@@ -224,13 +224,13 @@ export type WorkflowsActionInputById = {
                                 pluginId: string;
                                 localId: string;
                             };
-                            key: string;
+                            key: unknown;
                             value: unknown;
                             presentation: {
-                                label: string;
-                                typeLabel: string;
-                                description?: string | undefined;
-                                icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                label: unknown;
+                                typeLabel: unknown;
+                                description?: unknown;
+                                icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                             };
                         }[] | undefined;
@@ -243,28 +243,28 @@ export type WorkflowsActionInputById = {
         })[];
     };
     readonly "workflow.run.cancel": {
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
     };
     readonly "workflow.run.invocations.list": {
-        runId: string;
+        runId: unknown;
         cursor?: string | undefined;
         limit?: number | undefined;
-        parentRecordId?: string | undefined;
+        parentRecordId?: unknown;
         lifecycles?: ('running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded')[] | undefined;
         includeContent?: boolean | undefined;
     };
     readonly "workflow.run.invocations.get": {
-        runId: string;
-        invocationId: string;
+        runId: unknown;
+        invocationId: unknown;
     };
     readonly "workflow.run.invocations.retry": {
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
         invocation: {
-            recordId: string;
+            recordId: unknown;
         };
-        causalInvocationIds: string[];
+        causalInvocationIds: unknown[];
         conversation: 'same_conversation' | 'fresh_agent';
         input: {
             kind: 'original';
@@ -288,13 +288,13 @@ export type WorkflowsActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            typeLabel: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            typeLabel: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -306,36 +306,36 @@ export type WorkflowsActionInputById = {
         acknowledgeUncertainPriorEffects?: true | undefined;
     };
     readonly "workflow.run.delete": {
-        runId: string;
+        runId: unknown;
         expectedRevision: number;
     };
     readonly "workflow.run.invocations.publish_draft": {
         value: unknown;
-        runId: string;
+        runId: unknown;
         invocation: {
-            recordId: string;
+            recordId: unknown;
         };
         expectedContentRevision: string;
     };
     readonly "workflow.run.invocations.complete_review": {
         mode: 'use_result';
-        runId: string;
+        runId: unknown;
         invocation: {
-            recordId: string;
+            recordId: unknown;
         };
         expectedContentRevision: string;
         value?: unknown;
         followUp?: {
             kind: 'run_started';
-            runId: string;
+            runId: unknown;
         } | {
             kind: 'editing';
         } | undefined;
     } | {
         mode: 'generate';
-        runId: string;
+        runId: unknown;
         invocation: {
-            recordId: string;
+            recordId: unknown;
         };
         expectedContentRevision: string;
         acknowledgeUncertainPriorEffects?: true | undefined;
@@ -345,7 +345,7 @@ export type WorkflowsActionInputById = {
         limit?: number | undefined;
     };
     readonly "workflow.definition.get": {
-        definitionId: string;
+        definitionId: unknown;
     };
     readonly "workflow.definition.create": {
         definitionId: string;
@@ -363,7 +363,7 @@ export type WorkflowsActionInputById = {
         };
     };
     readonly "workflow.definition.update": {
-        definitionId: string;
+        definitionId: unknown;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -382,7 +382,7 @@ export type WorkflowsActionInputById = {
         };
     };
     readonly "workflow.definition.edit": {
-        definitionId: string;
+        definitionId: unknown;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -847,7 +847,7 @@ export type WorkflowsActionInputById = {
         } | {
             kind: 'move_block';
             blockId: string;
-            direction: 'in' | 'out' | 'up' | 'down';
+            direction: 'out' | 'in' | 'up' | 'down';
         } | {
             kind: 'set_step_prompt';
             blockId: string;
@@ -903,16 +903,21 @@ export type WorkflowsActionInputById = {
         } | {
             kind: 'rename';
             name: string;
+        } | {
+            kind: 'rename_result_field';
+            blockId: string;
+            from: string;
+            to: string;
         })[];
     };
     readonly "workflow.definition.delete": {
-        definitionId: string;
+        definitionId: unknown;
     };
     readonly "workflow.definition.import": {
         json: string;
     };
     readonly "workflow.definition.export": {
-        definitionId: string;
+        definitionId: unknown;
     };
     readonly "workflow.trigger.list": {
         workflow: string;
@@ -1060,6 +1065,18 @@ export type WorkflowsActionInputById = {
                 machineId: string;
                 runId: string;
                 sessionId?: string | undefined;
+                observation?: {
+                    kind: 'review_walkthrough';
+                    comparisonId: string;
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | {
+                    comparisonId: string;
+                    kind: 'scm_diff_summary';
+                    output: 'summary' | 'walkthrough' | 'commitPlan';
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | undefined;
             } | {
                 kind: 'workflow_run';
                 runId: string;
@@ -1083,12 +1100,12 @@ export type WorkflowsActionInputById = {
             enabled: boolean;
         };
         project: {
-            machineId: string;
+            machineId: unknown;
             directory: string;
-            workspaceRefId?: string | undefined;
+            workspaceRefId?: unknown;
         };
         inputs?: Record<string, unknown> | undefined;
-        visibleTeamId?: string | null | undefined;
+        visibleTeamId?: unknown;
         executionTarget?: {
             kind: 'session';
         } | {
@@ -1124,9 +1141,7 @@ export type WorkflowsActionInputById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -1432,9 +1447,7 @@ export type WorkflowsActionInputById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -1857,6 +1870,18 @@ export type WorkflowsActionInputById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -1877,7 +1902,7 @@ export type WorkflowsActionInputById = {
                 };
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: string | null | undefined;
+            visibleTeamId?: unknown;
             executionTarget?: {
                 kind: 'session';
             } | {
@@ -1901,9 +1926,9 @@ export type WorkflowsActionInputById = {
                 secondOpinion?: 'off' | 'encouraged' | undefined;
             }[] | undefined;
             project?: {
-                machineId: string;
+                machineId: unknown;
                 directory: string;
-                workspaceRefId?: string | undefined;
+                workspaceRefId?: unknown;
             } | undefined;
         };
         triggerId?: string | undefined;
@@ -2058,6 +2083,18 @@ export type WorkflowsActionInputById = {
                 machineId: string;
                 runId: string;
                 sessionId?: string | undefined;
+                observation?: {
+                    kind: 'review_walkthrough';
+                    comparisonId: string;
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | {
+                    comparisonId: string;
+                    kind: 'scm_diff_summary';
+                    output: 'summary' | 'walkthrough' | 'commitPlan';
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | undefined;
             } | {
                 kind: 'workflow_run';
                 runId: string;
@@ -2100,9 +2137,7 @@ export type WorkflowsActionInputById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -2392,7 +2427,7 @@ export type WorkflowsActionInputById = {
             }>;
         };
         inputs?: Record<string, unknown> | undefined;
-        visibleTeamId?: string | null | undefined;
+        visibleTeamId?: unknown;
         executionTarget?: {
             kind: 'session';
         } | {
@@ -2419,9 +2454,9 @@ export type WorkflowsActionInputById = {
             kind: 'originating_session';
         } | undefined;
         project?: {
-            machineId: string;
+            machineId: unknown;
             directory: string;
-            workspaceRefId?: string | undefined;
+            workspaceRefId?: unknown;
         } | undefined;
     };
     readonly "session.trigger.update": {
@@ -2441,9 +2476,7 @@ export type WorkflowsActionInputById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -2733,9 +2766,9 @@ export type WorkflowsActionInputById = {
                 }>;
             } | undefined;
             project?: {
-                machineId: string;
+                machineId: unknown;
                 directory: string;
-                workspaceRefId?: string | undefined;
+                workspaceRefId?: unknown;
             } | undefined;
             enabled?: boolean | undefined;
             trigger?: {
@@ -2871,6 +2904,18 @@ export type WorkflowsActionInputById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -2897,7 +2942,7 @@ export type WorkflowsActionInputById = {
                 } | undefined;
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: string | null | undefined;
+            visibleTeamId?: unknown;
             executionTarget?: {
                 kind: 'session';
             } | {
@@ -2948,9 +2993,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -3241,133 +3284,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.start": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -3390,25 +3315,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3425,11 +3335,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
@@ -3437,133 +3342,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.list": {
         runs: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -3586,25 +3373,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3621,11 +3393,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         }[];
@@ -3641,10 +3408,10 @@ export type WorkflowsActionResultById = {
         }>;
         invocationProvenance?: {
             index: {
+                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
-                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -3677,133 +3444,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.get": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -3826,25 +3475,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3861,11 +3495,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
@@ -3879,9 +3508,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -4188,9 +3815,7 @@ export type WorkflowsActionResultById = {
                     sessionId?: string | undefined;
                 } | null | undefined;
             };
-            inputs: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            inputs: Record<string, JsonValue>;
             machineId: string;
             executionTarget: {
                 kind: 'session';
@@ -4198,6 +3823,7 @@ export type WorkflowsActionResultById = {
                 kind: 'detached_run';
             };
             materializedLeaves: {
+                [x: string]: any;
                 sourceKey: string;
                 blockId: string;
                 kind: 'workflow' | 'action' | 'step' | 'wait';
@@ -4391,48 +4017,6 @@ export type WorkflowsActionResultById = {
                         baseRef?: string | null | undefined;
                     } | undefined;
                 };
-                authoredWorkspace: {
-                    kind: 'inherit';
-                } | {
-                    kind: 'project_checkout';
-                } | {
-                    kind: 'from_step';
-                    producer: {
-                        blockId: string;
-                        scope: {
-                            kind: 'current';
-                        } | {
-                            kind: 'previous_iteration';
-                            loopBlockId: string;
-                        } | {
-                            kind: 'outer';
-                            levels: number;
-                        };
-                    };
-                } | {
-                    kind: 'new_worktree';
-                    source: {
-                        kind: 'original';
-                    } | {
-                        kind: 'workflow';
-                    } | {
-                        kind: 'step';
-                        producer: {
-                            blockId: string;
-                            scope: {
-                                kind: 'current';
-                            } | {
-                                kind: 'previous_iteration';
-                                loopBlockId: string;
-                            } | {
-                                kind: 'outer';
-                                levels: number;
-                            };
-                        };
-                    };
-                    displayName?: string | undefined;
-                    baseRef?: string | null | undefined;
-                };
                 executionTarget: {
                     kind: 'session';
                 } | {
@@ -4463,19 +4047,11 @@ export type WorkflowsActionResultById = {
                 childRef?: string | undefined;
                 actionId?: string | undefined;
                 actionContract?: {
-                    inputSchema: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    outputSchema: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    completion?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    inputSchema: JsonValue;
+                    outputSchema: JsonValue;
+                    completion?: JsonValue | undefined;
                 } | undefined;
-                actionInput?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                actionInput?: Record<string, JsonValue> | undefined;
             }[];
             frozenChildren: Record<string, Readonly<{
                 version: 1;
@@ -4484,9 +4060,7 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -4864,9 +4438,7 @@ export type WorkflowsActionResultById = {
                 ref: string;
                 version: string | number;
             };
-            inputs: Record<string, string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null>;
+            inputs: Record<string, JsonValue>;
             machineId: string;
             executionTarget: {
                 kind: 'session';
@@ -4874,6 +4446,7 @@ export type WorkflowsActionResultById = {
                 kind: 'detached_run';
             };
             materializedLeaves: {
+                [x: string]: any;
                 sourceKey: string;
                 blockId: string;
                 kind: 'workflow' | 'action' | 'step' | 'wait';
@@ -5067,48 +4640,6 @@ export type WorkflowsActionResultById = {
                         baseRef?: string | null | undefined;
                     } | undefined;
                 };
-                authoredWorkspace: {
-                    kind: 'inherit';
-                } | {
-                    kind: 'project_checkout';
-                } | {
-                    kind: 'from_step';
-                    producer: {
-                        blockId: string;
-                        scope: {
-                            kind: 'current';
-                        } | {
-                            kind: 'previous_iteration';
-                            loopBlockId: string;
-                        } | {
-                            kind: 'outer';
-                            levels: number;
-                        };
-                    };
-                } | {
-                    kind: 'new_worktree';
-                    source: {
-                        kind: 'original';
-                    } | {
-                        kind: 'workflow';
-                    } | {
-                        kind: 'step';
-                        producer: {
-                            blockId: string;
-                            scope: {
-                                kind: 'current';
-                            } | {
-                                kind: 'previous_iteration';
-                                loopBlockId: string;
-                            } | {
-                                kind: 'outer';
-                                levels: number;
-                            };
-                        };
-                    };
-                    displayName?: string | undefined;
-                    baseRef?: string | null | undefined;
-                };
                 executionTarget: {
                     kind: 'session';
                 } | {
@@ -5139,19 +4670,11 @@ export type WorkflowsActionResultById = {
                 childRef?: string | undefined;
                 actionId?: string | undefined;
                 actionContract?: {
-                    inputSchema: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    outputSchema: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null;
-                    completion?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    inputSchema: JsonValue;
+                    outputSchema: JsonValue;
+                    completion?: JsonValue | undefined;
                 } | undefined;
-                actionInput?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                actionInput?: Record<string, JsonValue> | undefined;
             }[];
             frozenChildren: Record<string, Readonly<{
                 version: 1;
@@ -5160,9 +4683,7 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -5511,9 +5032,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -5812,9 +5331,7 @@ export type WorkflowsActionResultById = {
             };
             endFingerprint?: string | undefined;
         } | null;
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
         usage?: {
             inputTokens?: number | undefined;
             outputTokens?: number | undefined;
@@ -5824,133 +5341,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.wait": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -5973,25 +5372,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6008,148 +5392,23 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'terminal';
         matchedCondition: 'terminal';
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
     } | {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -6172,25 +5431,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6207,148 +5451,23 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'paused';
         matchedCondition: 'paused';
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
     } | {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -6371,25 +5490,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6406,148 +5510,23 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'needs_attention';
         matchedCondition: 'attention';
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
     } | {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -6570,25 +5549,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6605,147 +5569,22 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'timeout';
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
     } | {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -6768,25 +5607,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6803,148 +5627,23 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'not_matched_terminal';
-        result?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        result?: JsonValue | undefined;
     };
     readonly "workflow.run.pause": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -6967,25 +5666,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -7002,11 +5686,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
@@ -7014,133 +5693,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.resume": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -7163,25 +5724,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -7198,11 +5744,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
@@ -7210,133 +5751,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.cancel": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -7359,25 +5782,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -7394,11 +5802,6 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
@@ -7406,10 +5809,10 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.invocations.list": {
         invocations: {
+            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
-            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -7421,10 +5824,10 @@ export type WorkflowsActionResultById = {
         nextCursor?: string | undefined;
         invocationDetails?: {
             index: {
+                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
-                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -7433,6 +5836,7 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
+                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -7458,9 +5862,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
+                        [x: string]: any;
                         kind: 'item';
                         index: string;
-                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -7469,21 +5873,7 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: {
-                        sourceKey: string;
-                        blockId: string;
-                        sessionIds: string[];
-                        ordinal?: number | undefined;
-                        name?: string | undefined;
-                        observation?: {
-                            recordId: string;
-                            sequence: string;
-                            attempt: string;
-                            contentRevision: string;
-                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                        } | undefined;
-                    }[] | undefined;
+                    destinations?: any[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -7493,48 +5883,12 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
+                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
-                    frameInputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null> | undefined;
-                    frameProjectWorkspace?: {
-                        creationIntent?: {
-                            kind: 'git_worktree';
-                            sourceDirectory: string;
-                            baseRef: string;
-                            displayName: string;
-                            branchMode: 'new';
-                        } | undefined;
-                        descriptor?: {
-                            machineId: string;
-                            directory: string;
-                            checkoutRootPath: string;
-                            workspaceRefId?: string | undefined;
-                            sourceInvocation?: {
-                                producer: {
-                                    blockId: string;
-                                    scope: {
-                                        kind: 'current';
-                                    } | {
-                                        kind: 'previous_iteration';
-                                        loopBlockId: string;
-                                    } | {
-                                        kind: 'outer';
-                                        levels: number;
-                                    };
-                                };
-                                invocationRecordId: string;
-                            } | undefined;
-                            checkout?: {
-                                kind: 'git_worktree';
-                                branchName: string;
-                            } | undefined;
-                        } | undefined;
-                    } | undefined;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7551,8 +5905,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7570,8 +5924,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7593,9 +5947,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -7607,8 +5959,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7630,9 +5982,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -7644,8 +5994,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7664,8 +6014,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7684,8 +6034,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7707,16 +6057,10 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
-                input?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
-                result?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -7759,53 +6103,28 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
-                interaction?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
-                resultContract?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
-                    input: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null>;
+                    input: Record<string, JsonValue>;
                     turnId?: string | undefined;
-                    output?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
-                    awaitedRuns?: {
-                        key: string;
-                        runId: string;
-                        observation?: {
-                            kind: 'review_walkthrough';
-                            comparisonId: string;
-                            resultId?: string | undefined;
-                            afterRevision?: number | undefined;
-                        } | undefined;
-                    }[] | undefined;
-                    awaitedOperations?: {
-                        key: string;
-                        serverId: string;
-                        machineId: string;
-                        operationId: string;
-                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -7924,66 +6243,20 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
-                    providerResumeIdentity?: {
-                        [x: string]: unknown;
-                        kind: 'provider_session.v1';
-                        backendTarget: {
-                            kind: 'backend';
-                            backendId: string;
-                            configuredBackendId?: string | undefined;
-                            sourceKind?: 'built_in' | 'configured' | undefined;
-                        };
-                        providerSessionId: string;
-                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    session?: string | undefined;
-                    detached_run?: string | undefined;
+                    [x: string]: any;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
-                } | undefined;
-                workspace?: {
-                    creationIntent?: {
-                        kind: 'git_worktree';
-                        sourceDirectory: string;
-                        baseRef: string;
-                        displayName: string;
-                        branchMode: 'new';
-                    } | undefined;
-                    descriptor?: {
-                        machineId: string;
-                        directory: string;
-                        checkoutRootPath: string;
-                        workspaceRefId?: string | undefined;
-                        sourceInvocation?: {
-                            producer: {
-                                blockId: string;
-                                scope: {
-                                    kind: 'current';
-                                } | {
-                                    kind: 'previous_iteration';
-                                    loopBlockId: string;
-                                } | {
-                                    kind: 'outer';
-                                    levels: number;
-                                };
-                            };
-                            invocationRecordId: string;
-                        } | undefined;
-                        checkout?: {
-                            kind: 'git_worktree';
-                            branchName: string;
-                        } | undefined;
-                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
+                        reason: any;
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -7994,7 +6267,6 @@ export type WorkflowsActionResultById = {
                         };
                     } | undefined;
                 } | undefined;
-                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -8024,15 +6296,13 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
                                 displayText?: string | undefined;
                             };
-                            input: (string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null)[];
+                            input: JsonValue[];
                         };
                     };
                     acknowledgeUncertainPriorEffects?: true | undefined;
@@ -8080,10 +6350,10 @@ export type WorkflowsActionResultById = {
     readonly "workflow.run.invocations.get": {
         invocation: {
             index: {
+                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
-                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -8092,6 +6362,7 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
+                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -8117,9 +6388,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
+                        [x: string]: any;
                         kind: 'item';
                         index: string;
-                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -8128,21 +6399,7 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: {
-                        sourceKey: string;
-                        blockId: string;
-                        sessionIds: string[];
-                        ordinal?: number | undefined;
-                        name?: string | undefined;
-                        observation?: {
-                            recordId: string;
-                            sequence: string;
-                            attempt: string;
-                            contentRevision: string;
-                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                        } | undefined;
-                    }[] | undefined;
+                    destinations?: any[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -8152,48 +6409,12 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
+                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
-                    frameInputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null> | undefined;
-                    frameProjectWorkspace?: {
-                        creationIntent?: {
-                            kind: 'git_worktree';
-                            sourceDirectory: string;
-                            baseRef: string;
-                            displayName: string;
-                            branchMode: 'new';
-                        } | undefined;
-                        descriptor?: {
-                            machineId: string;
-                            directory: string;
-                            checkoutRootPath: string;
-                            workspaceRefId?: string | undefined;
-                            sourceInvocation?: {
-                                producer: {
-                                    blockId: string;
-                                    scope: {
-                                        kind: 'current';
-                                    } | {
-                                        kind: 'previous_iteration';
-                                        loopBlockId: string;
-                                    } | {
-                                        kind: 'outer';
-                                        levels: number;
-                                    };
-                                };
-                                invocationRecordId: string;
-                            } | undefined;
-                            checkout?: {
-                                kind: 'git_worktree';
-                                branchName: string;
-                            } | undefined;
-                        } | undefined;
-                    } | undefined;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8210,8 +6431,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8229,8 +6450,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8252,9 +6473,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -8266,8 +6485,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8289,9 +6508,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -8303,8 +6520,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8323,8 +6540,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8343,8 +6560,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -8366,16 +6583,10 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
-                input?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
-                result?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -8418,53 +6629,28 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
-                interaction?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
-                resultContract?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
-                    input: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null>;
+                    input: Record<string, JsonValue>;
                     turnId?: string | undefined;
-                    output?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
-                    awaitedRuns?: {
-                        key: string;
-                        runId: string;
-                        observation?: {
-                            kind: 'review_walkthrough';
-                            comparisonId: string;
-                            resultId?: string | undefined;
-                            afterRevision?: number | undefined;
-                        } | undefined;
-                    }[] | undefined;
-                    awaitedOperations?: {
-                        key: string;
-                        serverId: string;
-                        machineId: string;
-                        operationId: string;
-                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -8583,66 +6769,20 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
-                    providerResumeIdentity?: {
-                        [x: string]: unknown;
-                        kind: 'provider_session.v1';
-                        backendTarget: {
-                            kind: 'backend';
-                            backendId: string;
-                            configuredBackendId?: string | undefined;
-                            sourceKind?: 'built_in' | 'configured' | undefined;
-                        };
-                        providerSessionId: string;
-                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    session?: string | undefined;
-                    detached_run?: string | undefined;
+                    [x: string]: any;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
-                } | undefined;
-                workspace?: {
-                    creationIntent?: {
-                        kind: 'git_worktree';
-                        sourceDirectory: string;
-                        baseRef: string;
-                        displayName: string;
-                        branchMode: 'new';
-                    } | undefined;
-                    descriptor?: {
-                        machineId: string;
-                        directory: string;
-                        checkoutRootPath: string;
-                        workspaceRefId?: string | undefined;
-                        sourceInvocation?: {
-                            producer: {
-                                blockId: string;
-                                scope: {
-                                    kind: 'current';
-                                } | {
-                                    kind: 'previous_iteration';
-                                    loopBlockId: string;
-                                } | {
-                                    kind: 'outer';
-                                    levels: number;
-                                };
-                            };
-                            invocationRecordId: string;
-                        } | undefined;
-                        checkout?: {
-                            kind: 'git_worktree';
-                            branchName: string;
-                        } | undefined;
-                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
+                        reason: any;
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -8653,7 +6793,6 @@ export type WorkflowsActionResultById = {
                         };
                     } | undefined;
                 } | undefined;
-                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -8683,15 +6822,13 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
                                 displayText?: string | undefined;
                             };
-                            input: (string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null)[];
+                            input: JsonValue[];
                         };
                     };
                     acknowledgeUncertainPriorEffects?: true | undefined;
@@ -8738,133 +6875,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.invocations.retry": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -8887,25 +6906,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -8922,19 +6926,14 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
+            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
-            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -8951,10 +6950,10 @@ export type WorkflowsActionResultById = {
     readonly "workflow.run.invocations.publish_draft": {
         invocation: {
             index: {
+                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
-                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -8963,6 +6962,7 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
+                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -8988,9 +6988,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
+                        [x: string]: any;
                         kind: 'item';
                         index: string;
-                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -8999,21 +6999,7 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: {
-                        sourceKey: string;
-                        blockId: string;
-                        sessionIds: string[];
-                        ordinal?: number | undefined;
-                        name?: string | undefined;
-                        observation?: {
-                            recordId: string;
-                            sequence: string;
-                            attempt: string;
-                            contentRevision: string;
-                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                        } | undefined;
-                    }[] | undefined;
+                    destinations?: any[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -9023,48 +7009,12 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
+                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
-                    frameInputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null> | undefined;
-                    frameProjectWorkspace?: {
-                        creationIntent?: {
-                            kind: 'git_worktree';
-                            sourceDirectory: string;
-                            baseRef: string;
-                            displayName: string;
-                            branchMode: 'new';
-                        } | undefined;
-                        descriptor?: {
-                            machineId: string;
-                            directory: string;
-                            checkoutRootPath: string;
-                            workspaceRefId?: string | undefined;
-                            sourceInvocation?: {
-                                producer: {
-                                    blockId: string;
-                                    scope: {
-                                        kind: 'current';
-                                    } | {
-                                        kind: 'previous_iteration';
-                                        loopBlockId: string;
-                                    } | {
-                                        kind: 'outer';
-                                        levels: number;
-                                    };
-                                };
-                                invocationRecordId: string;
-                            } | undefined;
-                            checkout?: {
-                                kind: 'git_worktree';
-                                branchName: string;
-                            } | undefined;
-                        } | undefined;
-                    } | undefined;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9081,8 +7031,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9100,8 +7050,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9123,9 +7073,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -9137,8 +7085,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9160,9 +7108,7 @@ export type WorkflowsActionResultById = {
                         kind: 'definition';
                         reference: {
                             kind: 'literal';
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'input';
                             name: string;
@@ -9174,8 +7120,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9194,8 +7140,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9214,8 +7160,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
+                        [x: string]: any;
                         code: string;
-                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -9237,16 +7183,10 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
-                input?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
-                result?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -9289,53 +7229,28 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
-                interaction?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
-                resultContract?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
-                    input: Record<string, string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null>;
+                    input: Record<string, JsonValue>;
                     turnId?: string | undefined;
-                    output?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
-                    awaitedRuns?: {
-                        key: string;
-                        runId: string;
-                        observation?: {
-                            kind: 'review_walkthrough';
-                            comparisonId: string;
-                            resultId?: string | undefined;
-                            afterRevision?: number | undefined;
-                        } | undefined;
-                    }[] | undefined;
-                    awaitedOperations?: {
-                        key: string;
-                        serverId: string;
-                        machineId: string;
-                        operationId: string;
-                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
+                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -9454,66 +7369,20 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
-                    providerResumeIdentity?: {
-                        [x: string]: unknown;
-                        kind: 'provider_session.v1';
-                        backendTarget: {
-                            kind: 'backend';
-                            backendId: string;
-                            configuredBackendId?: string | undefined;
-                            sourceKind?: 'built_in' | 'configured' | undefined;
-                        };
-                        providerSessionId: string;
-                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    session?: string | undefined;
-                    detached_run?: string | undefined;
+                    [x: string]: any;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
-                } | undefined;
-                workspace?: {
-                    creationIntent?: {
-                        kind: 'git_worktree';
-                        sourceDirectory: string;
-                        baseRef: string;
-                        displayName: string;
-                        branchMode: 'new';
-                    } | undefined;
-                    descriptor?: {
-                        machineId: string;
-                        directory: string;
-                        checkoutRootPath: string;
-                        workspaceRefId?: string | undefined;
-                        sourceInvocation?: {
-                            producer: {
-                                blockId: string;
-                                scope: {
-                                    kind: 'current';
-                                } | {
-                                    kind: 'previous_iteration';
-                                    loopBlockId: string;
-                                } | {
-                                    kind: 'outer';
-                                    levels: number;
-                                };
-                            };
-                            invocationRecordId: string;
-                        } | undefined;
-                        checkout?: {
-                            kind: 'git_worktree';
-                            branchName: string;
-                        } | undefined;
-                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
+                        reason: any;
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -9524,7 +7393,6 @@ export type WorkflowsActionResultById = {
                         };
                     } | undefined;
                 } | undefined;
-                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -9554,15 +7422,13 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
                                 displayText?: string | undefined;
                             };
-                            input: (string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null)[];
+                            input: JsonValue[];
                         };
                     };
                     acknowledgeUncertainPriorEffects?: true | undefined;
@@ -9609,133 +7475,15 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.invocations.complete_review": {
         run: {
-            sourceArtifactId: string | null;
+            [x: string]: any;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
+                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
-                cause?: {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'schedule';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        scheduledFor: number;
-                    };
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'pluginEvent';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        eventRef: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        sourceSelectorId: string;
-                    };
-                } | {
-                    evidence: {
-                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionStarted';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    } | {
-                        event: 'sessionArchived';
-                        sourceSessionId: string;
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                        originRunId?: string | undefined;
-                    } | {
-                        event: 'userActionRequired';
-                        sourceSessionId: string;
-                        sourceTurnId: string;
-                        requestId: string;
-                        requestKind: 'permission' | 'user_action';
-                        policy: {
-                            kind: 'nextMatches';
-                            count: number;
-                        } | {
-                            kind: 'currentTurn';
-                        } | {
-                            kind: 'firstMatch';
-                        } | {
-                            kind: 'everyMatch';
-                        };
-                    };
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'sessionLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                } | {
-                    kind: 'trigger';
-                    triggerId: string;
-                    triggerRevision: number;
-                    triggerKind: 'runLifecycle';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    evidence: {
-                        source: {
-                            kind: 'execution_run';
-                            machineId: string;
-                            runId: string;
-                            sessionId?: string | undefined;
-                        } | {
-                            kind: 'workflow_run';
-                            runId: string;
-                        };
-                        condition: 'terminal' | 'needs_attention';
-                        sourceRevision: number;
-                        originRunId?: string | undefined;
-                    };
-                } | {
-                    kind: 'manual';
-                    invokedAt: number;
-                } | {
-                    kind: 'conversation';
-                    occurrenceKey: string;
-                    occurredAt: number;
-                    triggerId?: (string) | undefined;
-                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
@@ -9758,25 +7506,10 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
-            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: {
-                    sourceKey: string;
-                    blockId: string;
-                    sessionIds: string[];
-                    ordinal?: number | undefined;
-                    name?: string | undefined;
-                    observation?: {
-                        recordId: string;
-                        sequence: string;
-                        attempt: string;
-                        contentRevision: string;
-                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
-                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
-                    } | undefined;
-                }[] | undefined;
+                destinations?: any[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -9793,19 +7526,14 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
-            where?: {
-                machineId: string;
-                directory: string;
-                workspaceRefId?: string | undefined;
-            } | null | undefined;
             attentionRequired?: boolean | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
+            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
-            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -9954,9 +7682,7 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -10261,9 +7987,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -10590,9 +8314,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -10919,9 +8641,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -11243,9 +8963,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -11560,9 +9278,7 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -11868,9 +9584,7 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 enum?: string[] | undefined;
-                default?: string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null | undefined;
+                default?: JsonValue | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -12180,9 +9894,7 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     enum?: string[] | undefined;
-                    default?: string | number | boolean | readonly JsonValue[] | {
-                        readonly [key: string]: JsonValue;
-                    } | null | undefined;
+                    default?: JsonValue | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -12642,6 +10354,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -12684,9 +10408,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -12990,9 +10712,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -13018,9 +10738,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -13499,6 +11217,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -13541,9 +11271,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -13847,9 +11575,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -13875,9 +11601,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -14358,6 +12082,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -14400,9 +12136,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -14706,9 +12440,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -14734,9 +12466,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -15217,6 +12947,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -15259,9 +13001,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -15565,9 +13305,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -15593,9 +13331,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -16021,6 +13757,18 @@ export type WorkflowsActionResultById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;
@@ -16229,6 +13977,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -16271,9 +14031,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -16577,9 +14335,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -16605,9 +14361,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -17098,6 +14852,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -17140,9 +14906,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -17446,9 +15210,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -17474,9 +15236,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -17957,6 +15717,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -17999,9 +15771,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -18305,9 +16075,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -18333,9 +16101,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -18816,6 +16582,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -18858,9 +16636,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -19164,9 +16940,7 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'detached_run';
                 };
-                inputs?: Record<string, string | number | boolean | readonly JsonValue[] | {
-                    readonly [key: string]: JsonValue;
-                } | null> | undefined;
+                inputs?: Record<string, JsonValue> | undefined;
                 visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
@@ -19192,9 +16966,7 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         enum?: string[] | undefined;
-                        default?: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null | undefined;
+                        default?: JsonValue | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {

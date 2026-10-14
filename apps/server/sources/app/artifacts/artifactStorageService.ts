@@ -2,7 +2,7 @@ import type { Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime, getDbProviderFromEnv } from "@/storage/prisma";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
 import { artifactOrdinarySqlPredicate } from "./artifactClassification";
-import type { ArtifactQuotaExceededV1, ArtifactStorageUsageV1 } from "@happier-dev/protocol";
+import type { ArtifactQuotaExceededV1, ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 
 export type ArtifactQuotaExceeded = ArtifactQuotaExceededV1;
 

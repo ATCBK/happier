@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { getMachineMetadataFieldV1, readMachineMetadataFieldV1, mutateMachineMetadataFieldV1,
   type MachineMetadataFieldPortV1, type MachineMetadataFieldReadV1 } from './machineMetadataFieldV1.js';
 
@@ -6,31 +6,31 @@ import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 // Action input/output inference consumes the classic schema at this public seam.
-export const MachineFinitePolicyV1Schema = lazyZodSchema(() => z.object({
+export const MachineFinitePolicyV1Schema = lazyZodSchema(() => z.strictObject({
   accepting: z.boolean(),
-  runAtMost: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
-}).strict());
+  runAtMost: z.nullable(z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER))),
+}));
 export type MachineFinitePolicyV1 = z.infer<typeof MachineFinitePolicyV1Schema>;
 export const MachineFinitePolicyV1StoredSchema = createStoredReadSchema(MachineFinitePolicyV1Schema);
 
-export const MachineFinitePolicyMutationV1Schema = lazyZodSchema(() => z.object({
+export const MachineFinitePolicyMutationV1Schema = lazyZodSchema(() => z.strictObject({
   expectedPolicy: MachineFinitePolicyV1Schema,
-  expectedMetadataVersion: z.number().int().nonnegative(),
+  expectedMetadataVersion: z.number().check(z.int(), z.nonnegative()),
   policy: MachineFinitePolicyV1Schema,
-}).strict());
+}));
 export type MachineFinitePolicyMutationV1 = z.infer<typeof MachineFinitePolicyMutationV1Schema>;
 
 export const MachineFinitePolicyGetResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('ready'), policy: MachineFinitePolicyV1Schema,
-    source: z.enum(['default', 'stored']), metadataVersion: z.number().int().nonnegative() }).strict(),
-  z.object({ status: z.enum(['locked', 'invalid', 'unavailable']) }).strict(),
+  z.strictObject({ status: z.literal('ready'), policy: MachineFinitePolicyV1Schema,
+    source: z.enum(['default', 'stored']), metadataVersion: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ status: z.enum(['locked', 'invalid', 'unavailable']) }),
 ]));
 export type MachineFinitePolicyGetResultV1 = z.infer<typeof MachineFinitePolicyGetResultV1Schema>;
 
 export const MachineFinitePolicyMutationResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']),
-    policy: MachineFinitePolicyV1Schema, metadataVersion: z.number().int().nonnegative() }).strict(),
-  z.object({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }).strict(),
+  z.strictObject({ status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']),
+    policy: MachineFinitePolicyV1Schema, metadataVersion: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }),
 ]));
 export type MachineFinitePolicyMutationResultV1 = z.infer<typeof MachineFinitePolicyMutationResultV1Schema>;
 

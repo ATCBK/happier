@@ -1,9 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ActionIdSchema } from './actionIds.js';
+import { PromptRegistryInstallInputSchema } from './actionSpecs.js';
 import { ActionsSettingsV1Schema, isActionEnabledByActionsSettings, normalizeActionsSettingsV1 } from './actionSettings.js';
 
 describe('ActionsSettingsV1Schema', () => {
+  it('accepts a predecessor registry install target without granting a native export', async () => {
+    expect(PromptRegistryInstallInputSchema.parse({ machineId: 'machine', sourceId: 'source', itemId: 'item',
+      installTarget: { assetTypeId: 'claude.skill', scope: 'user', targetName: 'skill' } }))
+      .toEqual({ machineId: 'machine', sourceId: 'source', itemId: 'item' });
+  });
+  it('retains the predecessor Export override without resolving it to a current Action', () => {
+    const row = { enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [],
+      approvalRequiredSurfaces: [], toolExposureModes: {}, futurePolicy: { mode: 'ask' } };
+    const parsed = normalizeActionsSettingsV1({ v: 1, actions: { 'prompt_asset.export': row } });
+    expect(parsed.actions['prompt_asset.export']).toEqual(row);
+    expect(normalizeActionsSettingsV1(parsed).actions['prompt_asset.export']).toEqual(row);
+    expect(ActionIdSchema.safeParse('prompt_asset.export').success).toBe(false);
+  });
   it('initializes Account policy from the Actions settings entry point', async () => {
     vi.resetModules();
     const { ActionsSettingsV1Schema: schema } = await import('./actionSettings.js');

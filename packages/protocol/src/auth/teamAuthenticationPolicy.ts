@@ -1,20 +1,20 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { TeamIdentityConnectionIdSchema } from '../teams/identity/ids.js';
 import { AuthEntryMethodIdV1Schema } from './methodId.js';
 import { normalizeAuthMethodId } from './providers.js';
 
 export const TeamAcceptedAuthenticationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('home_method'), methodId: AuthEntryMethodIdV1Schema }).strict(),
-  z.object({ kind: z.literal('team_connection'), connectionId: TeamIdentityConnectionIdSchema }).strict(),
+  z.strictObject({ kind: z.literal('home_method'), methodId: AuthEntryMethodIdV1Schema }),
+  z.strictObject({ kind: z.literal('team_connection'), connectionId: TeamIdentityConnectionIdSchema }),
 ]));
 export type TeamAcceptedAuthenticationV1 = z.infer<typeof TeamAcceptedAuthenticationV1Schema>;
 
-export const TeamRestrictedAuthenticationPolicyV1Schema = lazyZodSchema(() => z.object({
+export const TeamRestrictedAuthenticationPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   mode: z.literal('restricted'),
-  accepted: z.array(TeamAcceptedAuthenticationV1Schema).min(1).superRefine((accepted, context) => {
+  accepted: z.array(TeamAcceptedAuthenticationV1Schema).check(z.minLength(1), z.superRefine((accepted, context) => {
     const seen = new Set<string>();
     for (const reference of accepted) {
       // Provider method IDs are a case-insensitive namespace (the catalog
@@ -26,16 +26,16 @@ export const TeamRestrictedAuthenticationPolicyV1Schema = lazyZodSchema(() => z.
         ? `home_method:${normalizeAuthMethodId(reference.methodId)}`
         : `team_connection:${reference.connectionId}`;
       if (seen.has(key)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Accepted authentication references must be unique' });
+        context.addIssue({ code: "custom", message: 'Accepted authentication references must be unique' });
       }
       seen.add(key);
     }
-  }),
-}).strict());
+  })),
+}));
 export type TeamRestrictedAuthenticationPolicyV1 = z.infer<typeof TeamRestrictedAuthenticationPolicyV1Schema>;
 
 export const TeamAuthenticationPolicyV1Schema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-  z.object({ v: z.literal(1), mode: z.literal('inherit') }).strict(),
+  z.strictObject({ v: z.literal(1), mode: z.literal('inherit') }),
   TeamRestrictedAuthenticationPolicyV1Schema,
 ]));
 export type TeamAuthenticationPolicyV1 = z.infer<typeof TeamAuthenticationPolicyV1Schema>;

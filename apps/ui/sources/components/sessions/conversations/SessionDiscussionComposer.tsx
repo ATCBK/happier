@@ -161,6 +161,7 @@ export function SessionDiscussionComposer(props: Readonly<{
                 value={props.value.text}
                 placeholder={placeholder}
                 inputAccessibilityLabel={placeholder}
+                submitAccessibilityLabel={t('common.send')}
                 onChangeText={onChangeText}
                 structuredInputMentions={composerMentions}
                 onStructuredInputMentionsChange={onMentionsChange}

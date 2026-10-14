@@ -299,13 +299,13 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s8,
   },
   labelTitle: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     flexShrink: 1,
     color: theme.colors.text.secondary,
   },
   labelMeta: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     marginLeft: 'auto',
     color: theme.colors.text.tertiary,
   },

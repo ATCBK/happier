@@ -1,4 +1,5 @@
-import { pluginJsonValuesEqual, type AccountEncryptionMigrateProjectRowsDirective } from '@happier-dev/protocol';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { type AccountEncryptionMigrateProjectRowsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 import {
     assertProjectAccountRowContentForModeV1,
     assertProjectAccountRowPayloadBindingV1,

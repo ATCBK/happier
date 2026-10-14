@@ -97,6 +97,9 @@ export function createVoiceSessionBindingManager(deps: Readonly<{
         });
         if (!resolution) return null;
         if (existing && hasSameBindingSemantics(existing, adapterId, resolution)) {
+            // An exact synced binding is discovery, not local admission, until this
+            // explicit Start binds it on this client. Later remote writes cannot steal it.
+            store.getState().bind(existing);
             return existing;
         }
 

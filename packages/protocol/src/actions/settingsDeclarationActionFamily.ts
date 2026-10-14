@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 
 export const SETTINGS_DECLARATION_ACTION_IDS_V1 = ['settings.list', 'settings.get', 'settings.set', 'settings.reset', 'settings.invoke'] as const;
@@ -11,97 +11,96 @@ export function isSettingsDeclarationActionIdV1(value: string): value is Setting
 
 /** Values are strict JSON; the declaration's canonical owner admits each setting's shape. */
 export const SettingsDeclarationValueV1Schema = StrictJsonValueSchema;
-const SettingsDeclarationScalarChoiceV1Schema = lazyZodSchema(() => z.union([z.string(), z.number().finite(), z.boolean(), z.null()]));
-const AnchorSchema = lazyZodSchema(() => z.string().trim().min(1));
-const SettingKeySchema = lazyZodSchema(() => z.string().trim().min(1));
-const OperationIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SettingsDeclarationScalarChoiceV1Schema = lazyZodSchema(() => z.union([z.string(), z.number(), z.boolean(), z.null()]));
+const AnchorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const SettingKeySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const OperationIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection', 'project']));
 /** Resource identity only; caller Account and authority come from Action admission. */
 export const SettingsDeclarationTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('home'), serverId: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('project'), serverId: OperationIdSchema, projectKey: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('team'), serverId: OperationIdSchema, teamId: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('team_identity_connection'), serverId: OperationIdSchema, teamId: OperationIdSchema, connectionId: OperationIdSchema }).strict(),
+  z.strictObject({ kind: z.literal('home'), serverId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('project'), serverId: OperationIdSchema, projectKey: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('team'), serverId: OperationIdSchema, teamId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('team_identity_connection'), serverId: OperationIdSchema, teamId: OperationIdSchema, connectionId: OperationIdSchema }),
 ]));
 export type SettingsDeclarationTargetV1 = z.infer<typeof SettingsDeclarationTargetV1Schema>;
 export type SettingsDeclarationTargetKindV1 = SettingsDeclarationTargetV1['kind'];
 /** Exact operation targets, never a settings path, credential value or caller confirmation. */
 export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('atmosphere_picture_add'), source: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('url'), url: z.url().refine(value => /^https?:\/\//i.test(value)) }).strict(),
-    z.object({ kind: z.literal('machine_file'), machineId: OperationIdSchema, path: OperationIdSchema }).strict(),
-  ]) }).strict(),
-  z.object({ kind: z.literal('atmosphere_picture_remove'), localId: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('account_settings_history_purge'), versions: z.array(z.number().int().nonnegative().safe()).nonempty() }).strict(),
-  z.object({ kind: z.literal('model_pack'), packId: OperationIdSchema, machineId: OperationIdSchema.optional() }).strict(),
-  z.object({ kind: z.literal('voice_preview'), voiceId: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('diagnostics_enabled'), enabled: z.boolean() }).strict(),
-  z.object({ kind: z.literal('diagnostics_export'), artifactId: OperationIdSchema, machineId: OperationIdSchema.optional() }).strict(),
-  z.object({ kind: z.literal('diagnostics_session'), sessionId: OperationIdSchema, machineId: OperationIdSchema }).strict(),
-  z.object({ kind: z.literal('diagnostics_revocation'), key: OperationIdSchema, revision: z.number().int().positive().safe() }).strict(),
+  z.strictObject({ kind: z.literal('atmosphere_picture_add'), source: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('url'), url: z.url().check(z.refine(value => /^https?:\/\//i.test(value))) }),
+    z.strictObject({ kind: z.literal('machine_file'), machineId: OperationIdSchema, path: OperationIdSchema }),
+  ]) }),
+  z.strictObject({ kind: z.literal('atmosphere_picture_remove'), localId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('account_settings_history_purge'), versions: z.array(z.number().check(z.int(), z.nonnegative(), z.int())).check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('model_pack'), packId: OperationIdSchema, machineId: z.optional(OperationIdSchema) }),
+  z.strictObject({ kind: z.literal('voice_preview'), voiceId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('diagnostics_enabled'), enabled: z.boolean() }),
+  z.strictObject({ kind: z.literal('diagnostics_export'), artifactId: OperationIdSchema, machineId: z.optional(OperationIdSchema) }),
+  z.strictObject({ kind: z.literal('diagnostics_session'), sessionId: OperationIdSchema, machineId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('diagnostics_revocation'), key: OperationIdSchema, revision: z.number().check(z.int(), z.positive(), z.int()) }),
 ]));
 export type SettingsDeclarationOperationInputV1 = z.infer<typeof SettingsDeclarationOperationInputV1Schema>;
-export const SettingsDeclarationDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const SettingsDeclarationDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   anchor: AnchorSchema,
-  pageId: z.string().min(1),
+  pageId: z.string().check(z.minLength(1)),
   title: z.string(),
-  description: z.string().optional(),
+  description: z.optional(z.string()),
   readable: z.boolean(),
   writable: z.boolean(),
   sensitive: z.boolean(),
-  storageScope: z.enum(['account', 'local']).optional(),
-  targetKinds: z.array(SettingsDeclarationTargetKindV1Schema).optional(),
-  targetRequired: z.boolean().optional(),
-  allowedValues: z.array(SettingsDeclarationScalarChoiceV1Schema).optional(),
-  operation: z.object({ actionId: z.literal('settings.invoke'), requiresHumanInteraction: z.boolean(), requiresApproval: z.boolean().optional() }).strict().optional(),
-  unavailableReason: z.enum(['not_bound', 'sensitive', 'read_only', 'unsupported_host', 'feature_disabled']).optional(),
-}).strict());
-const ValueResultSchema = lazyZodSchema(() => z.object({ anchor: AnchorSchema, value: SettingsDeclarationValueV1Schema }).strict());
-const UnsetResultSchema = lazyZodSchema(() => z.object({ anchor: AnchorSchema, unset: z.literal(true) }).strict());
-const SettingsVersionSchema = lazyZodSchema(() => z.number().int().nonnegative().safe());
+  storageScope: z.optional(z.enum(['account', 'local'])),
+  targetKinds: z.optional(z.array(SettingsDeclarationTargetKindV1Schema)),
+  targetRequired: z.optional(z.boolean()),
+  allowedValues: z.optional(z.array(SettingsDeclarationScalarChoiceV1Schema)),
+  operation: z.optional(z.strictObject({ actionId: z.literal('settings.invoke'), requiresHumanInteraction: z.boolean(), requiresApproval: z.optional(z.boolean()) })),
+  unavailableReason: z.optional(z.enum(['not_bound', 'sensitive', 'read_only', 'unsupported_host', 'feature_disabled'])),
+}));
+const ValueResultSchema = lazyZodSchema(() => z.strictObject({ anchor: AnchorSchema, value: SettingsDeclarationValueV1Schema }));
+const UnsetResultSchema = lazyZodSchema(() => z.strictObject({ anchor: AnchorSchema, unset: z.literal(true) }));
+const SettingsVersionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.int()));
 const SettingRawScalarSchema = lazyZodSchema(() => z.union([
-  z.object({ unset: z.literal(true) }).strict(),
-  z.object({ value: SettingsDeclarationScalarChoiceV1Schema }).strict(),
+  z.strictObject({ unset: z.literal(true) }),
+  z.strictObject({ value: SettingsDeclarationScalarChoiceV1Schema }),
 ]));
 /** Exact captured Home/Account identity, raw presence and versions from the Account Settings CAS owner. */
-export const SettingsDeclarationMutationReversalV1Schema = lazyZodSchema(() => z.object({
-  scope: z.object({ serverId: OperationIdSchema, accountId: OperationIdSchema }).strict(),
+export const SettingsDeclarationMutationReversalV1Schema = lazyZodSchema(() => z.strictObject({
+  scope: z.strictObject({ serverId: OperationIdSchema, accountId: OperationIdSchema }),
   beforeVersion: SettingsVersionSchema,
   appliedVersion: SettingsVersionSchema,
   before: SettingRawScalarSchema,
   applied: SettingRawScalarSchema,
-}).strict().refine(value => value.appliedVersion === value.beforeVersion + 1));
+}).check(z.refine(value => value.appliedVersion === value.beforeVersion + 1)));
 export type SettingsDeclarationMutationReversalV1 = z.infer<typeof SettingsDeclarationMutationReversalV1Schema>;
 const SettingReversalInputSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('capture') }).strict(),
-  SettingsDeclarationMutationReversalV1Schema.safeExtend({ kind: z.literal('restore') }),
+  z.strictObject({ kind: z.literal('capture') }),
+  z.safeExtend(SettingsDeclarationMutationReversalV1Schema, { kind: z.literal('restore') }),
 ]));
 
 export const SettingsDeclarationActionInputSchemasV1 = {
-  'settings.list': z.object({ pageId: z.string().trim().min(1).optional() }).strict(),
-  'settings.get': z.object({ anchor: AnchorSchema, key: SettingKeySchema.optional(), target: SettingsDeclarationTargetV1Schema.optional(), includeVersion: z.literal(true).optional() }).strict(),
-  'settings.set': z.object({ anchor: AnchorSchema, key: SettingKeySchema.optional(), value: SettingsDeclarationValueV1Schema, target: SettingsDeclarationTargetV1Schema.optional(),
-    expectedSettingsVersion: SettingsVersionSchema.optional(), reversal: SettingReversalInputSchema.optional() }).strict()
-    .refine(value => value.reversal?.kind !== 'restore' || value.expectedSettingsVersion === undefined || value.expectedSettingsVersion === value.reversal.appliedVersion),
-  'settings.reset': z.object({ anchor: AnchorSchema, target: SettingsDeclarationTargetV1Schema.optional() }).strict(),
-  'settings.invoke': z.object({ anchor: AnchorSchema, input: SettingsDeclarationOperationInputV1Schema.optional() }).strict(),
+  'settings.list': z.strictObject({ pageId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
+  'settings.get': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), target: z.optional(SettingsDeclarationTargetV1Schema), includeVersion: z.optional(z.literal(true)) }),
+  'settings.set': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), value: SettingsDeclarationValueV1Schema, target: z.optional(SettingsDeclarationTargetV1Schema),
+    expectedSettingsVersion: z.optional(SettingsVersionSchema), reversal: z.optional(SettingReversalInputSchema) }).check(z.refine(value => value.reversal?.kind !== 'restore' || value.expectedSettingsVersion === undefined || value.expectedSettingsVersion === value.reversal.appliedVersion)),
+  'settings.reset': z.strictObject({ anchor: AnchorSchema, target: z.optional(SettingsDeclarationTargetV1Schema) }),
+  'settings.invoke': z.strictObject({ anchor: AnchorSchema, input: z.optional(SettingsDeclarationOperationInputV1Schema) }),
 } as const;
 export const SettingsDeclarationActionOutputSchemasV1 = {
-  'settings.list': z.object({ items: z.array(SettingsDeclarationDescriptorV1Schema) }).strict(),
-  'settings.get': z.union([ValueResultSchema.extend({ settingsVersion: SettingsVersionSchema.optional() }),
-    UnsetResultSchema.extend({ settingsVersion: SettingsVersionSchema.optional() })]),
+  'settings.list': z.strictObject({ items: z.array(SettingsDeclarationDescriptorV1Schema) }),
+  'settings.get': z.union([lazyZodSchema(() => z.extend(ValueResultSchema, { settingsVersion: z.optional(SettingsVersionSchema) })),
+    lazyZodSchema(() => z.extend(UnsetResultSchema, { settingsVersion: z.optional(SettingsVersionSchema) }))]),
   'settings.set': z.union([
-    ValueResultSchema.extend({ settingsVersion: SettingsVersionSchema.optional(),
-      reversal: SettingsDeclarationMutationReversalV1Schema.optional(), reversalUnavailableReason: z.literal('no_change').optional() }),
-    UnsetResultSchema.extend({ settingsVersion: SettingsVersionSchema.optional(),
-      reversal: SettingsDeclarationMutationReversalV1Schema.optional(), reversalUnavailableReason: z.literal('no_change').optional() }),
+    lazyZodSchema(() => z.extend(ValueResultSchema, { settingsVersion: z.optional(SettingsVersionSchema),
+      reversal: z.optional(SettingsDeclarationMutationReversalV1Schema), reversalUnavailableReason: z.optional(z.literal('no_change')) })),
+    lazyZodSchema(() => z.extend(UnsetResultSchema, { settingsVersion: z.optional(SettingsVersionSchema),
+      reversal: z.optional(SettingsDeclarationMutationReversalV1Schema), reversalUnavailableReason: z.optional(z.literal('no_change')) })),
   ]),
   'settings.reset': z.union([ValueResultSchema, UnsetResultSchema]),
-  'settings.invoke': z.object({
+  'settings.invoke': z.strictObject({
     anchor: AnchorSchema,
     status: z.enum(['completed', 'cancelled', 'unavailable', 'interaction_opened']),
-    reason: z.string().min(1).optional(),
-    value: StrictJsonValueSchema.optional(),
-  }).strict(),
+    reason: z.optional(z.string().check(z.minLength(1))),
+    value: z.optional(StrictJsonValueSchema),
+  }),
 } as const;
 export type SettingsDeclarationDescriptorV1 = z.infer<typeof SettingsDeclarationDescriptorV1Schema>;

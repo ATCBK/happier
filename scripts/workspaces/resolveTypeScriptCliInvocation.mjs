@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveRemoteCommandPolicy } from '../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs';
+import { isWorkspaceBuildStartup } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
 
 const NATIVE_TYPESCRIPT_PACKAGE_JSON = '@typescript/native/package.json';
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -25,7 +26,7 @@ export function shouldRouteTypeScriptCliThroughHstack(params) {
 }
 
 export function requiresTypeScriptAdmission({ env = process.env, platform = process.platform } = {}) {
-  return platform === 'linux' && (!env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
+  return platform === 'linux' && !isWorkspaceBuildStartup({ env }) && (!env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
     || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN));
 }
 

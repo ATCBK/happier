@@ -14,6 +14,11 @@ import { useUnistyles } from 'react-native-unistyles';
 import { DefaultBackButton, Header, NavigationHeaderTitle, PageHeaderActionsHost } from '@/components/navigation/Header';
 import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 import { NavigationTitleChromeProvider, useNavigationChromeShowsBack, useNavigationTitleChromePublisher, useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
+import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootStackRouteOptions';
+import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
+
+const EMPTY_SCREEN_OPTIONS: NativeStackNavigationOptions = {};
 
 const DestinationHeaderOptionsContext = React.createContext<((options: NativeStackNavigationOptions) => void) | null>(null);
 
@@ -21,10 +26,13 @@ export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 
     & Partial<ReturnType<typeof useRouter>> & {
         /** Open another destination without retiring the caller's mounted draft. */
         pushRetainingCurrent?: ReturnType<typeof useRouter>['push'];
+        /** Retain this pane before acquiring work that outlives its preview. */
+        retainCurrent?: () => void;
     };
 
 type DestinationRouter = ReturnType<typeof useRouter> & {
     pushRetainingCurrent: ReturnType<typeof useRouter>['push'];
+    retainCurrent: () => void;
 };
 
 type DestinationInstanceContextValue = Readonly<{
@@ -67,6 +75,9 @@ export function DestinationInstanceHost(props: Readonly<{
     phone?: boolean;
     children: React.ReactNode;
 }>): React.ReactNode {
+    const rootOptions = useRootStackRouteOptions();
+    const match = matchWorkspaceDestinationRoute(props.pathname);
+    const baseOptions = resolveRootStackRouteOptions(rootOptions, match ? workspaceRouteFiles[match.routeKey] : undefined) ?? EMPTY_SCREEN_OPTIONS;
     const value = React.useMemo<DestinationInstanceContextValue>(() => ({
         tabId: props.tabId,
         ref: props.ref,
@@ -77,7 +88,7 @@ export function DestinationInstanceHost(props: Readonly<{
     }), [props.focused, props.navigation, props.pathname, props.ref, props.tabId, props.visible]);
     return <DestinationInstanceContext.Provider value={value}>
         <PluginSurfaceFocusEligibilityProvider active={value.focused} presentationActive={value.visible} currentUiContextActive={value.focused}>
-            <DestinationNavigationChrome scopeKey={`destination:${props.tabId}`} phone={props.phone === true} navigation={props.navigation}>
+            <DestinationNavigationChrome scopeKey={`destination:${props.tabId}`} phone={props.phone === true} navigation={props.navigation} baseOptions={baseOptions}>
                 {props.children}
             </DestinationNavigationChrome>
         </PluginSurfaceFocusEligibilityProvider>
@@ -88,6 +99,7 @@ function DestinationNavigationChrome(props: Readonly<{
     scopeKey: string;
     phone: boolean;
     navigation?: DestinationNavigation;
+    baseOptions?: NativeStackNavigationOptions;
     /** Native scenes keep their own router and visual chrome; collect only identity. */
     publicationOnly?: Readonly<{ tabId: string; ref: DestinationRef }> | null;
     children: React.ReactNode;
@@ -108,7 +120,12 @@ function DestinationNavigationChrome(props: Readonly<{
     const [chromeTitle, setChromeTitle] = React.useState<TitleIdentity & Readonly<{ title: string | null | undefined }>>({ ref, owner: publishTitle, title: undefined });
     const [pageIdentity, setPageIdentity] = React.useState<TitleIdentity & Readonly<{ title: string | null | undefined }>>({ ref, owner: publishTitle, title: undefined });
     const isCurrent = (identity: TitleIdentity) => identity.ref === ref && identity.owner === publishTitle;
-    const options = isCurrent(declared) ? declared.options : {};
+    const overrides = isCurrent(declared) ? declared.options : EMPTY_SCREEN_OPTIONS;
+    const options = React.useMemo<NativeStackNavigationOptions>(() => ({
+        ...props.baseOptions,
+        // Withdrawing a leaf declaration restores the inherited layout option.
+        ...Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined)),
+    }), [overrides, props.baseOptions]);
     const title = isCurrent(chromeTitle) ? chromeTitle.title : undefined;
     const pageTitle = isCurrent(pageIdentity) ? pageIdentity.title : undefined;
     const [back, setBack] = React.useState<React.ReactNode>(null);
@@ -129,11 +146,11 @@ function DestinationNavigationChrome(props: Readonly<{
     const canGoBack = props.navigation?.canGoBack?.() ?? false;
     const tintColor = options.headerTintColor ?? theme.colors.chrome.header.foreground;
     const chromeShown = props.phone && options.headerShown !== false;
-    const renderActions = React.useMemo(() => !props.phone && options.headerShown !== false && (options.headerLeft || options.headerRight)
+    const renderActions = React.useMemo(() => !chromeShown && (options.headerLeft || options.headerRight)
         ? () => <>
             {options.headerLeft?.({ tintColor, canGoBack }) ?? null}
             {options.headerRight?.({ tintColor, canGoBack }) ?? null}
-        </> : null, [canGoBack, options.headerLeft, options.headerRight, options.headerShown, props.phone, tintColor]);
+        </> : null, [canGoBack, chromeShown, options.headerLeft, options.headerRight, tintColor]);
     const declaredTitle = typeof options.headerTitle === 'string' ? options.headerTitle : options.title;
     // headerTitle belongs to navigation chrome; title and PageHeader supply
     // screen identity. A page's explicit null withdraws its previous identity.
@@ -162,7 +179,7 @@ function DestinationNavigationChrome(props: Readonly<{
                         ? <DefaultBackButton tintColor={tintColor} onPress={() => props.navigation?.back()} /> : null)}
                     headerRight={options.headerRight ? () => options.headerRight!({ tintColor, canGoBack }) : undefined} />
             </View> : null}
-            <HeaderActionsScope scopeKey={props.phone ? null : props.scopeKey}>
+            <HeaderActionsScope scopeKey={chromeShown ? null : props.scopeKey}>
                 <PageHeaderActionsHost scopeKey={props.scopeKey} render={renderActions} />
                 {props.children}
             </HeaderActionsScope>
@@ -265,6 +282,7 @@ export function useDestinationRouter(): DestinationRouter {
             prefetch: () => {},
             ...navigation,
             pushRetainingCurrent: navigation.pushRetainingCurrent ?? unsupported,
+            retainCurrent: navigation.retainCurrent ?? unsupported,
         };
     }, [instance.navigation]);
 }
@@ -273,7 +291,7 @@ function useWorkspaceOrExpoRouter() {
     const workspace = useOptionalWorkspaceNavigation();
     const router = useRouter();
     return React.useMemo(() => {
-        if (!workspace?.active) return { ...router, pushRetainingCurrent: router.push };
+        if (!workspace) return { ...router, pushRetainingCurrent: router.push, retainCurrent: () => {} };
         const navigate: typeof router.push = (href, options) => {
             if (!workspace.openHref(resolveHref(href))) router.push(href, options);
         };
@@ -281,14 +299,22 @@ function useWorkspaceOrExpoRouter() {
             if (!workspace.openHref(resolveHref(href), { replace: true })) router.replace(href, options);
         };
         const pushRetainingCurrent: typeof router.push = (href, options) => {
+            if (!workspace.active) { router.push(href, options); return; }
             const group = workspace.state.groups[workspace.state.focusedGroupId];
             const navigation = workspace.navigationForTab(group.activeTabId);
             if (!navigation.pushRetainingCurrent) throw new Error('The workspace navigation owner did not supply draft retention');
             navigation.pushRetainingCurrent(href, options);
         };
-        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent,
-            back: workspace.back,
-            canGoBack: () => workspace.canGoBack };
+        const retainCurrent = () => {
+            if (!workspace.active) return;
+            const group = workspace.state.groups[workspace.state.focusedGroupId];
+            const navigation = workspace.navigationForTab(group.activeTabId);
+            if (!navigation.retainCurrent) throw new Error('The workspace navigation owner did not supply pane retention');
+            navigation.retainCurrent();
+        };
+        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent, retainCurrent,
+            back: workspace.active ? workspace.back : router.back,
+            canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
     }, [router, workspace]);
 }
 

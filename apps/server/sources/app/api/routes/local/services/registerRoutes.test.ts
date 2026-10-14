@@ -19,6 +19,7 @@ import tweetnacl from "tweetnacl";
 
 import { FEATURE_ENV_KEYS } from "@/app/features/catalog/featureEnvSchema";
 import { createLocalServicePreviewRuntime } from '@/app/local/services/preview/runtime';
+import { LocalServicePublicExposureV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 // Database boundary only: the fixture Machine belongs to user_1. Registration
 // still executes its real Machine-owner check.
@@ -209,6 +210,19 @@ function readPreviewCookieHeader(reply: ReturnType<typeof createReplyStub>): str
     return cookie;
 }
 
+function mintedPublicRequest(reply: ReturnType<typeof createReplyStub>) {
+    const response = reply.send.mock.calls.at(-1)?.[0] as { exposure: unknown };
+    const exposure = LocalServicePublicExposureV1Schema.parse(response.exposure);
+    const url = new URL(exposure.publicUrl);
+    return {
+        method: 'GET',
+        url: url.pathname + url.search,
+        params: { '*': decodeURIComponent(url.pathname.slice(1)) },
+        query: Object.fromEntries(url.searchParams),
+        headers: { host: url.host },
+    };
+}
+
 async function exchangePreviewTokenForCookie(input: Readonly<{
     app: ReturnType<typeof createFakeRouteApp>;
     previewToken: string;
@@ -314,10 +328,12 @@ describe("local service API route composition", () => {
                 public: {
                     createExposure: vi.fn(),
                     resolveExposure: vi.fn(),
+                    resolveExposureByHost: () => null,
                     retainConnection: vi.fn(() => () => {}),
                     validateAccess: vi.fn(),
                     exchangeAccessToken: vi.fn(),
                     revokeExposure: vi.fn(),
+                    retireMachineAccess: vi.fn(),
                     getSnapshot: vi.fn(),
                 },
             },
@@ -359,10 +375,12 @@ describe("local service API route composition", () => {
                 public: {
                     createExposure: vi.fn(),
                     resolveExposure: vi.fn(),
+                    resolveExposureByHost: () => null,
                     retainConnection: vi.fn(() => () => {}),
                     validateAccess: vi.fn(() => ({ ok: true as const, preview })),
                     exchangeAccessToken: vi.fn(),
                     revokeExposure: vi.fn(),
+                    retireMachineAccess: vi.fn(),
                     getSnapshot: vi.fn(),
                 },
             },
@@ -480,6 +498,11 @@ describe("local service API route composition", () => {
         expect(exposureId).toBeTypeOf("string");
         expect(publicToken).toBeTypeOf("string");
 
+        const accessRequest = mintedPublicRequest(exposureReply);
+        const exchangeReply = createReplyStub();
+        await getRouteHandler(app, 'GET', '/*')(accessRequest, exchangeReply);
+        expect(exchangeReply.statusCode).toBe(303);
+
         const revokeReply = createReplyStub();
         await getRouteHandler(app, "DELETE", "/v1/local-services/public/:exposureId")({
             userId: "user_1",
@@ -502,12 +525,8 @@ describe("local service API route composition", () => {
         }));
 
         const accessReply = createReplyStub();
-        await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
-            method: "GET",
-            params: { exposureId, "*": "index.html" },
-            query: { publicToken },
-            headers: { host: "app.happier.test" },
-        }, accessReply);
+        await getRouteHandler(app, 'GET', '/*')({ ...accessRequest, query: {},
+            headers: { ...accessRequest.headers, cookie: exchangeReply.headers['Set-Cookie'].split(';')[0] } }, accessReply);
 
         expect(accessReply.statusCode).toBe(403);
         expect(accessReply.send).toHaveBeenCalledWith(expect.objectContaining({
@@ -646,12 +665,7 @@ describe("local service API route composition", () => {
 
         // Replaying the consumed original URL token is denied.
         const replayReply = createReplyStub();
-        await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
-            method: "GET",
-            params: { exposureId, "*": "index.html" },
-            query: { publicToken },
-            headers: { host: "app.happier.test" },
-        }, replayReply);
+        await getRouteHandler(app, 'GET', '/*')(mintedPublicRequest(exposureReply), replayReply);
         expect(replayReply.statusCode).toBe(403);
         expect(replayReply.send).toHaveBeenCalledWith(expect.objectContaining({
             reasonCode: "public_token_mismatch",
@@ -787,24 +801,29 @@ describe("local service API route composition", () => {
             expect(exposureResponse?.exposure?.publicUrl).toMatch(/^https:\/\/[a-z0-9-]+\.preview\.example\.test\//u);
             expect(publicToken).toBeTypeOf("string");
 
-            const exchangeViaUrlReply = createReplyStub();
-            await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
+            const apiHostReply = createReplyStub();
+            await getRouteHandler(app, 'GET', '/v1/local-services/public/:exposureId/*')({
                 method: "GET",
                 params: { exposureId, "*": "index.html" },
                 query: { publicToken },
                 headers: { host: "app.happier.test" },
-            }, exchangeViaUrlReply);
+            }, apiHostReply);
+            expect(apiHostReply.statusCode).toBe(403);
+            expect(apiHostReply.send).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'exposure_binding_mismatch' }));
+
+            const accessRequest = mintedPublicRequest(exposureReply);
+            const exchangeViaUrlReply = createReplyStub();
+            await getRouteHandler(app, 'GET', '/*')(accessRequest, exchangeViaUrlReply);
             expect(exchangeViaUrlReply.statusCode).toBe(303);
             const exchangedCookie = exchangeViaUrlReply.headers["Set-Cookie"];
             expect(exchangedCookie).toEqual(expect.stringContaining("happier_public_token="));
 
             const firstAccessReply = createReplyStub();
-            await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
-                method: "GET",
-                params: { exposureId, "*": "index.html" },
+            await getRouteHandler(app, 'GET', '/*')({
+                ...accessRequest,
                 query: {},
                 headers: {
-                    host: "app.happier.test",
+                    ...accessRequest.headers,
                     cookie: exchangedCookie,
                 },
             }, firstAccessReply);
@@ -812,12 +831,11 @@ describe("local service API route composition", () => {
             expect(openTunnel).toHaveBeenCalledTimes(1);
 
             const secondAccessReply = createReplyStub();
-            await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
-                method: "GET",
-                params: { exposureId, "*": "index.html" },
+            await getRouteHandler(app, 'GET', '/*')({
+                ...accessRequest,
                 query: {},
                 headers: {
-                    host: "app.happier.test",
+                    ...accessRequest.headers,
                     cookie: exchangedCookie,
                 },
             }, secondAccessReply);
@@ -984,6 +1002,16 @@ describe("local service API route composition", () => {
         expect(exposureId).toBeTypeOf("string");
         expect(publicToken).toBeTypeOf("string");
 
+        const accessRequest = mintedPublicRequest(exposureReply);
+        const exchangeReply = createReplyStub();
+        await getRouteHandler(app, 'GET', '/*')(accessRequest, exchangeReply);
+        expect(exchangeReply.statusCode).toBe(303);
+        const viewerRequest = { ...accessRequest, query: {},
+            headers: { ...accessRequest.headers, cookie: exchangeReply.headers['Set-Cookie'].split(';')[0] } };
+        const enabledReply = createReplyStub();
+        await getRouteHandler(app, 'GET', '/*')(viewerRequest, enabledReply);
+        expect(enabledReply.statusCode).toBe(200);
+
         const unregisterReply = createReplyStub();
         await getRouteHandler(app, "DELETE", "/v1/local-services/preview/:previewId")({
             userId: "user_1",
@@ -992,18 +1020,13 @@ describe("local service API route composition", () => {
         expect(unregisterReply.statusCode).toBe(200);
 
         const accessReply = createReplyStub();
-        await getRouteHandler(app, "GET", "/v1/local-services/public/:exposureId/*")({
-            method: "GET",
-            params: { exposureId, "*": "index.html" },
-            query: { publicToken },
-            headers: { host: "app.happier.test" },
-        }, accessReply);
+        await getRouteHandler(app, 'GET', '/*')(viewerRequest, accessReply);
 
         expect(accessReply.statusCode).toBe(403);
         expect(accessReply.send).toHaveBeenCalledWith(expect.objectContaining({
             reasonCode: "preview_not_found",
         }));
-        expect(openTunnel).not.toHaveBeenCalled();
+        expect(openTunnel).toHaveBeenCalledTimes(1);
     });
 
     it("serves a registered preview resource through the minted preview token and PMS tunnel seam", async () => {

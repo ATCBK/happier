@@ -28,10 +28,18 @@ import {
 
 export async function executeExternalSessionCandidatesListAction(
     raw: unknown,
-    options: Readonly<{ signal?: AbortSignal }> = {},
+    options: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number; requestStartedAtMs?: number }> = {},
 ): Promise<ExternalSessionsCandidatesListResponse> {
     const parsed = ExternalSessionsCandidatesListRequestSchema.safeParse(raw);
     if (!parsed.success) return externalSessionsError('invalid_request') satisfies ExternalSessionsCandidatesListResponse;
+    // Charge receiving preparation to the scan, not to a freshly renewed budget.
+    // Finalization remains governed by the containing invocation's signal/deadline.
+    const scanDeadlineAtMs = parsed.data.searchTarget === 'content' && parsed.data.budgetMs !== undefined
+        ? Math.min(
+            (options.requestStartedAtMs ?? Date.now()) + parsed.data.budgetMs,
+            options.deadlineAtMs ?? Number.POSITIVE_INFINITY,
+        )
+        : undefined;
     try {
         options.signal?.throwIfAborted();
         if (parsed.data.searchTarget === 'content'
@@ -79,6 +87,8 @@ export async function executeExternalSessionCandidatesListAction(
                 source,
                 ...request,
                 ...(options.signal ? { signal: options.signal } : {}),
+                ...(options.deadlineAtMs === undefined ? {} : { deadlineAtMs: options.deadlineAtMs }),
+                ...(scanDeadlineAtMs === undefined ? {} : { scanDeadlineAtMs }),
             }),
             hydrateCandidate: async (candidate) => (
                 await hydrateExternalSessionCandidateThroughAgentSource({

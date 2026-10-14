@@ -179,7 +179,7 @@ describe('runVitestShards', () => {
       });
       const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
       expect(calls.filter(args => args[0] === 'run').map(args => args.at(-1))).toEqual(['1/2', '2/2']);
-      expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs']);
+      expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs']);
     } finally {
       process.argv = prevArgv;
       if (prevShardCount === undefined) delete process.env.HAPPIER_CLI_VITEST_SHARDS;
@@ -205,7 +205,7 @@ describe('runVitestShards', () => {
       const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
       expect(calls.filter(args => args[0] === 'list')).toHaveLength(0);
       expect(calls.filter(args => args[0] === 'run')).toEqual([['run', '--config', 'vitest.config.ts']]);
-      expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs']);
+      expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs']);
     } finally {
       process.argv = prevArgv;
       envKeys.forEach((key, index) => {

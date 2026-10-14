@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,6 +41,7 @@ import type { ExecutionRunState } from './executionRunTypes';
 import { finishExecutionRun } from './finishExecutionRun';
 import { createExecutionRunControllerMessageHandler } from './messages/sessionStateEmission';
 import { createPiRuntimeEventProjector } from '@happier-dev/plugins-pi/agent/runtime/rpc/events';
+import { createSessionHooksService } from '@/plugins/runtime/hooks/session/service';
 
 import {
     createNativeAgentExecutionRunHostRuntime,
@@ -202,6 +203,59 @@ const VOICE_INTERACTION_SESSION_CAPABILITIES: AgentSessionCapabilities = {
     delivery: ['newTurn'],
     cancel: true,
 };
+
+it.each(['finite', 'retained'] as const)('isolates %s child hook resources from the live parent Session', async kind => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-child-run-hooks-'));
+    const hooks = createSessionHooksService({ happyHomeDir, hasCapability: capability => capability === 'sessionHooks' });
+    const identity = { providerId: 'acme.voice/agents/default', sessionId: 'session-parent',
+        lifecycle: { kind: 'session' as const, sessionId: 'session-parent' } };
+    const parent = await hooks.startServer({ ...identity, sessionHookSecret: 'parent-fixture-secret' });
+    const parentDir = await hooks.createPluginDir({ ...identity, files: [{ path: 'origin.txt', contents: 'parent' }] });
+    const child: { server: Awaited<ReturnType<typeof hooks.startServer>> | null; dir: string | null } = { server: null, dir: null };
+    // An external Agent SDK fixture consumes the real public host hook services.
+    // The host adapter, context binding, loopback server and filesystem remain real.
+    const runtime: AgentRuntime = { sessions: { async open(_request, context) {
+        child.server = await context.session.services.sessionHooks.startServer({ sessionHookSecret: 'child-fixture-secret' });
+        child.dir = await context.session.services.sessionHooks.createPluginDir({ files: [{ path: 'origin.txt', contents: 'child' }] });
+        return {
+            async send() { return { status: 'admitted' as const }; },
+            async cancel({ turnId }) { return { status: 'requested' as const, turnId }; },
+            watch() { return { dispose() {} }; },
+            async dispose() { await child.server?.dispose(); if (child.dir) await context.session.services.sessionHooks.disposePluginDir(child.dir); },
+        };
+    } } };
+    const common = {
+        runtime,
+        lease: { pluginId: 'acme.voice', pluginVersion: '1.0.0', agentId: 'acme.voice/agents/default',
+            localAgentId: 'default', occurrenceId: 'hook-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId: `run-hooks-${kind}`, scope: 'session_owned' as const,
+            backendId: 'acme.voice/agents/default', permissionMode: 'no_tools' as const,
+            start: { intent: 'scm_diff_summary' as const, runClass: 'long_lived' as const, retentionPolicy: 'resumable' as const } },
+        createSessionContext: ({ services, signal }: Parameters<NativeAgentSessionContextLeaseFactory>[0]) =>
+            createVoiceSessionContextLease({ services, signal, sessionHooks: hooks, async dispose() {} }),
+    };
+    const host = kind === 'finite'
+        ? createNativeAgentSessionExecutionRunHostRuntime({ ...common, supportsResume: false })
+        : createNativeAgentSessionInteractionHostRuntime({ ...common, sessionCapabilities: VOICE_INTERACTION_SESSION_CAPABILITIES });
+    try {
+        await host.provisionRuntime({ initialPrompt: 'Propose commits without tools.' });
+        expect(child.server).not.toBeNull();
+        expect(child.dir).not.toBeNull();
+        expect(child.server?.port).not.toBe(parent.port);
+        expect(child.dir).not.toBe(parentDir);
+        expect(await readFile(join(parentDir, 'origin.txt'), 'utf8')).toBe('parent');
+        await host.dispose();
+        await child.server?.dispose();
+        expect((await fetch(`http://127.0.0.1:${parent.port}/unknown`)).status).toBe(404);
+    } finally {
+        await host.dispose();
+        await child.server?.dispose();
+        await parent.dispose();
+        if (child.dir) await hooks.disposePluginDir(child.dir);
+        await hooks.disposePluginDir(parentDir);
+        await rm(happyHomeDir, { recursive: true, force: true });
+    }
+});
 
 describe('retained native Voice conversation continuity', () => {
     it.each([

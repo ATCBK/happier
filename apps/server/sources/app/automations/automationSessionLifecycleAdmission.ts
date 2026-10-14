@@ -1,11 +1,7 @@
-import {
-    AutomationRunCauseSchema,
-    AutomationSessionLifecycleOccurrenceEvidenceV1Schema,
-    deriveAutomationOccurrenceKeyV1,
-    snapshotAutomationSessionLifecyclePolicy,
-    type AutomationSessionLifecycleOccurrenceEvidenceV1,
-    type SessionTurnFactsV1,
-} from "@happier-dev/protocol";
+import { AutomationRunCauseSchema } from '@happier-dev/protocol/automations/run-cause';
+import { AutomationSessionLifecycleOccurrenceEvidenceV1Schema, deriveAutomationOccurrenceKeyV1, type AutomationSessionLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { snapshotAutomationSessionLifecyclePolicy } from '@happier-dev/protocol/automations/automationSessionLifecycle';
+import { type SessionTurnFactsV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { afterTx, type Tx } from "@/storage/inTx";

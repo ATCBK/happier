@@ -31,6 +31,4 @@ export type {
   PluginManifest,
   PluginManifestDiagnostic,
   PluginManifestParseResult,
-  PromptAssetCapabilities,
-  PromptAssetTypeDescriptor,
 } from './manifest.js';

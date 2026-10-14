@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Structured meta payload for a persisted voice agent transcript turn.
@@ -8,15 +8,15 @@ import { z } from 'zod';
  * The UI voice sidebar uses these entries to hydrate the local voice activity feed without needing
  * to render special transcript cards in the main session timeline.
  */
-export const VoiceAgentTurnV1Schema = lazyZodSchema(() => z.object({
+export const VoiceAgentTurnV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
-  epoch: z.number().int().min(0),
+  epoch: z.number().check(z.int(), z.minimum(0)),
   role: z.enum(['user', 'assistant']),
-  voiceAgentId: z.string().min(1),
-  runId: z.string().min(1).optional(),
-  streamId: z.string().min(1).optional(),
-  requestId: z.string().min(1).optional(),
-  ts: z.number().int().min(0),
-}).passthrough());
+  voiceAgentId: z.string().check(z.minLength(1)),
+  runId: z.optional(z.string().check(z.minLength(1))),
+  streamId: z.optional(z.string().check(z.minLength(1))),
+  requestId: z.optional(z.string().check(z.minLength(1))),
+  ts: z.number().check(z.int(), z.minimum(0)),
+}));
 
 export type VoiceAgentTurnV1 = z.infer<typeof VoiceAgentTurnV1Schema>;

@@ -122,14 +122,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     // it, and it is the one place the marking tools live.
     trayDock: {
         alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s12,
     },
     tray: {
         width: '100%',
         maxWidth: BROWSER_CHROME_WIDTH.card,
-        gap: 10,
-        padding: 10,
+        gap: theme.space.s10,
+        padding: theme.space.s10,
         borderRadius: 16,
         backgroundColor: theme.colors.surface.base,
         borderWidth: StyleSheet.hairlineWidth,
@@ -139,19 +139,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     trayRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     grow: {
         flex: 1,
         minWidth: 0,
     },
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         fontVariant: ['tabular-nums'],
     },
     warning: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         // Q2 measured the theme's semantic FOREGROUNDS as text at 2.20–3.55:1 in light theme —
         // they are fill colours, not text colours; the words carry the meaning in `text.primary`.
         color: theme.colors.text.primary,
@@ -159,7 +159,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     markRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
 }));
 

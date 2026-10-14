@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RunnerActivationCreateRequestV1Schema } from './activation.js';
 import { RunnerActivationProjectionV1Schema } from './projection.js';
@@ -7,22 +7,22 @@ import { EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1 } from './routes.js';
 import { EPHEMERAL_RUNNER_ACTION_IDS_V1, type EphemeralRunnerActionIdV1 } from './actionIdsV1.js';
 export { EPHEMERAL_RUNNER_ACTION_IDS_V1, EphemeralRunnerActionIdV1Schema, type EphemeralRunnerActionIdV1 } from './actionIdsV1.js';
 
-const ActivationIdentityInputV1Schema = lazyZodSchema(() => z.object({ activationId: z.string().uuid() }).strict());
+const ActivationIdentityInputV1Schema = lazyZodSchema(() => z.strictObject({ activationId: z.string().check(z.uuid()) }));
 export const EphemeralRunnerActionInputSchemasV1 = {
   'sessions.runner.activation.create': RunnerActivationCreateRequestV1Schema,
   'sessions.runner.activation.get': ActivationIdentityInputV1Schema,
   'sessions.runner.activation.cancel': ActivationIdentityInputV1Schema,
-} as const satisfies Readonly<Record<EphemeralRunnerActionIdV1, z.ZodTypeAny>>;
+} as const satisfies Readonly<Record<EphemeralRunnerActionIdV1, z.ZodMiniType>>;
 
-export const EphemeralRunnerActivationCancelResultV1Schema = lazyZodSchema(() => z.object({
-  activationId: z.string().uuid(),
+export const EphemeralRunnerActivationCancelResultV1Schema = lazyZodSchema(() => z.strictObject({
+  activationId: z.string().check(z.uuid()),
   closed: z.literal(true),
-}).strict());
+}));
 export const EphemeralRunnerActionOutputSchemasV1 = {
   'sessions.runner.activation.create': RunnerActivationProjectionV1Schema,
   'sessions.runner.activation.get': RunnerActivationProjectionV1Schema,
   'sessions.runner.activation.cancel': EphemeralRunnerActivationCancelResultV1Schema,
-} as const satisfies Readonly<Record<EphemeralRunnerActionIdV1, z.ZodTypeAny>>;
+} as const satisfies Readonly<Record<EphemeralRunnerActionIdV1, z.ZodMiniType>>;
 
 /**
  * The exact registered creator routes for the three activation intents, derived

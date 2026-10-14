@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountApiTokenEncryptionAccessV1Schema, AccountApiTokenSummaryV1Schema } from '../auth/accountApiTokens.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.js';
@@ -34,19 +34,19 @@ const BindingRoutingShape = () => ({
   requestId: ExternalActionRequestIdV1Schema,
   target: ExternalActionTargetV1Schema,
 });
-const ApiTokenBindingSchema = lazyZodSchema(() => z.object({
+const ApiTokenBindingSchema = lazyZodSchema(() => z.strictObject({
   serverIdentityId: AccountApiTokenEncryptionAccessV1Schema.shape.serverIdentityId,
   accountId: ExternalActionApiTokenServerPrincipalV1Schema.shape.accountId,
   credentialId: AccountApiTokenSummaryV1Schema.shape.tokenId,
   actionId: ExternalActionActionIdV1Schema,
   requestId: ExternalActionRequestIdV1Schema,
   target: ExternalActionTargetV1Schema,
-}).strict());
-const AccountBindingSchema = lazyZodSchema(() => z.object({ ...BindingRoutingShape(),
+}));
+const AccountBindingSchema = lazyZodSchema(() => z.strictObject({ ...BindingRoutingShape(),
   // Ciphertext retains the signed credential kind and epoch, never a PAT-shaped alias or human upgrade.
-  authentication: z.union([ExternalActionAccountAuthenticationV1Schema.omit({ evidence: true }),
-    ExternalActionTerminalAuthenticationV1Schema.omit({ evidence: true })]),
-}).strict());
+  authentication: z.union([z.omit(ExternalActionAccountAuthenticationV1Schema, { evidence: true }),
+    z.omit(ExternalActionTerminalAuthenticationV1Schema, { evidence: true })]),
+}));
 const BindingSchema = lazyZodSchema(() => z.union([ApiTokenBindingSchema, AccountBindingSchema]));
 export type ExternalActionEncryptionBindingV2 = Readonly<z.infer<typeof BindingSchema>>;
 
@@ -54,18 +54,18 @@ const requestShape = () => ({
   v: z.literal(2), direction: z.literal('request'), input: StrictJsonValueSchema,
 });
 const RequestSchema = lazyZodSchema(() => z.union([
-  ApiTokenBindingSchema.extend(requestShape()).strict(), AccountBindingSchema.extend(requestShape()).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ApiTokenBindingSchema, requestShape())), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AccountBindingSchema, requestShape())),
 ]));
 const responseShape = () => ({
   v: z.literal(2), direction: z.literal('response'),
-  executedMachineId: ExternalActionTargetV1Schema.options[0].shape.machineId,
-  requestPayloadDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u).refine((value) => (
+  executedMachineId: ExternalActionTargetV1Schema._zod.def.options[0].shape.machineId,
+  requestPayloadDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u), z.refine((value) => (
     encodeBase64(decodeBase64(value, 'base64url'), 'base64url') === value
-  )),
+  ))),
   execution: ExternalActionExecutionResultV1Schema,
 });
 const ResponseSchema = lazyZodSchema(() => z.union([
-  ApiTokenBindingSchema.extend(responseShape()).strict(), AccountBindingSchema.extend(responseShape()).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ApiTokenBindingSchema, responseShape())), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AccountBindingSchema, responseShape())),
 ]));
 
 type Material = Extract<AccountScopedCryptoMaterial, Readonly<{ type: 'dataKey' }>>;

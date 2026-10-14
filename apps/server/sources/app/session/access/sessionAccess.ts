@@ -11,10 +11,11 @@ import {
     type SessionAccessAuthentication,
 } from "./sessionAccessAuthentication";
 
-import { SESSION_CAPABILITY_RULES, SESSION_ACCESS_LEVEL_ORDER, projectSessionAccessCapabilitiesV1, isActiveHomeAccountStatus } from "@happier-dev/protocol";
-import type { EffectiveSessionAccessLevelV1, SessionCapabilityV1, SessionAccessSourceV1, SessionEffectiveAccessV1 } from "@happier-dev/protocol";
+import { SESSION_CAPABILITY_RULES, SESSION_ACCESS_LEVEL_ORDER, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
+import type { EffectiveSessionAccessLevelV1, SessionCapabilityV1, SessionAccessSourceV1, SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { evaluateApiTokenGrantV1, resolveApiTokenSessionCapabilityCeilingV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
-import type { ActionId } from "@happier-dev/protocol/actions";
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 export { SESSION_CAPABILITY_RULES, SESSION_ACCESS_LEVEL_ORDER };
 export type SessionAccessLevel = EffectiveSessionAccessLevelV1;
 export type SessionCapability = SessionCapabilityV1;

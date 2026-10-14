@@ -46,10 +46,10 @@ export const AgentSetupForm = React.memo(function AgentSetupForm(props: AgentSet
     const agentRef = React.useRef(agent);
     agentRef.current = agent;
 
-    const install = React.useCallback((intent: 'install' | 'update') => {
+    const install = React.useCallback((intent: 'install' | 'update' | 'uninstall') => {
         const current = agentRef.current;
         if (!current) return;
-        // Pressing Install after the form said what runs (and whose installer) is the consent.
+        // The Action confirmation reviews the install and any vendor-recipe consent.
         fireAndForget(installJob.start(intent, { consent: { vendorRecipe: current.install.requiresVendorConsent } }), { tag: 'AgentSetupForm.install' });
     }, [installJob]);
 

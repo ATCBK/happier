@@ -87,6 +87,8 @@ export type WidgetAddTranslation = Readonly<{
     countOnBoard: (params: Readonly<{ count: number }>) => string;
     countInCompanion: (params: Readonly<{ count: number }>) => string;
     justAdded: (params: Readonly<{ widget: string }>) => string;
+    /** The Add pane's button once it has added: the same Add again is another copy. */
+    addAnother: string;
     saved: (params: Readonly<{ widget: string }>) => string;
     addFailed: string;
     saveFailed: string;
@@ -216,6 +218,7 @@ export const widgetAddTranslationsEnglish = { en: {
         invalidReason: 'You no longer have access, or it was removed.',
         viewerOnly: 'Everyone here sees it with their own connection.',
         justAdded: ({ widget }) => `${widget} added`,
+        addAnother: 'Add another',
         saved: ({ widget }) => `${widget} saved`,
         addFailed: 'Couldn’t add it. Try again.',
         saveFailed: 'Couldn’t save. Try again.',

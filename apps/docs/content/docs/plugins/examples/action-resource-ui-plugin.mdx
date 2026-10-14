@@ -39,7 +39,7 @@ export const { manifest, activate } = definePlugin({
       title: 'Run build',
       description: 'Runs the workspace build and records when it finished.',
       execution: { target: 'daemon' },
-      surfaces: ['ui', 'cli'],
+      surfaces: ['agent', 'cli', 'mcp', 'ui'],
       async run(_input, context) {
         context.signal?.throwIfAborted();
         lastBuild = new Date(0).toISOString();
@@ -95,7 +95,8 @@ Three things are doing the work:
 
 ```tsx
 import * as React from 'react';
-import { Action, Card, Text, defineUiSurface, usePluginResource } from '@happier-dev/plugin-ui';
+import { defineUiSurface, usePluginResource } from '@happier-dev/plugin-ui';
+import { Action, Card, Text } from '@happier-dev/plugin-ui/components';
 
 function StatusPanel() {
   const { resource } = usePluginResource('build-status');

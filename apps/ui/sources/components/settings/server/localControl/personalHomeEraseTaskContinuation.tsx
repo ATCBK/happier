@@ -10,6 +10,7 @@ import { disconnectThisComputerBeforeForgettingHome } from '@/components/serverP
 import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { t, tLoose } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type PersonalHomeErasePreviewProps = CustomModalInjectedProps & Readonly<{
     canonicalServerUrl: string;
@@ -67,7 +68,7 @@ async function confirmPersonalHomeErasePreview(input: Readonly<{
             kind: 'card',
             title: t('personalHome.settings.eraseDataTitle'),
             bodyScroll: 'auto',
-            dimensions: { width: 520, maxHeightRatio: 0.85, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'md' },
             testID: 'settings.personalHomeRuntime.erasePreviewModal',
         },
         closeOnBackdrop: true,

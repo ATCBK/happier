@@ -21,7 +21,9 @@ test('source daemon preparation retries after a native Go input is corrected', {
   }
   await fs.writeFile(join(repoDir, 'yarn.lock'), '');
   await fs.writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
-  await fs.writeFile(join(nativeDir, 'go.mod'), 'module fixture\n\ngo 1.23\n');
+  // Exercise source diagnostics with the installed compiler, without asking Go
+  // to download an unrelated toolchain before it can read the broken input.
+  await fs.writeFile(join(nativeDir, 'go.mod'), 'module fixture\n');
   const source = join(nativeDir, 'main.go');
   await fs.writeFile(source, 'package main\nfunc main() { broken syntax }\n');
   const abort = new AbortController();

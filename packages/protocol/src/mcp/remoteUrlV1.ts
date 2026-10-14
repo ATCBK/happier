@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const MCP_CREDENTIAL_KEYS = new Set([
   'auth',
@@ -36,7 +36,7 @@ function isMcpCredentialKey(key: string): boolean {
     || normalized.endsWith('credentials');
 }
 
-export const McpRemoteUrlV1Schema = lazyZodSchema(() => z.string().url().superRefine((value, ctx) => {
+export const McpRemoteUrlV1Schema = lazyZodSchema(() => z.string().check(z.url(), z.superRefine((value, ctx) => {
   let url: URL;
   try {
     url = new URL(value);
@@ -59,4 +59,4 @@ export const McpRemoteUrlV1Schema = lazyZodSchema(() => z.string().url().superRe
       message: 'MCP remote URLs cannot contain fragments, credentials, or secret query parameters.',
     });
   }
-}));
+})));

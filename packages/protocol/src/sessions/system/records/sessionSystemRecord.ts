@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../../../json/strictJsonValue.js';
 import { SessionSystemRecordAddressSchema } from './sessionSystemRecordAddress.js';
@@ -9,23 +9,21 @@ import { asProtocolZod } from '../../../plugins/actions/internalProtocolZodAdapt
 
 /** Server-proved creation attribution, independent of caller-authored content. */
 export const SessionSystemRecordCreatorV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('session'), sessionId: asProtocolZod(SessionIdSchema) }).strict(),
-  z.object({ kind: z.literal('user') }).strict(),
-  z.object({ kind: z.literal('plugin') }).strict(),
-  z.object({ kind: z.literal('unknown') }).strict(),
+  z.strictObject({ kind: z.literal('session'), sessionId: asProtocolZod(SessionIdSchema) }),
+  z.strictObject({ kind: z.literal('user') }),
+  z.strictObject({ kind: z.literal('plugin') }),
+  z.strictObject({ kind: z.literal('unknown') }),
 ]));
 export type SessionSystemRecordCreatorV1 = z.infer<typeof SessionSystemRecordCreatorV1Schema>;
 
-export const SessionSystemRecordSchema = lazyZodSchema(() => z
-  .object({
-    id: z.string().trim().min(1),
+export const SessionSystemRecordSchema = lazyZodSchema(() => z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1)),
     address: SessionSystemRecordAddressSchema,
     content: StrictJsonValueSchema,
     /** Historical records and supported older servers may omit this fact. */
-    creator: SessionSystemRecordCreatorV1Schema.optional(),
+    creator: z.optional(SessionSystemRecordCreatorV1Schema),
     revision: SessionSystemRecordRevisionSchema,
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
-  })
-  .strict());
+  }));
 export type SessionSystemRecord = z.infer<typeof SessionSystemRecordSchema>;

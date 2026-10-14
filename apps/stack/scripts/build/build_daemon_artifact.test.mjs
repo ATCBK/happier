@@ -9,6 +9,7 @@ import {
   linkDaemonSupportPayload,
 } from './build_daemon_artifact.mjs';
 import { readReusableArtifactManifest } from '../runtime/shared/artifact_manifest.mjs';
+import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 
 test('daemon support links native dependencies while preserving the code-owned plugin graph', async t => {
   const root = await mkdtemp(join(tmpdir(), 'daemon-source-support-'));
@@ -66,13 +67,15 @@ async function writeDaemonCodePayload({ payloadDir }) {
   return { entrypoint: 'happier', workspaceRuntimeIdentity: 'a'.repeat(64) };
 }
 
-test('two concurrent code-only daemon publications reuse one immutable support payload without copying stable entries again', async () => {
+test('two concurrent code-only daemon publications reuse one immutable support payload without copying stable entries again', async t => {
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const root = await mkdtemp(join(tmpdir(), 'runtime-daemon-support-reuse-'));
   const stackBaseDir = join(root, 'stack');
   const supportFingerprint = 'daemon-support-stable';
   let supportBuilds = 0;
   let codeBuilds = 0;
   const runtimeManifestInputs = [];
+  const builds = [];
   let releaseFirstSupportBuild;
   const firstSupportBuildStarted = new Promise((resolve) => {
     // The support builder resolves this only once it has crossed the
@@ -120,8 +123,10 @@ test('two concurrent code-only daemon publications reuse one immutable support p
     });
 
     const firstBuild = build('daemon-code-one');
+    builds.push(firstBuild);
     await firstSupportBuildStarted;
     const secondBuild = build('daemon-code-two');
+    builds.push(secondBuild);
     continueFirstSupportBuild();
     const [first, second] = await Promise.all([firstBuild, secondBuild]);
 
@@ -144,6 +149,8 @@ test('two concurrent code-only daemon publications reuse one immutable support p
     assert.equal((await lstat(join(second.artifactDir, 'payload', 'node_modules', 'native-fixture'))).isSymbolicLink(), true);
     assert.equal((await lstat(join(supportPayloadDir, 'node_modules'))).isDirectory(), true);
   } finally {
+    continueFirstSupportBuild();
+    await Promise.allSettled(builds);
     await rm(root, { recursive: true, force: true });
   }
 });

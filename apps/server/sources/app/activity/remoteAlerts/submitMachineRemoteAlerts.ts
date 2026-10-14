@@ -1,17 +1,41 @@
-import {
-    MachineRemoteAlertV1Schema,
-    resolveAccountRemoteAlertPolicyCurrentness,
-    resolveExpoNotificationSoundName,
-    resolvePushNotificationAndroidChannelId,
-    resolveRemoteAlertPolicyDecision,
-    shouldMuteMobileAlertsForComputerFocus,
-    type MachineRemoteAlertV1,
-} from '@happier-dev/protocol';
+import { MachineRemoteAlertV1Schema, type MachineRemoteAlertV1 } from '@happier-dev/protocol/push/machineRemoteAlert';
+import { AccountRemoteAlertPolicyBindingV1Schema, resolveAccountRemoteAlertPolicyCurrentness, resolveRemoteAlertPolicyDecision,
+    type AccountRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
+import { resolveExpoNotificationSoundName, resolvePushNotificationAndroidChannelId } from '@happier-dev/protocol/push/pushNotificationActions';
+import { shouldMuteMobileAlertsForComputerFocus } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
 import { eventRouter } from '@/app/events/eventRouter';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { db } from '@/storage/db';
+import type { Tx } from '@/storage/inTx';
 import { log } from '@/utils/logging/log';
 import { sendAccountExpoPushMessages, type AccountPushDelivery } from '../accountPushTransport';
+
+const recoveryRequestPrefix = (accountId: string) => `machine-remote-alert:recovery:${JSON.stringify(accountId)}:`;
+const recoveryRequestKey = (accountId: string, machineId: string) => `${recoveryRequestPrefix(accountId)}${JSON.stringify(machineId)}`;
+
+/** The settings CAS remembers only new enrollment while offline, for both UI and agent Actions. */
+export async function reconcileMachineRecoveryNoticeRequestsInTx(params: Readonly<{
+    tx: Tx;
+    accountId: string;
+    previousPolicy: unknown;
+    nextPolicy: AccountRemoteAlertPolicyV1 | null;
+}>): Promise<void> {
+    const machineIds = params.nextPolicy?.machineOffline.machineIds ?? [];
+    const previous = AccountRemoteAlertPolicyBindingV1Schema.safeParse(params.previousPolicy);
+    const previousIds = previous.success ? previous.data.policy.machineOffline.machineIds : [];
+    await params.tx.simpleCache.deleteMany({ where: { key: {
+        startsWith: recoveryRequestPrefix(params.accountId),
+        notIn: machineIds.map(machineId => recoveryRequestKey(params.accountId, machineId)),
+    } } });
+    const addedIds = machineIds.filter(machineId => !previousIds.includes(machineId));
+    if (addedIds.length === 0) return;
+    const offline = await params.tx.machine.findMany({ where: { accountId: params.accountId, id: { in: addedIds },
+        active: false, revokedAt: null, replacedByMachineId: null }, select: { id: true } });
+    for (const machine of offline) {
+        const key = recoveryRequestKey(params.accountId, machine.id);
+        await params.tx.simpleCache.upsert({ where: { key }, create: { key, value: 'pending' }, update: { value: 'pending' } });
+    }
+}
 
 /** Presence owns the transition; current Machine custody and published consent own delivery. */
 export async function submitMachineRemoteAlerts(params: Readonly<{
@@ -38,6 +62,7 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
         const now = new Date();
         const serverId = await getOrCreateServerIdentityId(process.env);
         const deliveries: AccountPushDelivery[] = [];
+        const recoveryClaims: string[] = [];
         for (const account of accounts) {
             const current = resolveAccountRemoteAlertPolicyCurrentness(account.remoteAlertPolicy, account.settingsVersion);
             if (current.status !== 'current') continue;
@@ -47,18 +72,31 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
             const enrolled = machines.filter(machine => machine.accountId === account.id
                 && policy.machineOffline.machineIds.includes(machine.id));
             if (enrolled.length === 0) continue;
-            if (params.phase === 'offline' && policy.mutePhoneWhenComputerFocused === true
+            let computerMuted: boolean | undefined;
+            const readComputerMuted = async () => policy.mutePhoneWhenComputerFocused === true
                 && shouldMuteMobileAlertsForComputerFocus({ mutePhoneWhenComputerFocused: true,
-                    computerFocused: await eventRouter.hasFocusedComputerUi(account.id) })) continue;
-            for (const token of tokens.filter(row => row.accountId === account.id)) {
-                const decision = resolveRemoteAlertPolicyDecision({ accountPolicy: policy,
-                    devicePolicy: token.remoteAlerts, event: 'machine_offline', now });
-                if (!decision || (params.phase === 'offline' && decision.delivery === 'suppress')) continue;
-                for (const machine of enrolled) {
+                    computerFocused: await eventRouter.hasFocusedComputerUi(account.id) });
+            if (params.phase === 'offline') {
+                computerMuted = await readComputerMuted();
+                if (computerMuted) continue;
+            }
+            const deviceDecisions = tokens.filter(row => row.accountId === account.id).map(token => ({ token,
+                decision: resolveRemoteAlertPolicyDecision({ accountPolicy: policy,
+                    devicePolicy: token.remoteAlerts, event: 'machine_offline', now }) }));
+            for (const machine of enrolled) {
+                const key = recoveryRequestKey(account.id, machine.id);
+                // Alive writes are batched: claim this one-shot marker atomically
+                // before submission so concurrent/repeated alive cannot alert twice.
+                const notifyReturn = params.phase === 'recovered'
+                    && (await db.simpleCache.updateMany({ where: { key, value: 'pending' }, data: { value: 'submitted' } })).count === 1;
+                if (notifyReturn) recoveryClaims.push(key);
+                if (notifyReturn && computerMuted === undefined) computerMuted = await readComputerMuted();
+                for (const { token, decision } of deviceDecisions) {
+                    if (!decision || (params.phase === 'offline' && decision.delivery === 'suppress')) continue;
                     const data = MachineRemoteAlertV1Schema.parse({ type: 'machine_alert', v: 1,
                         serverId, accountId: account.id, machineId: machine.id, phase: params.phase,
                         previewBehavior: decision.previewBehavior });
-                    if (params.phase === 'recovered') {
+                    if (params.phase === 'recovered' && (!notifyReturn || computerMuted || decision.delivery === 'suppress')) {
                         // Dismissal is not a new alert: quiet hours and focused
                         // computer muting must not leave an obsolete notice up.
                         deliveries.push({ accountId: account.id, token: token.token,
@@ -69,7 +107,9 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
                         || decision.sound.kind === 'custom' ? 'none' : decision.sound.id;
                     const sound = resolveExpoNotificationSoundName(soundId);
                     deliveries.push({ accountId: account.id, token: token.token, message: {
-                        to: token.token, title: 'Happier', body: 'A machine you follow went offline.',
+                        to: token.token, title: 'Happier', body: params.phase === 'recovered'
+                            ? 'A machine you follow is back online.' : 'A machine you follow went offline.',
+                        ...(params.phase === 'recovered' ? { _contentAvailable: true } : {}),
                         ...(sound === null ? {} : { sound }),
                         channelId: resolvePushNotificationAndroidChannelId({ kind: 'ready', soundId }),
                         priority: decision.delivery === 'silent' ? 'normal' : 'high', mutableContent: true, data,
@@ -78,6 +118,9 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
             }
         }
         await sendAccountExpoPushMessages(deliveries, 'machine-remote-alerts');
+        if (recoveryClaims.length > 0) {
+            await db.simpleCache.deleteMany({ where: { key: { in: recoveryClaims }, value: 'submitted' } });
+        }
     } catch (error) {
         // Optional push failure may not interrupt presence publication or change
         // the established timeout/heartbeat lifecycle.

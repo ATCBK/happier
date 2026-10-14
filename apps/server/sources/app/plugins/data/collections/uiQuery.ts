@@ -1,43 +1,11 @@
-import {
-    PluginAccountPluginIntentV1Schema,
-    PluginCollectionContractReadResultV1Schema,
-    PluginCollectionContractRefV1Schema,
-    PluginCollectionGetResultV1Schema,
-    PluginCollectionQueryResultV1Schema,
-    PluginCollectionRowV1Schema,
-    PluginCollectionUiQueryResultV1Schema,
-    PluginCollectionUiQueryTransportResultV1Schema,
-    PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1,
-    assertPluginCollectionContentEnvelopeForModeV1,
-    comparePluginCollectionIndexSortKeysV1,
-    computeCanonicalDomainSeparatedDigest,
-    decodeBase64,
-    encodeBase64,
-    encodePluginCollectionIndexTuplePrefixV1,
-    getPluginCollectionScalarKindV1,
-    isCanonicalPluginCollectionIndexedInstantV1,
-    nextPluginCollectionIndexPrefixV1,
-    resolvePluginCollectionContractAccessV1,
-    validatePluginCollectionUiQueryParametersV1,
-    validatePluginCollectionUiQueryResultV1,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginCollectionContractReadRequestV1,
-    type PluginCollectionContractReadResultV1,
-    type PluginCollectionContractRefV1,
-    type NormalizedPluginCollectionUiQueryDescriptorV1,
-    type PluginCollectionScalarKindV1,
-    type PluginCollectionIndexScalarV1,
-    type PluginCollectionGetRequestV1,
-    type PluginCollectionGetResultV1,
-    type PluginCollectionIndexScalarValueV1,
-    type PluginCollectionQueryRequestV1,
-    type PluginCollectionQueryResultV1,
-    type PluginCollectionReadErrorCodeV1,
-    type PluginCollectionRowV1,
-    type PluginCollectionUiQueryRequestV1,
-    type PluginCollectionUiQueryTransportResultV1,
-} from "@happier-dev/protocol";
-import { z } from "zod";
+import { PluginAccountPluginIntentV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginCollectionContractReadResultV1Schema, PluginCollectionGetResultV1Schema, PluginCollectionQueryResultV1Schema, PluginCollectionRowV1Schema, PluginCollectionUiQueryTransportResultV1Schema, PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1, assertPluginCollectionContentEnvelopeForModeV1, comparePluginCollectionIndexSortKeysV1, encodePluginCollectionIndexTuplePrefixV1, getPluginCollectionScalarKindV1, nextPluginCollectionIndexPrefixV1, resolvePluginCollectionContractAccessV1, validatePluginCollectionUiQueryResultV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionContractReadRequestV1, type PluginCollectionContractReadResultV1, type PluginCollectionIndexScalarV1, type PluginCollectionGetRequestV1, type PluginCollectionGetResultV1, type PluginCollectionIndexScalarValueV1, type PluginCollectionQueryRequestV1, type PluginCollectionQueryResultV1, type PluginCollectionReadErrorCodeV1, type PluginCollectionRowV1, type PluginCollectionUiQueryTransportResultV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { PluginCollectionContractRefV1Schema, type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import { PluginCollectionUiQueryResultV1Schema, isCanonicalPluginCollectionIndexedInstantV1, validatePluginCollectionUiQueryParametersV1, type NormalizedPluginCollectionUiQueryDescriptorV1, type PluginCollectionUiQueryRequestV1 } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { type PluginCollectionScalarKindV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { z } from "zod/mini";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";

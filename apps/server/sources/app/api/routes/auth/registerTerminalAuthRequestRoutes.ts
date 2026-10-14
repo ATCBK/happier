@@ -19,7 +19,7 @@ import {
     parseAuthenticationEvidenceSnapshot,
     resolveCurrentAuthenticationEvidenceInTx,
 } from "@/app/auth/authenticationEvidence";
-import { AuthTokenAuthenticationEvidenceSnapshotV1Schema, type AuthTokenAuthenticationEvidenceV1 } from "@happier-dev/protocol";
+import { AuthTokenAuthenticationEvidenceSnapshotV1Schema, type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 
 const BASE64_URL_REGEX = /^[A-Za-z0-9_-]+$/;

@@ -7,7 +7,7 @@ import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1'
 import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import { SessionSkillSelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { resolveSessionProjectKey, type SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
-import { createRealpathNormalizer } from './createRealpathNormalizer';
+import { createRealpathNormalizer, realpathReachRules } from './createRealpathNormalizer';
 
 type DirectoryCapabilityParams = Readonly<{
   settings: McpServersSettingsV1; machineId: string; directory: string | null;
@@ -19,7 +19,7 @@ type DirectoryCapabilityParams = Readonly<{
 }>;
 type SessionProjectInput = Omit<SessionProjectPromptStackInput, 'machineId' | 'directory'>;
 export type DirectoryCapabilityResult = ResolveSessionCapabilitiesV1Result & ManagedMcpSelectionProjectionV1
-  & Readonly<{ projectKey?: string | null; mcpServerIdentities: Readonly<Record<string, McpServerIdentity>> }>;
+  & Readonly<{ context: ReachContextV1; projectKey?: string | null; mcpServerIdentities: Readonly<Record<string, McpServerIdentity>> }>;
 
 /** Real filesystem comparison and Account Project association at the machine boundary. */
 export function resolveSessionCapabilitiesForDirectory(params: DirectoryCapabilityParams & Readonly<{ sessionProject: SessionProjectInput }>): Promise<DirectoryCapabilityResult>;
@@ -59,14 +59,13 @@ function resolveForContext(params: DirectoryCapabilityParams): DirectoryCapabili
     machinePlatform: params.machinePlatform ?? (process.platform === 'win32' ? 'win32' : 'posix'),
     projectKey: params.projectKey ?? null, agentId: params.agentId ?? null };
   const settings = { ...params.settings,
-    bindings: params.settings.bindings.map(rule => rule.target.t === 'workspace'
-      ? { ...rule, target: { ...rule.target, workspaceRoot: normalizePath(rule.target.workspaceRoot) } } : rule),
+    bindings: realpathReachRules(params.settings.bindings, normalizePath),
     servers: params.settings.servers.map(server => server.configOverrides ? { ...server, configOverrides: server.configOverrides.map(override =>
       override.target.t === 'workspace' ? { ...override, target: { ...override.target, workspaceRoot: normalizePath(override.target.workspaceRoot) } } : override) } : server),
   };
-  const mcpPluginItems = params.mcpPluginItems?.map(item => ({ ...item, rules: item.rules.map(rule => rule.target.t === 'workspace'
-    ? { ...rule, target: { ...rule.target, workspaceRoot: normalizePath(rule.target.workspaceRoot) } } : rule) }));
-  const result = resolveSessionCapabilitiesV1({ context, mcp: settings, mcpPluginItems, skills: params.skills ?? null, selection: params.selection ?? {},
+  const mcpPluginItems = params.mcpPluginItems?.map(item => ({ ...item, rules: realpathReachRules(item.rules, normalizePath) }));
+  const skills = params.skills ? { ...params.skills, rules: realpathReachRules(params.skills.rules, normalizePath) } : null;
+  const result = resolveSessionCapabilitiesV1({ context, mcp: settings, mcpPluginItems, skills, selection: params.selection ?? {},
     // A neutral machine projection has no Agent; named Agents supply their declared fact.
     agentAcceptsUserMcp: params.agentAcceptsUserMcp ?? params.agentId == null });
   // Undefined means no association read was required; null is an observed unassociated Session.
@@ -74,6 +73,6 @@ function resolveForContext(params: DirectoryCapabilityParams): DirectoryCapabili
     const plugin = item.source === 'plugin' ? parseMcpPluginItemIdV1(item.id) : null;
     return { serverId: item.id, name: item.name, serverTitle: item.title ?? item.name, ...(plugin ? { plugin } : {}) };
   }) });
-  return { ...result, projectKey: params.projectKey, mcpServerIdentities: identities.mcpServerIdentities,
+  return { ...result, context, projectKey: params.projectKey, mcpServerIdentities: identities.mcpServerIdentities,
     ...projectManagedMcpSelectionV1(result, { settings, context, selection: params.selection?.mcp, wireNamesByServerId: identities.wireNamesByServerId }) };
 }

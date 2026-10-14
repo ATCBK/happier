@@ -16,6 +16,7 @@ export default defineConfig({
     fileParallelism: false,
     include: ['scripts/externalSessionMaterializeRecovery.composed.integration.test.ts'],
     isolate: true,
+    setupFiles: ['./sources/configureZodLocale.ts'],
     env: {
       HAPPIER_FEATURE_POLICY_ENV: '',
       S3_HOST: 'localhost',

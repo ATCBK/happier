@@ -1,18 +1,18 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { DevelopmentPluginSourceCustodyV1Schema } from '../../plugins/runtime/sourceCustody.js';
 
 /** Canonical closed binding; persisted readers derive their drop projection. */
 export const VoiceModelPackArtifactBindingV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('sourceIntegrity'),
-    integrity: z.string().min(1).max(1024).refine((value) => value.trim() === value),
-  }).strict(),
-  z.object({
+    integrity: z.string().check(z.minLength(1), z.maxLength(1024), z.refine((value) => value.trim() === value)),
+  }),
+  z.strictObject({
     kind: z.literal('materialization'),
     sourceCustody: DevelopmentPluginSourceCustodyV1Schema,
-  }).strict(),
+  }),
 ]));
 
 export type VoiceModelPackArtifactBindingV1 = z.infer<typeof VoiceModelPackArtifactBindingV1Schema>;

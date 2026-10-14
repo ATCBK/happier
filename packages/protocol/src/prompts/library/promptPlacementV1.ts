@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Current authoring has one placement; legacy placements remain stored data. */
 export const PromptPlacementV1Schema = lazyZodSchema(() => z.enum(['system_append']));

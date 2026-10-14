@@ -157,13 +157,13 @@ export function SourceControlPullRequestSection(props: Readonly<{
             testID="scm-pull-request-section"
         >
             <View style={{ gap: 8 }}>
-                <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.primary,  }}>
                     {model.kind === 'existing'
                         ? model.title ?? t('files.sourceControlOperations.update.pullRequest.existing')
                         : t('files.sourceControlOperations.update.pullRequest.ready')}
                 </Text>
                 {model.baseBranch && model.headBranch ? (
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                    <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                         {t('files.sourceControlOperations.update.pullRequest.branchPair', {
                             head: model.headBranch,
                             base: model.baseBranch,
@@ -171,7 +171,7 @@ export function SourceControlPullRequestSection(props: Readonly<{
                     </Text>
                 ) : null}
                 {error ? (
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                    <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                         {error}
                     </Text>
                 ) : null}

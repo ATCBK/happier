@@ -14,6 +14,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import spawn from 'cross-spawn';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import {
   RequestError,
   type SessionNotification,
@@ -732,6 +733,7 @@ export class AcpBackend implements CatalogAcpBackend {
       this.lastProcessExitDetail = null;
 
 	    this.process = spawn(spec.command, spec.args, spec.options);
+	    observeProcessLaunch(this.process);
 
 	    if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
 	      throw new Error('Failed to create stdio pipes');
@@ -2221,16 +2223,23 @@ export class AcpBackend implements CatalogAcpBackend {
     // but never reuse an allow-once response for a later turn with the same raw id.
     this.lastSelectedPermissionOptionIdByToolCallId.clear();
     this.emit({ type: 'status', status: 'running' });
-    const previousTurnOutcomeKind = this.isCurrentTurnGenerationClosed() ? this.lastTurnOutcome?.kind : undefined;
+    const previousTurnOutcome = this.isCurrentTurnGenerationClosed() ? this.lastTurnOutcome : null;
+    // A request-scoped ACP error or refusal has ended the prior prompt RPC. Its
+    // successor may stream the whole reply before answering, without a user echo.
+    // Local cancellation/timeout still needs the existing late-output fence.
+    const previousPromptRejected = previousTurnOutcome?.kind === 'refused'
+      || (previousTurnOutcome?.kind === 'failed' && previousTurnOutcome.error instanceof RequestError);
     const turnGeneration = this.turnGeneration + 1;
     this.turnGeneration = turnGeneration;
     this.closedTurnGeneration = null;
     this.prePromptResponseUpdateGuard =
-      previousTurnOutcomeKind === 'completed'
-        ? 'completed'
-        : previousTurnOutcomeKind
-          ? 'terminal'
-          : 'none';
+      previousPromptRejected
+        ? 'none'
+        : previousTurnOutcome?.kind === 'completed'
+          ? 'completed'
+          : previousTurnOutcome
+            ? 'terminal'
+            : 'none';
     this.dropPromptTurnUpdatesUntilPromptResponse = this.prePromptResponseUpdateGuard === 'terminal';
     this.pendingTurnOutcome = null;
     this.lastTurnOutcome = null;
@@ -2898,9 +2907,6 @@ export class AcpBackend implements CatalogAcpBackend {
 
   async cancel(sessionId: SessionId): Promise<void> {
     const cancelledTurnGeneration = this.turnGeneration;
-    if (this.waitingForResponse) {
-      this.failPendingResponseWait(makeAbortError('Cancelled by user'));
-    }
 
     if (this.postPromptCompletionIdleTimeout) {
       clearTimeout(this.postPromptCompletionIdleTimeout);
@@ -2989,6 +2995,12 @@ export class AcpBackend implements CatalogAcpBackend {
         )
       )
     ) {
+      // Publish terminal turn state only after this cancellation has released
+      // its raw prompt ownership. A permission denial otherwise lets the host
+      // admit the next input while that exact prompt is still settling.
+      if (this.waitingForResponse) {
+        this.failPendingResponseWait(makeAbortError('Cancelled by user'));
+      }
       this.emit({ type: 'status', status: 'stopped', detail: 'Cancelled by user' });
     }
   }

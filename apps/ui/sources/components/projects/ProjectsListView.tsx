@@ -87,7 +87,7 @@ export const ProjectsListView = React.memo(() => {
     return (
         <ItemList presentation="grouped"
             testID="projects-list"
-            containerStyle={{ paddingTop: 12 }}
+            containerStyle={{ paddingTop: theme.space.s12 }}
         >
             {model.rowsUnconfirmed ? (
                 <ProjectOpenResolutionCard testID="projects-list:rows" issue={model.rowsUnconfirmed}
@@ -197,10 +197,10 @@ const styles = StyleSheet.create((theme) => ({
     trailing: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     count: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
     },

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { TEAM_DIRECTORY_ACTION_IDS_V1 } from './directory/actionIds.js';
 import { TEAM_IDENTITY_ACTION_IDS_V1 } from './identity/actionIds.js';
 import { TEAM_EXTERNAL_GROUP_BINDING_ACTION_IDS_V1 } from './externalGroupBindings/actionIds.js';

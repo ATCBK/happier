@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { resolveUsageCalendarInstant } from './usageCalendar.js';
@@ -28,36 +28,36 @@ export interface UsageHowYouWorkDetailInput {
     /** Content-free points observed in the already-opened transcript; no inferred turn or duration. */
     phaseEvents?: readonly UsageAutopsyEvent[];
 }
-const UsageAutopsyEventSchema = lazyZodSchema(() => z.object({
-    evidenceId: z.string().min(1), sessionId: z.string().min(1), turnId: z.string().nullable(),
-    observedAtMs: z.number().int().nonnegative(), kind: z.enum(['read', 'change', 'execute', 'delegate', 'compaction', 'unknown']),
+const UsageAutopsyEventSchema = lazyZodSchema(() => z.strictObject({
+    evidenceId: z.string().check(z.minLength(1)), sessionId: z.string().check(z.minLength(1)), turnId: z.nullable(z.string()),
+    observedAtMs: z.number().check(z.int(), z.nonnegative()), kind: z.enum(['read', 'change', 'execute', 'delegate', 'compaction', 'unknown']),
     method: z.enum(['tool_classification', 'native_event']),
-}).strict());
+}));
 export type UsageAutopsyEvent = z.infer<typeof UsageAutopsyEventSchema>;
-const CountSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const DurationSchema = lazyZodSchema(() => z.number().finite().nonnegative());
-export const UsageHowYouWorkSchema = lazyZodSchema(() => z.object({
+const CountSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const DurationSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const UsageHowYouWorkSchema = lazyZodSchema(() => z.strictObject({
     detailStatus: z.enum(['available', 'partial', 'unknown']),
-    autopsy: z.object({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) }).strict().optional(),
-    intervals: UsageWorkIntervalsProjectionSchema.nullable(),
-    todayInParallel: z.object({ date: z.string(), startMs: z.number().int(), endMs: z.number().int(),
+    autopsy: z.optional(z.strictObject({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) })),
+    intervals: z.nullable(UsageWorkIntervalsProjectionSchema),
+    todayInParallel: z.nullable(z.strictObject({ date: z.string(), startMs: z.number().check(z.int()), endMs: z.number().check(z.int()),
         agentTimeMs: DurationSchema, elapsedBusyMs: DurationSchema, parallelBusyMs: DurationSchema, maxParallel: CountSchema,
-    }).strict().nullable(),
-    nightShift: UsageNightHoursV1Schema.safeExtend({
-        recordedActivityCount: CountSchema.nullable(), observedBusyMs: DurationSchema.nullable(),
-    }).strict().nullable(),
-    activity: UsageAnalyticsQueryResponseSchema.shape.activity.unwrap().nullable(),
-    permissions: z.object({ requestCount: CountSchema, pairedDecisionCount: CountSchema,
-        decisionLatencyMs: DurationSchema.nullable(), unknownRequestTimeCount: CountSchema, unknownDecisionTimeCount: CountSchema,
-        byAnsweringClient: z.object({ ios: CountSchema, android: CountSchema, web: CountSchema, desktop: CountSchema, unknown: CountSchema }).strict(),
-        byTool: z.array(z.object({ toolId: z.string().nullable(), requestCount: CountSchema, pairedDecisionCount: CountSchema,
-            decisionLatencyMs: DurationSchema.nullable() }).strict()),
-    }).strict().nullable(),
-    inputs: z.object({ acceptedCount: CountSchema, steeringCount: CountSchema,
-        byDeliveryKind: z.object({ newTurn: CountSchema, followUp: CountSchema, steer: CountSchema }).strict(),
-    }).strict().nullable(),
-    footprint: UsageFootprintProjectionSchema.nullable(),
-}).strict().superRefine((value, context) => {
+    })),
+    nightShift: z.nullable((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(UsageNightHoursV1Schema, {
+        recordedActivityCount: z.nullable(CountSchema), observedBusyMs: z.nullable(DurationSchema),
+    }))),
+    activity: z.nullable(UsageAnalyticsQueryResponseSchema.shape.activity._zod.def.innerType),
+    permissions: z.nullable(z.strictObject({ requestCount: CountSchema, pairedDecisionCount: CountSchema,
+        decisionLatencyMs: z.nullable(DurationSchema), unknownRequestTimeCount: CountSchema, unknownDecisionTimeCount: CountSchema,
+        byAnsweringClient: z.strictObject({ ios: CountSchema, android: CountSchema, web: CountSchema, desktop: CountSchema, unknown: CountSchema }),
+        byTool: z.array(z.strictObject({ toolId: z.nullable(z.string()), requestCount: CountSchema, pairedDecisionCount: CountSchema,
+            decisionLatencyMs: z.nullable(DurationSchema) })),
+    })),
+    inputs: z.nullable(z.strictObject({ acceptedCount: CountSchema, steeringCount: CountSchema,
+        byDeliveryKind: z.strictObject({ newTurn: CountSchema, followUp: CountSchema, steer: CountSchema }),
+    })),
+    footprint: z.nullable(UsageFootprintProjectionSchema),
+}).check(z.superRefine((value, context) => {
     if (value.detailStatus === 'unknown') {
         if (value.nightShift?.observedBusyMs !== undefined && value.nightShift.observedBusyMs !== null) {
             context.addIssue({ code: 'custom', path: ['nightShift', 'observedBusyMs'], message: 'Unknown private detail cannot disclose busy duration' });
@@ -67,7 +67,7 @@ export const UsageHowYouWorkSchema = lazyZodSchema(() => z.object({
             if (value[field] !== null) context.addIssue({ code: 'custom', path: [field], message: 'Unknown private detail cannot disclose facts' });
         }
     }
-}));
+})));
 export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 
 export function resolveUsageHowYouWork(input: Readonly<{

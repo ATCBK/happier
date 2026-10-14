@@ -1,5 +1,5 @@
-import { PluginMarketplaceSourcesScreen } from '@/components/settings/plugins/PluginMarketplaceSourcesScreen';
+import { PluginSourcesScreen } from '@/components/settings/plugins/PluginSourcesScreen';
 
-export const WorkspaceRouteBody = PluginMarketplaceSourcesScreen;
+export const WorkspaceRouteBody = PluginSourcesScreen;
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
 export default function RouteEntry() { return <WorkspaceRouteEntry Body={WorkspaceRouteBody} />; }

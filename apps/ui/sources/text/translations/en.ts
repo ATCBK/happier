@@ -609,39 +609,11 @@ const { accountEncryptionRecoveryTranslations } =
 const { glassAppearanceTranslations } = feature_glassAppearanceTranslations;
 
 const mcpServersUxTranslationExtension = {
-  mcpServersConfiguredEmptySubtitle:
-    'Create a server, import host JSON, or install a recommended preset.',
-  mcpServersHeroSubtitle: ({ configuredCount }: { configuredCount: number }) =>
-    `${configuredCount} configured in Happier`,
-  mcpServersHeroSubtitleEmpty:
-    'Create servers once, preview where they apply, and import what other tools already use.',
   mcpServersSegmentConfigured: 'Configured',
-  mcpServersSegmentConfiguredSubtitle: 'Your Happier catalog',
-  mcpServersSegmentDetected: 'Detected',
-  mcpServersSegmentDetectedSubtitle: 'Found in provider config files',
-  mcpServersSegmentPreview: 'Preview',
-  mcpServersSegmentPreviewSubtitle: 'What this session will get',
-  mcpServersAdvancedTitle: 'Advanced',
-  mcpServersAdvancedSubtitle: 'Strict mode and validation behavior',
   mcpServersDetectedDirectoryTitle: 'Project directory',
   mcpServersDetectedDirectorySubtitle:
     'Optional workspace path for project-level configs',
   mcpServersDetectedDirectoryPlaceholder: '/path/to/project',
-  mcpServersPreviewAgentTitle: 'Backend',
-  mcpServersPreviewMachineTitle: 'Machine',
-  mcpServersPreviewDeliveryTitle: 'Tool delivery',
-  mcpServersPreviewDirectoryTitle: 'Workspace directory',
-  mcpServersPreviewDirectorySubtitle:
-    'Pick the folder you plan to start the session in',
-  mcpServersPreviewDirectoryPlaceholder: '/path/to/workspace',
-  mcpServersPreviewRefreshTitle: 'Refresh preview',
-  mcpServersPreviewRefreshSubtitle:
-    'Resolve Happier and provider-native MCP servers for this context',
-  mcpServersPreviewEmptyTitle: 'No preview yet',
-  mcpServersPreviewEmptySubtitle:
-    'Choose a backend, machine, and directory, then refresh to inspect the effective MCP set.',
-  mcpServersPreviewDirectoryRequired:
-    'Choose a directory to preview this session.',
   mcpServersBuiltInDescription: 'Always available in Happier sessions.',
   mcpServersSourceHappier: 'Happier',
   mcpServersSourceBuiltIn: 'Built-in',
@@ -672,9 +644,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersTransportHttpSubtitle: 'Bridge from an HTTP endpoint',
   mcpServersTransportSseTitle: 'Remote SSE',
   mcpServersTransportSseSubtitle: 'Bridge from server-sent events',
-  mcpServersAdvancedCommandEditorTitle: 'Advanced command editor',
-  mcpServersAdvancedCommandEditorSubtitle:
-    'Split the command and arguments manually',
   mcpServersCancelSubtitle: 'Leave without saving this draft',
   mcpServersImportJsonTitle: 'Paste MCP host JSON',
   mcpServersImportJsonSubtitle:
@@ -818,46 +787,6 @@ const memoryEmbeddingsTranslationExtension = {
 
 const newSessionMcpTranslationExtension = {
   mcpChipLabel: 'MCP',
-  mcpChipLabelWithCount: ({ count }: { count: number }) => `MCP ${count}`,
-  mcpModalTitle: 'MCP servers',
-  mcpModalSubtitle: ({
-    machineName,
-    directory,
-  }: {
-    machineName: string;
-    directory: string;
-  }) => `Preview the MCP servers available on ${machineName} for ${directory}.`,
-  mcpManagedToggleTitle: 'Managed MCP servers',
-  mcpManagedToggleSubtitle:
-    'Include managed MCP servers when they are available for this session.',
-  mcpOpenSettingsTitle: 'Open MCP settings',
-  mcpOpenSettingsSubtitle:
-    'Manage configured servers, bindings, and import options.',
-  mcpUnavailableNoContextTitle: 'Choose a machine and directory first',
-  mcpUnavailableNoContextSubtitle:
-    'MCP preview needs both a target machine and a workspace directory.',
-  mcpSelectedSectionTitle: 'Selected',
-  mcpAvailableSectionTitle: 'Available',
-  mcpUnavailableSectionTitle: 'Unavailable',
-  mcpDetectedSectionTitle: 'Detected in provider configs',
-  mcpDetectedSectionTitleForAgent: ({ agentName }: { agentName: string }) =>
-    `Detected in ${agentName} config`,
-  mcpDetectedEmptyTitle: 'No detected MCP servers',
-  mcpDetectedEmptySubtitle:
-    'Refresh to scan provider config files on this machine.',
-  mcpDetectedUnsupportedTitle: 'Detected MCP servers are not available',
-  mcpDetectedUnsupportedSubtitle:
-    'Update Happier on this machine to enable provider config scanning.',
-  mcpHappierSectionTitle: 'Happier MCP servers',
-  mcpHappierEmptyTitle: 'No MCP servers defined in Happier',
-  mcpHappierEmptySubtitle:
-    'Define MCP servers in settings to use them in sessions.',
-  mcpReasonActiveByDefault: 'Included by default',
-  mcpReasonForcedIncluded: 'Required by configuration',
-  mcpReasonForcedExcluded: 'Excluded by configuration',
-  mcpReasonManagedDisabled: 'Managed MCP servers are disabled',
-  mcpReasonBindingDisabled: 'Disabled by server binding',
-  mcpReasonAvailablePortable: 'Portable to this session',
   mcpReasonNotPortable: 'Not portable to this session',
   profileReasonNotPortable: 'Not portable to this session',
   connectedServicesReasonNotPortable: 'Not portable to this session',
@@ -1855,7 +1784,6 @@ const enPromptLibrary = {
   memoryUseInNewBotsTitle: 'Use memory in new bots',
   memoryUseInNewBotsDescription: 'Applies when creating bots, not to existing sessions.',
   surface: {
-    installAction: 'Install',
     projectDirectoryPlaceholder: 'Path to the project on the machine',
     pageDescription:
       'Prompts, skills and slash templates you write once and reuse in sessions.',
@@ -1870,12 +1798,6 @@ const enPromptLibrary = {
     stacksLinkDescription:
       'Prompts and skills added to every coding or voice session.',
     foldersLinkDescription: 'Named groups for prompts and skills.',
-    importSection: 'Bring in from elsewhere',
-    importSectionDescription:
-      'Prompts and skills that already exist on your machines or in registries.',
-    externalAssetsLinkDescription:
-      'Prompts and skills your tools keep on a machine.',
-    registriesLinkDescription: 'Browse skill registries and import skills.',
     itemCount: ({ count }: { count: number }) => `${count}`,
     docsDescription:
       'Text you insert into sessions or add to an agent’s instructions.',
@@ -1908,10 +1830,6 @@ const enPromptLibrary = {
     supportingFilesDescription:
       'Files exported next to SKILL.md, such as templates and checklists.',
     addFile: 'Add file',
-    externalLinksDescription:
-        "Where this item was copied on your machines. Copies don't change when you edit the library.",
-    manageExternalAssetsDescription:
-      'Export it to a tool on a machine, or update an export.',
     templateSection: 'Template',
     templateSectionDescription: 'What you type in the composer to use it.',
     templateEditorDescription:
@@ -1956,23 +1874,6 @@ const enPromptLibrary = {
     importToLibrary: 'Import to library',
     registryInstallDescription:
       'Also writes it where a tool on the machine reads skills.',
-    installProjectScopeDescription:
-      'Inside a project directory on the machine.',
-    installUserScopeDescription:
-      'In your user folders on the machine, for every project.',
-    installMethodLink: 'Link',
-    installMethodCopy: 'Copy',
-    installMethodLinkDescription:
-      'Recommended: links to a copy Happier keeps up to date.',
-    installTargetDescription: 'The file or folder name the tool uses.',
-    externalAssetsPageDescription:
-      'Prompts and skills your tools keep on a machine. Import them to reuse and sync them.',
-    whereToLookSection: 'Where to look',
-    whereToLookDescription: 'A project on the machine, or your user folders.',
-    exportDescription: ({ title }: { title: string }) =>
-      `Write ${title} where a tool on a machine reads it.`,
-    exportOptionsDescription:
-      'Choose the tool and where it should find the file.',
   },
   sections: 'Sections',
   library: 'Library',
@@ -1992,57 +1893,6 @@ const enPromptLibrary = {
   templatesSubtitle: 'Create and manage /slash templates',
   newTemplate: 'New template',
   newTemplateSubtitle: 'Create a reusable slash template',
-  externalAssets: 'External assets',
-  externalAssetsSubtitle:
-    'Import skills and prompt assets from connected machines',
-  externalAssetsContext: 'Discovery context',
-  externalAssetsMachine: 'Machine',
-  externalAssetsScope: 'Scope',
-  externalAssetsProjectScope: 'Project',
-  externalAssetsProjectScopeSubtitle: 'Discover assets inside a workspace path',
-  externalAssetsUserScope: 'User',
-  externalAssetsUserScopeSubtitle: 'Discover assets in user-level folders',
-  externalAssetsProjectDirectory: 'Project directory',
-  externalAssetsProjectDirectoryRequired:
-    'Choose a project directory before importing or exporting project-scoped assets.',
-  externalAssetsRefresh: 'Refresh external assets',
-  externalAssetsRefreshSubtitle:
-    'Discover prompt assets for the selected machine and scope',
-  externalAssetsTypes: 'Asset types',
-  externalAssetsNoMachine: 'Select a machine to continue.',
-  externalAssetsNoTypes: 'No external asset types',
-  externalAssetsNoTypesSubtitle:
-    'This machine does not expose any prompt asset adapters yet.',
-  externalAssetsNoItems: 'No external assets found',
-  externalAssetsNoItemsSubtitle:
-    'Refresh after choosing a machine, scope, or directory.',
-  externalAssetsUnsupportedImport:
-    'Only bundle-based prompt assets can be imported here.',
-  externalAssetsImportAction: 'Import',
-  externalAssetsExportTitle: 'Export external asset',
-  externalAssetsExportOptions: 'Export options',
-  externalAssetsExportType: 'Asset type',
-  externalAssetsExportAction: 'Export',
-  externalAssetsExportConfirmTitle: 'Export external asset?',
-  externalAssetsExportConfirmBody:
-    'This will write the selected prompt asset to the external location.',
-  externalAssetsExportTarget: 'Target',
-  externalAssetsInstallMethod: 'Install method',
-  externalAssetsInstallMethodCopy: 'Copy files',
-  externalAssetsInstallMethodCopySubtitle:
-    'Write a standalone copy into the selected target',
-  externalAssetsInstallMethodSymlink: 'Symlink (recommended)',
-  externalAssetsInstallMethodSymlinkSubtitle:
-    'Link the target to a Happier-managed copy for easier updates',
-  externalAssetsExportTargetPathPlaceholder:
-    'Target path (e.g. review/code.md)',
-  externalAssetsExportTargetNamePlaceholder: 'Target name (e.g. reviewer)',
-  externalAssetsDeleteConfirmTitle: 'Delete external asset?',
-  externalAssetsDeleteConfirmBody:
-    'This will delete the linked external asset from disk.',
-  externalAssetsLinkedTitle: 'Linked external asset',
-  externalAssetsLinkedTo: ({ title }: { title: string }) =>
-    `Linked to ${title}`,
   registries: 'Registries',
   personal_saved_secrets: 'Saved Secrets',
   registriesSubtitle:
@@ -2051,7 +1901,7 @@ const enPromptLibrary = {
   registriesNoMachine: 'Select a machine to continue.',
   registriesRefresh: 'Refresh registries',
   registriesStatus: {
-    limited: ({ time }: { time?: string }) => time === undefined ? 'Rate limited' : `Limited until ${time}`,
+    limited: ({ time }: { time?: string }) => time === undefined ? 'Too many requests. Try again in a moment.' : `Too many requests. Try again at ${time}.`,
     unreachable: "Couldn’t reach this registry. Try again.",
     authFailed: "Token rejected. Replace the token.",
     needsMachine: "Bring a machine online to browse this registry.",
@@ -2132,9 +1982,6 @@ const enPromptLibrary = {
   noSkillsSubtitle: 'Create a skill bundle to reuse SKILL.md instructions.',
   imported: 'Imported',
   builtIn: 'Built-in',
-  linkedAssetsCount: ({ count }: { count: number }) =>
-    `${count} export${count === 1 ? '' : 's'}`,
-  manageExternalAssets: 'Manage external assets',
   deleteLibraryItemTitle: 'Delete library item?',
   deleteLibraryItemBody:
     'This removes the item from your library and unlinks any templates or system prompt additions that reference it.',
@@ -4259,7 +4106,7 @@ const enSettings = {
   systemStatus: 'System Status',
   systemStatusSubtitle: 'Homes, account, machines, daemon',
   mcpServers: 'MCP servers',
-  mcpServersSubtitle: 'Manage MCP servers and bindings',
+  mcpServersSubtitle: 'Tools your agents can call',
   mcpServersComingSoon: 'MCP servers settings are coming soon.',
   mcpServersStrictMode: 'Strict mode',
   mcpServersStrictModeSubtitle:
@@ -9436,23 +9283,6 @@ const enSession = {
       failed: 'Runner restart failed',
     },
   },
-  mcpRestartRequired: {
-    banner: {
-      title: 'Restart to apply MCP server changes',
-      body: 'MCP servers are applied when a session starts. Restart this session runner to use your updated selection.',
-      failedBody:
-        'The runner could not restart. Your MCP selection is saved and will apply the next time this session starts.',
-    },
-    actions: {
-      restart: 'Restart session',
-      restarting: 'Restarting...',
-      hideBanner: 'Hide MCP restart notice',
-      showBanner: 'Show MCP restart notice',
-    },
-    status: {
-      changed: 'MCP changes',
-    },
-  },
   rightPanel: {
     tabs: {
       git: 'Git',
@@ -10836,6 +10666,7 @@ const enSessionInfo = {
   killSessionConfirm: 'Are you sure you want to terminate this session?',
   stopSession: 'Stop session',
   stopSessionConfirm: 'Are you sure you want to stop this session?',
+  sessionStopped: "Session stopped",
   stopSessionControlUnavailable:
     'Happier could not reach the session controls. Make sure the session machine and daemon are online, then try again.',
   archiveSession: 'Archive session',
@@ -12699,6 +12530,17 @@ const enLocalServices = {
       unavailable:
         'This action is not available for this service on this machine.',
       incomplete: 'The action did not finish. You can try it again.',
+      portInUse: ({ port }: { port: number }) => `Port ${port} is already in use. Stop the existing service or choose another port.`,
+      portInUseSameProject: ({ port }: { port: number }) => `Port ${port} is already in use by this project. Use the running service or choose another port.`,
+      processExit: ({ code }: { code: string }) => `The service exited with code ${code}. Check Details before trying again.`,
+      openRunning: ({ service }: { service: string }) => `Open running ${service}`,
+      exitCode: ({ code }: { code: string }) => `Exit code ${code}`,
+      docker: {
+        not_installed: ({ machine }: { machine: string }) => `Docker is not installed on ${machine}. Install Docker before starting this service.`,
+        not_running: ({ machine }: { machine: string }) => `Docker is not running or cannot be reached on ${machine}. Start Docker and check its connection.`,
+        permission_denied: ({ machine }: { machine: string }) => `Happier does not have permission to use Docker on ${machine}. Ask the machine owner to grant Docker access.`,
+        unavailable: ({ machine }: { machine: string }) => `Docker is unavailable on ${machine}. Check its connection before starting this service.`,
+      },
     },
     failureTitle: {
       start: ({ service }: { service: string }) => `Could not start ${service}`,
@@ -13498,7 +13340,6 @@ const enSettingsActions = {
     voiceFeature: 'Enable Voice Assistant settings to use this target.',
     voiceInventoryPrivacy:
       'Turn on Share device inventory in Voice Assistant privacy settings to use this target.',
-    mcpFeature: 'Enable MCP servers to surface this action through MCP.',
     executionRunsFeature:
       'Enable background runs to use this action or target.',
     memorySearchFeature: 'Enable Local Memory Search to use this action.',
@@ -18704,7 +18545,7 @@ const enUsage = {
       noUsageTitle: "No usage in this period",
       noUsageReason: "Sessions you run on any machine show up here.",
       vsPrevious: "vs the period before",
-      sessionsCount: ({ count }: { count: string | number }) => `${count} sessions`,
+      sessionsCount: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'session' : 'sessions'}`,
       atApiPrices: ({ amount }: { amount: string | number }) => `≈ ${amount} at API prices`,
       youPaid: "You paid",
       mergedPrs: "Merged PRs",
@@ -18853,6 +18694,7 @@ const enUsage = {
       capacityTightestUnit: ({ name }: { name: string | number }) => `left on ${name}, the tightest`,
       capacityResets: ({ time }: { time: string | number }) => `resets ${time}`,
       capacityAccounts: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'account' : 'accounts'} read`,
+      capacityReading: ({ count }: { count: string | number }) => `Reading ${count} ${Number(count) === 1 ? 'account' : 'accounts'}…`,
       capacityNoReads: "No plan allowances read yet",
       capacityNoReadsReason: "Connect a subscription account to see what each plan has left.",
       openConnectedServices: "Connected services",
@@ -19088,20 +18930,21 @@ const enUsage = {
       provider: "Provider",
       ledgerCaption: ({ period }: { period: string | number }) => `${period} · what it bought`,
       ledgerLabel: "Projects by linked work",
-      ledgerRowLine: ({ sessions, prs }: { sessions: string | number; prs: string | number }) => `${sessions} sessions · ${prs} linked PRs`,
+      ledgerRowLine: ({ sessions, prs }: { sessions: string | number; prs: string | number }) => `${sessions} ${Number(sessions) === 1 ? 'session' : 'sessions'} · ${prs} linked ${Number(prs) === 1 ? 'PR' : 'PRs'}`,
       notLinkedPart: ({ amount }: { amount: string | number }) => `${amount} not linked to a PR`,
       unknownProject: "No project recorded",
       allProjects: "All projects",
       conservation: ({ allocated, unallocated }: { allocated: string | number; unallocated: string | number }) => `${allocated} linked to PRs · ${unallocated} not linked`,
       reason_missing_turn: "no turn recorded",
       reason_missing_evidence: "no commit or PR evidence",
+      reason_missing_pr: "no PR linked",
       reason_ambiguous_outcome: "linked to more than one PR",
       reason_uncertain_writers: "shared with other writers",
       workUnavailableTitle: "Work links aren't loaded yet",
       workUnavailableReason: "Totals still count every session; nothing is assigned to a PR without exact evidence.",
       emptyTitle: "No work in this period",
       emptyReason: "Sessions you run on any machine show up here.",
-      valueCaption: ({ count }: { count: string | number }) => `${count} sessions`,
+      valueCaption: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'session' : 'sessions'}`,
       valueLabel: "Sessions by cost and merged work",
       xCost: "Session cost",
       xTokens: "Session tokens",
@@ -19114,7 +18957,7 @@ const enUsage = {
       sessionLine: ({ prs }: { prs: string | number }) => `${prs} linked PRs`,
       openSession: ({ title }: { title: string | number }) => `Open ${title}`,
       judgement: "Cost and linked work, side by side; you decide what was worth it.",
-      outcomesCaption: ({ count }: { count: string | number }) => `${count} pull requests`,
+      outcomesCaption: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'pull request' : 'pull requests'}`,
       funnelLabel: "Sessions to merged PRs",
       funnelSessions: "Sessions",
       funnelWitnessed: "With PR evidence",
@@ -19122,7 +18965,7 @@ const enUsage = {
       funnelMerged: "Merged",
       prLabel: "Cost per PR",
       prTitle: ({ number, title }: { number: string | number; title: string | number }) => `#${number} ${title}`,
-      prLine: ({ sessions, state }: { sessions: string | number; state: string | number }) => `${sessions} sessions · ${state}`,
+      prLine: ({ sessions, state }: { sessions: string | number; state: string | number }) => `${sessions} ${Number(sessions) === 1 ? 'session' : 'sessions'} · ${state}`,
       state_open: "open",
       state_draft: "draft",
       state_merged: "merged",
@@ -19260,6 +19103,7 @@ const enUsage = {
       metric_failed_repetitions: "failed repeats",
       metric_outside_tokens: "outside Happier",
       metric_composed_tokens: "tokens in the request",
+      latestSample: ({ value }: { value: string | number }) => `Latest: ${value}`,
       metric_context_window_tokens: "context window",
       capability_instruction_injections: "which instructions were injected",
       capability_model_outcome_comparison: "matched outcomes across models",
@@ -20288,7 +20132,6 @@ const enProjects = {
     },
     run: {
       notRun: "Not run in this checkout yet",
-      waitsForSetup: "Waits for setup",
       accepted: "Accepted. Waiting to start.",
       running: ({ machine }: { machine: string }) => `Running on ${machine}`,
       completed: ({ time }: { time: string }) => `Completed ${time}`,
@@ -20318,6 +20161,7 @@ const enProjects = {
       tools: "Tools",
       values: "Values",
       valuesNote: "Names only; values are filled at run time.",
+      stepsUnavailable: "The setup steps couldn’t be read.",
       from: "From",
       viewFile: "View file",
       sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Runs as ${osUser} on ${machine}. Your approval for this project applies until setup changes.`,
@@ -21501,6 +21345,13 @@ const enPluginReactNative = {
 };
 
 const enPluginRuntime = {
+  collectionConflict: "This plugin’s data format conflicts with the stored collection. Open plugin settings to repair or update it.",
+  resourceAdmissionUnavailable: "This plugin could not make its data available. Open plugin settings to inspect and repair it.",
+  hostAccessMismatch: "This plugin requested access that it has not declared. Review its access in plugin settings.",
+  routeUnavailable: "This machine’s Happier version cannot serve this plugin view. Check for an update.",
+  responseInvalid: "This plugin view received an invalid response. Try loading it again.",
+  transportUnavailable: "Happier could not reach the source for this plugin view. Check the connection and try again.",
+  sourceUnavailable: "The selected plugin view’s files are unavailable. Try loading it again.",
   unavailableGeneric: 'It may still be starting. Try again in a moment.',
   crashLoop: 'The plugin was stopped after repeated crashes.',
   disabledByPolicy:
@@ -21739,6 +21590,7 @@ export const en: TranslationStructure = {
   transcript: enTranscript,
   inbox: enInbox,
   approvals: enApprovals,
+  contextBar: { machine: 'Machine', projectDirectory: 'Project directory' },
   promptLibrary: enPromptLibrary,
   runs: enRuns,
   sessionLog: enSessionLog,
@@ -22279,6 +22131,7 @@ type EnglishNamespaces10 = TranslationOverlay<
     readonly transcript: typeof enTranscript;
     readonly inbox: typeof enInbox;
     readonly approvals: typeof enApprovals;
+    readonly contextBar: Readonly<{ machine: string; projectDirectory: string }>;
     readonly promptLibrary: typeof enPromptLibrary;
     readonly runs: typeof enRuns;
     readonly sessionLog: typeof enSessionLog;

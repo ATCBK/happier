@@ -1,3 +1,4 @@
+import { omit } from 'zod/mini';
 import {
     DaemonContributionRegistryProjectionDescribeResponseSchema,
     DaemonPluginUiTargetedContributionsReadResponseSchema,
@@ -19,7 +20,7 @@ export type DaemonContributionRegistryProjectionDescribeParsedResponse = Readonl
 }>;
 
 /** The response envelope's siblings; the projection is parsed by its own schema. */
-const DescribeResponseSiblingsSchema = DaemonContributionRegistryProjectionDescribeResponseSchema.omit({
+const DescribeResponseSiblingsSchema = omit(DaemonContributionRegistryProjectionDescribeResponseSchema, {
     projection: true,
 });
 

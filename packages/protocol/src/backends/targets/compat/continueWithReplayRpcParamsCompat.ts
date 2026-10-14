@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   hasLegacyCustomAcpConcreteBackendId,
@@ -83,7 +83,7 @@ export function validateLegacyContinueWithReplayRpcParamsCompat(
     agent?: unknown;
     backendTarget?: Readonly<Record<string, unknown>> | undefined;
   }>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   const legacyAgent = normalizeLegacyContinueWithReplayAgent(value.agent);
   if (!legacyAgent) {
@@ -94,7 +94,7 @@ export function validateLegacyContinueWithReplayRpcParamsCompat(
   const carrier = readLegacyCustomAcpAgentCarrier(legacyAgent);
   if (carrier?.kind === 'custom_acp_placeholder' && !backendTarget) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'backendTarget is required for legacy configured-backend carriers',
       path: ['backendTarget'],
     });
@@ -115,7 +115,7 @@ export function validateLegacyContinueWithReplayRpcParamsCompat(
 
   if (legacyAgent !== backendId && !isConfiguredLegacyAgent) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'agent must match backendTarget when both are provided',
       path: ['agent'],
     });

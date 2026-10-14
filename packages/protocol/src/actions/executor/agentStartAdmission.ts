@@ -1,4 +1,7 @@
 import * as z from 'zod/mini';
+import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
+export { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
+export type { ActionStartDiagnosticV1, ActionStartPhaseV1 } from './actionStartDiagnostics.js';
 import { admitAgentStartV1, AgentStartSessionCallerV1Schema, type AgentStartFactsV1, type AgentStartContextV1, type AgentStartRequestV1, type Unresolved } from '../../account/settings/admitAgentStartV1.js';
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { BackendTargetKeyV2Schema, PersistedBackendTargetRefV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
@@ -50,11 +53,11 @@ const unresolved = { kind: 'unresolved' } as const;
 const RunStartConfigOptionsSchema = z.record(z.string(), SpawnConfigOptionValueSchema);
 // Admission needs authoritative selection facts, not a dynamically bound task
 // body. The native Session owner still validates the complete effective input.
-const spawnPolicyFields = SessionSpawnNewInputV2BaseSchema.pick({
+const spawnPolicyFields = z.object(z.pick(SessionSpawnNewInputV2BaseSchema, {
     executionTarget: true, directory: true, agentTarget: true, roleId: true,
     modelSelection: true, permissionMode: true, agentModeId: true, configuration: true,
     profileId: true, environmentVariables: true, connectedServices: true, capabilitySelection: true, transcriptStorage: true,
-}).strip();
+}).shape);
 type SpawnStartFactsInput = {
     [Key in keyof z.infer<typeof spawnPolicyFields>]?: z.infer<typeof spawnPolicyFields>[Key] | Unresolved;
 };
@@ -197,7 +200,7 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
             ...facts,
             agentTarget: target,
             modelSelection: overrideEngine ? selectedModel : facts.modelSelection === undefined ? selectedModel : facts.modelSelection,
-            permissionMode: facts.permissionMode ?? selection(SessionSpawnNewInputV2Schema.shape.permissionMode.unwrap(), selected.permissionMode),
+            permissionMode: facts.permissionMode ?? selection(SessionSpawnNewInputV2Schema.shape.permissionMode._zod.def.innerType, selected.permissionMode),
             agentModeId: facts.agentModeId === undefined ? selected.acpSessionModeId : facts.agentModeId,
             configOptions: facts.configOptions === undefined ? options === null ? null : options ? Object.fromEntries(Object.entries(options.overrides)
                 .map(([name, option]) => [name, { value: option.value, updatedAtMs: option.updatedAt }])) : undefined : facts.configOptions,
@@ -205,7 +208,7 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
                 : facts.profileId === undefined ? selected.profileId : facts.profileId,
             connectedServices: facts.connectedServices === undefined ? selected.connectedServices : facts.connectedServices,
             capabilitySelection: facts.capabilitySelection === undefined ? selected.capabilitySelection : facts.capabilitySelection,
-            transcriptStorage: facts.transcriptStorage ?? selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage.unwrap(), selected.transcriptStorage),
+            transcriptStorage: facts.transcriptStorage ?? selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage._zod.def.innerType, selected.transcriptStorage),
         };
     };
     if (!isAgentStartActionV1(actionId))
@@ -239,17 +242,17 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
             return { ok: true, effectiveInput,
                 requests: [{ kind: 'spawn_new', facts: selectedFacts(spawnStartFactsV1(spawn.data)), roleId: spawn.data.roleId }] };
         const deferred: Partial<Record<keyof typeof spawnPolicyFields.shape, true>> = {};
-        for (const key of spawnPolicyFields.keyof().options) {
+        for (const key of z.keyof(spawnPolicyFields).options) {
             if (isUnresolvedStartFact(effectiveInput[key]))
                 deferred[key] = true;
         }
         if (Object.keys(deferred).length > 0) {
             // Validate all known required fields with the same native schema. Only
             // actual deferred values are omitted, then retained as unresolved facts.
-            const known = spawnPolicyFields.omit(deferred).safeParse(effectiveInput);
+            const known = z.omit(spawnPolicyFields, deferred).safeParse(effectiveInput);
             if (known.success) {
                 const partial: SpawnStartFactsInput = { ...known.data };
-                for (const key of spawnPolicyFields.keyof().options)
+                for (const key of z.keyof(spawnPolicyFields).options)
                     if (deferred[key])
                         partial[key] = unresolved;
                 // An unresolved Role can change the eventual effective Agent Engine.
@@ -381,10 +384,10 @@ export function executionRunStartFactsV1(input: Readonly<Record<string, unknown>
         ...(input.permissionMode !== undefined ? { permissionMode: typeof input.permissionMode === 'string' ? parseAgentPermissionIntentV1Alias(input.permissionMode) ?? unresolved : unresolved } : {}),
         ...(input.agentModeId !== undefined || input.acpSessionModeId !== undefined ? { agentModeId: selection(z.string().check(z.minLength(1)), input.agentModeId ?? input.acpSessionModeId) } : {}),
         ...(configOptions !== undefined ? { configOptions } : {}),
-        ...(input.launchProfileId !== undefined ? { profileId: selection(SessionSpawnNewInputV2Schema.shape.profileId.unwrap(), input.launchProfileId) } : {}),
+        ...(input.launchProfileId !== undefined ? { profileId: selection(SessionSpawnNewInputV2Schema.shape.profileId._zod.def.innerType, input.launchProfileId) } : {}),
         ...(connected !== undefined ? { connectedServices: connected.ok && connected.defaultServiceIds.length === 0 ? connected.bindings : unresolved } : {}),
-        ...(input.capabilitySelection !== undefined ? { capabilitySelection: selection(SessionSpawnNewInputV2Schema.shape.capabilitySelection.unwrap(), input.capabilitySelection) } : {}),
-        ...(input.transcriptStorage !== undefined ? { transcriptStorage: selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage.unwrap(), input.transcriptStorage) } : {}),
+        ...(input.capabilitySelection !== undefined ? { capabilitySelection: selection(SessionSpawnNewInputV2Schema.shape.capabilitySelection._zod.def.innerType, input.capabilitySelection) } : {}),
+        ...(input.transcriptStorage !== undefined ? { transcriptStorage: selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage._zod.def.innerType, input.transcriptStorage) } : {}),
     };
 }
 export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentStartFactsV1 {
@@ -409,14 +412,19 @@ export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentS
     };
 }
 export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string) {
-    let resolved = context.agentStartContext ?? await deps.resolveAgentStartContext?.(context) ?? null;
+    let resolved = context.agentStartContext ?? await measureActionStartPhaseV1(context, 'agent_start_context',
+      async () => await deps.resolveAgentStartContext?.(context) ?? null);
     if (context.actionCaller?.kind === 'session') {
         const caller = context.actionCaller;
-        if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId)
+        if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId) {
+            if (resolved) context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: 'caller_witness_invalid' });
             return null;
+        }
         const original = AgentStartSessionCallerV1Schema.safeParse(caller);
-        if (!original.success)
+        if (!original.success) {
+            context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: 'caller_witness_invalid' });
             return null;
+        }
         resolved = { ...resolved, caller: original.data };
     }
     if (!resolved || targetSessionId === undefined)
@@ -432,11 +440,14 @@ export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutor
 }
 export function admitActionAgentStartV1(context: ActionExecutorContext, request: AgentStartRequestV1, resolved: AgentStartContextV1 | null) {
     const policy = SessionAgentSpawnPolicyV1StrictSchema.safeParse(context.sessionAgentSpawnPolicyV1 ?? {});
-    if (!resolved || !policy.success)
-        return { ok: false as const, refusal: { code: 'target_unavailable' as const }, error: {
-                ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable',
-            } satisfies ActionExecuteFailure };
+    if (!resolved || !policy.success) {
+        const reason = !resolved ? 'agent_start_context_unavailable' as const : 'spawn_policy_invalid' as const;
+        return { ok: false as const, refusal: { code: 'target_unavailable' as const, reason },
+            error: actionStartTargetUnavailableV1(context, 'agent_start_context', reason) };
+    }
     const admission = admitAgentStartV1(policy.data, request, resolved);
+    if (!admission.ok && admission.refusal.code === 'target_unavailable' && admission.refusal.reason)
+        context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: admission.refusal.reason });
     return admission.ok ? admission : { ok: false as const, refusal: admission.refusal, error: {
             ok: false as const, errorCode: admission.refusal.code, error: admission.refusal.code, details: admission.refusal,
         } satisfies ActionExecuteFailure };

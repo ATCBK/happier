@@ -40,7 +40,6 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
     const stagedServerId = getActiveServerSnapshot().serverId;
     const appliedServerId = `${stagedServerId}-execution-owner`;
     const state = {
-      profileScope: fixtureScope,
       ...storage.getState(),
       profileScope: { serverId: appliedServerId, accountId: fixtureScope.accountId },
       machines: {},

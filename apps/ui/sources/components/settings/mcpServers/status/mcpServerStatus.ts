@@ -1,7 +1,9 @@
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
-import type { ValueRefV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 /**
  * A server's sign-in as the status owner reads it (T2 states, U7.9's `useMcpServerSignIn`). `null`: the
@@ -28,7 +30,7 @@ export type McpServerStatusFixes = Readonly<{
     signIn: () => void;
     reconnect: () => void;
     grantAccess: () => void;
-    addKey: () => void;
+    addKey?: () => void;
     howToFix: (machineId: string) => void;
     tryAgain: (machineId: string) => void;
 }>;
@@ -38,25 +40,26 @@ export type McpServerStatusInput = Readonly<{
     signIn: McpServerSignInFact;
     tests: Readonly<Record<string, McpServerTestFact | undefined>>;
     machines: readonly McpServerMachineFact[];
-    /** Saved Secrets this Account holds, by id: a reference to anything else is a missing key. */
-    savedSecretIds: ReadonlySet<string>;
+    savedSecretCatalog: McpSavedSecretAvailability;
     fixes: McpServerStatusFixes;
+    /** Only the calling Session's transcript; Account settings pages omit this. */
+    sessionNotices?: readonly SessionCapabilityNoticeV1[];
 }>;
 
-function* secretIdsOf(ref: ValueRefV1): Generator<string> {
-    if (ref.t === 'savedSecret') yield ref.secretId;
-    if (ref.t === 'template') for (const variable of Object.values(ref.vars)) if (variable.t === 'savedSecret') yield variable.secretId;
-}
+/** The Saved Secret owner alone decides whether a reference is usable. */
+export type McpSavedSecretAvailability = Pick<SavedSecretCatalogProjection, 'resolveReference'>;
 
-export function mcpServerNeedsKey(entry: McpServerCatalogEntryV1, savedSecretIds: ReadonlySet<string>): boolean {
-    return mcpServerMissingKeyNames(entry, savedSecretIds).size > 0;
+export function mcpServerNeedsKey(entry: McpServerCatalogEntryV1, catalog: McpSavedSecretAvailability): boolean {
+    return mcpServerMissingKeyNames(entry, catalog).size > 0;
 }
 
 /** The env and header names whose Saved Secret is missing: where the banner's "Add key" lands. */
-export function mcpServerMissingKeyNames(entry: McpServerCatalogEntryV1, savedSecretIds: ReadonlySet<string>): ReadonlySet<string> {
+export function mcpServerMissingKeyNames(entry: McpServerCatalogEntryV1, catalog: McpSavedSecretAvailability): ReadonlySet<string> {
     const names = new Set<string>();
     const named = [...Object.entries(entry.env), ...Object.entries(entry.remote?.headers ?? {})];
-    for (const [name, ref] of named) for (const secretId of secretIdsOf(ref)) if (!savedSecretIds.has(secretId)) names.add(name);
+    for (const [name, ref] of named) for (const secretId of listValueRefSecretIdsV1(ref)) {
+        if (catalog.resolveReference(secretId).status !== 'ready') names.add(name);
+    }
     return names;
 }
 
@@ -94,10 +97,20 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
                 break;
         }
     }
-    if (mcpServerNeedsKey(input.entry, input.savedSecretIds)) {
-        statuses.push({ kind: 'key', fix: { kind: 'add_key', onPress: fixes.addKey } });
+    if (mcpServerNeedsKey(input.entry, input.savedSecretCatalog)) {
+        statuses.push({ kind: 'key', ...(fixes.addKey ? { fix: { kind: 'add_key' as const, onPress: fixes.addKey } } : {}) });
     }
     statuses.push(...mcpServerMachineStatuses(input).values());
+    for (const notice of input.sessionNotices ?? []) for (const item of notice.items) {
+        if (item.kind !== 'mcp_server' || item.itemId !== input.entry.id) continue;
+        // The current grant/attempt owner supersedes this historical missing-auth condition.
+        if (item.code === 'mcp_sign_in_required' && input.signIn) continue;
+        const machine = input.machines[0];
+        statuses.push(item.code === 'mcp_sign_in_required'
+            ? { kind: 'signin', fix: { kind: 'sign_in', onPress: fixes.signIn } }
+            : { kind: 'error', ...(machine ? { machineName: machine.name } : {}), detail: item.detail ?? item.code,
+                ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
+    }
     return statuses;
 }
 

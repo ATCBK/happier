@@ -1,13 +1,7 @@
-import {
-    normalizeTeamAuthenticationPolicyV1,
-    type TeamAuthenticationPolicyV1,
-    type TeamRestrictedAuthenticationPolicyV1,
-    type TeamAuthenticationPolicyComparisonBasisV1,
-    type TeamAuthenticationPolicyUnavailableDetailsV1,
-    TeamAuthenticationPolicyV1Schema,
-} from "@happier-dev/protocol";
+import { normalizeTeamAuthenticationPolicyV1, type TeamAuthenticationPolicyV1, type TeamRestrictedAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema } from '@happier-dev/protocol/auth/entry';
+import { type TeamAuthenticationPolicyComparisonBasisV1, type TeamAuthenticationPolicyUnavailableDetailsV1 } from '@happier-dev/protocol/teams';
 import type { TeamCapabilitiesV1 } from "@happier-dev/protocol/teams";
-import type { TeamSummaryV1 } from "@happier-dev/protocol/teams";
+import type { TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
 
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import type { Tx } from "@/storage/inTx";

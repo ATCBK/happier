@@ -35,16 +35,23 @@ export type CommitProposalViewProps = Readonly<{
     proposal: CommitProposal | null;
     /** none: nothing requested · writing: the model is grouping · ready: a proposal exists. */
     phase: 'none' | 'writing' | 'ready';
+    /** Output progress is independent of whether usable proposal groups already exist. */
+    isGenerating?: boolean;
     branch: string | null;
     modelLabel: string | null;
     layout: CommitProposalViewLayout;
     actions: CommitProposalActions;
     /** The empty state's way in: propose for these pending changes. */
-    start?: Readonly<{ onStart: () => void; busy: boolean; disabled: boolean; reason: string | null; modelPicker?: React.ReactNode }> | null;
+    /** `reason` replaces the explanation when proposing cannot apply; `options` is what belongs beside Propose (the model, why it did not start). */
+    start?: Readonly<{ onStart: () => void; busy: boolean; disabled: boolean; reason: string | null; options?: React.ReactNode }> | null;
+    /** The notification offer for a proposal still being written; shown only while it is. */
+    notify?: React.ReactNode;
     /** A commit the person asked for elsewhere (the Git pane's Open); the view scrolls it into view. */
     focusGroupId?: string | null;
     busy?: boolean;
     error?: string | null;
+    /** The refused or failed generation of a proposal that stays on screen: the shared failure notice. */
+    failureNotice?: React.ReactNode;
     /** Only while the view is on screen and in front (keyboard). */
     active?: boolean;
     /** A proposal was just discarded: one revision-checked Undo restores it. */
@@ -68,6 +75,9 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
     const insets = useSafeAreaInsets();
     const phone = props.layout === 'phone';
     const { proposal, actions } = props;
+    // One keyed root child retains registration/cancellation state as partial groups become usable.
+    const notify = props.isGenerating && props.notify
+        ? <View key="notify" testID="commit-proposal-notify" style={styles.startPicker}>{props.notify}</View> : null;
     const hookEvidence = useCommitHookEvidence(proposal?.outcome?.kind === 'hookChanged' ? proposal.outcome : null, actions.readHookDiff);
     const hookActions = React.useMemo(() => ({ ...actions, onIncludeHookChanges: actions.onIncludeHookChanges
         ? () => { if (hookEvidence.state === 'ready') actions.onIncludeHookChanges?.(); } : undefined }), [actions, hookEvidence.state]);
@@ -147,9 +157,10 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                             onPress: props.start.onStart,
                             disabled: props.start.disabled || props.start.busy,
                         } : undefined}
+                        actionFooter={props.start?.options}
                     />
                 )}
-                {props.phase === 'none' && props.start?.modelPicker ? <View style={styles.startPicker}>{props.start.modelPicker}</View> : null}
+                {notify}
             </View>
         );
     }
@@ -166,14 +177,14 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
     const header = proposal.applying || pausedForHook ? (
         <View style={styles.head}>
             <View style={styles.headText}>
-                <Text style={[styles.title, phone ? styles.titlePhone : null]} accessibilityRole="header">{t('commitProposal.applying.title', { count: total })}</Text>
+                <Text style={styles.title} accessibilityRole="header">{t('commitProposal.applying.title', { count: total })}</Text>
                 <Text style={styles.subtitle}>{phone ? t('commitProposal.applying.bodyPhone') : t('commitProposal.applying.body')}</Text>
             </View>
         </View>
     ) : (
         <View style={styles.head}>
             <View style={styles.headText}>
-                <Text style={[styles.title, phone ? styles.titlePhone : null]} accessibilityRole="header">
+                <Text style={styles.title} accessibilityRole="header">
                     {phone ? t('commitProposal.titlePhone', { count: total }) : t('commitProposal.title', { count: total })}
                 </Text>
                 <Text style={styles.subtitle}>
@@ -325,6 +336,7 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
             <ScrollView ref={scrollRef} style={styles.scroll} contentContainerStyle={[styles.content, phone ? styles.contentPhone : null]}>
                 <View style={styles.column}>
                     {header}
+                    {props.failureNotice ? <View style={styles.failureNotice}>{props.failureNotice}</View> : null}
                     {props.error ? (
                         <Text style={styles.error} accessibilityLiveRegion="polite">{props.error}</Text>
                     ) : null}
@@ -339,6 +351,7 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                     </View>
                 </View>
             </ScrollView>
+            {notify}
             {footer}
         </View>
     );
@@ -461,9 +474,9 @@ const styles = StyleSheet.create((theme) => ({
     head: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.s16, marginBottom: 18 },
     headText: { flex: 1, minWidth: 0 },
     title: { ...Typography.variant('title'),   color: theme.colors.text.primary,  },
-    titlePhone: { fontSize: 25, lineHeight: 31 },
-    subtitle: { marginTop: theme.space.s4, fontSize: 15, lineHeight: 22, color: theme.colors.text.secondary, ...Typography.default() },
+    subtitle: { marginTop: theme.space.s4, ...Typography.variant('reading'), color: theme.colors.text.secondary },
     subtitleSmall: { marginTop: theme.space.s2, ...Typography.variant('reading'),  color: theme.colors.text.secondary,  },
+    failureNotice: { marginBottom: theme.space.s12 },
     error: { marginBottom: theme.space.s12, ...Typography.variant('body'),  color: theme.colors.state.danger.foreground,  },
     outcome: { marginBottom: 14 },
     groups: { gap: 14 },

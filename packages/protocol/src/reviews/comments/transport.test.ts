@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createActionExecutor } from '../../actions/actionExecutor.js';
 import { ActionsSettingsV1Schema } from '../../actions/actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from '../../actions/actionApprovalPolicy.js';
@@ -30,7 +30,7 @@ describe('canonical Review Comment client transport', () => {
       request: async () => ({ comment: null, extra: true }),
       randomBytes: (length) => new Uint8Array(length),
     });
-    await expect(result).rejects.toBeInstanceOf(z.ZodError);
+    await expect(result).rejects.toBeInstanceOf(z.core.$ZodError);
     await expect(result).rejects.toMatchObject({ issues: [
       { code: 'invalid_union', path: ['comment'] },
       { code: 'unrecognized_keys', path: [], keys: ['extra'] },

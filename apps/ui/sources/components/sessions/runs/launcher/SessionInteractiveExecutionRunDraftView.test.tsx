@@ -15,6 +15,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { AgentInput } from '@/components/sessions/agentInput';
+import { AgentInputChipPickerPanel } from '@/components/sessions/agentInput/components/AgentInputChipPickerPanel';
 import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
@@ -188,7 +189,15 @@ async function send(text = 'Inspect this', waitForCompletion = true) {
     await settle();
     if (waitForCompletion) await waitFor(() => expect(screen.findByTestId('execution-run-conversation-phase')).toBeNull());
 }
-async function selectEngine(id: string) { await act(async () => composer().engine?.onSelect(id)); }
+// Chooses through the real engine popover panel, as a user does: a row that only takes focus
+// leaves the draft on its previous Agent, which a direct `engine.onSelect` call would hide.
+async function selectEngine(id: string) {
+    const engine = composer().engine!;
+    const picker = await renderScreen(<AgentInputChipPickerPanel title={engine.title} options={engine.options}
+        selectedOptionId={engine.selectedOptionId} onSelect={engine.onSelect} onRequestClose={vi.fn()} />);
+    await picker.pressByTestIdAsync(`agent-input-chip-picker.option:${id}`);
+    await settle();
+}
 async function renderChipContent(key: string) {
     const renderContent = chip(key).collapsedContentPopover?.renderContent;
     return renderScreen(<>{typeof renderContent === 'function' ? renderContent({ requestClose: vi.fn(), maxHeight: Dimensions.get('window').height }) : renderContent}</>);
@@ -477,10 +486,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     it('preserves selected Agent and correlation across a known no-run retry', async () => {
         startResults.push(noRun(), started());
         await mount();
-        await selectEngine(composer().engine!.options.find((option) => option.id.includes('codex'))!.id);
+        const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
+        await selectEngine(codex.id);
         await send();
         await send();
-        const selected = canonicalTargetKey(composer().engine!.selectedOptionId!);
+        const selected = canonicalTargetKey(codex.id);
+        expect(composer().engine!.selectedOptionId).toBe(codex.id);
         expect(emittedStarts.map(startedTargetKey)).toEqual([selected, selected]);
         expect(emittedStarts[0]?.launchOrigin).toEqual(emittedStarts[1]?.launchOrigin);
     });
@@ -516,6 +527,100 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await waitFor(() => expect(emittedStarts).toHaveLength(3));
         expect(emittedStarts[2]).toMatchObject({ modelSelection: ref });
         expect(emittedStarts[2]).not.toHaveProperty('childSelection');
+    });
+    it.each(['plan', 'delegate'] as const)('offers a %s launch the child choice, keeps the draft, then starts one fresh Run with the Agent default', async (intent) => {
+        startResults.push(childChoiceRefusal(), started());
+        const opened = vi.fn();
+        await mount({ intent, onRunStarted: opened });
+        await send();
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        expect(screen.findByTestId('execution-run-conversation-error')).toBeNull();
+        expect(opened).not.toHaveBeenCalled();
+        expect(input().props.value).toBe('Inspect this');
+        await screen.pressByTestIdAsync('execution-run-child-choice.default');
+        await waitFor(() => expect(opened).toHaveBeenCalledWith('run_1', undefined, { title: 'Inspect this' }));
+        expect(emittedStarts).toHaveLength(2);
+        expect(emittedStarts[1]).toMatchObject({ intent, instructions: 'Inspect this', childSelection: 'agentDefault' });
+        expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
+    });
+    it('resolves only the refused reviewer with the exact model and never replays the one that started', async () => {
+        startResults.push(started('run_claude'), childChoiceRefusal(), started('run_codex'));
+        const opened = vi.fn();
+        await mount({ intent: 'review', onRunStarted: opened });
+        await reviewers();
+        await send();
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        expect(opened).not.toHaveBeenCalled();
+        expect(input().props.value).toBe('Inspect this');
+        await screen.pressByTestIdAsync('execution-run-child-choice.model');
+        const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+        const ref = { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+        await act(async () => shown.props.onSelect(ref));
+        await waitFor(() => expect(opened).toHaveBeenCalledWith('run_codex', undefined, { title: 'Inspect this' }));
+        expect(emittedStarts).toHaveLength(3);
+        expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[1]!));
+        expect(startedTargetKey(emittedStarts[2]!)).not.toBe(startedTargetKey(emittedStarts[0]!));
+        expect(emittedStarts[2]).toMatchObject({ modelSelection: ref });
+    });
+    it('does not treat an unknown-outcome reviewer as permission to start it again', async () => {
+        startResults.push(uncertain(), childChoiceRefusal(), started('run_codex'));
+        const opened = vi.fn();
+        await mount({ intent: 'review', onRunStarted: opened });
+        await reviewers();
+        await send();
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        await screen.pressByTestIdAsync('execution-run-child-choice.model');
+        const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+        await act(async () => shown.props.onSelect({ agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6.1-luna' }));
+        await waitFor(() => expect(opened).toHaveBeenCalledWith('run_codex', undefined, { title: 'Inspect this' }));
+        expect(emittedStarts).toHaveLength(3);
+        expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[1]!));
+    });
+    describe('choosing a model for this Run from the route chip', () => {
+        async function chooseModelRow() {
+            const content = await renderChipContent('execution-run-start-route');
+            await content.pressByTestIdAsync('execution-run-route-choice.choose');
+            await content.pressByTestIdAsync('execution-run-route-choice.model');
+            return modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+        }
+        const claude = () => canonicalTargetKey('claude');
+        it('starts on the exact source and model picked, telling same-name models of two sources apart', async () => {
+            await mount();
+            const picker = await chooseModelRow();
+            const first = { agentTargetKey: claude(), providerConnectionId: 'pc_a', modelId: 'same-name' };
+            const second = { agentTargetKey: claude(), providerConnectionId: 'pc_b', modelId: 'same-name' };
+            await act(async () => picker.props.onSelect(first));
+            await act(async () => picker.props.onSelect(second));
+            await send();
+            expect(emittedStarts[0]).toMatchObject({ modelSelection: second });
+            expect(emittedStarts[0]).not.toHaveProperty('modelId');
+        });
+        it('starts on a native model without a source', async () => {
+            await mount();
+            const picker = await chooseModelRow();
+            const native = { agentTargetKey: claude(), providerConnectionId: null, modelId: 'claude-native' };
+            await act(async () => picker.props.onSelect(native));
+            await send();
+            expect(emittedStarts[0]).toMatchObject({ modelSelection: native });
+        });
+        it('returns to following the session when Inherit is chosen again', async () => {
+            await mount();
+            const picker = await chooseModelRow();
+            await act(async () => picker.props.onSelect({ agentTargetKey: claude(), providerConnectionId: 'pc_a', modelId: 'm' }));
+            const content = await renderChipContent('execution-run-start-route');
+            await content.pressByTestIdAsync('execution-run-route-choice.inherit');
+            await send();
+            expect(emittedStarts[0]).not.toHaveProperty('modelSelection');
+            expect(emittedStarts[0]).not.toHaveProperty('modelId');
+        });
+        it('carries the exact choice into a bounded launch', async () => {
+            await mount({ intent: 'delegate' });
+            const picker = await chooseModelRow();
+            const ref = { agentTargetKey: claude(), providerConnectionId: 'pc_a', modelId: 'same-name' };
+            await act(async () => picker.props.onSelect(ref));
+            await send();
+            expect(emittedStarts[0]).toMatchObject({ intent: 'delegate', modelSelection: ref });
+        });
     });
     it('does not guess when correlation has multiple matches', async () => {
         startResults.push(uncertain());

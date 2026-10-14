@@ -396,6 +396,7 @@ export type SystemToolResolveRequestV1 = Readonly<{
 export type SystemToolDiagnosticV1 = ExecRuntimeDiagnosticV1;
 
 export type SystemToolLaunchGrantV1 = Readonly<{
+    providerExitOwnership?: 'direct';
     grantId: string;
     toolId: string;
     displayName: string;

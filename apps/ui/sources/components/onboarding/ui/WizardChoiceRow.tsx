@@ -42,33 +42,31 @@ type WizardChoiceRowProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     badge: {
-        paddingHorizontal: 8,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s2,
         backgroundColor: theme.colors.surface.pressedOverlay,
         borderRadius: 999,
     },
     badgeText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 11,
-        lineHeight: 14,
+        ...Typography.variant('micro'),
     },
     trailing: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     retryButton: {
         minWidth: 0,
     },
     menuTrigger: {
-        paddingHorizontal: 6,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s6,
+        paddingVertical: theme.space.s6,
     },
     row: {
         marginHorizontal: 0,
-        paddingHorizontal: 16,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
     },
     rowSelected: {
         backgroundColor: theme.colors.surface.base,

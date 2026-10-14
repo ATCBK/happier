@@ -50,7 +50,12 @@ describe('SessionContinueWithReplayRequestSchema', () => {
         permissionMode: 'no_tools',
       },
     });
-    expect(parsed.success).toBe(true);
+    expect(parsed).toMatchObject({ success: true, data: { summaryRunner: { v: 1, modelSelection: {
+      agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'default',
+    }, permissionMode: 'no_tools' } } });
+    if (!parsed.success) throw parsed.error;
+    expect(parsed.data.summaryRunner).not.toHaveProperty('backendTarget');
+    expect(SessionContinueWithReplayRequestSchema.parse(JSON.parse(JSON.stringify(parsed.data)))).toEqual(parsed.data);
   });
 
   it('rejects legacy dialog field', () => {

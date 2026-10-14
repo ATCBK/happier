@@ -128,7 +128,7 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 0,
     },
     description: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     purpose: {
         fontSize: 12,
@@ -137,7 +137,7 @@ const styles = StyleSheet.create((theme) => ({
     engineRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     engineIcon: {
         width: 12,
@@ -154,9 +154,9 @@ const styles = StyleSheet.create((theme) => ({
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 7,
-        paddingTop: 10,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s6,
+        paddingTop: theme.space.s10,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
@@ -170,8 +170,8 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingVertical: 6,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s6,
     },
     manageText: {
         fontSize: 13,

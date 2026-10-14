@@ -1,4 +1,4 @@
-import type { ServerConfigEnv } from '@happier-dev/protocol';
+import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { maybeCaptureSentryMonitorCheckIn } from '@/app/monitoring/sentryMonitors';
 import { readRetentionPolicyFromEnv } from '@/app/retention/config/readRetentionPolicyFromEnv';

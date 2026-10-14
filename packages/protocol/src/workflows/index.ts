@@ -18,6 +18,7 @@ export * from './workflowValidationV1.js';
 export * from './workflowProgressV1.js';
 export * from './workflowDefinitionV1.js';
 export * from './workflowDefinitionEditV1.js';
+export * from './workflowResultFieldsV1.js';
 export * from './workflowDocumentV1.js';
 export * from './workflowStoredContentV1.js';
 export * from './workflowRunStorageV1.js';

@@ -76,13 +76,12 @@ export function resolveSessionOwnedRunToolPolicy(params: Readonly<{
     agentId: string;
 }>): Parameters<typeof createRunScopedExecutionPermissionHandler>[0]['toolPolicy'] {
     const { options } = params;
-    if (options.start?.allowedTools === undefined && options.start?.unlistedTools === undefined) return undefined;
     return {
         permissionMode: options.permissionMode,
         backendId: params.agentId,
         workspaceWrites: readSessionWorkspaceWritesV1(params.parentMetadata) === 'deny' ? 'deny' : options.workspaceWrites,
-        allowedTools: options.start.allowedTools,
-        unlistedTools: options.start.unlistedTools,
+        allowedTools: options.start?.allowedTools,
+        unlistedTools: options.start?.unlistedTools,
         ...(Object.hasOwn(options, 'causalPermissionAuthority') ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}),
     };
 }
@@ -329,6 +328,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                         : {}),
                                     permissionHandler: hostRuntimeParams.permissionHandler,
                                     readResolvedMcpServers: () => hostRuntimeParams.resolvedMcpServers ?? [],
+                                    resolveMcpToolNaming: hostRuntimeParams.resolveMcpToolNaming,
                                 },
                                 ...(hostRuntimeParams.currentTerminalMetadata
                                     ? { currentTerminalMetadata: hostRuntimeParams.currentTerminalMetadata }
@@ -675,6 +675,8 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 : {}),
                                             permissionHandler: executionPermissionHandler ?? host.permissionHandler,
                                             readResolvedMcpServers: () => runToolBinding?.resolvedMcpServers ?? [],
+                                            resolveMcpToolNaming: async (request, options) => runToolBinding?.resolveMcpToolNaming
+                                                ? await runToolBinding.resolveMcpToolNaming(request, options) : null,
                                         },
                                         sessionId,
                                         directory: options.cwd,
@@ -841,6 +843,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 ? { mcpServers: runToolBinding.mcpServers }
                                                 : {}),
                                             ...(runToolBinding?.mcpToolPolicy ? { mcpToolPolicy: runToolBinding.mcpToolPolicy } : {}),
+                                            ...(runToolBinding?.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: runToolBinding.mcpServersStrictMode } : {}),
                                             ...(runToolBinding?.subscribeMcpToolPolicy ? { subscribeMcpToolPolicy: runToolBinding.subscribeMcpToolPolicy } : {}),
                                             ...(runToolBinding?.skills ? { skills: runToolBinding.skills } : {}),
                                             ...(runToolBinding?.observeSkillUse ? { observeSkillUse: runToolBinding.observeSkillUse } : {}),

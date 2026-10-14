@@ -1,5 +1,5 @@
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { TEAM_CREDENTIAL_ACTION_IDS_V1, TEAM_CREDENTIAL_HOME_ACTION_IDS_V1,
   type TeamCredentialActionIdV1, type TeamCredentialHomeActionIdV1 } from './actionIdsV1.js';
 export { TEAM_CREDENTIAL_ACTION_IDS_V1, TEAM_CREDENTIAL_HOME_ACTION_IDS_V1,
@@ -53,38 +53,38 @@ import { TeamCredentialResourceReadinessV1Schema } from './readinessV1.js';
 import { TeamCredentialUsageExportInputV1Schema } from './usageExportV1.js';
 import { UsageFileResultSchema } from '../../usage/usageExport.js';
 
-export const TeamCredentialTestActionInputV1Schema = lazyZodSchema(() => z.object({
-  teamId: z.string().min(1).max(256),
-  resourceId: z.string().min(1).max(256),
-}).strict());
+export const TeamCredentialTestActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  teamId: z.string().check(z.minLength(1), z.maxLength(256)),
+  resourceId: z.string().check(z.minLength(1), z.maxLength(256)),
+}));
 export type TeamCredentialTestActionInputV1 = z.infer<typeof TeamCredentialTestActionInputV1Schema>;
 
-export const TeamCredentialTestActionOutputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialTestActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
   result: z.enum(['available', 'needs_attention', 'partially_available']),
   readiness: TeamCredentialResourceReadinessV1Schema,
-  recovery: z.string().trim().min(1).max(240).optional(),
-}).strict());
+  recovery: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(240))),
+}));
 export type TeamCredentialTestActionOutputV1 = z.infer<typeof TeamCredentialTestActionOutputV1Schema>;
 
 /** A user/Agent observation, never the daemon's recipient or envelope census. */
-export const TeamCredentialPreparationInputV1Schema = lazyZodSchema(() => z.object({
-  teamId: z.string().min(1).max(256),
-  resourceId: z.string().min(1).max(256),
-  view: z.literal('readiness').default('readiness'),
-}).strict());
+export const TeamCredentialPreparationInputV1Schema = lazyZodSchema(() => z.strictObject({
+  teamId: z.string().check(z.minLength(1), z.maxLength(256)),
+  resourceId: z.string().check(z.minLength(1), z.maxLength(256)),
+  view: z._default(z.literal('readiness'), 'readiness'),
+}));
 export type TeamCredentialPreparationInputV1 = z.infer<typeof TeamCredentialPreparationInputV1Schema>;
 
 export const TeamCredentialPreparationOutputV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('ready'),
     reason: z.null(),
-    counts: z.object({ pending: z.literal(0) }).strict(),
-  }).strict(),
-  z.object({
+    counts: z.strictObject({ pending: z.literal(0) }),
+  }),
+  z.strictObject({
     status: z.literal('not_ready'),
     reason: z.literal('preparation_pending'),
-    counts: z.object({ pending: z.number().int().positive() }).strict(),
-  }).strict(),
+    counts: z.strictObject({ pending: z.number().check(z.int(), z.positive()) }),
+  }),
 ]));
 export type TeamCredentialPreparationOutputV1 = z.infer<typeof TeamCredentialPreparationOutputV1Schema>;
 
@@ -139,7 +139,7 @@ export const TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.externalKeys.list': TeamCredentialExternalApiKeyListInputV1Schema,
   'teams.credentials.externalKeys.revoke': TeamCredentialExternalApiKeyRevokeInputV1Schema,
   'teams.credentials.externalKeys.revokeAll': TeamCredentialExternalApiKeyRevokeAllInputV1Schema,
-} as const satisfies Readonly<Record<TeamCredentialActionIdV1, z.ZodTypeAny>>));
+} as const satisfies Readonly<Record<TeamCredentialActionIdV1, z.ZodMiniType>>));
 
 export const TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.list': TeamCredentialResourcePageV1Schema,
@@ -165,7 +165,7 @@ export const TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.externalKeys.list': TeamCredentialExternalApiKeyListOutputV1Schema,
   'teams.credentials.externalKeys.revoke': TeamCredentialExternalApiKeyRevokeOutputV1Schema,
   'teams.credentials.externalKeys.revokeAll': TeamCredentialExternalApiKeyRevokeAllOutputV1Schema,
-} as const satisfies Readonly<Record<TeamCredentialActionIdV1, z.ZodTypeAny>>));
+} as const satisfies Readonly<Record<TeamCredentialActionIdV1, z.ZodMiniType>>));
 
 export const TEAM_CREDENTIAL_ACTION_METHODS_V1: Readonly<Record<TeamCredentialHomeActionIdV1, 'POST' | 'GET'>> = {
   'teams.credentials.list': 'POST',

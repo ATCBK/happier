@@ -1,45 +1,16 @@
 import * as privacyKit from "privacy-kit";
 import { createHash, randomBytes } from "node:crypto";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS,
-    PasswordCredentialMutationDigestV1Schema,
-    AuthTokenProvenanceSchema,
-    AuthTokenProvenanceV2Schema,
-    readAuthTokenProvenance,
-    parseAccountApiTokenBearerV1,
-    AccountApiTokenCreateEncryptionV1Schema,
-    AccountApiTokenEncryptionAccessV1Schema,
-    AuthTokenAuthenticationEvidenceSnapshotV1Schema,
-    ApiTokenGrantV1Schema,
-    ManagedMachineActionIdV1Schema,
-    StoredApiTokenGrantV1Schema,
-    API_TOKEN_FULL_GRANT_V1,
-    EmbedConfigV1Schema,
-    StoredEmbedConfigV1Schema,
-    evaluateApiTokenGrantV1,
-    isApiTokenGrantWithinV1,
-    type ApiTokenGrantV1,
-    type EmbedConfigV1,
-    PluginContributionIdentityV1Schema,
-    type AccountApiTokenCreateEncryptionV1,
-    type AccountApiTokenEncryptionAccessV1,
-    type AccountApiTokenEncryptionAccessResponseV1,
-    type AccountStatusV1,
-    type AuthTokenAuthority,
-    type AuthTokenKind,
-    type AuthTokenProvenanceAny,
-    type AuthTokenAuthenticationEvidenceV1,
-    type ParsedAccountApiTokenBearerV1,
-} from "@happier-dev/protocol";
-import {
-    ExternalActionExecutionAuthorizationBindingV1Schema,
-    ExternalActionExecutionAuthorizationV1Schema,
-    formatQualifiedPluginActionId,
-    parseQualifiedPluginActionId,
-    type ExternalActionExecutionAuthorizationBindingV1,
-    type ExternalActionExecutionAuthorizationV1,
-} from "@happier-dev/protocol/actions";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS, AuthTokenProvenanceSchema, AuthTokenProvenanceV2Schema, readAuthTokenProvenance, AuthTokenAuthenticationEvidenceSnapshotV1Schema, type AuthTokenAuthority, type AuthTokenKind, type AuthTokenProvenanceAny, type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
+import { parseAccountApiTokenBearerV1, AccountApiTokenCreateEncryptionV1Schema, AccountApiTokenEncryptionAccessV1Schema, type AccountApiTokenCreateEncryptionV1, type AccountApiTokenEncryptionAccessV1, type AccountApiTokenEncryptionAccessResponseV1, type ParsedAccountApiTokenBearerV1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { ApiTokenGrantV1Schema, StoredApiTokenGrantV1Schema, API_TOKEN_FULL_GRANT_V1, evaluateApiTokenGrantV1, isApiTokenGrantWithinV1, type ApiTokenGrantV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { EmbedConfigV1Schema, StoredEmbedConfigV1Schema, type EmbedConfigV1 } from '@happier-dev/protocol/embed';
+import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
+import { type AccountStatusV1 } from '@happier-dev/protocol/home/governance';
+import { ExternalActionExecutionAuthorizationBindingV1Schema, ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import {
     VerifiedEphemeralSessionRunnerPrincipalSchema,
     type VerifiedEphemeralSessionRunnerPrincipal,
@@ -49,7 +20,7 @@ import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/ac
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { assertAccountActive } from "./accountStatus";
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 import { inTx, type Tx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { LRUTtlMap } from "@/utils/collections/lru";
@@ -115,11 +86,7 @@ type DecodedAuthToken = Readonly<{
     legacy: boolean;
 }>;
 
-export type {
-    AuthTokenAuthority,
-    AuthTokenKind,
-    AuthTokenProvenance,
-} from "@happier-dev/protocol";
+export type { AuthTokenAuthority, AuthTokenKind, AuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
 
 /** Backward-compatible server spelling retained for existing request callers. */
 export type AuthAuthority = AuthTokenAuthority;
@@ -150,9 +117,9 @@ export type VerifiedApiTokenPrincipal = Readonly<{
     authenticationEvidence?: readonly AuthTokenAuthenticationEvidenceV1[];
 }>;
 
-export type ExternalActionExecutionAuthorizationMintInput<Binding = ExternalActionExecutionAuthorizationBindingV1> =
-    Binding extends ExternalActionExecutionAuthorizationBindingV1
-        ? Omit<Binding, 'custodianAccountId' | 'installationId'> : never;
+export type ExternalActionExecutionAuthorizationMintInput =
+    | Omit<Extract<ExternalActionExecutionAuthorizationBindingV1, { authentication: unknown }>, 'custodianAccountId' | 'installationId'>
+    | Omit<Extract<ExternalActionExecutionAuthorizationBindingV1, { credentialId: string }>, 'custodianAccountId' | 'installationId'>;
 
 export type VerifiedAuthToken = Readonly<{
     userId: string;
@@ -580,8 +547,13 @@ class AuthModule {
         if (!accountMode) {
             throw new ApiTokenOperationError('invalid_token');
         }
+        const inputRecord = typeof context.input === "object" && context.input !== null && !Array.isArray(context.input)
+            ? context.input as Readonly<Record<string, unknown>> : null;
+        const automationId = input.actionId === 'workflow.trigger.run_now' && typeof inputRecord?.automationId === 'string'
+            ? inputRecord.automationId : undefined;
         const supplied = ExternalActionExecutionAuthorizationBindingV1Schema.parse({
             ...input, custodianAccountId: machine.accountId, installationId: machine.installationId,
+            ...(automationId ? { automationId } : {}),
             accountEncryptionMode: accountMode.encryptionMode,
         });
         if ('authentication' in supplied) {
@@ -630,18 +602,18 @@ class AuthModule {
         const principal = await this.verifyCurrentApiTokenPrincipal(supplied);
         if (!principal) throw new ApiTokenOperationError("invalid_token");
         const qualifiedAction = parseQualifiedPluginActionId(supplied.actionId);
-        const inputRecord = typeof context.input === "object" && context.input !== null && !Array.isArray(context.input)
-            ? context.input as Readonly<Record<string, unknown>> : null;
         const invokedAction = supplied.actionId === "action.invoke"
             ? PluginContributionIdentityV1Schema.safeParse(inputRecord?.action) : null;
         const contributedQualifiedId = qualifiedAction ? supplied.actionId
             : invokedAction?.success ? formatQualifiedPluginActionId(invokedAction.data) : undefined;
         if (!isApiTokenGrantWithinV1(supplied.grant, principal.grant)) throw new ApiTokenOperationError('credential_scope_denied');
+        if (supplied.automationId !== automationId) throw new ApiTokenOperationError('credential_scope_denied');
         const { readExternalActionCredentialActionId } = await import('./externalActionExecutionAuthorization');
         const admission = evaluateApiTokenGrantV1({ grant: supplied.grant,
             actionId: qualifiedAction ? "action.invoke" : readExternalActionCredentialActionId(supplied), contributedQualifiedId,
             contributedActionAdmission: 'pre_open',
             target: supplied.target, targetMachineId: supplied.machineId,
+            automationId,
             ...(supplied.actionId === "session.spawn_new" && !supplied.handoffContinuation && context.input !== undefined ? { spawnInput: context.input } : {}),
         });
         if (!admission.ok) throw new ApiTokenOperationError("credential_scope_denied");

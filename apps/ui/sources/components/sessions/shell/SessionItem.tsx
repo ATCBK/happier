@@ -56,7 +56,7 @@ import { TagIcon } from './sessionTagIcons';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ContextMenu } from '@/components/ui/forms/dropdown/ContextMenu';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import {
     resolveSessionRowAttentionState,
     resolveSessionRowPresentation,
@@ -74,7 +74,7 @@ import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     resolveSessionListRowIdentityMetrics,
     SESSION_LIST_ROW_IDENTITY_METRICS,
-    SESSION_LIST_ROW_STATUS_TEXT_METRICS,
+    resolveSessionListRowStatusTextMetrics,
 } from './resolveSessionListDensityViewState';
 import { resolveSessionRowInteractionPolicy } from './row/resolveSessionRowInteractionPolicy';
 import { SESSION_LIST_SHEET_INSET_PX } from './sessionListStyles';
@@ -625,17 +625,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: 12,
     },
     statusText: {
-        ...SESSION_LIST_ROW_STATUS_TEXT_METRICS.default,
+        ...resolveSessionListRowStatusTextMetrics('default'),
         ...Typography.default(),
     },
     statusTextCompact: {
-        ...SESSION_LIST_ROW_STATUS_TEXT_METRICS.compact,
+        ...resolveSessionListRowStatusTextMetrics('compact'),
     },
     statusTextQuiet: {
         color: theme.colors.text.secondary,
     },
     statusTextMinimal: {
-        ...SESSION_LIST_ROW_STATUS_TEXT_METRICS.minimal,
+        ...resolveSessionListRowStatusTextMetrics('minimal'),
     },
     // The row's meta: the shared right-aligned tabular column, so times scan down the list.
     activityTime: {
@@ -856,7 +856,7 @@ const SessionItemContent = React.memo(
         const [tagMenuOpen, setTagMenuOpen] = React.useState(false);
         const [tagMenuEverOpened, setTagMenuEverOpened] = React.useState(false);
         const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
-        const copyFeedback = useTemporaryCopyFeedback();
+        const copyFeedback = useHappierCopyFeedback();
         const [rowWidth, setRowWidth] = React.useState<number | null>(null);
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';

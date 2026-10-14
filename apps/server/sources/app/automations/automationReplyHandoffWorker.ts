@@ -1,8 +1,4 @@
-import {
-    AutomationReplyHandoffDispatchRequestV1Schema,
-    AutomationReplyHandoffDispatchResultV1Schema,
-    type AutomationReplyHandoffDispatchResultV1,
-} from "@happier-dev/protocol";
+import { AutomationReplyHandoffDispatchRequestV1Schema, AutomationReplyHandoffDispatchResultV1Schema, type AutomationReplyHandoffDispatchResultV1 } from '@happier-dev/protocol/automations/event';
 import { warn } from "@/utils/logging/log";
 
 import {

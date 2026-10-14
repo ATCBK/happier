@@ -25,7 +25,7 @@ const daemonRpc = vi.fn<(request: {
 }) => Promise<unknown>>();
 
 const settingsState = {
-  get current() { return storage.getState().settings; },
+  get current(): ReturnType<typeof settingsParse> { return storage.getState().settings; },
   set current(value: unknown) { storage.setState({ settings: settingsParse(value) }); },
 };
 
@@ -79,6 +79,18 @@ async function settleWithin<T>(
 }
 
 describe('DaemonVoiceAgentClient', () => {
+  it('admits an Account Launch Profile without claiming plugin execution Profile custody', async () => {
+    daemonRpc.mockResolvedValueOnce({ ok: true, runId: 'run_persona', created: true });
+    const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');
+    await expect(new DaemonVoiceAgentClient({ serverId: home.id, accountId: 'account-a' }).start({
+      sessionId: 's1', agentSource: 'session', agentId: 'codex', launchProfileId: '  account-persona  ',
+      permissionIntent: 'read-only', idleTtlSeconds: 300, initialContext: 'ctx',
+    })).resolves.toEqual({ voiceAgentId: 'run_persona' });
+    const startRequest = ExecutionRunEnsureOrStartRequestSchema.parse(daemonRpc.mock.calls[0]?.[0].payload).start;
+    expect(startRequest?.launchProfileId).toBe('account-persona');
+    expect(startRequest?.profileId).toBeUndefined();
+    expect(startRequest?.profileSourceCustody).toBeUndefined();
+  });
   it('starts an inherited Voice choice through safe ensure/start without an inheritance capability', async () => {
     daemonRpc.mockResolvedValue({ ok: true, runId: 'run_inherited', created: true });
     const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import type { SessionListQueryV1 } from "@happier-dev/protocol";
+import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { createSessionTranscriptPublicationLiveFactsWhere } from "@/app/session/sessionTranscriptPublicationPolicy";
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 
 /** Shipped 0.2 input grammar, reused by the canonical authoring value readers. */
@@ -9,11 +9,11 @@ export const LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS = Object.freeze([
 export type LegacyAuthoringMemorySettingsKey = typeof LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS[number];
 
 export const LegacyRecentMachinePathSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
-  path: z.string().min(1),
-}).strip());
+  machineId: z.string().check(z.minLength(1)),
+  path: z.string().check(z.minLength(1)),
+}));
 
-export const LegacyRecentMachinePathsSchema = lazyZodSchema(() => z.preprocess((value) => {
+export const LegacyRecentMachinePathsSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   if (!Array.isArray(value)) return [];
   const paths: Array<z.output<typeof LegacyRecentMachinePathSchema>> = [];
   for (const candidate of value) {
@@ -22,9 +22,9 @@ export const LegacyRecentMachinePathsSchema = lazyZodSchema(() => z.preprocess((
     paths.push(parsed.data);
   }
   return paths;
-}, z.array(LegacyRecentMachinePathSchema)));
+}), z.array(LegacyRecentMachinePathSchema)));
 
-export const LegacyLastUsedProfileSchema = lazyZodSchema(() => z.string().nullable());
+export const LegacyLastUsedProfileSchema = lazyZodSchema(() => z.nullable(z.string()));
 export const LegacyRememberedEngineSelectionsByScopeV1Schema = lazyZodSchema(() => z.record(
   // Engine carriers now belong to reserved rows, not the whole Settings
   // document. Its generic collection/depth budgets do not govern this domain.

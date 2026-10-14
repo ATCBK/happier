@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
@@ -7,22 +7,22 @@ import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hos
 import { WidgetInstanceV1Schema, WidgetInputBindingsV1Schema, resetWidgetInputBindingsV1, setWidgetInputBindingsV1 } from './widgetInstanceV1.js';
 import { WidgetGroupWidthV1Schema, WidgetGridSizeV1Schema, WidgetProjectAreaV1Schema, resolveWidgetGroupWidthFitV1 } from './widgetPresentationV1.js';
 
-const id = z.string().trim().min(1);
-const index = z.number().int().nonnegative().safe();
+const id = z.string().check(z.trim(), z.minLength(1));
+const index = z.number().check(z.int(), z.nonnegative(), z.int());
 const frameStyle = z.enum(['card', 'plain']);
-export const WidgetLayoutWidgetV1Schema = lazyZodSchema(() => z.object({
+export const WidgetLayoutWidgetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('widget'), instance: WidgetInstanceV1Schema,
-  size: WidgetGridSizeV1Schema.optional(), frameStyle: frameStyle.optional(), area: WidgetProjectAreaV1Schema.optional(),
-}).strict());
+  size: z.optional(WidgetGridSizeV1Schema), frameStyle: z.optional(frameStyle), area: z.optional(WidgetProjectAreaV1Schema),
+}));
 export type WidgetLayoutWidgetV1 = z.infer<typeof WidgetLayoutWidgetV1Schema>;
-export const WidgetLayoutGroupV1Schema = lazyZodSchema(() => z.object({
-  kind: z.literal('group'), id, children: z.array(WidgetLayoutWidgetV1Schema).min(1),
-  width: WidgetGroupWidthV1Schema.default('full'), title: id.optional(),
+export const WidgetLayoutGroupV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('group'), id, children: z.array(WidgetLayoutWidgetV1Schema).check(z.minLength(1)),
+  width: z._default(WidgetGroupWidthV1Schema, 'full'), title: z.optional(id),
   // Host preset copy is translated by the viewer; a rename retires this presentation marker.
-  titleKey: id.optional(),
-  frameStyle: frameStyle.default('card'), dividers: z.enum(['hairline', 'none']).default('hairline'),
-  context: WidgetInputBindingsV1Schema.optional(), area: WidgetProjectAreaV1Schema.optional(),
-}).strict());
+  titleKey: z.optional(id),
+  frameStyle: z._default(frameStyle, 'card'), dividers: z._default(z.enum(['hairline', 'none']), 'hairline'),
+  context: z.optional(WidgetInputBindingsV1Schema), area: z.optional(WidgetProjectAreaV1Schema),
+}));
 export type WidgetLayoutGroupV1 = z.infer<typeof WidgetLayoutGroupV1Schema>;
 export const WidgetLayoutItemV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [WidgetLayoutWidgetV1Schema, WidgetLayoutGroupV1Schema]));
 export type WidgetLayoutItemV1 = z.infer<typeof WidgetLayoutItemV1Schema>;
@@ -36,7 +36,7 @@ export function findWidgetLayoutItemV1(items: readonly WidgetLayoutItemV1[], ite
 export function findWidgetLayoutParentV1(items: readonly WidgetLayoutItemV1[], itemId: string): WidgetLayoutGroupV1 | undefined {
   return items.find((item): item is WidgetLayoutGroupV1 => item.kind === 'group' && item.children.some(child => child.instance.id === itemId));
 }
-export const WidgetLayoutItemsV1Schema = lazyZodSchema(() => z.array(WidgetLayoutItemV1Schema).superRefine((items, ctx) => {
+export const WidgetLayoutItemsV1Schema = lazyZodSchema(() => z.array(WidgetLayoutItemV1Schema).check(z.superRefine((items, ctx) => {
   const ids = new Set<string>();
   for (const item of items) {
     for (const itemId of item.kind === 'group' ? [item.id, ...item.children.map(child => child.instance.id)] : [item.instance.id]) {
@@ -47,24 +47,24 @@ export const WidgetLayoutItemsV1Schema = lazyZodSchema(() => z.array(WidgetLayou
       ctx.addIssue({ code: 'custom', message: 'Group width cannot fit child' });
     }
   }
-}));
+})));
 export const WidgetLayoutItemsV1StoredSchema = createStoredReadSchema(WidgetLayoutItemsV1Schema);
 export const WidgetLayoutItemIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('group_create'), groupId: id, instanceIds: z.array(id).min(1), width: WidgetGroupWidthV1Schema.optional(), title: id.optional(), context: WidgetInputBindingsV1Schema.optional() }).strict(),
-  z.object({ kind: z.literal('group_add'), group: WidgetLayoutGroupV1Schema, toIndex: index.optional() }).strict(),
-  z.object({ kind: z.literal('group_ungroup'), instanceId: id }).strict(),
-  z.object({ kind: z.literal('group_set'), instanceId: id, width: WidgetGroupWidthV1Schema.optional(), dividers: z.enum(['hairline', 'none']).optional() }).strict(),
-  z.object({ kind: z.literal('group_inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema }).strict(),
-  z.object({ kind: z.literal('add'), instance: WidgetInstanceV1Schema, groupId: id.optional(), toIndex: index.optional(), size: WidgetGridSizeV1Schema.optional(), frameStyle: frameStyle.optional(), area: WidgetProjectAreaV1Schema.optional() }).strict(),
-  z.object({ kind: z.literal('remove'), instanceId: id }).strict(),
-  z.object({ kind: z.literal('move'), instanceId: id, toIndex: index, groupId: id.nullable().optional(), area: WidgetProjectAreaV1Schema.optional() }).strict(),
-  z.object({ kind: z.literal('rename'), instanceId: id, displayName: id.nullable() }).strict(),
-  z.object({ kind: z.literal('size'), instanceId: id, size: WidgetGridSizeV1Schema }).strict(),
-  z.object({ kind: z.literal('width'), instanceId: id, width: WidgetGroupWidthV1Schema }).strict(),
-  z.object({ kind: z.literal('frame'), instanceId: id, frameStyle: frameStyle.nullable() }).strict(),
-  z.object({ kind: z.literal('inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema, paths: z.array(InputPathSchema).optional() }).strict(),
-  z.object({ kind: z.literal('inputs_reset'), instanceId: id, paths: z.array(InputPathSchema).optional() }).strict(),
-  z.object({ kind: z.literal('network'), instanceId: id, network: UiSurfaceNetworkRequestV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('group_create'), groupId: id, instanceIds: z.array(id).check(z.minLength(1)), width: z.optional(WidgetGroupWidthV1Schema), title: z.optional(id), context: z.optional(WidgetInputBindingsV1Schema) }),
+  z.strictObject({ kind: z.literal('group_add'), group: WidgetLayoutGroupV1Schema, toIndex: z.optional(index) }),
+  z.strictObject({ kind: z.literal('group_ungroup'), instanceId: id }),
+  z.strictObject({ kind: z.literal('group_set'), instanceId: id, width: z.optional(WidgetGroupWidthV1Schema), dividers: z.optional(z.enum(['hairline', 'none'])) }),
+  z.strictObject({ kind: z.literal('group_inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema }),
+  z.strictObject({ kind: z.literal('add'), instance: WidgetInstanceV1Schema, groupId: z.optional(id), toIndex: z.optional(index), size: z.optional(WidgetGridSizeV1Schema), frameStyle: z.optional(frameStyle), area: z.optional(WidgetProjectAreaV1Schema) }),
+  z.strictObject({ kind: z.literal('remove'), instanceId: id }),
+  z.strictObject({ kind: z.literal('move'), instanceId: id, toIndex: index, groupId: z.optional(z.nullable(id)), area: z.optional(WidgetProjectAreaV1Schema) }),
+  z.strictObject({ kind: z.literal('rename'), instanceId: id, displayName: z.nullable(id) }),
+  z.strictObject({ kind: z.literal('size'), instanceId: id, size: WidgetGridSizeV1Schema }),
+  z.strictObject({ kind: z.literal('width'), instanceId: id, width: WidgetGroupWidthV1Schema }),
+  z.strictObject({ kind: z.literal('frame'), instanceId: id, frameStyle: z.nullable(frameStyle) }),
+  z.strictObject({ kind: z.literal('inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema, paths: z.optional(z.array(InputPathSchema)) }),
+  z.strictObject({ kind: z.literal('inputs_reset'), instanceId: id, paths: z.optional(z.array(InputPathSchema)) }),
+  z.strictObject({ kind: z.literal('network'), instanceId: id, network: UiSurfaceNetworkRequestV1Schema }),
 ]));
 export type WidgetLayoutItemIntentV1 = z.infer<typeof WidgetLayoutItemIntentV1Schema>;
 export class WidgetLayoutMutationErrorV1 extends Error {

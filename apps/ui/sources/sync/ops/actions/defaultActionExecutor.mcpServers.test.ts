@@ -39,9 +39,14 @@ const { useWhereItsOnNames } = await import('@/components/capabilities/where/use
 const { useMcpServerTools } = await import('@/components/settings/mcpServers/tools/useMcpServerTools');
 const { describeMcpToolAgents } = await import('@/components/settings/mcpServers/tools/McpServerToolsSection');
 const { resolveUiAccountActionFallbackMachineId } = await import('./accountActionDeps');
+const { observeMcpServerCatalog, refreshMcpServerCatalog, resetMcpServerCatalogEngineForTests } = await import('@/sync/engine/settings/mcpServerCatalogEngine');
+const { getMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const initialState = getStorage().getState();
 const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
 afterEach(async () => {
+    resetMcpServerCatalogEngineForTests();
+    resetMcpServerCatalogSnapshotsForTests();
     retireActiveServerAccountScopeLifetime();
     resetRuntimeFetch();
     invalidateAccountEncryptionModeCache();
@@ -75,7 +80,10 @@ const toolFactsProjection = PluginProjectionV2Schema.parse({
 });
 
 async function prepareToolFactsHome(includeMachine = true, installedAgentIds = Object.keys(toolFactsProjection.agentsById),
-    onCatalogRead?: () => void, maintenanceReady?: Promise<void>) {
+    onCatalogRead?: () => void, maintenanceReady?: Promise<void>, catalogState?: Readonly<{
+        revision?: () => number; catalog?: () => McpServerCatalogV1; mode?: () => 'plain' | 'e2ee';
+        row?: () => unknown; settings?: () => Readonly<Record<string, unknown>>;
+    }>) {
     const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
         homeServerIdentityId: 'srv_mcp_tool_facts', canonicalServerUrl: 'https://mcp-tool-facts.test', revision: 1,
         endpoints: [{ kind: 'https', url: 'https://mcp-tool-facts.test' }] } });
@@ -94,13 +102,14 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
         if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
         expect(target.origin).toBe(home.serverUrl);
         if (target.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
-        if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (target.pathname === '/v1/account/encryption') return Response.json({ mode: catalogState?.mode?.() ?? 'plain', updatedAt: 0 });
         if (target.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 7 }));
-        if (target.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 7 });
+        if (target.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: catalogState?.settings?.() ?? {} }, version: 7 });
         if (target.pathname === '/v1/account/entity-rows/mcp') {
             onCatalogRead?.();
-            return Response.json({ status: 'present', revision: 3,
-                content: { t: 'plain', v: { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
+            if (catalogState?.row) return Response.json(catalogState.row());
+            return Response.json({ status: 'present', revision: catalogState?.revision?.() ?? 3,
+                content: { t: 'plain', v: catalogState?.catalog?.() ?? { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
                     stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [] } } });
         }
         if (target.pathname === '/v1/account/entity-rows/profiles/transfer') {
@@ -114,6 +123,125 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
 }
 
 describe('UI MCP per-Agent tool facts', () => {
+    it.each(['active', 'inactive'] as const)('lists valid neighbors from real %s partial authority while refusing tools', async authority => {
+        const incomplete = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
+            stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 },
+            { id: 'bad', name: 'bad', transport: 'stdio' }], bindings: [] };
+        // Only the HTTP row/source is incomplete. Admission, projection and strict consumers stay real.
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], undefined, undefined, {
+            row: () => authority === 'active' ? { status: 'present', revision: 3, content: { t: 'plain', v: incomplete } }
+                : { status: 'absent' },
+            settings: () => authority === 'inactive' ? { mcpServersSettingsV1: { ...incomplete, strictMode: false } } : {},
+        });
+        const scope = { serverId: home.serverIdentityId!, accountId: 'tool-owner' };
+        getStorage().setState({ settingsScope: scope });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const release = observeMcpServerCatalog(scope);
+        const executor = createDefaultActionExecutor();
+        const context = { serverId: home.id, surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+        try {
+            await refreshMcpServerCatalog(scope);
+            const result = await executor.execute('mcp.servers.list', {}, context);
+            if (!result.ok) throw new Error(result.errorCode);
+            const list = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(result.result);
+            expect(list).toMatchObject({ status: 'partial', authority,
+                revision: authority === 'active' ? 3 : 'absent', catalog: { servers: [{ id: 'server' }] } });
+            if (list.status !== 'partial') throw new Error('The incomplete inventory must remain diagnostic');
+            expect(list.catalog.servers).toHaveLength(1);
+            expect(list.diagnostics).toContainEqual({ path: 'servers[1]', reason: 'invalid-stored-content' });
+            expect(await executor.execute('mcp.servers.tools.list', { serverId: 'server' }, context)).toMatchObject({
+                ok: false, errorCode: 'mcp_catalog_unavailable',
+            });
+        } finally { release(); }
+    });
+
+    it('borrows observed admitted list authority without rereading the same catalog', async () => {
+        let reads = 0;
+        const maintenance = createDeferred<void>();
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], () => { reads += 1; }, maintenance.promise);
+        const scope = { serverId: home.serverIdentityId!, accountId: 'tool-owner' };
+        getStorage().setState({ settingsScope: scope });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const release = observeMcpServerCatalog(scope);
+        try {
+            await refreshMcpServerCatalog(scope);
+            const readsBeforeList = reads;
+            const result = await createDefaultActionExecutor().execute('mcp.servers.list', {},
+                { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+            if (!result.ok) throw new Error(result.errorCode);
+            const list = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(result.result);
+            expect(list).toMatchObject({ status: 'ready', authority: 'active', revision: 3,
+                catalog: { servers: [{ id: 'server' }], bindings: [] } });
+            expect(reads).toBe(readsBeforeList);
+        } finally {
+            maintenance.resolve();
+            release();
+        }
+    });
+
+    it('borrows observed admitted tool authority without rereading and revalidates after an observer gap', async () => {
+        let reads = 0;
+        let revision = 3;
+        const maintenance = createDeferred<void>();
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], () => { reads += 1; }, maintenance.promise,
+            { revision: () => revision });
+        const scope = { serverId: home.serverIdentityId!, accountId: 'tool-owner' };
+        getStorage().setState({ settingsScope: scope });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        let release = observeMcpServerCatalog(scope);
+        const executor = createDefaultActionExecutor();
+        const context = { serverId: home.id, surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+        try {
+            await refreshMcpServerCatalog(scope);
+            expect(getMcpServerCatalogSnapshot(scope)).toMatchObject({ status: 'ready', authority: 'active', stale: false, revision: 3 });
+            const readsBeforeTools = reads;
+            for (let observer = 0; observer < 2; observer += 1) {
+                const result = await executor.execute('mcp.servers.tools.list', { serverId: 'server' }, context);
+                if (!result.ok) throw new Error(result.errorCode);
+                expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse(result.result)).toMatchObject({
+                    serverId: 'server', revision: 3, perAgent: { status: 'ready' },
+                });
+                expect(reads).toBe(readsBeforeTools);
+            }
+            release();
+            expect(getMcpServerCatalogSnapshot(scope)).toMatchObject({ status: 'loading', stale: true, revision: 3 });
+            revision = 4;
+            const changed = await executor.execute('mcp.servers.tools.list', { serverId: 'server' }, context);
+            expect(changed).toMatchObject({ ok: true, result: { serverId: 'server', revision: 4 } });
+            expect(reads).toBe(readsBeforeTools + 1);
+            expect(getMcpServerCatalogSnapshot(scope).stale).toBe(true);
+        } finally {
+            maintenance.resolve();
+            release();
+        }
+    });
+
+    it('withdraws admitted plain tool authority before an Account without E2EE material can read it', async () => {
+        let mode: 'plain' | 'e2ee' = 'plain';
+        const maintenance = createDeferred<void>();
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], undefined, maintenance.promise,
+            { mode: () => mode });
+        const scope = { serverId: home.serverIdentityId!, accountId: 'tool-owner' };
+        getStorage().setState({ settingsScope: scope });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const release = observeMcpServerCatalog(scope);
+        try {
+            await refreshMcpServerCatalog(scope);
+            expect(getMcpServerCatalogSnapshot(scope).value?.servers[0]?.id).toBe('server');
+            mode = 'e2ee';
+            publishHomeAccountChange(scope.serverId, ['self']);
+            const result = await createDefaultActionExecutor().execute('mcp.servers.tools.list', { serverId: 'server' },
+                { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+            expect(result).toMatchObject({ ok: false });
+            expect(result).not.toHaveProperty('result');
+            await refreshMcpServerCatalog(scope);
+            expect(getMcpServerCatalogSnapshot(scope)).toMatchObject({ status: 'unavailable', value: null });
+        } finally {
+            maintenance.resolve();
+            release();
+        }
+    });
+
     it('joins simultaneous mounted tool reads without tying their transport to either observer', async () => {
         let catalogReads = 0;
         const maintenance = createDeferred<void>();
@@ -140,14 +268,50 @@ describe('UI MCP per-Agent tool facts', () => {
             await second.rerender();
             expect(second.getCurrent().list).toBe(admitted);
             expect(catalogReads).toBe(1);
-            await act(async () => { second.getCurrent().reload(); });
-            await vi.waitFor(() => expect(catalogReads).toBe(2));
-            await vi.waitFor(() => expect(second.getCurrent().list).toBe(admitted));
         } finally {
             maintenance.resolve();
             projection.resolve({ protocolVersion: 1, projection: toolFactsProjection });
             await first.unmount();
             await second.unmount();
+        }
+    });
+
+    it('reloads current Agent facts through the real tools Action while observed catalog authority stays fresh', async () => {
+        let reads = 0;
+        const maintenance = createDeferred<void>();
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], () => { reads += 1; }, maintenance.promise);
+        const scope = { serverId: home.serverIdentityId!, accountId: 'tool-owner' };
+        getStorage().setState({ settingsScope: scope });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const release = observeMcpServerCatalog(scope);
+        await refreshMcpServerCatalog(scope);
+        const tools = await renderHook(() => useMcpServerTools('server', 3, ['acme.mcp-facts/host']));
+        try {
+            await vi.waitFor(() => expect(tools.getCurrent().list?.perAgent.agents).toEqual([
+                { agentId: 'acme.mcp-facts/host', off: 'blocked', approval: 'host', loading: 'every_turn', tokens: null },
+            ]));
+            const before = tools.getCurrent().list;
+            const readsBeforeReload = reads;
+            await act(async () => {
+                getStorage().setState(state => {
+                    const previous = state.machines['facts-machine']!;
+                    const machine = { ...previous, metadata: { ...previous.metadata!,
+                        agentInventory: { checkedAt: Date.now(), installedAgentIds: ['acme.mcp-facts/native'] } } };
+                    return { machines: { ...state.machines, [machine.id]: machine },
+                        machineListByServerId: { ...state.machineListByServerId, [home.id]: [machine] } };
+                });
+                tools.getCurrent().reload();
+            });
+            await vi.waitFor(() => expect(tools.getCurrent().list?.perAgent.agents).toEqual([
+                { agentId: 'acme.mcp-facts/native', off: 'hidden', approval: 'native', loading: 'on_demand', tokens: null },
+            ]));
+            expect(tools.getCurrent().list).not.toBe(before);
+            expect(getMcpServerCatalogSnapshot(scope)).toMatchObject({ status: 'ready', authority: 'active', stale: false, revision: 3 });
+            expect(reads).toBe(readsBeforeReload);
+        } finally {
+            maintenance.resolve();
+            await tools.unmount();
+            release();
         }
     });
 

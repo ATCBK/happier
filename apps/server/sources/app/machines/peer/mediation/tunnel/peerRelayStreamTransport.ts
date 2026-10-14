@@ -1,10 +1,6 @@
-import {
-    decodePeerTcpTunnelBinaryFrameV2,
-    encodePeerTcpTunnelBinaryFrameV2,
-    PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    type PeerTcpTunnelRelayEnvelope,
-} from "@happier-dev/protocol";
+import { decodePeerTcpTunnelBinaryFrameV2, encodePeerTcpTunnelBinaryFrameV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v2';
+import { PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
 import {
     createPeerTcpTunnelStreamSession,
     decodePeerTcpTunnelBinaryFrameForSubstreamSession,

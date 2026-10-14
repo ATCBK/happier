@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ScmBackendPreferenceSchema } from './backendIdentity.js';
 
 export const ScmRequestBaseSchema = lazyZodSchema(() => z.object({
-  cwd: z.string().optional(),
-  backendPreference: ScmBackendPreferenceSchema.optional(),
-  outcomeVersion: z.literal(1).optional(),
+  cwd: z.optional(z.string()),
+  backendPreference: z.optional(ScmBackendPreferenceSchema),
+  outcomeVersion: z.optional(z.literal(1)),
 }));
 export type ScmRequestBase = z.infer<typeof ScmRequestBaseSchema>;

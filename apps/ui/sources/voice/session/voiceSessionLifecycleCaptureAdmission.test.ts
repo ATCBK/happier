@@ -22,7 +22,11 @@ function deferred() {
 
 describe('Voice session lifecycle capture admission', () => {
     let environment: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>;
-    const fixtures: Array<Awaited<ReturnType<typeof createHarness>>> = [];
+    const fixtures: Array<Readonly<{
+        lifecycle: ReturnType<typeof import('./voiceSessionLifecycleController')['createVoiceSessionLifecycleController']>;
+        runtime: Awaited<ReturnType<Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['createRuntime']>>;
+        browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>;
+    }>> = [];
 
     beforeEach(async () => {
         environment = await createOpenAiVoiceRuntimeEnvironment();
@@ -41,7 +45,7 @@ describe('Voice session lifecycle capture admission', () => {
         await environment?.dispose();
     });
 
-    async function createHarness() {
+    async function createHarness(onCreatePeer?: NonNullable<Parameters<typeof installVoiceWebRtcBrowserBoundary>[0]>['onCreatePeer']) {
         const [
             { createVoiceCaptureAdmissionController },
             { createVoiceSessionLifecycleController },
@@ -53,6 +57,7 @@ describe('Voice session lifecycle capture admission', () => {
         // AudioContext is an OS/browser object. Real WebMicSession owns its lifecycle.
         const browser = installVoiceWebRtcBrowserBoundary({
             createAudioContext: () => audioContext as unknown as AudioContext,
+            onCreatePeer,
         });
         const runtime = await environment.createRuntime(browser);
         const captureAdmission = createVoiceCaptureAdmissionController();
@@ -134,7 +139,7 @@ describe('Voice session lifecycle capture admission', () => {
                 name: 'VoiceCaptureBusyError', code: 'voice_capture_busy_dictation', activeOwner: 'dictation',
             });
             expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-            expect(fixture.browser.peer.createDataChannel).not.toHaveBeenCalled();
+            expect(fixture.browser.peers).toEqual([]);
             const records = log.getLogs().slice(logStart).filter(line => line.startsWith('[voiceRuntimeFailure]'));
             expect(records.some(line => line.includes('voice_capture_busy_dictation'))).toBe(true);
         } finally {
@@ -162,10 +167,11 @@ describe('Voice session lifecycle capture admission', () => {
     });
 
     it('stops an admitted realtime adapter when disposal races its pending start', async () => {
-        const fixture = await createHarness();
         const remoteDescription = deferred();
         const cleanup = deferred();
-        fixture.browser.peer.setRemoteDescription.mockImplementationOnce(() => remoteDescription.promise);
+        const fixture = await createHarness(peer => {
+            peer.setRemoteDescription.mockImplementationOnce(() => remoteDescription.promise);
+        });
         fixture.audioContext.close.mockImplementationOnce(() => cleanup.promise);
         const starting = fixture.lifecycle.toggle(null);
         await vi.waitFor(() => expect(fixture.browser.peer.setRemoteDescription).toHaveBeenCalledOnce());

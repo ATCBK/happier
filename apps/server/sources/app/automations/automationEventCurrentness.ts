@@ -1,8 +1,6 @@
-import {
-    type PluginSourceCustodyV1,
-    type AutomationEventDeclarationReleaseV1,
-    type ParsedPluginManifestV2,
-} from "@happier-dev/protocol";
+import { type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { type AutomationEventDeclarationReleaseV1 } from '@happier-dev/protocol/automations/event';
+import { type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 
 import { resolveCurrentPluginDeclarationTx } from "@/app/plugins/availability/currentDeclaration";
 import { resolveCurrentClaimablePluginMachineMaterializationTx } from "@/app/plugins/availability/operations";

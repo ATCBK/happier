@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -188,14 +189,13 @@ export const SubAgentRunView = React.memo<ToolViewProps>(({ tool, messages, deta
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 10,
+        padding: theme.space.s10,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 6,
+        gap: theme.space.s6,
     },
     title: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     line: {

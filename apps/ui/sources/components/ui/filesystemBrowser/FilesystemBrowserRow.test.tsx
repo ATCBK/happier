@@ -72,6 +72,23 @@ describe('FilesystemBrowserRow folder error', () => {
 });
 
 describe('FilesystemBrowserRow tree title (one line; the meaningful end stays)', () => {
+    it('keeps a folder selection mixed until all of its children are selected', async () => {
+        const folder: FilesystemBrowserNode = { path: 'src', name: 'src', type: 'directory', depth: 0, isExpanded: false, isLoadingChildren: false };
+        function SelectedFolder() {
+            const states = ['unchecked', 'mixed', 'checked'] as const;
+            const [index, setIndex] = React.useState(0);
+            return <FilesystemBrowserRow testID="folder-selection" node={folder} title="src" icon={null} disclosure
+                selection={{ state: states[index]!, accessibilityLabel: 'Select src', onToggle: () => setIndex(current => (current + 1) % states.length) }} />;
+        }
+        const screen = await renderScreen(<SelectedFolder />);
+        for (const checked of [false, 'mixed', true, false] as const) {
+            const control = screen.findHostByTestId('folder-selection-select');
+            expect(control?.props['aria-checked']).toBe(checked);
+            expect(control?.props.accessibilityState?.checked).toBe(checked);
+            await act(async () => { screen.pressByTestId('folder-selection-select'); });
+        }
+    });
+
     it('discloses a folder independently from its named navigation target', async () => {
         const folder: FilesystemBrowserNode = { path: 'folder.ts', name: 'folder.ts', type: 'directory', depth: 0, isExpanded: false, isLoadingChildren: false };
         const onPress = vi.fn();

@@ -3,8 +3,7 @@ import React from 'react';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createSessionFixture, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema, type SessionMetadataTuplePatchV1 } from '@happier-dev/protocol';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { act } from 'react-test-renderer';
@@ -13,7 +12,13 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { IDBFactory } from 'fake-indexeddb';
 import type { ManagedEndpointSupervisor } from '@happier-dev/connection-supervisor';
 import { createSocketIoAckTimeoutError } from '@happier-dev/sync-client';
+import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { SESSION_HUMAN_PRESENCE_VISIBLE_REPLACE_EVENT, SessionHumanPresenceVisibleReplaceV1Schema, SessionHumanPresenceVisibleReplaceResultV1Schema } from '@happier-dev/protocol/sessions';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import type { ResumeSessionOptions } from '@/sync/ops/sessions';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -41,7 +46,6 @@ vi.mock('react-native-mmkv', () => {
 
 const appStateAddListener = vi.hoisted(() => vi.fn(() => ({ remove: vi.fn() })));
 const runtimeFetchWithServerReachabilityMock = vi.hoisted(() => vi.fn());
-const appliedRuntime = vi.hoisted(() => ({ available: true }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock(
@@ -61,17 +65,6 @@ vi.mock('react-native', async () => {
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchWithServerReachabilityMock,
 }));
-
-// This direct-Sync fixture does not run connectionManager's restore lifecycle.
-// Its staged runtime snapshot is therefore also the applied, available Home
-// unless a test explicitly models a switch.
-vi.mock('@/sync/runtime/orchestration/connectionManager', async () => {
-    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
-    return {
-        getAppliedActiveServerSnapshot: () => getActiveServerSnapshot(),
-        isAppliedActiveServerRuntimeAvailable: () => appliedRuntime.available,
-    };
-});
 
 const ensureSessionRuntimeForPendingInputMock = vi.hoisted(() => vi.fn(async (_options?: ResumeSessionOptions) => ({ type: 'success' as const })));
 vi.mock('@/sync/ops', () => ({
@@ -140,6 +133,8 @@ import {
 } from '@/sync/engine/pending/pendingQueueV2';
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import {
     captureActiveServerAccountScopeLifetime,
     retireActiveServerAccountScopeLifetime,
@@ -185,8 +180,10 @@ function releasedServerV021PendingEnqueueResponse(body: BodyInit | null | undefi
 
 function createSession(params: { sessionId: string; metadata?: Session['metadata'] }): Session {
     const now = Date.now();
-    return {
+    return createSessionFixture({
         id: params.sessionId,
+        serverId: getActiveServerSnapshot().serverId,
+        encryptionMode: 'e2ee',
         seq: 0,
         createdAt: now,
         updatedAt: now,
@@ -201,7 +198,12 @@ function createSession(params: { sessionId: string; metadata?: Session['metadata
         thinkingAt: 0,
         presence: 'online',
         optimisticThinkingAt: null,
-    };
+    });
+}
+
+function pendingActionAcknowledgement(init?: RequestInit): Response {
+    const { requestedAction } = JSON.parse(String(init?.body)) as { requestedAction: unknown };
+    return Response.json(PendingResetStartSetResultV1Schema.parse({ didUpdate: true, requestedAction }));
 }
 
 function composerAttachmentRawRecord(params: Readonly<{
@@ -454,22 +456,24 @@ describe('sync.sendMessage optimistic thinking', () => {
         vi.stubGlobal('indexedDB', new IDBFactory());
         await clearBrowserRecords();
         storage.setState(initialStorageState, true);
+        projectManager.clear();
         kvStore.clear();
         const activeScope = {
             serverId: getActiveServerSnapshot().serverId,
             accountId: 'sync-test-account',
         } as const;
         storage.getState().activateProfileScope(activeScope);
+        // Direct Sync tests still publish the same completed Home transition as restore.
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         // Direct Sync tests bypass restore; bind the same applied transport and Account it owns.
         const { sync } = await import('./syncEngine');
         Reflect.set(sync, 'appliedServerTarget', getActiveServerSnapshot());
         Reflect.set(sync, 'serverID', activeScope.accountId);
-        appliedRuntime.available = true;
         appStateAddListener.mockClear();
         runtimeFetchWithServerReachabilityMock.mockReset();
         runtimeFetchWithServerReachabilityMock.mockResolvedValue(new Response(null, { status: 200 }));
         ensureSessionRuntimeForPendingInputMock.mockClear();
-        vi.spyOn(apiSocket, 'request').mockResolvedValue(Response.json({ didUpdate: true }));
+        vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => pendingActionAcknowledgement(init));
     });
 
     afterEach(async () => {
@@ -2298,7 +2302,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         });
         const { sync } = await import('./sync');
         sync.encryption = await Encryption.create(new Uint8Array(32).fill(9));
-        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(Response.json({ didUpdate: true }));
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => pendingActionAcknowledgement(init));
         const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC');
         const emitWithAck = vi.fn();
         sync.setMessageTransport({ emitWithAck, send: vi.fn() });
@@ -2497,7 +2501,7 @@ describe('sync.sendMessage optimistic thinking', () => {
             didWrite: true,
         })) as any;
 
-        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(Response.json({ didUpdate: true }));
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => pendingActionAcknowledgement(init));
         const { sync } = await import('./sync');
         sync.encryption = encryption;
         vi.spyOn(encryption, 'getMachineEncryption').mockReturnValue({} as any);
@@ -2605,7 +2609,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         const deletePendingMessageSpy = vi.spyOn(sync, 'deletePendingMessage');
         const discardPendingMessageSpy = vi.spyOn(sync, 'discardPendingMessage');
         const reorderPendingMessagesSpy = vi.spyOn(sync, 'reorderPendingMessages');
-        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(new Response(null, { status: 200 }));
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => pendingActionAcknowledgement(init));
         const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC');
 
         await expect(sync.sendPendingMessageNow(sessionId, {
@@ -2704,7 +2708,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         const requests: Array<{ path: string; method: string; body: unknown }> = [];
         vi.spyOn(apiSocket, 'request').mockImplementation(async (path, init) => {
             requests.push({ path, method: init?.method ?? 'GET', body: JSON.parse(String(init?.body)) });
-            return Response.json({ didUpdate: true });
+            return pendingActionAcknowledgement(init);
         });
 
         await expect(sync.sendPendingMessageNow(sessionId, {
@@ -3175,68 +3179,6 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].latestTurnStatus).toBe('completed');
     });
 
-    it('keeps an acknowledged exact send accepted when its Account retires during next-prompt permission publication', async () => {
-        const sessionId = 's_exact_perm_publish_retired_after_ack';
-        const serverId = getActiveServerSnapshot().serverId;
-        const session = {
-            ...createSession({
-                sessionId,
-                metadata: { permissionMode: 'default', permissionModeUpdatedAt: 1 } as any,
-            }),
-            serverId,
-        };
-        storage.getState().applySessions([session]);
-        storage.getState().applySettingsLocal({ sessionPermissionModeApplyTiming: 'next_prompt' as any });
-        storage.getState().updateSessionPermissionMode(sessionId, 'yolo' as any);
-        const addressedSession = storage.getState().sessions[sessionId]!;
-
-        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
-        await encryption.initializeSessions(new Map([[sessionId, null]]));
-        const accountLifetime = captureActiveServerAccountScopeLifetime();
-        expect(accountLifetime).not.toBeNull();
-        const { sync } = await import('./sync');
-        sync.encryption = encryption;
-        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
-        sync.setMessageTransport({
-            emitWithAck: vi.fn(async () => ({
-                ok: true,
-                id: 'accepted-message',
-                seq: 7,
-                localId: null,
-                didWrite: true,
-            })) as any,
-            send: vi.fn(),
-        });
-        let publicationStarted!: () => void;
-        const publicationStartedGate = new Promise<void>((resolve) => { publicationStarted = resolve; });
-        let releasePublication!: () => void;
-        const publicationGate = new Promise<void>((resolve) => { releasePublication = resolve; });
-        const publish = vi.fn(async () => {
-            publicationStarted();
-            await publicationGate;
-        });
-        (sync as any).publishSessionPermissionModeToMetadata = publish;
-
-        const sending = sync.sendMessage(sessionId, 'hello', undefined, undefined, {
-            serverId,
-            accountLifetime: accountLifetime!,
-            session: addressedSession,
-        });
-        await publicationStartedGate;
-        retireActiveServerAccountScopeLifetime();
-        releasePublication();
-
-        await expect(sending).resolves.toMatchObject({
-            seq: 7,
-            persistence: 'transcript_committed',
-        });
-        expect(publish).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId,
-            serverId,
-            accountLifetime,
-        }));
-    });
-
     it('keeps a positive exact runtime RPC acknowledgement accepted when its Account retires before postflight', async () => {
         const sessionId = 's_exact_runtime_ack_retired_before_postflight';
         const serverId = getActiveServerSnapshot().serverId;
@@ -3259,10 +3201,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             return { ok: true } as never;
         });
         const emitWithAck = vi.fn();
-        const publish = vi.fn(async () => {});
         const { sync } = await import('./sync');
         sync.setMessageTransport({ emitWithAck, send: vi.fn() });
-        (sync as any).publishSessionPermissionModeToMetadata = publish;
 
         const sending = sync.sendMessage(sessionId, 'accepted by runtime', undefined, undefined, {
             localId: 'runtime-accepted-local',
@@ -3283,7 +3223,6 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(sessionRpc).toHaveBeenCalledOnce();
         expect(emitWithAck).not.toHaveBeenCalled();
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual(pendingBeforeRetirement);
-        expect(publish).not.toHaveBeenCalled();
         expect(ensureSessionRuntimeForPendingInputMock).not.toHaveBeenCalled();
     });
 
@@ -3318,10 +3257,8 @@ describe('sync.sendMessage optimistic thinking', () => {
                 didWrite: true,
             };
         });
-        const publish = vi.fn(async () => {});
         const { sync } = await import('./sync');
         sync.setMessageTransport({ emitWithAck: emitWithAck as any, send: vi.fn() });
-        (sync as any).publishSessionPermissionModeToMetadata = publish;
 
         const sending = sync.sendMessage(sessionId, 'committed by socket', undefined, undefined, {
             localId: 'socket-accepted-local',
@@ -3340,7 +3277,6 @@ describe('sync.sendMessage optimistic thinking', () => {
             persistence: 'transcript_committed',
         });
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual(pendingBeforeRetirement);
-        expect(publish).not.toHaveBeenCalled();
         expect(ensureSessionRuntimeForPendingInputMock).not.toHaveBeenCalled();
     });
 
@@ -3471,7 +3407,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         },
     );
 
-    it('does not publish session metadata after send when apply timing is next_prompt but metadata is already up to date', async () => {
+    it('preserves the current session permission metadata after a direct send', async () => {
         const sessionId = 's_perm_next_prompt_noop';
         storage.getState().applySessions([
             {
@@ -3499,12 +3435,11 @@ describe('sync.sendMessage optimistic thinking', () => {
             send: vi.fn(),
         });
 
-        const publish = vi.fn(async () => {});
-        (sync as any).publishSessionPermissionModeToMetadata = publish;
+        const metadataBeforeSend = storage.getState().sessions[sessionId].metadata;
 
         await sync.sendMessage(sessionId, 'hello');
 
-        expect(publish).not.toHaveBeenCalled();
+        expect(storage.getState().sessions[sessionId].metadata).toEqual(metadataBeforeSend);
     });
 });
 
@@ -3512,23 +3447,28 @@ describe('sync.sendMessage optimistic thinking', () => {
  * These deciding rejection/auth cases exercise real Account, readiness and Sync owners.
  * The older unrelated direct-Sync family above remains a separately scoped harness migration.
  */
-const accountTransport = vi.hoisted(() => ({ enabled: false, ack: vi.fn(), emitted: vi.fn() }));
+const accountTransport = vi.hoisted(() => ({ enabled: false, authDenied: false, ack: vi.fn(), emitted: vi.fn() }));
 installDisconnectedServerSocketBoundary((socket) => {
     socket.connected = accountTransport.enabled;
+    // This Account fixture serves a reachable Socket transport, including recovery
+    // after the real authenticated endpoint supervisor invalidates its probe.
+    vi.spyOn(socket, 'connect').mockImplementation(() => {
+        socket.connected = accountTransport.enabled && !accountTransport.authDenied;
+        if (socket.connected) for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emit').mockImplementation((event: string, ...args: unknown[]) => {
         accountTransport.emitted(event, ...args);
         return socket;
     });
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: unknown) => {
-        // This external receiver does not implement daemon Session RPC. Refuse
-        // that neighboring protocol without consuming a message admission ACK.
-        if (event === SOCKET_RPC_EVENTS.CALL) return {
-            ok: false, error: 'Session method unavailable', errorCode: 'METHOD_NOT_AVAILABLE',
-        };
-        if (event !== 'message' && event !== 'update-metadata') return {
-            v: 1, ok: true, admittedSessionIds: [],
-        };
+        if (event === SOCKET_RPC_EVENTS.CALL) return { ok: false, error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
+        if (event === SESSION_HUMAN_PRESENCE_VISIBLE_REPLACE_EVENT) {
+            const visible = SessionHumanPresenceVisibleReplaceV1Schema.parse(payload);
+            return SessionHumanPresenceVisibleReplaceResultV1Schema.parse({ v: 1, ok: true,
+                admittedSessionIds: visible.sessionIds, ...('locations' in visible ? { admittedLocations: visible.locations } : {}) });
+        }
         return accountTransport.ack(event, payload);
     });
 });
@@ -3539,16 +3479,15 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
     let webLocks: ReturnType<typeof installWebLockManagerMock>;
     let state: typeof storage;
     let runtime: typeof import('./syncEngine')['sync'];
-    let authDenied: boolean;
     let authProbeStatuses: number[];
-    let metadataWrites: SessionMetadataTuplePatchV1[];
-    let beforeSessionMetadataRead: (() => void) | undefined;
+    let metadataBoundary: ReturnType<typeof createSessionMetadataHttpBoundary>;
+    let disposePendingSettlement: (() => void) | undefined;
 
     const request = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const path = new URL(String(url), 'https://optimistic-account.example.test').pathname;
         if (path === '/health') return Response.json({});
         if (path === '/v1/auth/ping') {
-            const status = authDenied ? 401 : 200;
+            const status = accountTransport.authDenied ? 401 : 200;
             authProbeStatuses.push(status);
             return Response.json({}, { status });
         }
@@ -3560,31 +3499,8 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
         });
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
         if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
-        if (path.startsWith('/v2/sessions/')) {
-            const session = state.getState().sessions[decodeURIComponent(path.slice('/v2/sessions/'.length))];
-            if (session) {
-                if (init?.method === 'PATCH') {
-                    const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
-                    if (patch.mode !== 'owner_migration') throw new Error('Expected an owner metadata migration');
-                    metadataWrites.push(patch);
-                    return Response.json(SessionMetadataTuplePatchSuccessV1Schema.parse({
-                        success: true, metadataLayoutVersion: 1,
-                        sharedMetadata: { version: patch.source.metadata.version + 1 },
-                        agentState: { version: patch.source.agentState.version + 1 },
-                    }));
-                }
-                beforeSessionMetadataRead?.();
-                // These metadata-writer cases use a supported legacy Session row;
-                // access negotiation and the tuple snapshot still run through HTTP.
-                const { ownerMetadata: _ownerMetadata, ...wire } = createPlainSessionCurrentProjectionRecordFixture({
-                    id: session.id, active: session.active, metadataVersion: session.metadataVersion,
-                    agentStateVersion: session.agentStateVersion,
-                });
-                return Response.json({ session: SessionCurrentProjectionRecordV1Schema.parse({ ...wire,
-                    metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata),
-                }) });
-            }
-        }
+        const metadataResponse = metadataBoundary.handle(url, init);
+        if (metadataResponse) return metadataResponse;
         return Response.json({ error: 'not_found' }, { status: 404 });
     };
 
@@ -3606,15 +3522,15 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
         accountTransport.enabled = true;
         accountTransport.ack.mockReset();
         accountTransport.emitted.mockReset();
-        authDenied = false;
+        accountTransport.authDenied = false;
         authProbeStatuses = [];
-        metadataWrites = [];
-        beforeSessionMetadataRead = undefined;
         await loadSyncSingletonForTests();
         state = (await import('./domains/state/storage')).storage;
+        metadataBoundary = createSessionMetadataHttpBoundary(() => state.getState().sessions);
         restored = await restoreServerAccountForTest({
             serverUrl: 'https://optimistic-account.example.test',
             accountId: 'sync-test-account',
+            credentialScope: 'restored-home',
             request,
         });
         // The readiness adapter, including authenticated probes, remains real.
@@ -3629,6 +3545,8 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
 
     afterEach(async () => {
         vi.useRealTimers();
+        disposePendingSettlement?.();
+        disposePendingSettlement = undefined;
         await authScreen?.unmount();
         authScreen = undefined;
         await restored?.dispose();
@@ -3661,89 +3579,44 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
             metadata: { path: '/repo', host: 'test-host', version: '0.0.9', permissionMode: 'default', permissionModeUpdatedAt: 1 },
         })]);
         state.getState().applySettingsLocal({ sessionPermissionModeApplyTiming: 'next_prompt' });
-        state.getState().updateSessionPermissionMode(sessionId, 'yolo');
-        accountTransport.ack.mockImplementation(async (event: string, payload: unknown) => {
+        const { applyPermissionModeSelection } = await import('./domains/permissions/permissionModeApply');
+        const { createDefaultActionExecutor } = await import('./ops/actions/defaultActionExecutor');
+        const { getSessionDraftSnapshot, readSessionNextPromptPermissionModeFromDraft,
+            captureSessionDraftCurrentness, clearSessionDraftCurrentnessLocal } = await import('./ops/sessionDrafts/sessionDraftRepository');
+        await (await import('./ops/sessionDrafts/sessionDraftPersistenceStorage')).prepareSessionDraftPersistenceStorage();
+        const accountLifetime = (await import('./domains/scope/activeServerAccountScope')).captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime) throw new Error('Expected the restored Account lifetime');
+        const scope = accountLifetime.scope;
+        const address = { kind: 'session' as const, sessionId };
+        const choosePermission = (mode: 'yolo' | 'read-only') => applyPermissionModeSelection({
+            sessionId, serverId: scope.serverId, mode, applyTiming: 'next_prompt', draftScope: scope,
+            executeAction: createDefaultActionExecutor().execute,
+        });
+        await choosePermission('yolo');
+        const admittedDraft = captureSessionDraftCurrentness({ scope, address });
+        const admittedMode = readSessionNextPromptPermissionModeFromDraft(getSessionDraftSnapshot(scope, address)?.document);
+        expect(admittedMode).toBe('yolo');
+        accountTransport.ack.mockImplementation(async (event: string) => {
             if (event === 'message') {
-                state.getState().updateSessionPermissionMode(sessionId, 'read-only');
+                await choosePermission('read-only');
                 return { ok: true, id: 'admitted-message', seq: 1, localId: 'frozen-permission', didWrite: true };
-            }
-            if (event === 'update-metadata') {
-                return { result: 'success', version: 2, metadata: (payload as { metadata: string }).metadata };
             }
             throw new Error(`Unexpected socket event: ${event}`);
         });
 
-        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-        const accountLifetime = captureActiveServerAccountScopeLifetime();
-        expect(accountLifetime).not.toBeNull();
-        const outboundSession = state.getState().sessions[sessionId];
-        await runtime.sendMessage(sessionId, 'hello', undefined, {}, {
-            localId: 'frozen-permission', accountLifetime: accountLifetime!,
-            serverId: accountLifetime!.scope.serverId, session: outboundSession,
-        });
+        await expect(runtime.sendMessage(sessionId, 'hello', undefined, { permissionMode: admittedMode }, {
+            localId: 'frozen-permission', serverId: restored!.home.id, accountLifetime,
+            session: state.getState().sessions[sessionId],
+        })).resolves.toMatchObject({ localId: 'frozen-permission', persistence: 'transcript_committed' });
+        clearSessionDraftCurrentnessLocal({ scope, address, currentness: admittedDraft,
+            fieldIds: ['extensions.happier.nextPromptPermissionModeV1'] });
 
         expect(accountTransport.ack).toHaveBeenCalledWith('message', expect.objectContaining({
             message: { t: 'plain', v: expect.objectContaining({ meta: expect.objectContaining({ permissionMode: 'yolo' }) }) },
         }));
-        expect(metadataWrites).toEqual([]);
-        expect(state.getState().sessions[sessionId].permissionMode).toBe('read-only');
-        const { readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView');
-        expect(readSessionOwnerMetadataView(state.getState().sessions[sessionId])?.permissionMode).toBe('default');
-    });
-
-    it('publishes the admitted next-prompt permission through the real Account metadata writer', async () => {
-        const sessionId = 's_account_permission_admitted';
-        state.getState().applySessions([createSessionFixture({
-            id: sessionId, serverId: restored!.home.id, active: true,
-            metadata: { path: '/repo', host: 'test-host', version: '0.0.9', permissionMode: 'default', permissionModeUpdatedAt: 1 },
-        })]);
-        state.getState().applySettingsLocal({ sessionPermissionModeApplyTiming: 'next_prompt' });
-        state.getState().updateSessionPermissionMode(sessionId, 'yolo');
-        accountTransport.ack.mockImplementation(async (event: string, payload: unknown) => {
-            if (event === 'message') return { ok: true, id: 'admitted-message', seq: 1, localId: 'admitted-permission', didWrite: true };
-            if (event === 'update-metadata') return { result: 'success', version: 2, metadata: (payload as { metadata: string }).metadata };
-            throw new Error(`Unexpected socket event: ${event}`);
-        });
-
-        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-        const accountLifetime = captureActiveServerAccountScopeLifetime();
-        expect(accountLifetime).not.toBeNull();
-        const outboundSession = state.getState().sessions[sessionId];
-        await runtime.sendMessage(sessionId, 'hello', undefined, {}, {
-            localId: 'admitted-permission', accountLifetime: accountLifetime!,
-            serverId: accountLifetime!.scope.serverId, session: outboundSession,
-        });
-
-        expect(metadataWrites).toEqual([expect.objectContaining({ mode: 'owner_migration' })]);
-        const { readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView');
-        expect(readSessionOwnerMetadataView(state.getState().sessions[sessionId])?.permissionMode).toBe('yolo');
-    });
-
-    it('keeps an admitted prompt accepted when its permission publication is superseded during tuple acquisition', async () => {
-        const sessionId = 's_account_permission_read_race';
-        state.getState().applySessions([createSessionFixture({
-            id: sessionId, serverId: restored!.home.id, active: true,
-            metadata: { path: '/repo', host: 'test-host', version: '0.0.9', permissionMode: 'default', permissionModeUpdatedAt: 1 },
-        })]);
-        state.getState().applySettingsLocal({ sessionPermissionModeApplyTiming: 'next_prompt' });
-        state.getState().updateSessionPermissionMode(sessionId, 'yolo');
-        accountTransport.ack.mockImplementation(async (event: string) => {
-            if (event === 'message') {
-                beforeSessionMetadataRead = () => state.getState().updateSessionPermissionMode(sessionId, 'read-only');
-                return { ok: true, id: 'admitted-message', seq: 1, localId: 'read-race', didWrite: true };
-            }
-            throw new Error(`Unexpected socket event: ${event}`);
-        });
-        const accountLifetime = (await import('./domains/scope/activeServerAccountScope')).captureActiveServerAccountScopeLifetime();
-        if (!accountLifetime) throw new Error('Expected the restored Account lifetime');
-
-        await expect(runtime.sendMessage(sessionId, 'hello', undefined, {}, {
-            localId: 'read-race', serverId: restored!.home.id, accountLifetime,
-            session: state.getState().sessions[sessionId],
-        })).resolves.toMatchObject({ localId: 'read-race', persistence: 'transcript_committed' });
-
-        expect(metadataWrites).toEqual([]);
-        expect(state.getState().sessions[sessionId].permissionMode).toBe('read-only');
+        expect(metadataBoundary.writes).toEqual([]);
+        expect(readSessionNextPromptPermissionModeFromDraft(getSessionDraftSnapshot(scope, address)?.document)).toBe('read-only');
+        expect(state.getState().sessions[sessionId].permissionMode).toBe('default');
         const { readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView');
         expect(readSessionOwnerMetadataView(state.getState().sessions[sessionId])?.permissionMode).toBe('default');
     });
@@ -3774,7 +3647,7 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
         await expect(runtime.sendMessage(sessionId, 'retry me', undefined, {}, { localId: 'p-retry-auth' }))
             .resolves.toEqual({ localId: 'p-retry-auth', persistence: 'pending' });
         state.getState().markSessionOptimisticThinking(sessionId);
-        authDenied = true;
+        accountTransport.authDenied = true;
         const { getEndpointSupervisorForServer } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
         const supervisor = getEndpointSupervisorForServer({
             serverId: restored!.home.id, serverUrl: 'https://optimistic-account.example.test',
@@ -3798,16 +3671,29 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
         const sessionId = 's_pending_retry_auth_probe';
         installSession(sessionId);
         retainUnrelatedPending(sessionId);
+        let retryIssued!: () => void;
+        const retryIssuedGate = new Promise<void>((resolve) => { retryIssued = resolve; });
         accountTransport.ack.mockResolvedValueOnce(null)
-            .mockRejectedValueOnce(createSocketIoAckTimeoutError());
-        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+            .mockImplementationOnce(async () => {
+                // The token expires at the retry transport failure, after its ready preflight.
+                accountTransport.authDenied = true;
+                retryIssued();
+                throw createSocketIoAckTimeoutError();
+            });
 
         await expect(runtime.sendMessage(sessionId, 'retry me', undefined, {}, { localId: 'p-retry-auth-probe' }))
             .resolves.toEqual({ localId: 'p-retry-auth-probe', persistence: 'pending' });
         state.getState().markSessionOptimisticThinking(sessionId);
-        authDenied = true;
-        await vi.advanceTimersByTimeAsync(1_000);
-        await flushPendingOutboxRetryMicrotasks();
+        const pendingSettled = new Promise<void>((resolve) => {
+            disposePendingSettlement = state.subscribe(snapshot => {
+                if (!snapshot.sessionPending[sessionId]?.messages.some(message => message.id === 'p-retry-auth-probe')) resolve();
+            });
+        });
+        // Observe the real Socket retry, auth-settle and endpoint-probe lifecycles.
+        await retryIssuedGate;
+        // The bounded probe may settle after its first retry; the existing
+        // scheduler then observes terminal auth at the next preflight.
+        await pendingSettled;
 
         expect(accountTransport.ack).toHaveBeenCalledTimes(2);
         expect(accountTransport.ack.mock.calls[1]?.[1]).toEqual(expect.objectContaining({

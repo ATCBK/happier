@@ -1,15 +1,14 @@
 import { timingSafeEqual } from "node:crypto";
 
-import {
-    verifyAccountContentKeyBindingV1,
-    type ContentPublicKeyFingerprint,
-} from "@happier-dev/protocol";
+import { verifyAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
+import { type ContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import tweetnacl from "tweetnacl";
 
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import type { Tx } from "@/storage/inTx";
+import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
 
-type AccountContentKeyClient = Pick<Tx, "account">;
+type AccountContentKeyClient = Tx;
 
 export type VerifiedAccountContentKeyBinding = Readonly<{
     contentPublicKey: Uint8Array<ArrayBuffer>;
@@ -180,6 +179,7 @@ export async function admitAccountContentKey(
                 },
             });
             if (initialized.count === 1) {
+                await publishAccountEncryptionCurrentnessAfterTx(client, params.accountId);
                 return { status: "initialized", binding };
             }
         } else if (!bytesEqual(
@@ -200,6 +200,7 @@ export async function admitAccountContentKey(
                 },
             });
             if (filled.count === 1) {
+                await publishAccountEncryptionCurrentnessAfterTx(client, params.accountId);
                 return { status: "signature_filled", binding };
             }
         } else {

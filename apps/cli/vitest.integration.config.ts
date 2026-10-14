@@ -57,6 +57,7 @@ export default defineConfig({
                 singleFork: true,
             },
         },
+        setupFiles: ['./src/configureZodLocale.ts'],
         include: [
             'src/**/*.integration.test.ts',
             'src/**/*.real.integration.test.ts',

@@ -264,7 +264,9 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     })).toHaveLength(1));
     await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount')));
     expect(account.promotions).toHaveLength(1);
-    const retainedRef = account.resources[0]!.entry.ref;
+    const retainedEntry = account.resources[0]!.entry;
+    if (!('ref' in retainedEntry)) throw new Error('Expected acknowledged SavedSecret Resource');
+    const retainedRef = retainedEntry.ref;
     expect(account.settings.voiceSettingsV1.credentialBindings).toHaveLength(1);
     const priorApproval = account.settings.voiceSettingsV1.credentialBindings[0]!.approvedRecipientContractDigest;
     expect(priorApproval).toEqual(expect.any(String));
@@ -288,7 +290,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
     expect(screen.getTextContent()).toContain(t('settingsVoice.externalCredentials.reviewRequired'));
     expect(account.resources).toHaveLength(1);
-    expect(account.resources[0]!.entry.ref).toBe(retainedRef);
+    expect(account.resources[0]!.entry).toMatchObject({ ref: retainedRef });
     const vendorRequest = vi.fn<typeof globalThis.fetch>();
     if (!changed.recipientContract) throw new Error('expected verified external recipient contract');
     const controller = new AbortController();

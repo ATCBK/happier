@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sha1 } from '@noble/hashes/sha1';
 import { bytesToHex } from '@noble/hashes/utils';
@@ -18,51 +18,51 @@ import { projectOverviewDefaultPlacementsV1 } from './builtinWidgetDescriptorV1.
 import { WidgetLayoutItemV1Schema, type WidgetLayoutItemV1, WidgetLayoutItemsV1Schema, WidgetLayoutItemIntentV1Schema, applyWidgetLayoutItemIntentV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, flattenWidgetLayoutWidgetsV1, getWidgetLayoutItemIdV1 } from './widgetLayoutItemV1.js';
 
 export const WIDGET_SURFACE_ARTIFACT_KIND_V1 = 'widget-area-layout.v1';
-export const WidgetAreaSurfaceRefV1Schema = lazyZodSchema(() => WidgetSurfaceRefV1Schema.refine(surface => surface.owner.kind === 'project' || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage', 'Personal area required'));
-export const WidgetAreaLayoutV1Schema = lazyZodSchema(() => z.object({
-    v: z.literal(1), surface: WidgetAreaSurfaceRefV1Schema, name: z.string().trim().min(1).optional(),
+export const WidgetAreaSurfaceRefV1Schema = lazyZodSchema(() => WidgetSurfaceRefV1Schema.check(z.refine(surface => surface.owner.kind === 'project' || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage', 'Personal area required')));
+export const WidgetAreaLayoutV1Schema = lazyZodSchema(() => z.strictObject({
+    v: z.literal(1), surface: WidgetAreaSurfaceRefV1Schema, name: z.optional(z.string().check(z.trim(), z.minLength(1))),
     items: WidgetLayoutItemsV1Schema,
-}).strict());
+}));
 export type WidgetAreaLayoutV1 = z.infer<typeof WidgetAreaLayoutV1Schema>;
 export const WidgetAreaLayoutV1StoredSchema = createStoredReadSchema(WidgetAreaLayoutV1Schema);
 /** Host-owned defaults, passed by the page owner; never an Action-request layout authority. */
-export const WidgetAreaPresetV1Schema = lazyZodSchema(() => z.object({
-    id: z.string().trim().min(1), name: z.string().trim().min(1), items: WidgetLayoutItemsV1Schema,
-}).strict());
+export const WidgetAreaPresetV1Schema = lazyZodSchema(() => z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1)), name: z.string().check(z.trim(), z.minLength(1)), items: WidgetLayoutItemsV1Schema,
+}));
 export type WidgetAreaPresetV1 = z.input<typeof WidgetAreaPresetV1Schema>;
 /**
  * One thing an edited layout differs from its preset by. `item` is the layout's own item, or, for a
  * removed one, the preset's (it is no longer in the layout, and a reader still has to name it).
  */
 export const WidgetAreaPresetChangeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('renamed') }).strict(),
-    z.object({ kind: z.literal('added'), item: WidgetLayoutItemV1Schema }).strict(),
-    z.object({ kind: z.literal('removed'), item: WidgetLayoutItemV1Schema }).strict(),
-    z.object({ kind: z.literal('moved'), item: WidgetLayoutItemV1Schema, direction: z.enum(['up', 'down']) }).strict(),
-    z.object({ kind: z.literal('changed'), item: WidgetLayoutItemV1Schema }).strict(),
+    z.strictObject({ kind: z.literal('renamed') }),
+    z.strictObject({ kind: z.literal('added'), item: WidgetLayoutItemV1Schema }),
+    z.strictObject({ kind: z.literal('removed'), item: WidgetLayoutItemV1Schema }),
+    z.strictObject({ kind: z.literal('moved'), item: WidgetLayoutItemV1Schema, direction: z.enum(['up', 'down']) }),
+    z.strictObject({ kind: z.literal('changed'), item: WidgetLayoutItemV1Schema }),
 ]));
 export type WidgetAreaPresetChangeV1 = z.infer<typeof WidgetAreaPresetChangeV1Schema>;
-export const WidgetAreaPresetStateV1Schema = lazyZodSchema(() => z.object({
-    id: z.string().trim().min(1), name: z.string().trim().min(1), isEdited: z.boolean(),
+export const WidgetAreaPresetStateV1Schema = lazyZodSchema(() => z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1)), name: z.string().check(z.trim(), z.minLength(1)), isEdited: z.boolean(),
     /** What the edit changed, in the layout's order; empty exactly when `isEdited` is false. */
-    changes: z.array(WidgetAreaPresetChangeV1Schema).default([]),
-}).strict());
+    changes: z._default(z.array(WidgetAreaPresetChangeV1Schema), []),
+}));
 export type WidgetAreaPresetStateV1 = z.infer<typeof WidgetAreaPresetStateV1Schema>;
-export const WidgetAreaPresetUndoV1Schema = lazyZodSchema(() => z.object({
+export const WidgetAreaPresetUndoV1Schema = lazyZodSchema(() => z.strictObject({
     surface: WidgetAreaSurfaceRefV1Schema, previousLayout: WidgetAreaLayoutV1Schema, expectedRevision: ArtifactRevisionV1Schema,
-}).strict());
+}));
 export type WidgetAreaPresetUndoV1 = z.infer<typeof WidgetAreaPresetUndoV1Schema>;
-export const WidgetAreaPresetResultV1Schema = lazyZodSchema(() => z.object({
-    surface: WidgetAreaSurfaceRefV1Schema, layout: WidgetAreaLayoutV1Schema, undo: WidgetAreaPresetUndoV1Schema.optional(),
-}).strict());
+export const WidgetAreaPresetResultV1Schema = lazyZodSchema(() => z.strictObject({
+    surface: WidgetAreaSurfaceRefV1Schema, layout: WidgetAreaLayoutV1Schema, undo: z.optional(WidgetAreaPresetUndoV1Schema),
+}));
 export type WidgetAreaPresetResultV1 = z.infer<typeof WidgetAreaPresetResultV1Schema>;
 const instanceId = WidgetInstanceV1Schema.shape.id;
-const index = z.number().int().nonnegative().safe();
+const index = z.number().check(z.int(), z.nonnegative(), z.int());
 export const WidgetAreaLayoutIntentV1Schema = lazyZodSchema(() => z.union([
     WidgetLayoutItemIntentV1Schema,
-    z.object({ kind: z.literal('remove'), instanceId, expectedInstance: WidgetInstanceV1Schema.optional(), expectedPresentation: WidgetExpectedPresentationV1Schema.optional() }).strict(),
-    z.object({ kind: z.literal('move'), instanceId, area: WidgetProjectAreaV1Schema.optional(), groupId: z.string().min(1).nullable().optional(), toIndex: index,
-        expectedInstance: WidgetInstanceV1Schema.optional(), expectedPresentation: WidgetExpectedPresentationV1Schema.optional() }).strict(),
+    z.strictObject({ kind: z.literal('remove'), instanceId, expectedInstance: z.optional(WidgetInstanceV1Schema), expectedPresentation: z.optional(WidgetExpectedPresentationV1Schema) }),
+    z.strictObject({ kind: z.literal('move'), instanceId, area: z.optional(WidgetProjectAreaV1Schema), groupId: z.optional(z.nullable(z.string().check(z.minLength(1)))), toIndex: index,
+        expectedInstance: z.optional(WidgetInstanceV1Schema), expectedPresentation: z.optional(WidgetExpectedPresentationV1Schema) }),
 ]));
 export type WidgetAreaLayoutIntentV1 = z.infer<typeof WidgetAreaLayoutIntentV1Schema>;
 export class WidgetAreaMutationErrorV1 extends Error {
@@ -207,10 +207,10 @@ export type WidgetSurfaceArtifactPortV1 = Readonly<{
 export type WidgetAreaReadV1 =
     | Readonly<{ kind: 'missing'; surface: WidgetSurfaceRefV1; layout: WidgetAreaLayoutV1; preset?: WidgetAreaPresetStateV1 }>
     | Readonly<{ kind: 'present'; layout: WidgetAreaLayoutV1; access: ArtifactCallerAccessV1; revision: WorkBoardArtifactRevisionV1; isShared: boolean; preset?: WidgetAreaPresetStateV1 }>;
-const WidgetSurfaceArtifactHeaderV1Schema = lazyZodSchema(() => z.object({
-    kind: z.literal(WIDGET_SURFACE_ARTIFACT_KIND_V1), v: z.literal(1), title: z.string().trim().min(1),
-    surface: WidgetAreaSurfaceRefV1Schema.optional(), sortKey: z.string().min(1).optional(),
-}).strict());
+const WidgetSurfaceArtifactHeaderV1Schema = lazyZodSchema(() => z.strictObject({
+    kind: z.literal(WIDGET_SURFACE_ARTIFACT_KIND_V1), v: z.literal(1), title: z.string().check(z.trim(), z.minLength(1)),
+    surface: z.optional(WidgetAreaSurfaceRefV1Schema), sortKey: z.optional(z.string().check(z.minLength(1))),
+}));
 const WidgetSurfaceArtifactHeaderV1StoredSchema = createStoredReadSchema(WidgetSurfaceArtifactHeaderV1Schema);
 /** Header discovery and body opening use the same identity and known-field projections. */
 export function buildWidgetSurfaceArtifactHeaderV1(layout: WidgetAreaLayoutV1, sortKey = 'a0'): Readonly<Record<string, unknown>> {
@@ -334,10 +334,10 @@ export function createWidgetSurfaceArtifactPortV1(transport: HomeHubArtifactTran
         }
     } };
 }
-export const WidgetAreaLayoutSummaryV1Schema = lazyZodSchema(() => z.object({
-    artifactId: z.string().min(1), surface: WidgetAreaSurfaceRefV1Schema, name: z.string().trim().min(1),
-    sortKey: z.string().min(1), isDefault: z.boolean(), isPreset: z.boolean(), isEdited: z.boolean(), revision: ArtifactRevisionV1Schema.nullable(),
-}).strict());
+export const WidgetAreaLayoutSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+    artifactId: z.string().check(z.minLength(1)), surface: WidgetAreaSurfaceRefV1Schema, name: z.string().check(z.trim(), z.minLength(1)),
+    sortKey: z.string().check(z.minLength(1)), isDefault: z.boolean(), isPreset: z.boolean(), isEdited: z.boolean(), revision: z.nullable(ArtifactRevisionV1Schema),
+}));
 export type WidgetAreaLayoutSummaryV1 = z.infer<typeof WidgetAreaLayoutSummaryV1Schema>;
 export type WidgetAreaLayoutArtifactTransportV1 = HomeHubArtifactTransportV1 & Pick<WorkBoardArtifactTransportV1, 'list' | 'delete'>;
 type LayoutMutationV1 = Readonly<{ surface: WidgetSurfaceRefV1; expectedRevision: WorkBoardArtifactRevisionV1 | null }>;
@@ -446,9 +446,9 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
         list,
         async create(input: Readonly<{ layoutId: string; name: string; fromSurface?: WidgetSurfaceRefV1 }>, signal?: AbortSignal) {
             requireOwner();
-            const surface = target(namedSurface(z.string().trim().min(1).parse(input.layoutId)));
+            const surface = target(namedSurface(z.string().check(z.trim(), z.minLength(1)).parse(input.layoutId)));
             if (presetFor(surface)) throw new WidgetAreaMutationErrorV1('widget_area_layout_already_exists');
-            const name = z.string().trim().min(1).parse(input.name);
+            const name = z.string().check(z.trim(), z.minLength(1)).parse(input.name);
             const row = await fetch(surface, signal);
             if (row) throw new WidgetAreaMutationErrorV1('widget_area_layout_already_exists');
             const entries = await list(signal);
@@ -465,7 +465,7 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
             const row = await fetch(surface, signal, true); expectRevision(row, input.expectedRevision);
             if (!row && !presetFor(surface)) throw new WidgetAreaMutationErrorV1('widget_area_not_found');
             const layout = row ? readWidgetSurfaceArtifactV1(row)! : missingAreaLayout(surface, presetFor(surface));
-            return save(surface, row, { ...layout, name: z.string().trim().min(1).parse(input.name) }, typeof row?.header.sortKey === 'string' ? row.header.sortKey : presetFor(surface)?.sortKey ?? 'a0', signal);
+            return save(surface, row, { ...layout, name: z.string().check(z.trim(), z.minLength(1)).parse(input.name) }, typeof row?.header.sortKey === 'string' ? row.header.sortKey : presetFor(surface)?.sortKey ?? 'a0', signal);
         },
         async delete(input: LayoutMutationV1, signal?: AbortSignal) {
             requireOwner();

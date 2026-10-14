@@ -17,7 +17,7 @@ import {
     normalizeAutomationAssignments,
 } from "./automationValidation";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
-import { parseAutomationStoredWorkflowDefinitionRecipeV2 } from "@happier-dev/protocol";
+import { parseAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
 
 type AutomationAssignmentWakeRun = Readonly<{
     triggerId: string | null;

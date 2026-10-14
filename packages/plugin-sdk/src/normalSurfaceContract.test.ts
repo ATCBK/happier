@@ -804,8 +804,8 @@ describe('normal supported package surface', () => {
                 sourceIdentity: 'AgentSessionRunnerFactoryLocatorV1',
             },
             {
-                exportName: 'PromptAssetCapabilities',
-                sourceIdentity: 'PromptAssetCapabilitiesV1',
+                exportName: 'PromptAssetContribution',
+                sourceIdentity: 'PluginPromptAssetContributionV1',
             },
             {
                 exportName: 'PluginActionInputById',

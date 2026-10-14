@@ -16,6 +16,13 @@ export type {
   HappierStyleProp,
   HappierTextSelection,
 } from './portableTypes.js';
+export {
+  HappierItemAddRow,
+  type HappierItemAddRowContentProps,
+  type HappierItemAddRowRenderProps,
+  type HappierItemAddRowProps,
+} from './collection/ItemAddRow.js';
+export { resolveHappierPageRowDetailLayout } from './layout/pageRowDetail.js';
 export * from './work/workVocabulary.js';
 export { HappierRoleMark } from './work/RoleMark.js';
 export {
@@ -26,12 +33,21 @@ export {
 } from './interaction/DecisionBar.js';
 export * from './interaction/companionReleaseMotion.js';
 export { HappierMotionFeedback, type MotionFeedbackProps } from './interaction/MotionFeedback.js';
+export { useHappierCopyFeedback } from './interaction/copyFeedback.js';
 export { HappierComposerChip, type HappierComposerChipProps } from './interaction/ComposerChip.js';
 export {
   HappierApprovalPromptChrome,
   type HappierApprovalPromptChromeProps,
   type HappierApprovalPromptTextRender,
 } from './interaction/ApprovalPromptChrome.js';
+export {
+  HappierApprovalPendingNotice,
+  HappierNoticeLine,
+  type HappierApprovalPendingNoticeProps,
+  type HappierApprovalPendingNoticeTextRender,
+  type HappierNoticeLineProps,
+  type HappierNoticeLineTextRender,
+} from './interaction/ApprovalPendingNotice.js';
 export * from './interaction/companionPointerDragConfig.js';
 export * from './interaction/resolveCompanionDragVelocity.js';
 export * from './interaction/companionGeometry.js';
@@ -39,6 +55,7 @@ export * from './interaction/useCompanionPointerDragSession.js';
 export {
   frameRectsOverlap,
   resolveFloatingFrameRect,
+  resolveFloatingFrameResizeRect,
   type FrameRect,
   type FloatingFrameMode,
   type FloatingFrameGeometry,
@@ -405,6 +422,7 @@ export {
   HappierText,
   HappierTextSelectabilityScope,
   useHappierTextPresentation,
+  useHappierTextSelectability,
   type HappierTextProps,
   type HappierTextPresentation,
   type HappierTextPresentationInput,
@@ -797,6 +815,7 @@ export {
 } from './collection/ItemGroup.js';
 export {
   HappierItemOverflow,
+  useHappierItemOverflowState,
   type HappierItemOverflowAction,
   type HappierItemOverflowProps,
   type HappierItemOverflowRenderInput,

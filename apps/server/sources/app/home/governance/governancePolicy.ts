@@ -1,19 +1,5 @@
-import {
-    HOME_TEAM_CREATION_POLICY_DEFAULT_V1,
-    HOME_TEAMS_VISIBLE_TO_MEMBERS_DEFAULT_V1,
-    readHomeAuthenticationPolicyV1,
-    readHomeIdentityNetworkPolicyV1,
-    readHomeTeamProviderPolicyV1,
-    readTeamCreationPolicyV1,
-    type HomeAuthenticationPolicyReadV1,
-    type HomeAuthenticationPolicyV1,
-    type HomeGovernancePolicySetInputV1,
-    type HomeSignInServicePolicyV1,
-    type HomeIdentityNetworkPolicyReadV1,
-    type HomeTeamProviderPolicyReadV1,
-    type ManagedIdentityProviderKindV1,
-    type TeamCreationPolicyV1,
-} from "@happier-dev/protocol";
+import { HOME_TEAM_CREATION_POLICY_DEFAULT_V1, HOME_TEAMS_VISIBLE_TO_MEMBERS_DEFAULT_V1, readHomeAuthenticationPolicyV1, readHomeIdentityNetworkPolicyV1, readHomeTeamProviderPolicyV1, readTeamCreationPolicyV1, type HomeAuthenticationPolicyReadV1, type HomeAuthenticationPolicyV1, type HomeGovernancePolicySetInputV1, type HomeIdentityNetworkPolicyReadV1, type HomeTeamProviderPolicyReadV1, type ManagedIdentityProviderKindV1, type TeamCreationPolicyV1 } from '@happier-dev/protocol/home/governance';
+import { type HomeSignInServicePolicyV1 } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";

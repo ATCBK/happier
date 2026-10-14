@@ -491,7 +491,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
             selectedTargetWorkspaceRefIds: targetIds, relationshipIds, strategy: 'keep_both' }) : null;
     const selectedDetail = selectedPath ? (
             <View style={props.embedded ? undefined : { flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, padding: theme.space.s12 }}>
                     {!props.approvedRequest ? <IconButton iconName="arrow-left" accessibilityLabel={t('common.back')} onPress={() => {
                         returnToRowRef.current = true;
                         returnedPathRef.current = selectedPath;
@@ -501,15 +501,15 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                     <Text numberOfLines={2} style={{ flex: 1 }}>{selectedPath}</Text>
                     <IconButton iconName="arrow-clockwise" accessibilityLabel={t('workspaceSync.actions.refresh')} onPress={refresh} />
                 </View>
-                <ScrollView scrollEnabled={!props.embedded} style={props.embedded ? undefined : { flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
-                    {inspectionPhase === 'loading' ? <Text style={{ padding: 16 }}>{t('common.loading')}</Text> : null}
-                    {inspectionPhase === 'error' ? <Text accessibilityLiveRegion="polite" style={{ padding: 16 }}>{t('workspaceSync.review.inspectionUnavailable')}</Text> : null}
+                <ScrollView scrollEnabled={!props.embedded} style={props.embedded ? undefined : { flex: 1 }} contentContainerStyle={{ paddingBottom: theme.space.s24 }}>
+                    {inspectionPhase === 'loading' ? <Text style={{ padding: theme.space.s16 }}>{t('common.loading')}</Text> : null}
+                    {inspectionPhase === 'error' ? <Text accessibilityLiveRegion="polite" style={{ padding: theme.space.s16 }}>{t('workspaceSync.review.inspectionUnavailable')}</Text> : null}
                     {props.approvedRequest && inspectionPhase === 'ready' && !approvedCurrent ? <Text accessibilityLiveRegion="polite"
-                        style={{ padding: 16, color: theme.colors.state.warning.foreground }}>
+                        style={{ padding: theme.space.s16, color: theme.colors.state.warning.foreground }}>
                         {t('workspaceSync.resolve.changedBody')}
                     </Text> : null}
                     {!selectedRow || invalidated || !projection.coverage.complete || !currentInspection?.coverage.complete ? (
-                        <Text accessibilityLiveRegion="polite" style={{ padding: 16, color: theme.colors.state.warning.foreground }}>
+                        <Text accessibilityLiveRegion="polite" style={{ padding: theme.space.s16, color: theme.colors.state.warning.foreground }}>
                             {t('workspaceSync.review.coverageIncomplete')}
                         </Text>
                     ) : null}
@@ -555,7 +555,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                                             }}
                                         />
                                         {currentInspection.versions.length > 2 && !version.endpointWorkspaceRefIds.includes(sourceId ?? '') ? (
-                                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingBottom: 8 }}>
+                                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s8 }}>
                                                 <RoundButton size="normal" display="inverted"
                                                     title={t('workspaceSync.review.compareNamedVersion', { name: endpointLabel(id) })}
                                                     onPress={() => setCompareWorkspaceRefId(id)} />
@@ -599,20 +599,20 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                                 {sourcePreview.phase === 'refreshing' || comparePreview.phase === 'refreshing'
                                     || (sourcePreview.phase === 'error' && sourcePreview.value)
                                     || (comparePreview.phase === 'error' && comparePreview.value)
-                                    ? <Text accessibilityLiveRegion="polite" style={{ paddingHorizontal: 16, color: theme.colors.state.warning.foreground }}>
+                                    ? <Text accessibilityLiveRegion="polite" style={{ paddingHorizontal: theme.space.s16, color: theme.colors.state.warning.foreground }}>
                                         {t('workspaceSync.previewUnavailable')}
                                     </Text> : null}
                                 {comparisonText ? (
                                         <DiffViewer mode="text" filePath={selectedPath} oldText={comparisonText.oldText} newText={comparisonText.newText}
                                             showLineNumbers={true} presentationStyleOverride="unified" />
                                     ) : (
-                                        <View style={{ padding: 16, gap: 8 }}>
+                                        <View style={{ padding: theme.space.s16, gap: theme.space.s8 }}>
                                             <Text>{sourceVersion?.entry.kind === 'file' ? (sourcePreview.phase === 'loading' ? t('common.loading') : previewLabel(sourcePreview.value)) : sourceVersion ? entryLabel(sourceVersion.entry) : t('workspaceSync.review.unknown')}</Text>
                                             <Text>{compareVersion?.entry.kind === 'file' ? (comparePreview.phase === 'loading' ? t('common.loading') : previewLabel(comparePreview.value)) : compareVersion ? entryLabel(compareVersion.entry) : t('workspaceSync.review.unknown')}</Text>
                                         </View>
                                     )}
                             </ItemGroup>
-                            {actionPhase ? <Text accessibilityLiveRegion="polite" style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+                            {actionPhase ? <Text accessibilityLiveRegion="polite" style={{ paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s12 }}>
                                 {t(actionPhase === 'applying' ? 'workspaceSync.review.applying' : 'workspaceSync.review.requestingApproval')}
                             </Text> : null}
                             <ItemGroup title={t('workspaceSync.review.linkDecisions')}>
@@ -660,19 +660,19 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                                         machineLabel={endpointLabel(preserved.destinationWorkspaceRefId)} />,
                                 ] : [])}
                             </ItemGroup></View> : null}
-                    {props.approvedRequest && visibleOutcome ? <View style={{ paddingHorizontal: 12, paddingBottom: 12 }}>
+                    {props.approvedRequest && visibleOutcome ? <View style={{ paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s12 }}>
                         <RoundButton size="normal" display="inverted"
                             title={t('workspaceSync.review.inspectCurrentVersions')}
                             loading={inspectionPhase === 'loading'} disabled={inspectionPhase === 'loading'}
                             onPress={refresh} />
                     </View> : null}
-                    {resolveError ? <Text accessibilityLiveRegion="polite" style={{ padding: 16 }}>
+                    {resolveError ? <Text accessibilityLiveRegion="polite" style={{ padding: theme.space.s16 }}>
                                 {resolveError === 'changed' ? t('workspaceSync.resolve.changedBody') : t('errors.operationFailed')}
                             </Text> : null}
                 </ScrollView>
-                {!props.approvedRequest && currentInspection && sourceId ? <View style={{ padding: 12, gap: 8 }}>
+                {!props.approvedRequest && currentInspection && sourceId ? <View style={{ padding: theme.space.s12, gap: theme.space.s8 }}>
                     <Text numberOfLines={2}>{endpointLabel(sourceId)} · {sourceVersion ? entryLabel(sourceVersion.entry) : t('workspaceSync.review.unknown')}</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 }}>
                         {outcome || resolveError ? <RoundButton size="normal"
                             title={t('workspaceSync.review.inspectCurrentVersions')}
                             disabled={reinspectingTerminal} loading={reinspectingTerminal}
@@ -717,7 +717,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
         estimatedItemSize={64}
         extraData={selectedPath}
         style={showPathList ? (splitComparison && selectedPath ? { width: 320, maxWidth: '40%' } : { flex: 1 }) : { display: 'none' }}
-        contentContainerStyle={{ paddingTop: 12, paddingBottom: 24 }}
+        contentContainerStyle={{ paddingTop: theme.space.s12, paddingBottom: theme.space.s24 }}
         onScroll={(event) => { if (showPathList) listScrollOffsetRef.current = event.nativeEvent.contentOffset.y; }}
         ListHeaderComponent={<>
             <ItemGroup title={t('workspaceSync.title')}>

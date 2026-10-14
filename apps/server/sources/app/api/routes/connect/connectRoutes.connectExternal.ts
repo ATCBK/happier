@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../types";
 import { Context } from "@/context";
@@ -14,7 +14,7 @@ import { connectPendingSchema } from "./oauthExternal/oauthExternalSchemas";
 import { OAUTH_STATE_UNAVAILABLE_CODE } from "@/app/auth/oauthStateErrors";
 import { OAUTH_NOT_CONFIGURED_ERROR } from "./oauthExternal/oauthExternalErrors";
 import { registerExternalConnectFinalizeRoute } from "./oauthExternal/registerExternalConnectFinalizeRoute";
-import { ExternalOAuthErrorResponseSchema, ExternalOAuthParamsResponseSchema } from "@happier-dev/protocol";
+import { ExternalOAuthErrorResponseSchema, ExternalOAuthParamsResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { NotFoundSchema } from "../../schemas/notFoundSchema";
 import { resolveWebAppOAuthReturnUrlFromRequestHeaders } from "./oauthExternal/oauthExternalConfig";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
@@ -31,11 +31,11 @@ export function connectConnectExternalRoutes(app: Fastify) {
         schema: {
             params: z.object({ provider: z.string() }),
             querystring: z.object({
-                connectFinalization: z.literal("credential_adoption_v1").optional(),
-                purpose: z.literal("team_admission").optional(),
-                teamId: z.string().optional(),
-                connectionId: z.string().optional(),
-                origin: z.enum(["home", "team"]).optional(),
+                connectFinalization: z.optional(z.literal("credential_adoption_v1")),
+                purpose: z.optional(z.literal("team_admission")),
+                teamId: z.optional(z.string()),
+                connectionId: z.optional(z.string()),
+                origin: z.optional(z.enum(["home", "team"])),
             }),
             response: {
                 200: ExternalOAuthParamsResponseSchema,

@@ -1,3 +1,4 @@
+import './configureZodLocale';
 import { writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';

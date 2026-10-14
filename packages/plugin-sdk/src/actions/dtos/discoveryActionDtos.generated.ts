@@ -97,7 +97,7 @@ export type DiscoveryActionInputById = {
                         submitLabel?: string | undefined;
                         fields?: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -193,7 +193,7 @@ export type DiscoveryActionResultById = {
             inputHints: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -271,7 +271,7 @@ export type DiscoveryActionResultById = {
                 machineId?: 'current_session_machine' | undefined;
             } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
-            sideEffectClass?: 'external' | 'read' | 'none' | 'danger' | 'write' | undefined;
+            sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
             operation?: {
                 version: 1;
                 visibility: 'activity';
@@ -313,7 +313,7 @@ export type DiscoveryActionResultById = {
             inputHints: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -393,7 +393,7 @@ export type DiscoveryActionResultById = {
                 machineId?: 'current_session_machine' | undefined;
             } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
-            sideEffectClass?: 'external' | 'read' | 'none' | 'danger' | 'write' | undefined;
+            sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
             operation?: {
                 version: 1;
                 visibility: 'activity';
@@ -474,6 +474,7 @@ export type DiscoveryActionResultById = {
                         descriptor: {
                             id: string;
                             name: string;
+                            costTier?: 'low' | 'standard' | 'premium' | undefined;
                             aliases?: string[] | undefined;
                             description?: string | undefined;
                             contextWindowTokens?: number | undefined;
@@ -562,6 +563,7 @@ export type DiscoveryActionResultById = {
                             descriptor: {
                                 id: string;
                                 name: string;
+                                costTier?: 'low' | 'standard' | 'premium' | undefined;
                                 aliases?: string[] | undefined;
                                 description?: string | undefined;
                                 contextWindowTokens?: number | undefined;
@@ -702,7 +704,5 @@ export type DiscoveryActionResultById = {
             } | null;
         } | undefined;
     };
-    readonly "action.invoke": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "action.invoke": JsonValue;
 };

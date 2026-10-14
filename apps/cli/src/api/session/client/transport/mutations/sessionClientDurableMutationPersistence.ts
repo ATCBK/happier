@@ -821,6 +821,7 @@ function isSessionClientDurableMutationAttemptReason(
 ): value is SessionClientDurableMutationAttemptReason {
     return value === 'delivery_not_confirmed'
         || value === 'delivery_error'
+        || value === 'session_turn_mutation_rejected'
         || value === 'metadata_tuple_conflict'
         || value === 'transcript_message_provenance_missing_or_invalid'
         || value === 'transcript_message_invalid_observation';

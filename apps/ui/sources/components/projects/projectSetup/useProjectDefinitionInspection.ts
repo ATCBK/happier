@@ -35,10 +35,10 @@ export function useProjectDefinitionInspection(workspace: WorkspaceAddressV1 | n
     const workspaceRef = React.useRef(workspace);
     workspaceRef.current = workspace;
     const retry = React.useCallback(() => {
-        // Keep the definition usable, but do not retain an authoritative readiness claim while its
-        // captured requester is reading the target again.
+        // Refresh is not evidence of changed setup inputs. Keep the last inspected readiness and
+        // its basis until this exact checkout's reader publishes new facts or its Account retires.
         setRead(previous => previous?.scopeKey === scopeKey && 'value' in previous.read
-            ? { ...previous, read: { ...previous.read, value: { ...previous.read.value, setupReadiness: undefined }, refreshing: true } } : previous);
+            ? { ...previous, read: { ...previous.read, refreshing: true } } : previous);
         setRefresh(value => value + 1);
     }, [scopeKey]);
     React.useEffect(() => {
@@ -96,7 +96,7 @@ export function useProjectDefinitionInspection(workspace: WorkspaceAddressV1 | n
             const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
                 ? error.code : 'project_definition_inspection_failed';
             setRead(previous => previous?.scopeKey === scopeKey && 'value' in previous.read
-                ? { ...previous, read: { ...previous.read, value: { ...previous.read.value, setupReadiness: undefined }, refreshing: false, error: code } }
+                ? { ...previous, read: { ...previous.read, refreshing: false, error: code } }
                 : { scopeKey, read: { key, error: code } });
         });
         return () => { retirement.dispose(); controller.abort(); };

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const WIDGET_INSTANCE_ACTION_IDS_V1 = [
   'widgets.catalog.list', 'widgets.item.list', 'widgets.item.add', 'widgets.item.remove',

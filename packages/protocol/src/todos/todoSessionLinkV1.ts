@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
-const scopeIdentity = z.object({ serverId: z.string().min(1), accountId: z.string().min(1) }).strict();
-const sessionIdentity = scopeIdentity.extend({ sessionId: z.string().min(1) }).strict();
-const linkedSession = z.object({ title: z.string(), linkedAt: z.number(), session: sessionIdentity.optional() }).strict();
+const scopeIdentity = z.strictObject({ serverId: z.string().check(z.minLength(1)), accountId: z.string().check(z.minLength(1)) });
+const sessionIdentity = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scopeIdentity, { sessionId: z.string().check(z.minLength(1)) }));
+const linkedSession = z.strictObject({ title: z.string(), linkedAt: z.number(), session: z.optional(sessionIdentity) });
 /** The existing todo.<id> record, including released bare Session-key links. */
-export const TodoItemV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), title: z.string(), done: z.boolean(), createdAt: z.number(), updatedAt: z.number(),
-  completedAt: z.number().optional(), linkedSessions: z.record(z.string(), linkedSession).optional(),
-}).strict());
+export const TodoItemV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), title: z.string(), done: z.boolean(), createdAt: z.number(), updatedAt: z.number(),
+  completedAt: z.optional(z.number()), linkedSessions: z.optional(z.record(z.string(), linkedSession)),
+}));
 export const TodoItemV1StoredSchema = createStoredReadSchema(TodoItemV1Schema);
 export type TodoItemV1 = z.infer<typeof TodoItemV1Schema>;
-export const TodoSessionLinkInputV1Schema = lazyZodSchema(() => z.object({
-  scope: scopeIdentity, taskId: z.string().min(1), session: sessionIdentity,
-}).strict());
+export const TodoSessionLinkInputV1Schema = lazyZodSchema(() => z.strictObject({
+  scope: scopeIdentity, taskId: z.string().check(z.minLength(1)), session: sessionIdentity,
+}));
 export type TodoSessionLinkInputV1 = z.infer<typeof TodoSessionLinkInputV1Schema>;
 export const TodoSessionLinkOutputV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('linked') }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
-  z.object({ status: z.literal('refused'), reason: z.enum(['task_deleted', 'task_scope_mismatch', 'invalid_input']) }).strict(),
-  z.object({ status: z.literal('unknown'), reason: z.literal('task_link_failed') }).strict(),
+  z.strictObject({ status: z.literal('linked') }),
+  z.strictObject({ status: z.literal('unavailable') }),
+  z.strictObject({ status: z.literal('refused'), reason: z.enum(['task_deleted', 'task_scope_mismatch', 'invalid_input']) }),
+  z.strictObject({ status: z.literal('unknown'), reason: z.literal('task_link_failed') }),
 ]));
 export type TodoSessionLinkOutputV1 = z.infer<typeof TodoSessionLinkOutputV1Schema>;
 export class TodoSessionLinkErrorV1 extends Error {

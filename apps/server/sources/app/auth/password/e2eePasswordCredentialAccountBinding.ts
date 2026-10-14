@@ -1,8 +1,4 @@
-import {
-    decodePasswordCredentialFieldV1,
-    type E2eeAccountPasswordCredentialV1,
-    type PasswordWrappedRecoverySecretV1,
-} from "@happier-dev/protocol";
+import { decodePasswordCredentialFieldV1, type E2eeAccountPasswordCredentialV1, type PasswordWrappedRecoverySecretV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import * as privacyKit from "privacy-kit";
 
 /** An E2EE password envelope must wrap the secret for its owning Account identity. */

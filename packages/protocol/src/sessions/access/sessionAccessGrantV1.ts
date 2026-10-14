@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   AccountPrincipalRefV1Schema, GroupPrincipalRefV1Schema, TeamPrincipalRefV1Schema,
 } from '../../teams/principal.js';
@@ -15,7 +15,7 @@ const grantValue = {
 
 function enforcePermissionDelegationLevel(
   grant: Readonly<{ accessLevel: z.infer<typeof SessionAccessLevelV1Schema>; canApprovePermissions: boolean }>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ) {
   if (grant.accessLevel === 'view' && grant.canApprovePermissions) {
     ctx.addIssue({
@@ -27,28 +27,28 @@ function enforcePermissionDelegationLevel(
 
 /** Public desired-state grant intent. Encryption material is host-owned. */
 export const SessionGrantIntentV1Schema = lazyZodSchema(() => z.union([
-  z.object({ subject: AccountPrincipalRefV1Schema, ...grantValue }).strict(),
-  z.object({ subject: TeamPrincipalRefV1Schema, ...grantValue }).strict(),
-  z.object({ subject: GroupPrincipalRefV1Schema, ...grantValue }).strict(),
-]).superRefine(enforcePermissionDelegationLevel));
+  z.strictObject({ subject: AccountPrincipalRefV1Schema, ...grantValue }),
+  z.strictObject({ subject: TeamPrincipalRefV1Schema, ...grantValue }),
+  z.strictObject({ subject: GroupPrincipalRefV1Schema, ...grantValue }),
+]).check(z.superRefine(enforcePermissionDelegationLevel)));
 export type SessionGrantIntentV1 = z.infer<typeof SessionGrantIntentV1Schema>;
 
 /** Private physical mutation. Only a trusted host may add direct-recipient material. */
 export const SessionGrantMutationV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     subject: AccountPrincipalRefV1Schema,
     ...grantValue,
-    accountEnvelopeInput: SessionRecipientEnvelopeInputV1Schema.optional(),
-  }).strict(),
-  z.object({ subject: TeamPrincipalRefV1Schema, ...grantValue }).strict(),
-  z.object({ subject: GroupPrincipalRefV1Schema, ...grantValue }).strict(),
-]).superRefine(enforcePermissionDelegationLevel));
+    accountEnvelopeInput: z.optional(SessionRecipientEnvelopeInputV1Schema),
+  }),
+  z.strictObject({ subject: TeamPrincipalRefV1Schema, ...grantValue }),
+  z.strictObject({ subject: GroupPrincipalRefV1Schema, ...grantValue }),
+]).check(z.superRefine(enforcePermissionDelegationLevel)));
 export type SessionGrantMutationV1 = z.infer<typeof SessionGrantMutationV1Schema>;
 
 /** Explicit grant facts exclude persistence identity, timestamps, keys, and membership. */
 export const SessionAccessGrantV1Schema = lazyZodSchema(() => z.union([
-  z.object({ subject: AccountPrincipalRefV1Schema, ...grantValue }).strict(),
-  z.object({ subject: TeamPrincipalRefV1Schema, ...grantValue, requiredByTeamPolicy: z.boolean() }).strict(),
-  z.object({ subject: GroupPrincipalRefV1Schema, ...grantValue }).strict(),
+  z.strictObject({ subject: AccountPrincipalRefV1Schema, ...grantValue }),
+  z.strictObject({ subject: TeamPrincipalRefV1Schema, ...grantValue, requiredByTeamPolicy: z.boolean() }),
+  z.strictObject({ subject: GroupPrincipalRefV1Schema, ...grantValue }),
 ]));
 export type SessionAccessGrantV1 = z.infer<typeof SessionAccessGrantV1Schema>;

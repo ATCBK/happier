@@ -6,7 +6,7 @@ import { isProfileCompatibleWithAgent } from './profileCompatibility.js';
 import { isLaunchProfileV2, type AiLaunchProfile } from './read.js';
 import { AIBackendProfileSchema } from './backendProfileSchema.js';
 import { LaunchProfileV2Schema } from './v2/schema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProfileRecordIdV1Schema } from './profileRecordSchemaV1.js';
 
@@ -24,7 +24,7 @@ import { ProfileRecordIdV1Schema } from './profileRecordSchemaV1.js';
  * Protocol does not depend on. Compatibility itself is still decided here, so
  * the rule has one owner and only its input is supplied.
  */
-export const LaunchProfileListItemV1Schema = lazyZodSchema(() => z.object({
+export const LaunchProfileListItemV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProfileRecordIdV1Schema,
   name: AIBackendProfileSchema.shape.name,
   isBuiltIn: z.boolean(),
@@ -48,7 +48,7 @@ export const LaunchProfileListItemV1Schema = lazyZodSchema(() => z.object({
   preferredAgentTargetKey: LaunchProfileV2Schema.shape.preferredAgentTargetKey,
   placement: LaunchProfileV2Schema.shape.placement,
   checkout: LaunchProfileV2Schema.shape.checkout,
-}).strict());
+}));
 export type LaunchProfileListItemV1 = Readonly<z.infer<typeof LaunchProfileListItemV1Schema>>;
 
 export function mapAiLaunchProfileToListItemV1(

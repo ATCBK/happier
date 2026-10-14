@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
-import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { z } from 'zod/mini';
+import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { CallerInputConstraintsV1Schema, type CallerInputConstraintsV1 } from './callerInputConstraintsV1.js';
 export { CallerInputConstraintsV1Schema, type CallerInputConstraintsV1 } from './callerInputConstraintsV1.js';
 import { ACTION_ID_FAMILIES_V1, ActionIdFamilyV1Schema, type ActionIdFamilyV1 } from '../actions/actionIds.js';
@@ -21,10 +21,10 @@ import { parseQualifiedPluginActionId } from '../plugins/actions/qualifiedAction
 import { SessionSpawnNewInputV2BaseSchema, SessionSpawnNewInputV2Schema } from '../sessions/creation/sessionSpawnNewInputV2.js';
 
 /** Prompt-free admission projection; ordinary Session input retains private custody. */
-export const ApiTokenSessionSpawnAdmissionV1Schema = lazyZodSchema(() => SessionSpawnNewInputV2BaseSchema.pick({
+export const ApiTokenSessionSpawnAdmissionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.pick(SessionSpawnNewInputV2BaseSchema, {
   executionTarget: true, agentTarget: true, directory: true, organizationPlacement: true,
   modelSelection: true, permissionMode: true,
-}).strict());
+})));
 export type ApiTokenSessionSpawnAdmissionV1 = z.infer<typeof ApiTokenSessionSpawnAdmissionV1Schema>;
 export function projectApiTokenSessionSpawnAdmissionV1(input: unknown): ApiTokenSessionSpawnAdmissionV1 {
   const canonical = SessionSpawnNewInputV2Schema.parse(input);
@@ -36,37 +36,40 @@ export function projectApiTokenSessionSpawnAdmissionV1(input: unknown): ApiToken
   });
 }
 
-export const ApiTokenGrantOriginV1Schema = lazyZodSchema(() => CanonicalHttpOriginSchema.refine((value) => {
+export const ApiTokenGrantOriginV1Schema = lazyZodSchema(() => CanonicalHttpOriginSchema.check(z.refine((value) => {
   // Zod runs refinements after a dirty superRefine; invalid input must stay a typed refusal.
   if (!CanonicalHttpOriginSchema.safeParse(value).success) return false;
   const url = new URL(value);
   return url.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-}, 'Grant origins require HTTPS, except HTTP on loopback.'));
+}, 'Grant origins require HTTPS, except HTTP on loopback.')));
 
-const GrantIdSchema = lazyZodSchema(() => z.string().min(1));
+const GrantIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 const modelKey = (ref: ProviderBoundModelRef) => JSON.stringify([ref.agentTargetKey, ref.providerConnectionId, ref.modelId]);
 
-export const ApiTokenGrantV1Schema = lazyZodSchema(() => z.object({
+export const ApiTokenGrantV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  actions: z.object({ families: z.array(ActionIdFamilyV1Schema), ids: z.array(GrantIdSchema) }).strict().nullable(),
-  targets: z.object({ sessions: z.array(GrantIdSchema), machines: z.array(GrantIdSchema) }).strict().nullable(),
+  actions: z.nullable(z.strictObject({ families: z.array(ActionIdFamilyV1Schema), ids: z.array(GrantIdSchema) })),
+  targets: z.nullable(z.strictObject({ sessions: z.array(GrantIdSchema), machines: z.array(GrantIdSchema) })),
+  /** Exact workflow.trigger.run_now operand restriction; absent/null is unrestricted. */
+  automationIds: z.optional(z.nullable(z.array(GrantIdSchema).check(z.minLength(1)))),
   approve: z.boolean(),
   origins: z.array(ApiTokenGrantOriginV1Schema),
   models: CallerInputConstraintsV1Schema.shape.models,
   permissionModes: CallerInputConstraintsV1Schema.shape.permissionModes,
-  create: z.object({
+  create: z.nullable(z.strictObject({
     machineId: GrantIdSchema,
     agentTargetKey: ProviderAgentTargetKeySchema,
     directory: z.literal('managed'),
     placement: SessionOrganizationPlacementV1Schema,
-  }).strict().nullable(),
-}).strict().superRefine((value, context) => {
+  })),
+}).check(z.superRefine((value, context) => {
   const lists: ReadonlyArray<readonly [readonly string[], readonly (string | number)[]]> = [
     [value.origins, ['origins']],
     ...(value.actions ? [[value.actions.families, ['actions', 'families']], [value.actions.ids, ['actions', 'ids']]] as const : []),
     ...(value.targets ? [[value.targets.sessions, ['targets', 'sessions']], [value.targets.machines, ['targets', 'machines']]] as const : []),
     ...(value.models ? [[value.models.map(modelKey), ['models']]] as const : []),
     ...(value.permissionModes ? [[value.permissionModes, ['permissionModes']]] as const : []),
+    ...(value.automationIds ? [[value.automationIds, ['automationIds']]] as const : []),
   ];
   for (const [list, path] of lists) if (new Set(list).size !== list.length) context.addIssue({ code: 'custom', path: [...path], message: 'Grant entries must be unique.' });
   if (value.actions && !value.actions.families.length && !value.actions.ids.length) context.addIssue({ code: 'custom', path: ['actions'], message: 'A restricted action grant must be nonempty.' });
@@ -74,8 +77,10 @@ export const ApiTokenGrantV1Schema = lazyZodSchema(() => z.object({
   if (value.create && value.targets && !value.targets.machines.includes(value.create.machineId)) {
     context.addIssue({ code: 'custom', path: ['create', 'machineId'], message: 'The creation machine must belong to the grant targets.' });
   }
-}));
+})));
 export type ApiTokenGrantV1 = z.infer<typeof ApiTokenGrantV1Schema>;
+// Grants carry authority: stored reads must not erase an unknown restriction.
+defineStoredReadProjection(ApiTokenGrantV1Schema, () => ApiTokenGrantV1Schema);
 export const StoredApiTokenGrantV1Schema = createStoredReadSchema(ApiTokenGrantV1Schema);
 
 export const API_TOKEN_FULL_GRANT_V1: ApiTokenGrantV1 = Object.freeze({
@@ -83,7 +88,7 @@ export const API_TOKEN_FULL_GRANT_V1: ApiTokenGrantV1 = Object.freeze({
 });
 
 export function isApiTokenGrantRestrictedV1(grant: ApiTokenGrantV1): boolean {
-  return grant.actions !== null || grant.targets !== null || grant.models !== null || grant.permissionModes !== null || grant.create !== null;
+  return grant.actions !== null || grant.targets !== null || grant.models !== null || grant.permissionModes !== null || grant.create !== null || grant.automationIds != null;
 }
 
 const DISCOVERY_IDS = new Set(['action.spec.search', 'action.spec.get', 'action.options.resolve']);
@@ -110,7 +115,10 @@ export function isApiTokenGrantTargetMemberV1(grant: ApiTokenGrantV1, target?: E
 }
 
 function placementsEqual(a: SessionOrganizationPlacementV1, b: SessionOrganizationPlacementV1): boolean {
-  return a.folderId === b.folderId && a.tagIds.length === b.tagIds.length && a.tagIds.every((tag, index) => tag === b.tagIds[index]);
+  if (a.folderId !== b.folderId) return false;
+  const aTags = new Set(a.tagIds);
+  const bTags = new Set(b.tagIds);
+  return aTags.size === bTags.size && [...aTags].every((tag) => bTags.has(tag));
 }
 
 /** All transports call this owner; encrypted spawn fields are decisively rechecked by the daemon. */
@@ -121,12 +129,17 @@ export function evaluateApiTokenGrantV1(input: Readonly<{
   /** Host-only opaque ingress/currentness stage. Execution must supply the resolved identity. */
   contributedActionAdmission?: 'pre_open';
   spawnInput?: unknown;
+  automationId?: unknown;
   target?: ExternalActionTargetV1 | null;
   targetMachineId?: string | null;
-}>): { ok: true } | { ok: false; reason: 'action_not_granted' | 'target_required' | 'target_not_granted' | 'create_not_granted' } {
+}>): { ok: true } | { ok: false; reason: 'action_not_granted' | 'target_required' | 'target_not_granted' | 'create_not_granted' | 'automation_not_granted' } {
   const { grant, actionId, target } = input;
   if (!actionGranted(grant, actionId, input.contributedQualifiedId, input.contributedActionAdmission)) return { ok: false, reason: 'action_not_granted' };
   if (DISCOVERY_IDS.has(actionId)) return { ok: true };
+  if (actionId === 'workflow.trigger.run_now' && grant.automationIds != null
+    && (typeof input.automationId !== 'string' || !grant.automationIds.includes(input.automationId))) {
+    return { ok: false, reason: 'automation_not_granted' };
+  }
   if (actionId === 'session.spawn_new' && grant.create !== null) {
     const binding = grant.create;
     if (target?.kind !== 'machine' || target.machineId !== binding.machineId) return { ok: false, reason: 'create_not_granted' };
@@ -156,6 +169,7 @@ export function evaluateApiTokenGrantV1(input: Readonly<{
 export function isApiTokenGrantWithinV1(child: ApiTokenGrantV1, parent: ApiTokenGrantV1): boolean {
   const subset = (c: readonly string[] | null, p: readonly string[] | null) => p === null || (c !== null && c.every((item) => p.includes(item)));
   if (child.approve && !parent.approve || !subset(child.origins, parent.origins)
+    || !subset(child.automationIds ?? null, parent.automationIds ?? null)
     || !subset(child.models?.map(modelKey) ?? null, parent.models?.map(modelKey) ?? null)
     || !subset(child.permissionModes?.map((mode) => parseAgentPermissionIntentV1Alias(mode)!) ?? null,
       parent.permissionModes?.map((mode) => parseAgentPermissionIntentV1Alias(mode)!) ?? null)) return false;

@@ -1,14 +1,9 @@
-import { PromptAssetMutationResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
 import { FoundSkillDownloadRequestV1Schema } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import type { PromptAssetMutationResponseV1 } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { TransferSessionStore } from '@happier-dev/transfers/node';
-import { registerUploadTransferLifecycleHandlers } from '@/transfers/rpc/registerUploadTransferLifecycleHandlers';
 import { resolveFoundSkillDownloadSource, type FoundSkillReadOptions } from '@/prompts/skills/native/resolveFoundSkillDownloadSource';
-import { resolvePromptAssetUploadTarget } from '@/transfers/targets/resolvePromptAssetUploadTarget';
 
 import type { RpcHandlerRegistrar } from '../rpc/types';
 import { registerMachineDownloadTransferRpcHandlers } from './transfers/registerMachineDownloadTransferRpcHandlers';
@@ -19,17 +14,8 @@ export type MachinePromptAssetTransferRpcRegistration = Readonly<{
   dispose: () => Promise<void>;
 }>;
 
-type PromptAssetUploadInitResponse =
-  | Readonly<{ success: true; uploadId: string; chunkSizeBytes: number; recipientPublicKeyBase64: string }>
-  | Readonly<{ success: false; error: string }>;
-
-type PromptAssetUploadFinalizeResponse =
-  | Readonly<{ success: true; response: PromptAssetMutationResponseV1 }>
-  | Readonly<{ success: false; error: string }>;
-
 export function registerMachinePromptAssetTransferRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcHandlerRegistrar;
-  adapterRegistry: ReadonlyMap<string, PromptAssetAdapter>;
   foundSkills?: Omit<FoundSkillReadOptions, 'signal'>;
 }>): MachinePromptAssetTransferRpcRegistration {
   const store = new TransferSessionStore({ ttlMs: configuration.filesTransferSessionTtlMs });
@@ -67,61 +53,6 @@ export function registerMachinePromptAssetTransferRpcHandlers(params: Readonly<{
     initFailureMessage: 'Found skill download init failed',
   });
 
-  registerUploadTransferLifecycleHandlers<
-    PromptAssetUploadInitResponse,
-    PromptAssetUploadFinalizeResponse,
-    PromptAssetMutationResponseV1
-  >({
-    rpcHandlerManager: params.rpcHandlerManager,
-    store,
-    methods: {
-      init: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT,
-      chunk: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_CHUNK,
-      finalize: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_FINALIZE,
-      abort: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_ABORT,
-    },
-    resolveInit: async (data) => {
-      const request = data as { sizeBytes?: unknown } | null;
-      const target = resolvePromptAssetUploadTarget({
-        adapterRegistry: params.adapterRegistry,
-        sizeBytes: request?.sizeBytes,
-      });
-      if (!target.success) {
-        return {
-          kind: 'rejected',
-          response: { success: false, error: target.error },
-        };
-      }
-
-      return {
-        kind: 'accepted',
-        target: target.target,
-        diagnosticContext: {
-          transferKind: 'prompt_asset',
-        },
-      };
-    },
-    buildInitSuccessResponse: ({ session }) => ({
-      success: true,
-      uploadId: session.uploadId,
-      chunkSizeBytes: session.chunkSizeBytes,
-      recipientPublicKeyBase64: session.recipientPublicKeyBase64 ?? '',
-    }),
-    buildFinalizeMissingUploadIdResponse: () => ({ success: false, error: 'Missing uploadId' }),
-    buildFinalizeMissingSessionResponse: () => ({ success: false, error: 'Upload session not found' }),
-    buildFinalizeSizeMismatchResponse: () => ({ success: false, error: 'Upload size mismatch' }),
-    buildFinalizeHashMismatchResponse: () => ({ success: false, error: 'Upload hash mismatch' }),
-    buildFinalizeErrorResponse: (error) => ({
-      success: false,
-      error: error instanceof Error ? error.message : 'Prompt asset upload finalize failed',
-    }),
-    buildFinalizeFailureResponse: (error) => ({ success: false, error }),
-    buildFinalizeSuccessResponse: ({ finalized }) => ({
-      success: true,
-      response: PromptAssetMutationResponseV1Schema.parse(finalized.result),
-    }),
-    enableChunkEncryption: true,
-  });
 
   return {
     transferSessionStore: store,

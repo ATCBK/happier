@@ -2,22 +2,15 @@ import { InactiveAccountError } from "@/app/auth/accountStatus";
 import { z } from "zod";
 import { inTx } from "@/storage/inTx";
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
-import {
-    AccountEncryptionModeResponseSchema,
-    AccountEncryptionCurrentnessResponseSchema,
-    AccountEncryptionCurrentnessErrorResponseSchema,
-    AccountEncryptionModeUpdateRequestSchema,
-} from "@happier-dev/protocol";
+import { AccountEncryptionModeResponseSchema, AccountEncryptionCurrentnessResponseSchema, AccountEncryptionCurrentnessErrorResponseSchema, AccountEncryptionModeUpdateRequestSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { type Fastify } from "../../types";
 import { updateAccountEncryptionMode } from "./updateAccountEncryptionMode";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
     isAccountContentKeyBindingRecoveryRequired,
 } from "@/app/encryption/accountContentKeyAdmission";
-import {
-    deriveAccountEncryptionMigrationKeyFingerprints,
-} from "@/app/encryption/accountEncryptionTransition";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
+import { projectAccountEncryptionCurrentnessFromRow } from '@/app/encryption/accountEncryptionCurrentness';
 import {
     PresentUserRequiredResponseSchema,
     requirePresentUser,
@@ -121,17 +114,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                         recipientEnvelopeReadiness,
                     }));
                 }
-                return reply.send({
-                    mode: currentness.currentness.encryptionMode,
-                    version: user.seq,
-                    settingsVersion: user.settingsVersion,
-                    recipientEnvelopeReadiness,
-                    ...deriveAccountEncryptionMigrationKeyFingerprints(
-                        user,
-                    ),
-                    updatedAt:
-                        user.encryptionModeUpdatedAt.getTime(),
-                });
+                return reply.send(projectAccountEncryptionCurrentnessFromRow(user));
             } catch (error) {
                 if (error instanceof InactiveAccountError) throw error;
                 return reply.code(500).send({ error: "internal" });

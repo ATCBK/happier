@@ -2,9 +2,10 @@ import * as React from 'react';
 import '@/dev/testkit/harness/syncSingletonLoader';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ScmDiffSummaryDiscussInputSchema, ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditInputSchema } from '@happier-dev/protocol/scm';
+import { buildScmComparisonIdentity, ScmComparisonCaptureInputSchema, ScmComparisonCaptureOutputSchema, ScmDiffSummaryDiscussInputSchema, ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditInputSchema } from '@happier-dev/protocol/scm';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol';
+import { ExecutionRunGetResponseSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 const boundary = vi.hoisted(() => ({
@@ -17,6 +18,10 @@ const boundary = vi.hoisted(() => ({
     runResponse: null as import('@happier-dev/protocol').ExecutionRunGetResponse | null,
     nativeRunBarrier: null as (() => Promise<void>) | null,
     sessionCalls: [] as Array<{ sessionId: string; method: string; payload: unknown; scope?: { serverId: string; accountId: string } }>,
+    accountRoute: null as ((request: ServedHomeRequest) => Promise<Response | undefined>) | null,
+    /** The daemon's answer to a generation the canonical request schema admitted, when a case needs one. */
+    generate: null as ((input: import('@happier-dev/protocol/scm').ScmDiffSummaryGenerateInput) => unknown) | null,
+    router: null as ReturnType<typeof import('@/dev/testkit/mocks/router').createExpoRouterMock> | null,
 }));
 
 vi.mock('react-native', async () => {
@@ -25,15 +30,8 @@ vi.mock('react-native', async () => {
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
-});
-// Device credential custody is external. The profile registry, token parser,
-// Account binding lifetime and every consumer of it remain real.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
-        getCredentialsForServerUrl: async () => ({ token: `header.${Buffer.from(JSON.stringify({ sub: 'walkthrough-account' })).toString('base64')}.signature`, secret: 'fixture-secret' }),
-    } });
+    boundary.router = createExpoRouterMock();
+    return boundary.router.module;
 });
 // The machine transport is the remote process boundary. Its real SCM and
 // capability facades, admission, schemas, settings and result store are intact.
@@ -42,8 +40,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     const rpc = async (request: { machineId: string; method: string; payload: unknown; serverId?: string | null; accountId?: string | null;
         authorization?: import('@happier-dev/protocol/rpc').SocketRpcAuthorizationContext }) => {
         boundary.calls.push(request);
+        // The serialized Socket boundary requires a method. An absent protocol
+        // constant must not be acknowledged as a fictitious workspace Run read.
+        if (typeof request.method !== 'string' || !request.method) throw new Error('Socket RPC method is required');
         if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return boundary.capabilities();
-        if (request.method === RPC_METHODS.DAEMON_EXECUTION_RUN_GET && boundary.runResponse) {
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && boundary.runResponse) {
             await boundary.nativeRunBarrier?.();
             return boundary.runResponse;
         }
@@ -58,6 +59,13 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         }
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ && boundary.savedResult) {
             return { success: true, result: boundary.savedResult };
+        }
+        if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE && boundary.savedResult) {
+            const input = ScmComparisonCaptureInputSchema.parse(request.payload);
+            const { comparison, metadata } = boundary.savedResult.output;
+            return ScmComparisonCaptureOutputSchema.parse(comparison && input.comparisonId === comparison.id
+                ? { success: true, comparison, metadata }
+                : { success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'The captured comparison is unavailable' });
         }
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO && boundary.savedResult) {
             return { success: true, result: boundary.savedResult };
@@ -80,6 +88,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         }
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE) {
             const input = ScmDiffSummaryGenerateInputSchema.parse(request.payload);
+            if (boundary.generate) return boundary.generate(input);
             // The host reads this retained identity before model admission; an
             // unavailable capture must not become fresh working-tree evidence.
             if (input.comparisonId) return ScmDiffSummaryGenerateOutputSchema.parse({ success: false,
@@ -124,7 +133,7 @@ const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
 const { getStorage } = await import('@/sync/domains/state/storage');
-const { upsertServerProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { encodeScmDiffSummaryModelOverride, decodeScmDiffSummaryModelOverride } = await import('@/settings/scmDiffSummary/settings');
 const { getScmDiffSummaryState, getScmDiffSummaryOperationState } = await import('@/sync/ops/scmDiffSummary/generate');
 const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
@@ -137,7 +146,7 @@ const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSi
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { encodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
 const { formatWithCachedDateTimeFormatter } = await import('@/utils/datetime/cachedIntlFormatters');
 const { getPreferredLanguage } = await import('@/text');
@@ -148,10 +157,11 @@ const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/project
 const initialStorage = getStorage().getState();
 const initialAppliedHome = getAppliedActiveServerSnapshot();
 const initialRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-const accountCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'walkthrough-account' })).toString('base64')}.signature` };
+let accountCredentials: import('@/auth/storage/tokenStorage').AuthCredentials;
 let restoreObservationClock: (() => void) | null = null;
+let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | null = null;
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     restoreObservationClock?.();
     restoreObservationClock = null;
@@ -166,12 +176,34 @@ afterEach(() => {
     boundary.runResponse = null;
     boundary.nativeRunBarrier = null;
     boundary.sessionCalls = [];
+    boundary.accountRoute = null;
+    boundary.generate = null;
+    boundary.router?.spies.push.mockClear();
+    await servedHome?.dispose();
+    servedHome = null;
 });
 
-async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = false) {
-    const home = await upsertServerProfile({ name: sessionId, serverUrl: `https://${sessionId}.example.test` });
-    await setActiveServerId(home.id, { scope: 'device' });
-    const machine = createMachineFixture({ id: `machine:${sessionId}`, activeAt: Date.now() });
+async function createHome(serverUrl: string) {
+    servedHome = await serveActionHomes({
+        homes: [{ key: 'home', serverUrl, accountId: 'walkthrough-account', currentAccount: true }],
+        async route(request) {
+            if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
+                features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
+                capabilities: {},
+            }));
+            return await boundary.accountRoute?.(request);
+        },
+    });
+    const home = servedHome.homes.home!;
+    const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl);
+    if (!credentials) throw new Error('The fixture Home did not publish its credentials');
+    accountCredentials = credentials;
+    return home;
+}
+
+async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = true) {
+    const home = await createHome(`https://${sessionId}.example.test`);
+    const machine = createMachineFixture({ id: `machine:${sessionId}`, activeAt: Date.now(), storageMode: 'plain' });
     const session = createSessionFixture({ id: sessionId, serverId: home.id, active: true,
         metadata: { path: '/repo/exact', host: 'tester.local', machineId: machine.id, flavor: 'codex' } });
     getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine },
@@ -179,6 +211,7 @@ async function mount(comparison: SessionScmReviewComparison, sessionId: string, 
         ...(authenticated ? { profileScope: { serverId: home.id, accountId: 'walkthrough-account' } } : {}),
         settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
             'scm.diffSummary.modelProfileOverride': storedModel } });
+    getStorage().getState().applySessions([session]);
     if (authenticated) publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const screen = await renderScreen(<SessionWalkthroughView sessionId={sessionId} serverId={home.id}
         comparison={comparison} scopeLabel="Shown comparison" layout="wide" renderBar={renderBar}
@@ -193,7 +226,10 @@ function generationCalls() {
 }
 
 async function mountWithAccountMarks(sessionId: string) {
-    const comparison = { id: `captured:${sessionId}`, source: { kind: 'workingTree' }, repository: { rootPath: '/repo/exact' }, endpoints: {},
+    const before = 'a'.repeat(40);
+    const after = 'b'.repeat(40);
+    const comparison = { id: buildScmComparisonIdentity({ source: { kind: 'workingTree' }, repositoryRootPath: '/repo/exact',
+        beforeOid: before, afterOid: after }), source: { kind: 'workingTree' }, repository: { rootPath: '/repo/exact' }, endpoints: { before, after },
         inventory: { state: 'complete', reasons: [], files: [{ path: 'a.ts', changeKind: 'modified', binary: false, generated: false, lockfile: false,
             evidence: { state: 'available', unifiedDiff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+retained-code\n' },
             occurrences: [{ id: 'captured-change', alias: 'c1', path: 'a.ts', position: 0,
@@ -214,23 +250,20 @@ async function mountWithAccountMarks(sessionId: string) {
     const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
     // Account HTTP is the external boundary; mode admission, JSON custody, CAS,
     // marks membership and the active Account lifetime all remain real.
-    setRuntimeFetch(async (input, init) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        if (url.pathname === '/v1/account/encryption/currentness') return json({ mode: 'plain', version: 1,
-            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-        if (url.pathname === '/v1/kv' && init?.method === 'POST') {
-            const mutation = JSON.parse(String(init.body)).mutations[0];
+    boundary.accountRoute = async ({ path, method, body }) => {
+        if (path === '/v1/kv' && method === 'POST') {
+            const mutation = (body as { mutations: Array<{ version: number; value: string; key: string }> }).mutations[0]!;
             expect(mutation.version).toBe(version);
             stored = mutation.value;
             writes++;
             return json({ success: true, results: [{ key: mutation.key, version: ++version }] });
         }
-        if (url.pathname.startsWith('/v1/kv/')) {
+        if (path.startsWith('/v1/kv/')) {
             reads++;
-            return json({ key: decodeURIComponent(url.pathname.slice('/v1/kv/'.length)), value: stored, version });
+            return json({ key: decodeURIComponent(path.slice('/v1/kv/'.length)), value: stored, version });
         }
-        throw new Error(`Unexpected Account HTTP boundary: ${url.pathname}`);
-    });
+        return undefined;
+    };
     const mounted = await mount({ kind: 'workingTree' }, sessionId, '', undefined, true);
     await vi.waitFor(() => expect(mounted.screen.findByTestId('walkthrough-mark-retained')?.props.disabled).toBe(false));
     expect(reads).toBeGreaterThan(0);
@@ -249,13 +282,13 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         { name: 'starts workspace-native generation and observes its exact Run output without Session notifications', expiry: false },
     ])('$name', async ({ expiry }) => {
         boundary.capabilities = async () => ({ protocolVersion: 1, results: {
-            'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: { claude: { available: true } } } },
+            'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { protocolVersion: 2, features: { detachedScope: true },
+                backends: { claude: { available: true } } } },
         } });
         const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: { kind: 'backend', backendId: 'claude' },
             models: getAgentStaticModels('claude'), agentFormats: getAgentCore('claude')?.structuredOutput?.formats });
-        const home = await upsertServerProfile({ serverUrl: 'https://native-generation.example.test' });
-        await setActiveServerId(home.id, { scope: 'device' });
-        const machine = createMachineFixture({ id: 'native-machine', activeAt: Date.now() });
+        const home = await createHome('https://native-generation.example.test');
+        const machine = createMachineFixture({ id: 'native-machine', activeAt: Date.now(), storageMode: 'plain' });
         getStorage().setState({ sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
             profileScope: { serverId: home.id, accountId: 'walkthrough-account' },
             settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
@@ -293,7 +326,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         }
         await screen.pressByTestIdAsync('walkthrough-start');
         await vi.waitFor(() => expect(boundary.calls).toContainEqual(expect.objectContaining({
-            method: RPC_METHODS.DAEMON_EXECUTION_RUN_GET, payload: { runId: 'native-run', includeStructured: true,
+            method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, payload: { runId: 'native-run', includeStructured: true,
                 waitForInputId: 'native-input',
                 waitForOutput: { kind: 'review_walkthrough', comparisonId: 'comparison:/native/repo', resultId: 'native-result', afterRevision: 0 } },
         })));
@@ -312,7 +345,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         await act(async () => screen.changeTextByTestId('walkthrough-saved-message', 'Why this approach?'));
         await screen.pressByTestIdAsync('walkthrough-saved-discuss-send');
         await vi.waitFor(() => expect(boundary.calls).toContainEqual(expect.objectContaining({
-            method: RPC_METHODS.DAEMON_EXECUTION_RUN_GET,
+            method: SESSION_RPC_METHODS.EXECUTION_RUN_GET,
             payload: { runId: 'native-run', includeStructured: true, waitForInputId: 'discussion-input' },
         })));
         boundary.runResponse = ExecutionRunGetResponseSchema.parse({ ...boundary.runResponse,
@@ -328,9 +361,8 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         expect(boundary.sessionCalls).toEqual([]);
     }, 120_000);
     it('restores and edits workspace-native saved reading without a Session and retires it on another checkout', async () => {
-        const home = await upsertServerProfile({ name: 'workspace-only', serverUrl: 'https://workspace-only.example.test' });
-        await setActiveServerId(home.id, { scope: 'device' });
-        const machine = createMachineFixture({ id: 'workspace-only-machine', activeAt: Date.now() });
+        const home = await createHome('https://workspace-only.example.test');
+        const machine = createMachineFixture({ id: 'workspace-only-machine', activeAt: Date.now(), storageMode: 'plain' });
         getStorage().setState({ sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
             profileScope: { serverId: home.id, accountId: 'walkthrough-account' } });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
@@ -372,7 +404,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
     it('labels retained code from its observation and disables personal marks when the owning machine goes offline', async () => {
         const { screen, offline, writes, observedAtMs } = await mountWithAccountMarks('offline-marks');
         await screen.pressByTestIdAsync('walkthrough-mark-retained');
-        await vi.waitFor(() => expect(writes()).toBe(1));
+        await vi.waitFor(() => expect(writes(), screen.getTextContent()).toBe(1));
         // The operations owner captures its observation clock at creation.
         // Move only the consumer's Date boundary after that real read; timers
         // stay real and neither Date.now nor new Date may invent a fresh label.
@@ -480,9 +512,91 @@ describe('SessionWalkthroughView START through real generation and model owners'
         await screen.pressByTestIdAsync('walkthrough-start');
         const selector = decodeScmDiffSummaryModelOverride(eligible.id);
         expect(generationCalls()).toEqual([expect.objectContaining({ machineId: machine.id, serverId: home.id,
-            accountId: 'walkthrough-account', payload: { sessionId, cwd: '/repo/exact', source, outputs: ['walkthrough'], modelSelector: selector } })]);
+            accountId: 'walkthrough-account', payload: expect.objectContaining({ sessionId, cwd: '/repo/exact', source, outputs: ['walkthrough'], modelSelector: selector }) })]);
         const entry = Object.values(getScmDiffSummaryState().entriesByKey).find((value) => value.sessionId === sessionId);
         expect(entry).toMatchObject({ sessionId, input: { source, modelSelector: selector }, latestOutput: { success: true, metadata: { source } } });
+    }, 120_000);
+
+    /** The first eligible model of the real picker: Start needs a settled machine and a chosen model. */
+    async function chooseEligibleModel(screen: Awaited<ReturnType<typeof mount>>['screen']) {
+        const picker = screen.findByType(DropdownMenu);
+        const eligible = picker.props.items.find((item: { id: string; disabled?: boolean }) => decodeScmDiffSummaryModelOverride(item.id) !== null && !item.disabled);
+        expect(eligible).toBeDefined();
+        await act(async () => picker.props.onSelect(eligible.id));
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false));
+    }
+    const EXECUTION_CAPABILITIES = async () => ({ protocolVersion: 1, results: {
+        'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: { codex: { available: true, intents: ['scm_diff_summary'] } } } },
+    } });
+
+    it('presents an admitted failed output as the typed failure, never the native reason', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        boundary.generate = (input) => {
+            const sourceKey = `comparison:${input.sessionId ?? input.cwd}`;
+            return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey, metadata: { sourceKey, source: input.source },
+                requestedOutputs: input.outputs,
+                comparison: { id: sourceKey, source: input.source, repository: { rootPath: input.cwd }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'failed', reason: 'Native model provisioning failed' } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        };
+        const { screen } = await mount({ kind: 'workingTree' }, 'admitted-failure');
+        await chooseEligibleModel(screen);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-failed')).toBeTruthy());
+        expect(screen.findByTestId('walkthrough-none')).toBeNull();
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain('Native model provisioning failed');
+        expect(screen.findByTestId('walkthrough-retry')).toBeTruthy();
+    }, 120_000);
+
+    it('tells a refused regeneration of a kept reading what to do, and keeps the reading', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        let generations = 0;
+        boundary.generate = (input) => {
+            // The first admission writes a reading of files that changed since; the second is refused by the daemon.
+            if (++generations > 1) return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'MODEL_UNAVAILABLE', error: 'Provider xyz rejected the model' });
+            const sourceKey = `comparison:${input.sessionId ?? input.cwd}`;
+            return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey, metadata: { sourceKey, source: input.source },
+                requestedOutputs: input.outputs,
+                comparison: { id: sourceKey, source: input.source, freshness: 'stale', repository: { rootPath: input.cwd }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Kept reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        };
+        const { screen } = await mount({ kind: 'workingTree' }, 'kept-reading');
+        await chooseEligibleModel(screen);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-stale')).toBeTruthy());
+        expect(screen.findByTestId('walkthrough-notice-failed')).toBeNull();
+        await screen.pressByTestIdAsync('walkthrough-refresh');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-failed')).toBeTruthy());
+        // The reading stays; the refusal is the typed sentence and its next step, not the daemon's words or code.
+        expect(generations).toBe(2);
+        expect(screen.getTextContent()).toContain('Kept reading');
+        expect(screen.getTextContent()).toContain('The selected model isn’t available right now.');
+        expect(screen.getTextContent()).not.toContain('Provider xyz');
+        expect(screen.getTextContent()).not.toContain('MODEL_UNAVAILABLE');
+        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(0);
+        await screen.pressByTestIdAsync('walkthrough-choose-model');
+        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(1);
+    }, 120_000);
+
+    it('keeps Start unavailable while Explain changes is off, says so, and leads to the setting', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        const { screen } = await mount({ kind: 'workingTree' }, 'explain-off');
+        await chooseEligibleModel(screen);
+        await act(async () => getStorage().setState((state) => ({ settings: { ...state.settings, 'scm.diffSummary.enabled': false } })));
+        expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        expect(generationCalls()).toEqual([]);
+        expect(screen.getTextContent()).toContain('“Explain changes” is off.');
+        await screen.pressByTestIdAsync('walkthrough-start-options-enable-explain');
+        expect(boundary.router!.spies.push).toHaveBeenCalledWith('/settings/source-control');
+        // Turning it on clears the refusal and Start works again.
+        await act(async () => getStorage().setState((state) => ({ settings: { ...state.settings, 'scm.diffSummary.enabled': true } })));
+        expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false);
+        expect(screen.getTextContent()).not.toContain('is off');
     }, 120_000);
 
     it('does not admit a syntactically valid stored selector absent from the real eligible catalog', async () => {
@@ -503,10 +617,10 @@ describe('SessionWalkthroughView START through real generation and model owners'
         await act(async () => picker.props.onSelect(eligible.id));
         await vi.waitFor(() => expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('walkthrough-start');
-        expect(generationCalls()).toEqual([expect.objectContaining({ payload: {
+        expect(generationCalls()).toEqual([expect.objectContaining({ payload: expect.objectContaining({
             sessionId: 'unavailable-model', cwd: '/repo/exact', source: { kind: 'workingTree' }, outputs: ['walkthrough'],
             modelSelector: decodeScmDiffSummaryModelOverride(eligible.id),
-        } })]);
+        }) })]);
     }, 120_000);
 
     it('keeps the exact captured identity and reports unavailable evidence without replacing it with a fresh source', async () => {
@@ -526,7 +640,10 @@ describe('SessionWalkthroughView START through real generation and model owners'
         const entry = Object.values(getScmDiffSummaryState().entriesByKey).find((value) => value.sessionId === 'captured-route');
         expect(entry).toMatchObject({ status: 'failed', error: { code: 'DIFF_UNAVAILABLE' } });
         expect(entry?.latestOutput?.success).not.toBe(true);
-        expect(screen.getTextContent()).toContain(entry!.error!.message);
+        // The person reads the typed refusal and its way forward, never the diagnostic message or code.
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain(entry!.error!.message);
+        expect(screen.getTextContent()).not.toContain('DIFF_UNAVAILABLE');
     }, 120_000);
 
     it('keeps Refresh when a stale saved reading receives a new supported Summary preference with its picker unmounted', async () => {
@@ -561,15 +678,12 @@ describe('SessionWalkthroughView START through real generation and model owners'
         } })));
         expect(screen.findByTestId('walkthrough-refresh')).toBeTruthy();
         await screen.pressByTestIdAsync('walkthrough-refresh');
-        expect(generationCalls()).toEqual([]);
-        const picker = screen.findByType(DropdownMenu);
-        const eligible = picker.props.items.find((item: { id: string; disabled?: boolean }) => decodeScmDiffSummaryModelOverride(item.id) !== null && item.id !== stored && !item.disabled);
-        expect(eligible).toBeDefined();
-        await act(async () => picker.props.onSelect(eligible.id));
-        await screen.pressByTestIdAsync('walkthrough-refresh');
+        // The shared selected-model observer admits a supported Account preference
+        // directly; reopening a picker is not a prerequisite for Refresh.
+        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(0);
         expect(generationCalls()).toEqual([expect.objectContaining({ machineId: machine.id, serverId: home.id,
-            accountId: 'walkthrough-account', payload: { sessionId: 'reopened-stale', cwd: '/repo/exact', source: { kind: 'workingTree' },
-                outputs: ['walkthrough'], modelSelector: decodeScmDiffSummaryModelOverride(eligible.id), cachePolicy: { mode: 'bypass' } } })]);
+            accountId: 'walkthrough-account', payload: expect.objectContaining({ sessionId: 'reopened-stale', cwd: '/repo/exact', source: { kind: 'workingTree' },
+                outputs: ['walkthrough'], modelSelector: decodeScmDiffSummaryModelOverride(changedPreference), cachePolicy: { mode: 'bypass' } }) })]);
     }, 120_000);
 
     it('adopts a persisted pending result’s later Run binding and prose on existing Session activity without model admission', async () => {

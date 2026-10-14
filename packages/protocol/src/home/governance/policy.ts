@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { CanonicalGitHubHostV1Schema } from '../../identity/githubApps.js';
 
 import {
@@ -45,14 +45,11 @@ export type HomeAdmissionModeV1 = z.infer<typeof HomeAdmissionModeV1Schema>;
  * The Home may disable its sign-in service or inherit the deployment's. It can
  * never select another issuer, so this narrowing carries no issuer fields.
  */
-export const HomeSignInServiceNarrowingV1Schema = lazyZodSchema(() => z.object({
+export const HomeSignInServiceNarrowingV1Schema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('disabled'),
-}).strict());
+}));
 
-const HomeAuthenticationMethodIdV1Schema = lazyZodSchema(() => z.string().min(1).max(128).refine(
-  (value) => value === value.trim().toLowerCase(),
-  { message: 'Authentication method IDs must be canonical lowercase identifiers.' },
-));
+const HomeAuthenticationMethodIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128), z.refine((value) => value === value.trim().toLowerCase(), { message: 'Authentication method IDs must be canonical lowercase identifiers.' })));
 
 /**
  * The bounded Home authentication/storage/admission policy document.
@@ -73,28 +70,28 @@ const HomeAuthenticationMethodIdV1Schema = lazyZodSchema(() => z.string().min(1)
  * owner and the encryption owner; this codec only owns storage shape and the
  * document's internal consistency.
  */
-export const HomeAuthenticationPolicyV1Schema = lazyZodSchema(() => z.object({
+export const HomeAuthenticationPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  enabledMethodIds: z.array(HomeAuthenticationMethodIdV1Schema).min(1).optional(),
-  permittedAccountModes: z.array(AccountEncryptionModeSchema).min(1).optional(),
-  recommendedProvisioningMode: AccountEncryptionModeSchema.optional(),
-  admission: HomeAdmissionModeV1Schema.optional(),
-  signInService: HomeSignInServiceNarrowingV1Schema.nullable().optional(),
+  enabledMethodIds: z.optional(z.array(HomeAuthenticationMethodIdV1Schema).check(z.minLength(1))),
+  permittedAccountModes: z.optional(z.array(AccountEncryptionModeSchema).check(z.minLength(1))),
+  recommendedProvisioningMode: z.optional(AccountEncryptionModeSchema),
+  admission: z.optional(HomeAdmissionModeV1Schema),
+  signInService: z.optional(z.nullable(HomeSignInServiceNarrowingV1Schema)),
   /** Key-only (anonymous) signup; `AUTH_ANONYMOUS_SIGNUP_ENABLED` where the deployment leaves it unset. */
-  anonymousSignup: z.boolean().optional(),
+  anonymousSignup: z.optional(z.boolean()),
   /** Which Accounts may store data without E2EE; applies at the next server start. */
-  storagePolicy: EncryptionStoragePolicySchema.optional(),
-}).strict().superRefine((policy, ctx) => {
+  storagePolicy: z.optional(EncryptionStoragePolicySchema),
+}).check(z.superRefine((policy, ctx) => {
   if (policy.enabledMethodIds && new Set(policy.enabledMethodIds).size !== policy.enabledMethodIds.length) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['enabledMethodIds'],
       message: 'Enabled authentication method IDs must be unique.',
     });
   }
   if (policy.permittedAccountModes && new Set(policy.permittedAccountModes).size !== policy.permittedAccountModes.length) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['permittedAccountModes'],
       message: 'Permitted Account modes must be unique.',
     });
@@ -105,12 +102,12 @@ export const HomeAuthenticationPolicyV1Schema = lazyZodSchema(() => z.object({
     && !policy.permittedAccountModes.includes(policy.recommendedProvisioningMode)
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['recommendedProvisioningMode'],
       message: 'The recommended provisioning mode must be one of the permitted Account modes.',
     });
   }
-}));
+})));
 
 export type HomeAuthenticationPolicyV1 = z.infer<typeof HomeAuthenticationPolicyV1Schema>;
 
@@ -139,50 +136,48 @@ export const ManagedIdentityProviderKindV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type ManagedIdentityProviderKindV1 = z.infer<typeof ManagedIdentityProviderKindV1Schema>;
 
-const UniqueManagedIdentityProviderKindsV1Schema = lazyZodSchema(() => z.array(ManagedIdentityProviderKindV1Schema).superRefine((values, ctx) => {
+const UniqueManagedIdentityProviderKindsV1Schema = lazyZodSchema(() => z.array(ManagedIdentityProviderKindV1Schema).check(z.superRefine((values, ctx) => {
   if (new Set(values).size !== values.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Managed identity-provider kinds must be unique.' });
+    ctx.addIssue({ code: "custom", message: 'Managed identity-provider kinds must be unique.' });
   }
-}));
+})));
 
-const UniqueGitHubEnterpriseOriginsV1Schema = lazyZodSchema(() => z.array(CanonicalGitHubHostV1Schema).superRefine(
-  (values, ctx) => {
+const UniqueGitHubEnterpriseOriginsV1Schema = lazyZodSchema(() => z.array(CanonicalGitHubHostV1Schema).check(z.superRefine((values, ctx) => {
     if (new Set(values).size !== values.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'GitHub Enterprise origins must be unique.' });
+      ctx.addIssue({ code: "custom", message: 'GitHub Enterprise origins must be unique.' });
     }
-  },
-));
+  })));
 
 /** Home-wide ceiling for Team-owned or Team-bound provider instances. */
-export const HomeTeamProviderPolicyV1Schema = lazyZodSchema(() => z.object({
+export const HomeTeamProviderPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   allowedTeamProviderKinds: UniqueManagedIdentityProviderKindsV1Schema,
   teamJitAllowed: z.boolean(),
   approvedGitHubEnterpriseOrigins: UniqueGitHubEnterpriseOriginsV1Schema,
-}).strict());
+}));
 export type HomeTeamProviderPolicyV1 = z.infer<typeof HomeTeamProviderPolicyV1Schema>;
 
-const UniqueNonEmptyStringsV1Schema = lazyZodSchema(() => z.array(z.string().trim().min(1)).min(1).superRefine((values, ctx) => {
+const UniqueNonEmptyStringsV1Schema = lazyZodSchema(() => z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1), z.superRefine((values, ctx) => {
   if (new Set(values).size !== values.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Policy entries must be unique.' });
+    ctx.addIssue({ code: "custom", message: 'Policy entries must be unique.' });
   }
-}));
-const UniquePortsV1Schema = lazyZodSchema(() => z.array(z.number().int().min(1).max(65535)).min(1).superRefine((values, ctx) => {
+})));
+const UniquePortsV1Schema = lazyZodSchema(() => z.array(z.number().check(z.int(), z.minimum(1), z.maximum(65535))).check(z.minLength(1), z.superRefine((values, ctx) => {
   if (new Set(values).size !== values.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Policy ports must be unique.' });
+    ctx.addIssue({ code: "custom", message: 'Policy ports must be unique.' });
   }
-}));
+})));
 
 /** A stored Home policy may only narrow the deployment operator's outbound ceiling. */
 export const HomeIdentityNetworkPolicyV1Schema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-  z.object({ v: z.literal(1), mode: z.literal('public_only') }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), mode: z.literal('public_only') }),
+  z.strictObject({
     v: z.literal(1),
     mode: z.literal('private_allowlist'),
     hostnames: UniqueNonEmptyStringsV1Schema,
     cidrs: UniqueNonEmptyStringsV1Schema,
     ports: UniquePortsV1Schema,
-  }).strict(),
+  }),
 ]));
 export type HomeIdentityNetworkPolicyV1 = z.infer<typeof HomeIdentityNetworkPolicyV1Schema>;
 
@@ -215,26 +210,23 @@ export function readHomeIdentityNetworkPolicyV1(value: unknown): HomeIdentityNet
  * Every field is decoded before persistence; a mixed patch is authorized and
  * committed atomically by the Home governance owner.
  */
-export const HomeGovernancePolicySetInputV1Schema = lazyZodSchema(() => z.object({
-  expectedRevision: z.number().int().min(0),
-  teamCreationPolicy: TeamCreationPolicyV1Schema.optional(),
-  teamsVisibleToMembers: z.boolean().optional(),
-  authenticationPolicy: HomeAuthenticationPolicyV1Schema.nullable().optional(),
-  teamProviderPolicy: HomeTeamProviderPolicyV1Schema.nullable().optional(),
-  identityNetworkPolicy: HomeIdentityNetworkPolicyV1Schema.nullable().optional(),
+export const HomeGovernancePolicySetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  expectedRevision: z.number().check(z.int(), z.minimum(0)),
+  teamCreationPolicy: z.optional(TeamCreationPolicyV1Schema),
+  teamsVisibleToMembers: z.optional(z.boolean()),
+  authenticationPolicy: z.optional(z.nullable(HomeAuthenticationPolicyV1Schema)),
+  teamProviderPolicy: z.optional(z.nullable(HomeTeamProviderPolicyV1Schema)),
+  identityNetworkPolicy: z.optional(z.nullable(HomeIdentityNetworkPolicyV1Schema)),
   /**
    * The owner saw and accepted the consequence of widening sign-in, admission or
    * storage policy. A widening patch without it is refused with
    * `home_policy_widening_unconfirmed` and changes nothing; narrowing needs none.
    */
-  confirmWidening: z.literal(true).optional(),
-}).strict().refine(
-  (input) => input.teamCreationPolicy !== undefined
+  confirmWidening: z.optional(z.literal(true)),
+}).check(z.refine((input) => input.teamCreationPolicy !== undefined
     || input.teamsVisibleToMembers !== undefined
     || input.authenticationPolicy !== undefined
     || input.teamProviderPolicy !== undefined
-    || input.identityNetworkPolicy !== undefined,
-  { message: 'A Home policy patch must change at least one field.' },
-));
+    || input.identityNetworkPolicy !== undefined, { message: 'A Home policy patch must change at least one field.' })));
 
 export type HomeGovernancePolicySetInputV1 = z.infer<typeof HomeGovernancePolicySetInputV1Schema>;

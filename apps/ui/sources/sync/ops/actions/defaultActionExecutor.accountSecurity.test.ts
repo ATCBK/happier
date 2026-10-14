@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import {
@@ -34,6 +35,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { disposeIrohHomeTunnelRuntime, getIrohHomeTunnelRuntime } from '@/sync/runtime/nativeIrohTunnels/runtime';
 
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 const initialState = getStorage().getState();
 const tokenWithPayload = (payload: object) => `e30.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.signature`;
@@ -159,7 +161,10 @@ describe('default Account Security Action transport', () => {
         );
         const executor = createDefaultActionExecutor();
         const client = createAccountSecurityActionClient({
-            execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+            execute: createFrontDoorActionExecute({
+                execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+                prepare: (actionId, input, context) => executor.prepare(actionId, input, { ...context, bypassApprovals: true }),
+            }),
             resolveServerId: () => serverId,
         });
         screen = await renderScreen(React.createElement(AuthProvider, { initialCredentials: credentials, children:
@@ -314,7 +319,10 @@ describe('default Account Security Action transport', () => {
         });
         const executor = createDefaultActionExecutor();
         const client = createAccountSecurityActionClient({
-            execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+            execute: createFrontDoorActionExecute({
+                execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+                prepare: (actionId, input, context) => executor.prepare(actionId, input, { ...context, bypassApprovals: true }),
+            }),
             resolveServerId: () => serverId,
         });
         await expect(client.changePlainPassword({
@@ -330,7 +338,10 @@ describe('default Account Security Action transport', () => {
         setRuntimeFetch(async () => Response.json({ error: 'credential_revision_conflict' }, { status: 409 }));
         const executor = createDefaultActionExecutor();
         const client = createAccountSecurityActionClient({
-            execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+            execute: createFrontDoorActionExecute({
+                execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+                prepare: (actionId, input, context) => executor.prepare(actionId, input, { ...context, bypassApprovals: true }),
+            }),
             resolveServerId: () => serverId,
         });
         await expect(client.changePlainPassword({
@@ -346,7 +357,10 @@ describe('default Account Security Action transport', () => {
         setRuntimeFetch(async () => { throw new TypeError('Failed to fetch'); });
         const executor = createDefaultActionExecutor();
         const client = createAccountSecurityActionClient({
-            execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+            execute: createFrontDoorActionExecute({
+                execute: (actionId, input, context) => executor.execute(actionId, input, { ...context, bypassApprovals: true }),
+                prepare: (actionId, input, context) => executor.prepare(actionId, input, { ...context, bypassApprovals: true }),
+            }),
             resolveServerId: () => serverId,
         });
         const failure = await client.read().then(() => null, (error: unknown) => error);

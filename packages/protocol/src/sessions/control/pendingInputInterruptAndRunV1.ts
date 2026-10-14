@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const SessionIdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const LocalIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SessionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const LocalIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
-export const SessionPendingInputInterruptAndRunRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingInputInterruptAndRunRequestV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: SessionIdSchema,
   localId: LocalIdSchema,
-  expectedStateAtMs: z.number().int().nonnegative().optional(),
-}).passthrough());
+  expectedStateAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type SessionPendingInputInterruptAndRunRequestV1 =
   z.infer<typeof SessionPendingInputInterruptAndRunRequestV1Schema>;
 
 export const SessionPendingInputInterruptAndRunResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     status: z.literal('interrupted'),
     sessionId: SessionIdSchema,
     localId: LocalIdSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     ok: z.literal(false),
     status: z.enum([
       'unsupported',
@@ -31,9 +31,9 @@ export const SessionPendingInputInterruptAndRunResultV1Schema = lazyZodSchema(()
     ]),
     sessionId: SessionIdSchema,
     localId: LocalIdSchema,
-    errorCode: z.string().min(1).optional(),
-    error: z.string().min(1).optional(),
-  }).passthrough(),
+    errorCode: z.optional(z.string().check(z.minLength(1))),
+    error: z.optional(z.string().check(z.minLength(1))),
+  }),
 ]));
 export type SessionPendingInputInterruptAndRunResultV1 =
   z.infer<typeof SessionPendingInputInterruptAndRunResultV1Schema>;

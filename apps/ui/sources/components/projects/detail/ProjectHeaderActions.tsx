@@ -9,8 +9,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingRight: 8,
+        gap: theme.space.s8,
+        paddingRight: theme.space.s8,
     },
     iconButton: {
         width: 34,

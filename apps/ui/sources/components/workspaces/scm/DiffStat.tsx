@@ -60,7 +60,7 @@ export const DiffStat = React.memo(function DiffStat(
 
 const styles = StyleSheet.create((theme) => ({
   stat: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     flexShrink: 0,
   },

@@ -1,4 +1,4 @@
-import { projectSessionFollowFactsV1, type SessionFollowFactsV1 } from "@happier-dev/protocol";
+import { projectSessionFollowFactsV1, type SessionFollowFactsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 import type { Tx } from "@/storage/inTx";
 

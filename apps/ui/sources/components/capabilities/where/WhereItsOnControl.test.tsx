@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { t } from '@/text';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -24,6 +25,9 @@ vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
+
+// Load the real UI graph during collection, not inside the behavior timeout budget.
+const { WhereItsOnControl, useDraftReachRules } = await import('./WhereItsOnControl');
 
 afterEach(() => {
   standardCleanup();
@@ -76,9 +80,10 @@ async function renderControl(
     ) => Promise<{ ok: true } | { ok: false; message: string }>;
     readOnlyReason?: string;
     projectKey?: string | null;
+    projection?: readonly Readonly<ReturnType<typeof projectionFor>[number] & { agentInventoryComplete?: boolean }>[];
+    kind?: 'skill' | 'mcp_server';
   }>,
 ) {
-  const { WhereItsOnControl } = await import('./WhereItsOnControl');
   const changes: Replace[] = [];
   const onChange =
     input.onChange ??
@@ -88,10 +93,10 @@ async function renderControl(
     });
   const screen = await renderScreen(
     <WhereItsOnControl
-      kind="skill"
+      kind={input.kind ?? 'skill'}
       rules={input.rules}
       status="ready"
-      projection={projectionFor(input.rules, input.projectKey ?? null)}
+      projection={input.projection ?? projectionFor(input.rules, input.projectKey ?? null)}
       places={{ agentIds: AGENTS, machines: MACHINES, projects: PROJECTS }}
       onChange={async (change) => {
         const result = await onChange(change);
@@ -138,10 +143,12 @@ async function renderControl(
       await target.props.onPress();
     });
   };
+  const directText = (children: unknown): string => typeof children === 'string' ? children
+    : Array.isArray(children) ? children.map(directText).join('') : '';
   const text = () =>
     screen
-      .findAll((node) => typeof node.props?.children === 'string')
-      .map((node) => node.props.children as string)
+      .findAll(() => true)
+      .map((node) => directText(node.props.children))
       .join('|');
   return { screen, changes, byTestId, open, choose, press, text };
 }
@@ -150,6 +157,21 @@ const ruleKey = (target: ReachRuleV1['target'], agentId?: string) =>
   `where:rule:${reachRuleKeyV1({ target, ...(agentId ? { agentId } : {}) })}`;
 
 describe('WhereItsOnControl', () => {
+  it.each(['skill', 'mcp_server'] as const)('keeps unknown %s inventory in the consequence slot without hiding confirmed availability', async kind => {
+    const rules = [everywhere(true)];
+    const incomplete = [{ machineId: 'mbp', agents: [], agentInventoryComplete: false }];
+    const unknown = await renderControl({ rules, kind, projection: incomplete });
+    expect(unknown.byTestId('where:consequence').length).toBeGreaterThan(0);
+    expect(unknown.text()).toContain('—');
+    expect(unknown.text()).not.toContain(t('capabilities.where.availableNowhere'));
+    const known = await renderControl({ rules, kind, projection: [{ ...incomplete[0]!,
+      agents: [{ agentId: 'codex', enabled: true, decidedBy: null }] }] });
+    expect(known.text()).toContain('Codex');
+    expect(known.text()).toContain('MacBook Pro');
+    const empty = await renderControl({ rules, kind, projection: [{ ...incomplete[0]!, agentInventoryComplete: true }] });
+    expect(empty.text()).toContain(t('capabilities.where.availableNowhere'));
+  });
+
   it('adds an agent exception as one replace that holds wherever a project turns it on (D33)', async () => {
     const exceptRules = [
       everywhere(true),
@@ -329,7 +351,6 @@ describe('WhereItsOnControl', () => {
 
 describe('useDraftReachRules', () => {
   it('starts from the create-time default (Everywhere On) with no pick, then carries the last replace', async () => {
-    const { useDraftReachRules } = await import('./WhereItsOnControl');
     let latest: ReturnType<typeof useDraftReachRules> | null = null;
     function Probe() {
       latest = useDraftReachRules('skill');

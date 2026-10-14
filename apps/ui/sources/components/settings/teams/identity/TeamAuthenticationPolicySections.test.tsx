@@ -211,6 +211,23 @@ afterEach(() => {
 });
 
 describe('TeamAuthenticationPolicySections', () => {
+    it('preserves typed qualification refusal through the real policy Action and rendered editor', async () => {
+        const team = teamSummaryFixture({
+            capabilities: teamCapabilitiesFixture({ manageAuthentication: true }),
+            policy: teamPolicyFixture({ authenticationPolicy: null, authenticationPolicyStatus: 'available' }),
+        });
+        const serverId = await addHomeWithTeam(team);
+        harness.answer(serverId, TEAM_POLICY_PATH, { status: 403, body: { error: 'team_authentication_required' } });
+        const screen = await renderAuthentication(serverId);
+        await waitForPressable(screen, 'team-authentication-policy-mode:restricted');
+        await screen.pressByTestIdAsync('team-authentication-policy-mode:restricted');
+        await waitForTestId(screen, 'team-authentication-policy-save');
+        await screen.pressByTestIdAsync('team-authentication-policy-save');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('teams.authentication.policy.authenticationRequired'));
+        expect(screen.getTextContent()).not.toContain('teams.errors.authenticationRequired');
+        expect(screen.getTextContent()).not.toContain('teams.errors.forbidden');
+        expect(screen.findByTestId('team-authentication-policy-save')).not.toBeNull();
+    });
     it('writes admission through the exact Team policy owner', async () => {
         const team = teamSummaryFixture({
             capabilities: teamCapabilitiesFixture({ manageAuthentication: true }),

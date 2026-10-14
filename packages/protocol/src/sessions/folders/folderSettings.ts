@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 export const SESSION_FOLDER_MAX_COUNT = 500;
@@ -8,59 +8,51 @@ export const SESSION_FOLDER_VISUAL_DEPTH_CAP = 3;
 export const SESSION_FOLDER_MAX_ID_LENGTH = 2_000;
 export const SESSION_FOLDER_MAX_PATH_LENGTH = 10_000;
 
-const FolderIdSchema = z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH);
-const OptionalRenderWorkspaceKeySchema = z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH).optional();
-const ServerIdSchema = z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH).nullable();
+const FolderIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH));
+const OptionalRenderWorkspaceKeySchema = z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH)));
+const ServerIdSchema = z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH)));
 
-const SessionFolderWorkspaceRefWorkspaceRefV1Schema = z
-  .object({
+const SessionFolderWorkspaceRefWorkspaceRefV1Schema = z.strictObject({
     t: z.literal('workspaceRef'),
     serverId: ServerIdSchema,
-    workspaceRefId: z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH),
-  })
-  .strict();
+    workspaceRefId: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH)),
+  });
 
-const SessionFolderWorkspaceRefWorkspaceScopeV1Schema = z
-  .object({
+const SessionFolderWorkspaceRefWorkspaceScopeV1Schema = z.strictObject({
     t: z.literal('workspaceScope'),
     serverId: ServerIdSchema,
-    machineId: z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH).nullable(),
-    rootPath: z.string().trim().min(1).max(SESSION_FOLDER_MAX_PATH_LENGTH),
-  })
-  .strict();
+    machineId: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH))),
+    rootPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_PATH_LENGTH)),
+  });
 
 export const SessionFolderWorkspaceRefV1Schema = z.discriminatedUnion('t', [
   SessionFolderWorkspaceRefWorkspaceRefV1Schema,
   SessionFolderWorkspaceRefWorkspaceScopeV1Schema,
-  z.object({
+  z.strictObject({
     t: z.literal('managedSessions'),
     serverId: ServerIdSchema,
-    machineId: z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH),
-  }).strict(),
+    machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH)),
+  }),
 ]);
 export type SessionFolderWorkspaceRefV1 = z.infer<typeof SessionFolderWorkspaceRefV1Schema>;
 export const SessionFolderWorkspaceRefV1StoredSchema = createStoredReadSchema(SessionFolderWorkspaceRefV1Schema);
 
-export const SessionFolderV1Schema = z
-  .object({
+export const SessionFolderV1Schema = z.strictObject({
     id: FolderIdSchema,
     workspace: SessionFolderWorkspaceRefV1Schema,
     renderWorkspaceKey: OptionalRenderWorkspaceKeySchema,
-    parentId: FolderIdSchema.nullable(),
-    name: z.string().trim().min(1).max(SESSION_FOLDER_MAX_NAME_LENGTH),
-    createdAt: z.number().int().nonnegative(),
-    updatedAt: z.number().int().nonnegative(),
-    sortKey: z.string().trim().min(1).max(SESSION_FOLDER_MAX_ID_LENGTH).optional(),
-  })
-  .strict();
+    parentId: z.nullable(FolderIdSchema),
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_NAME_LENGTH)),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    sortKey: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_FOLDER_MAX_ID_LENGTH))),
+  });
 export type SessionFolderV1 = z.infer<typeof SessionFolderV1Schema>;
 
-export const SessionFoldersV1Schema = z
-  .object({
+export const SessionFoldersV1Schema = z.strictObject({
     v: z.literal(1),
-    folders: z.array(SessionFolderV1Schema).max(SESSION_FOLDER_MAX_COUNT).default([]),
-  })
-  .strict();
+    folders: z._default(z.array(SessionFolderV1Schema).check(z.maxLength(SESSION_FOLDER_MAX_COUNT)), []),
+  });
 export type SessionFoldersV1 = z.infer<typeof SessionFoldersV1Schema>;
 export const SessionFoldersV1StoredSchema = createStoredReadSchema(SessionFoldersV1Schema);
 

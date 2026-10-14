@@ -4,19 +4,15 @@ import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 import { z } from "zod";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
-import {
-    SessionOrganizationPlacementV1Schema,
-    SessionOwnerMetadataEnvelopeV1Schema,
-    SessionInitialAccessMaterializedV1Schema,
-    SessionInitialTriggerAdmissionV1Schema,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    SessionCreateOriginFieldsV1Schema,
-    refineSessionCreateOriginFieldsV1,
-    SessionReportsToV1Schema,
-    V2SessionRecordSchema,
-    SESSION_CREATION_AUTHORIZATION_HEADER_V1,
-} from "@happier-dev/protocol";
-import { SessionTeamCredentialBindingIntentsV1Schema } from "@happier-dev/protocol/teams";
+import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionOwnerMetadataEnvelopeV1Schema, SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionInitialAccessMaterializedV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
+import { SessionInitialTriggerAdmissionV1Schema } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
+import { SessionCreateOriginFieldsV1Schema, refineSessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
+import { SessionReportsToV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { applySessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { initializeExternalLinkedSessionStorage } from "@/app/session/externalLinkedSessionStorageInitialization";
 import {
@@ -56,7 +52,7 @@ import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { auth, ApiTokenOperationError } from "@/app/auth/auth";
 import { verifyCurrentExternalActionPrincipal } from "@/app/auth/externalActionExecutionAuthorization";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ExternalActionExecutionAuthorizationBindingV1 } from "@happier-dev/protocol/actions";
+import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { readSessionCreationApiTokenIdInTx } from "@/app/session/create/apiTokenSessionCreationAuthorization";
 
 export function registerSessionCreateOrLoadRoute(app: Fastify) {

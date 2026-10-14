@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const CODEX_BACKEND_MODES = ['acp', 'appServer'] as const;
 export type CodexBackendMode = (typeof CODEX_BACKEND_MODES)[number];
@@ -27,28 +27,24 @@ export function normalizeCodexBackendMode(value: unknown): CodexBackendMode | nu
  */
 
 export function createModelOverrideV1Schema(zod: typeof z) {
-  return zod
-    .object({
+  return zod.looseObject({
       v: zod.literal(1),
-      updatedAt: zod.number().finite(),
+      updatedAt: zod.number(),
       // Cleared overrides are represented as `null` (see computeNextMetadataStringOverrideV1).
-      modelId: zod.string().nullable(),
-    })
-    .passthrough();
+      modelId: zod.nullable(zod.string()),
+    });
 }
 
 export const ModelOverrideV1Schema = createModelOverrideV1Schema(z);
 export type ModelOverrideV1 = z.infer<typeof ModelOverrideV1Schema>;
 
 export function createAcpSessionModeOverrideV1Schema(zod: typeof z) {
-  return zod
-    .object({
+  return zod.looseObject({
       v: zod.literal(1),
-      updatedAt: zod.number().finite(),
+      updatedAt: zod.number(),
       // Cleared overrides are represented as `null` (see computeNextMetadataStringOverrideV1).
-      modeId: zod.string().nullable(),
-    })
-    .passthrough();
+      modeId: zod.nullable(zod.string()),
+    });
 }
 
 export const AcpSessionModeOverrideV1Schema = createAcpSessionModeOverrideV1Schema(z);
@@ -64,21 +60,17 @@ export function buildAcpSessionModeOverrideV1(params: Readonly<{ updatedAt: numb
 
 export function createAcpConfigOptionOverridesV1Schema(zod: typeof z) {
   const valueSchema = zod.union([zod.string(), zod.number(), zod.boolean(), zod.null()]);
-  return zod
-    .object({
+  return zod.looseObject({
       v: zod.literal(1),
-      updatedAt: zod.number().finite(),
+      updatedAt: zod.number(),
       overrides: zod.record(
         zod.string(),
-        zod
-          .object({
-            updatedAt: zod.number().finite(),
+        zod.looseObject({
+            updatedAt: zod.number(),
             value: valueSchema,
-          })
-          .passthrough(),
+          }),
       ),
-    })
-    .passthrough();
+    });
 }
 
 export const AcpConfigOptionOverridesV1Schema = createAcpConfigOptionOverridesV1Schema(z);

@@ -12,7 +12,6 @@ import {
     CONVERSATION_CONNECTION_HISTORY_GAP_REASONS_V1,
     CONVERSATION_PROVIDER_FAILURE_REASONS_V1,
     MAX_CONVERSATION_PROVIDER_DIAGNOSTIC_UTF8_BYTES,
-    MAX_CONVERSATION_RETRY_AFTER_MS,
 } from './bounds.js';
 
 /** @internal Relative-only input for composed Channels protocol schemas. */
@@ -45,7 +44,7 @@ export const ConversationProviderFailureV1ProtocolSchema = defineProtocolObject(
     retryAfterMs: defineProtocolNumber({
         integer: true,
         minimum: 0,
-        maximum: MAX_CONVERSATION_RETRY_AFTER_MS,
+        maximum: Number.MAX_SAFE_INTEGER,
     }).optional(),
     diagnostic: ConversationProviderDiagnosticV1ProtocolSchema.optional(),
 }, { policy: 'closed' });

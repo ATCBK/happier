@@ -104,7 +104,10 @@ export async function runWorkspaceUnitProjects(options: {
             passed.push(workspace);
           }
         }
-        for (const error of vitest.state.getUnhandledErrors()) failures.push(error.message ?? String(error));
+        for (const error of vitest.state.getUnhandledErrors()) {
+          const message = error !== null && typeof error === 'object' && 'message' in error ? error.message : undefined;
+          failures.push(String(message ?? error));
+        }
         if (process.exitCode && failures.length === 0) failures.push('Vitest exited unsuccessfully.');
       } finally {
         await vitest.close();

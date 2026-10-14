@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SessionSkillSelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 import {
     LEGACY_ACP_CONFIG_OPTION_OVERRIDES_KEY,
@@ -96,12 +97,15 @@ describe('sessionConfigurationSeed', () => {
                     effort: { updatedAt: 101, value: 'high' },
                 },
             },
-            capabilitySelection: { mcp: {
-                v: 1,
-                managedServersEnabled: false,
-                forceIncludeServerIds: ['portable'],
-                forceExcludeServerIds: ['disabled'],
-            } },
+            capabilitySelection: {
+                mcp: {
+                    v: 1,
+                    managedServersEnabled: false,
+                    forceIncludeServerIds: ['portable'],
+                    forceExcludeServerIds: ['disabled'],
+                },
+                skills: SessionSkillSelectionV1Schema.parse({}),
+            },
             backendNewSessionOptionStateByTargetKey: {
                 'agent:happier.agent.codex/codex': {
                     connectedServices: {

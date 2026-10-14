@@ -9,6 +9,8 @@ import { Stack } from './destinationRoute';
 import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
 import { NavigationHeaderActions, PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { t } from '@/text';
 import {
     DestinationInstanceHost,
     useDestinationFocus,
@@ -69,6 +71,25 @@ function PageHeaderActionsProbe() {
 }
 
 describe('DestinationInstanceHost', () => {
+    it('inherits the root declaration for a phone page before any leaf options arrive', async () => {
+        const screen = await renderScreen(<DestinationInstanceHost tabId="history-phone" phone
+            ref={{ kind: 'sessionRecent', params: {} }} pathname="/session/recent" focused visible>
+            {React.createElement('HistoryBody')}
+        </DestinationInstanceHost>);
+        expect(screen.findByTestId('workspace-destination-header')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(t('sessionHistory.title'));
+    });
+    it('keeps an Artifacts PageHeader and its actions in the page without a second phone bar', async () => {
+        const screen = await renderScreen(<DestinationInstanceHost tabId="artifacts-phone" phone
+            ref={{ kind: 'artifacts', params: {} }} pathname="/artifacts" focused visible>
+            <Stack.Screen options={{ headerRight: () => React.createElement('CreateArtifact') }} />
+            <PageHeader title="Artifacts" alwaysShowTitle actions={React.createElement('ArtifactActions')} />
+        </DestinationInstanceHost>);
+        expect(screen.findByTestId('workspace-destination-header')).toBeNull();
+        expect(screen.getTextContent()).toContain('Artifacts');
+        expect(screen.root.findAllByType('ArtifactActions')).toHaveLength(1);
+        expect(screen.root.findAllByType('CreateArtifact')).toHaveLength(1);
+    });
     it('hands hosted desktop route actions to the page header once and retains them when content is loading', async () => {
         const page = (ready: boolean) => <DestinationInstanceHost tabId="header-tab"
             ref={{ kind: 'settings', params: {} }} pathname="/settings" focused visible

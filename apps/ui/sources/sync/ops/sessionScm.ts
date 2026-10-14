@@ -72,6 +72,7 @@ import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitAc
 import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { runMachineScmRpcWithFallback } from './scm/machineScm';
+import type { ScmRpcTransportResult } from './scm/scmRpcAdmission';
 import type { ScmRpcFailure } from './scm/scmRpcFailure';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
@@ -89,7 +90,7 @@ async function callScmPreferMachineTransport<
     signal?: AbortSignal,
     accountId?: string | null,
     bindResolvedRequest?: (request: R & { cwd: string }) => R & { cwd: string },
-): Promise<T | ScmRpcFailure> {
+): Promise<ScmRpcTransportResult<T>> {
     const workEvidence = (method === RPC_METHODS.SCM_BRANCH_LIST || method === RPC_METHODS.SCM_PULL_REQUEST_LIST || method === RPC_METHODS.SCM_PULL_REQUEST_GET)
         && 'workEvidence' in request ? request.workEvidence : undefined;
     if (workEvidence !== undefined && (!workEvidence || typeof workEvidence !== 'object'
@@ -134,7 +135,7 @@ async function callScmPreferMachine<T extends { success: boolean; error?: string
     sessionId: string, method: string, request: R, serverId?: string | null,
 ): Promise<T | ScmRpcFailure> {
     if (getScmRpcSideEffectClass(method) === 'read' && method !== RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE) {
-        return callScmPreferMachineTransport<T, R>(sessionId, method, request, serverId);
+        return normalizeUiScmFacadeResult<T>(await callScmPreferMachineTransport<T, R>(sessionId, method, request, serverId));
     }
     const actionId = ActionIdSchema.parse(method);
     const schema = getActionSpec(actionId).outputSchema;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -87,24 +87,24 @@ function normalizeJsonValue(value: unknown, depth: number, seen: WeakSet<object>
   }
 }
 
-function addIssue(context: z.RefinementCtx, message: string, path?: (string | number)[]): void {
+function addIssue(context: z.core.$RefinementCtx, message: string, path?: (string | number)[]): void {
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message,
     ...(path ? { path } : {}),
   });
 }
 
-const PluginAccountSettingsValuesV1RawSchema = lazyZodSchema(() => z.object({
+const PluginAccountSettingsValuesV1RawSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   values: z.record(PluginSettingFieldIdV2Schema, z.unknown()),
-}).strict());
+}));
 
 /**
  * The persisted payload carries values only. The reserved UserKV row version
  * is the single Account Settings CAS revision and is never duplicated here.
  */
-export const PluginAccountSettingsValuesV1Schema = lazyZodSchema(() => PluginAccountSettingsValuesV1RawSchema.transform((input, context) => {
+export const PluginAccountSettingsValuesV1Schema = lazyZodSchema(() => z.pipe(PluginAccountSettingsValuesV1RawSchema, z.transform((input, context) => {
   const entries = Object.entries(input.values);
   if (entries.length > PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1.maximumFields) {
     addIssue(context, `Plugin Account Settings may contain at most ${PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1.maximumFields} fields`, ['values']);
@@ -130,12 +130,11 @@ export const PluginAccountSettingsValuesV1Schema = lazyZodSchema(() => PluginAcc
     addIssue(context, error instanceof Error ? error.message : 'Plugin Account Settings value is invalid', ['values']);
     return z.NEVER;
   }
-}));
+})));
 export type PluginAccountSettingsValuesV1 = z.infer<typeof PluginAccountSettingsValuesV1Schema>;
 export const PluginAccountSettingsValuesV1StoredSchema = createStoredReadSchema(PluginAccountSettingsValuesV1Schema);
 
-const PluginAccountSettingsEncryptedCiphertextWriteV1Schema = lazyZodSchema(() => z.string().min(1).superRefine(
-  (ciphertext, context) => {
+const PluginAccountSettingsEncryptedCiphertextWriteV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.superRefine((ciphertext, context) => {
     if (
       textEncoder.encode(ciphertext).byteLength
       > PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1.maximumEncryptedCiphertextUtf8Bytes
@@ -146,19 +145,18 @@ const PluginAccountSettingsEncryptedCiphertextWriteV1Schema = lazyZodSchema(() =
         ['c'],
       );
     }
-  },
-));
+  })));
 
 /** Server storage is envelope-only: it never opens or interprets E2EE values. */
 export const PluginAccountSettingsContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: PluginAccountSettingsValuesV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().min(1),
-  }).strict(),
+    c: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type PluginAccountSettingsContentV1 = z.infer<typeof PluginAccountSettingsContentV1Schema>;
 export const PluginAccountSettingsContentV1StoredSchema = createStoredReadSchema(PluginAccountSettingsContentV1Schema);
@@ -168,14 +166,14 @@ export const PluginAccountSettingsContentV1StoredSchema = createStoredReadSchema
  * preserves an oversized predecessor envelope for recovery.
  */
 const PluginAccountSettingsContentV1WriteSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: PluginAccountSettingsValuesV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
     c: PluginAccountSettingsEncryptedCiphertextWriteV1Schema,
-  }).strict(),
+  }),
 ]));
 
 /**
@@ -219,43 +217,43 @@ export function assertPluginAccountSettingsContentForModeV1(
   return content;
 }
 
-const PluginAccountSettingsRevisionV1Schema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
+const PluginAccountSettingsRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 export const PluginAccountSettingsReadResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('present'),
     revision: PluginAccountSettingsRevisionV1Schema,
     content: PluginAccountSettingsContentV1StoredSchema,
-  }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
-  z.object({
+  }),
+  z.strictObject({ status: z.literal('absent') }),
+  z.strictObject({
     status: z.literal('deleted'),
     revision: PluginAccountSettingsRevisionV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginAccountSettingsReadResponseV1 = z.infer<typeof PluginAccountSettingsReadResponseV1Schema>;
 
-export const PluginAccountSettingsMutationRequestV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountSettingsMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   expectedRevision: z.union([
     PluginAccountSettingsRevisionV1Schema,
     z.literal('absent'),
   ]),
-  content: PluginAccountSettingsContentV1WriteSchema.nullable(),
-}).strict());
+  content: z.nullable(PluginAccountSettingsContentV1WriteSchema),
+}));
 export type PluginAccountSettingsMutationRequestV1 = z.infer<typeof PluginAccountSettingsMutationRequestV1Schema>;
 
 export const PluginAccountSettingsMutationResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('updated'),
     revision: PluginAccountSettingsRevisionV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('conflict'),
     revision: PluginAccountSettingsRevisionV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginAccountSettingsMutationResponseV1 = z.infer<typeof PluginAccountSettingsMutationResponseV1Schema>;
 
-export const PluginAccountSettingsStorageUnavailableV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountSettingsStorageUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('plugin_account_settings_storage_unavailable'),
-}).strict());
+}));

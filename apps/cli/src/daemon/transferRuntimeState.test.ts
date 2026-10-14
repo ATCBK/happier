@@ -4,6 +4,25 @@ import type { DaemonState } from '@/api/types';
 import { createDaemonTransferRuntimeState, createDaemonTransferRuntimeStatePublisher } from './transferRuntimeState';
 
 describe('createDaemonTransferRuntimeState', () => {
+  it.each(['missing', 'previous-daemon'] as const)('publishes the current lazy Home declaration on attachment over %s state', async previous => {
+    const initialState = createDaemonTransferRuntimeState({ directPeer: {
+      featureEnabled: false, serverEnabled: false, bindHost: '127.0.0.1', bindPort: 46001, advertisedHosts: [],
+    } });
+    let state: DaemonState = { status: 'running', pid: 123,
+      ...(previous === 'previous-daemon' ? { transfer: {
+        ...initialState, supported: { import: false, export: false },
+        listenerClasses: { ...initialState.listenerClasses, loopback_http: { enabled: true, configured: true, active: true } },
+      } } : {}),
+    };
+    const publisher = createDaemonTransferRuntimeStatePublisher({ initialTransferState: initialState });
+    await publisher.attachApiMachine({ updateDaemonState: async updater => {
+      state = updater(state);
+      return 'published';
+    } });
+    expect(state.transfer).toEqual(initialState);
+    expect(state.pid).toBe(123);
+  });
+
   it('derives the initial transfer capability snapshot from direct-peer runtime config', () => {
     const state = createDaemonTransferRuntimeState({
       directPeer: {
@@ -177,8 +196,7 @@ describe('createDaemonTransferRuntimeState', () => {
       available: true,
     });
 
-    expect(updateDaemonState).toHaveBeenCalledTimes(1);
-    expect(publishedStates[0]?.transfer?.listenerClasses.tailscale_serve_https).toEqual({
+    expect(publishedStates.at(-1)?.transfer?.listenerClasses.tailscale_serve_https).toEqual({
       enabled: true,
       configured: true,
       active: true,
@@ -229,9 +247,8 @@ describe('createDaemonTransferRuntimeState', () => {
       publishedTransferCount: 1,
     });
 
-    expect(updateDaemonState).toHaveBeenCalledTimes(1);
-    expect(publishedStates[0]?.transfer?.listenerClasses.loopback_http.active).toBe(true);
-    expect(publishedStates[0]?.transfer?.listenerClasses.tailscale_serve_https).toEqual({
+    expect(publishedStates.at(-1)?.transfer?.listenerClasses.loopback_http.active).toBe(true);
+    expect(publishedStates.at(-1)?.transfer?.listenerClasses.tailscale_serve_https).toEqual({
       enabled: true,
       configured: false,
       active: false,
@@ -289,7 +306,6 @@ describe('createDaemonTransferRuntimeState', () => {
       available: true,
     });
 
-    expect(updateDaemonState).toHaveBeenCalledTimes(2);
     expect(publishedStates.at(-1)?.transfer?.listenerClasses.loopback_http).toEqual({
       enabled: true,
       configured: true,
@@ -417,7 +433,7 @@ describe('createDaemonTransferRuntimeState', () => {
         advertisedHosts: ['127.0.0.1'],
       },
     });
-    let quiescing = false;
+    let quiescing = true;
     let resolveFirstPublication!: (outcome: 'suppressed') => void;
     const firstPublication = new Promise<'suppressed'>((resolve) => {
       resolveFirstPublication = resolve;
@@ -433,6 +449,7 @@ describe('createDaemonTransferRuntimeState', () => {
       isDaemonQuiescing: () => quiescing,
     });
     await publisher.attachApiMachine({ updateDaemonState });
+    quiescing = false;
 
     const publish = publisher.publishDirectTransferServerLifecycleState({
       status: 'running',
@@ -486,6 +503,6 @@ describe('createDaemonTransferRuntimeState', () => {
     ]);
 
     expect(outcome).toBe('resolved');
-    expect(updateDaemonState).toHaveBeenCalledTimes(1);
+    expect(updateDaemonState).toHaveBeenCalledTimes(2);
   });
 });

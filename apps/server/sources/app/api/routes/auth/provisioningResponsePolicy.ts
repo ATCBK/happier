@@ -1,8 +1,4 @@
-import {
-    inspectTerminalProvisioningV3Payload,
-    resolveTerminalProvisioningVariantV2,
-    type TerminalProvisioningV2Response,
-} from "@happier-dev/protocol";
+import { inspectTerminalProvisioningV3Payload, resolveTerminalProvisioningVariantV2, type TerminalProvisioningV2Response } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
 import * as privacyKit from "privacy-kit";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

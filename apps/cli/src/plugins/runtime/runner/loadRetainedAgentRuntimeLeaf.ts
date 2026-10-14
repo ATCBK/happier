@@ -190,6 +190,7 @@ export async function verifyRunnerAgentBindingAgainstGeneration(
         paths: PluginStorePaths;
         binding: unknown;
         developmentOccurrenceId?: string;
+        developmentRunnerSnapshotIdentity?: string;
         resolveBundledPluginRoot?: typeof resolveRetainedBundledPluginRoot;
     }>,
 ): Promise<Readonly<{
@@ -223,17 +224,25 @@ export async function verifyRunnerAgentBindingAgainstGeneration(
     if (
         binding.sourceCustody.kind === 'development'
         && !params.developmentOccurrenceId?.trim()
+        && !params.developmentRunnerSnapshotIdentity?.trim()
     ) {
         throw new Error(
             'Development retained Agent binding requires a daemon-attested current occurrence',
         );
     }
     const retainedSource = binding.sourceCustody.kind === 'development'
+        && !params.developmentRunnerSnapshotIdentity
         ? null
         : await attestRetainedPluginSource({
             paths: params.paths,
             pluginId: binding.pluginId,
             custody: binding.sourceCustody,
+            ...(params.developmentRunnerSnapshotIdentity
+                ? {
+                    manifestAuthority: 'bundled_first_party' as const,
+                    runnerSnapshotIdentity: params.developmentRunnerSnapshotIdentity,
+                }
+                : {}),
             ...(params.resolveBundledPluginRoot
                 ? { resolveBundledPluginRoot: params.resolveBundledPluginRoot }
                 : {}),

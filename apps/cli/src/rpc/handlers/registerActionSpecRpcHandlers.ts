@@ -2,7 +2,8 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import type { ActionExecuteResult, ActionExecutorContext, ActionId } from '@happier-dev/protocol/actions';
-import { ACTION_SPECS } from '@happier-dev/protocol/actions/actionSpecs';
+import { ACTION_SPECS, getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { logger } from '@/ui/logger';
 import type { ActionSpecSurfaceBindings, ActionSurfaceBindingContext } from '@happier-dev/protocol/actions/actionSpecs';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionFollowSourceKeyPreparationResultV1Schema, SESSION_FOLLOW_SOURCE_KEY_PREPARATION_WAITING_ACTION_ERROR_V1, projectSessionFollowSourceKeyPreparationAfterSetV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
@@ -124,9 +125,11 @@ export function unwrapActionResultForRpc(actionId: ActionId, result: ActionExecu
     if (result.ok) {
         return result.result;
     }
-    let details: unknown = actionId === 'execution.run.start'
+    let details: unknown = (actionId === 'execution.run.start'
+        || (actionId === 'execution.run.ensure_or_start'
+            && readObjectValue(result.details, 'executionRunStart') !== undefined))
         ? withExecutionRunStartFailureDetails(
-            undefined,
+            result.details,
             readExecutionRunStartRunCreation(result.details),
         )
         : undefined;
@@ -388,6 +391,8 @@ export function registerActionSpecRpcHandlers<TActionId extends ActionId = Actio
                     ...(envelopeDefaultSessionId ? { defaultSessionId: envelopeDefaultSessionId } : {}),
                     ...(externalActionTarget ? { externalActionTarget } : {}),
                     ...(execution.signal ? { signal: execution.signal } : {}),
+                    ...(context?.deadlineAtMs === undefined ? {} : { deadlineAtMs: context.deadlineAtMs }),
+                    ...(context?.requestStartedAtMs === undefined ? {} : { requestStartedAtMs: context.requestStartedAtMs }),
                     ...(context?.callerAuthority ? { callerAuthority: context.callerAuthority } : {}),
                     ...(context?.sessionActionOrigin ? { sessionActionOrigin: context.sessionActionOrigin } : {}),
                     ...(context?.authorization?.kind === 'session.write'
@@ -457,6 +462,19 @@ export function registerActionSpecRpcHandlers<TActionId extends ActionId = Actio
                     }),
                 })
                 : await execute({ ...(context?.signal ? { signal: context.signal } : {}) });
+            if (typedActionId === 'scm.diffSummary.generate' && !result.ok && result.errorCode === 'invalid_parameters') {
+                const validated = getActionSpec(typedActionId).inputSchema.safeParse(semanticInput);
+                if (!validated.success) logger.infoFile('[RPC] SCM input validation failed', {
+                    actionId: typedActionId,
+                    issues: validated.error.issues.map(issue => {
+                        // This closed input has schema-owned paths, except the opaque source Action's JSON input.
+                        // Stop at that boundary: dictionary keys, values, issue prose and unknown keys are private.
+                        const opaqueInput = issue.path.indexOf('input');
+                        const path = opaqueInput < 0 ? issue.path : issue.path.slice(0, opaqueInput + 1);
+                        return { path: path.map(segment => typeof segment === 'number' ? '[]' : segment), code: issue.code };
+                    }),
+                });
+            }
             if (!result.ok || !rpcBinding) {
                 return unwrapActionResultForRpc(typedActionId, result);
             }

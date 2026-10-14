@@ -7,10 +7,8 @@ import {
     resolvePersonalHomeRuntimeLayout,
     replacePersonalHomeFileDurably,
 } from '@happier-dev/cli-common/firstPartyRuntime/server';
-import {
-    IrohEndpointIdV1Schema,
-    type HomeConnectionEndpointV1,
-} from '@happier-dev/protocol';
+import { IrohEndpointIdV1Schema } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
+import { type HomeConnectionEndpointV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { compareAndSetSimpleCache, compareAndSetSimpleCacheInTx, readFromSimpleCache } from '@/storage/cache/simpleCache';
 import type { Tx } from '@/storage/inTx';
 import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';

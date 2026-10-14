@@ -10,6 +10,8 @@ import { sync } from '@/sync/sync';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { t } from '@/text';
 
 type SessionRouteHydrationStateRecord = Readonly<{
     routeKey: string;
@@ -267,5 +269,8 @@ export function useHydrateSessionForRoute(
         return createAvailableState(normalizedSessionId, hydratedAvailableServerId);
     }, [hydratedAvailableServerId, normalizedSessionId]);
 
-    return hydratedAvailableState ?? routeState;
+    const result = hydratedAvailableState ?? routeState;
+    // The route read owns absence; a loaded list/cache alone cannot establish it.
+    useDestinationPageTitle(result.kind === 'missing' ? t('errors.sessionDeleted') : undefined);
+    return result;
 }

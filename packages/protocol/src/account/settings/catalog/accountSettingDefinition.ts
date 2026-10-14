@@ -1,4 +1,4 @@
-import type { ZodTypeAny } from 'zod';
+import type { ZodMiniType as ZodTypeAny } from 'zod/mini';
 
 import { buildSettingArtifacts } from '../../../settings/registry/buildSettingArtifacts.js';
 import type {

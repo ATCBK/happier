@@ -315,6 +315,7 @@ describe('daemon browser controller commands', () => {
       isApprovalExecutionOriginCurrent: async () => true,
     });
     const context = { surface: 'agent' as const, authority: 'account_automation' as const, defaultSessionId: 'browser',
+      defaultSessionMachineId: 'machine-browser',
       serverId: 'home', actionRequestId: 'browser-control', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1 }) };
     try {
       if (kind === 'handBack') await control.dispatchCommand({ ...view, kind: 'takeControl', commandId: 'take' }, { authority: 'present_user' });
@@ -322,7 +323,7 @@ describe('daemon browser controller commands', () => {
       expect(await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'control' }, context))
         .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
       expect(automation.getStatus(view).controller).toBe(before);
-      expect(stored).toMatchObject({ executionOriginV1: { authority: 'account_automation' } });
+      expect(stored).toMatchObject({ executionOriginV1: { authority: 'account_automation', machineId: context.defaultSessionMachineId } });
       decision = 'approve';
       const approved = await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'control' }, context);
       expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'dispatched' } });

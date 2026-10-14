@@ -84,13 +84,14 @@ function view(entries: readonly Entry[]) {
 async function render(
   entries: readonly Entry[],
   state: 'ready' | 'error' | 'machine_unreachable' | 'resolving' = 'ready',
+  options: Readonly<{ preview?: boolean }> = {},
 ) {
   const { buildSessionCapabilitiesModel } =
     await import('./sessionCapabilitiesModel');
   const { SessionCapabilitiesContent } =
     await import('./SessionCapabilitiesContent');
   const model = buildSessionCapabilitiesModel({
-    view: view(entries),
+    view: options.preview === false ? null : view(entries),
     state,
     readOnly: false,
     names,
@@ -194,5 +195,17 @@ describe('SessionCapabilitiesContent', () => {
         (node) => node.props?.testID === 'caps:empty:skills',
       ),
     ).toHaveLength(0);
+  });
+
+  it('says an offline machine once and never claims empty groups it could not check', async () => {
+    const offline = await render([], 'machine_unreachable', { preview: false });
+    const ids = new Set(
+      offline.screen
+        .findAll((node) => typeof node.props?.testID === 'string')
+        .map((node) => node.props.testID as string),
+    );
+    expect(ids.has('caps:offline')).toBe(true);
+    expect([...ids].filter((id) => id.startsWith('caps:group:'))).toEqual([]);
+    expect([...ids].filter((id) => id.startsWith('caps:empty:'))).toEqual([]);
   });
 });

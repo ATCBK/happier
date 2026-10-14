@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Bounded result for the passive Codex Voice setup probe. It intentionally
@@ -16,10 +16,10 @@ export type CodexPassiveRealtimeSetupStatusV1 = z.infer<
   typeof CodexPassiveRealtimeSetupStatusV1Schema
 >;
 
-export const CodexPassiveRealtimeSetupResultV1Schema = lazyZodSchema(() => z.object({
+export const CodexPassiveRealtimeSetupResultV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: CodexPassiveRealtimeSetupStatusV1Schema,
-}).strict());
+}));
 export type CodexPassiveRealtimeSetupResultV1 = z.infer<
   typeof CodexPassiveRealtimeSetupResultV1Schema
 >;

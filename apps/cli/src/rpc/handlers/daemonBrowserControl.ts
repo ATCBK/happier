@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { DaemonBrowserControlDispatchRequestV1Schema, DaemonBrowserControlDispatchResponseV1Schema, DaemonBrowserViewListRequestV1Schema, DaemonBrowserViewListResponseV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import type { DaemonBrowserControlDispatchResponseV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -10,7 +10,8 @@ import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes
 // supplies a real `sendDaemonCommand` transport that routes a `BrowserCommandV1` here, through the
 // SAME control broker the agent execution-run dispatch uses (MC-6 — one daemon control owner, no
 // parallel path). The route is owner-scoped (account+machine, direct_ephemeral) — the user-initiated
-// `ui` path, which never prompts; the agent path stays approval-floored at the action surface.
+// UI and automation callers retain verified ingress authority and request cancellation;
+// control and confidentiality decisions stay with the shared Browser owner.
 export type DaemonBrowserControlHandlerOptions = Readonly<{
     browserControl?: BrowserDaemonControlRoutes | null;
 }>;
@@ -27,13 +28,15 @@ export function registerDaemonBrowserControlHandler(
     });
     rpc.registerHandler(
         RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH,
-        async (raw: unknown): Promise<DaemonBrowserControlDispatchResponseV1> => {
+        async (raw: unknown, context?: RpcHandlerContext): Promise<DaemonBrowserControlDispatchResponseV1> => {
             const request = DaemonBrowserControlDispatchRequestV1Schema.parse(raw);
             if (!options.browserControl) {
                 throw new Error('Browser control runtime is unavailable');
             }
-            // Owner-scoped machine RPC is the present user's route; never trust payload authority.
-            const result = await options.browserControl.dispatchCommand(request.command, { authority: 'present_user' });
+            const result = await options.browserControl.dispatchCommand(request.command, {
+                authority: context?.callerAuthority ?? 'account_automation',
+                signal: context?.signal,
+            });
             return DaemonBrowserControlDispatchResponseV1Schema.parse({
                 protocolVersion: 1,
                 result,

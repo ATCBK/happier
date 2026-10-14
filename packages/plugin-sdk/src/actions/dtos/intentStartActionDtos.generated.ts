@@ -14,6 +14,7 @@ export type IntentStartActionInputById = {
         target?: {
             kind: 'detached';
         } | undefined;
+        childSelection?: 'agentDefault' | undefined;
         cwd?: string | undefined;
         outputs?: 'walkthrough'[] | undefined;
         comparisonId?: string | undefined;
@@ -421,22 +422,10 @@ export type IntentStartActionInputById = {
     };
 };
 export type IntentStartActionResultById = {
-    readonly "review.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "review.walkthrough": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "review.explain_findings": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "subagents.plan.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "subagents.delegate.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "voice_agent.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "review.start": JsonValue;
+    readonly "review.walkthrough": JsonValue;
+    readonly "review.explain_findings": JsonValue;
+    readonly "subagents.plan.start": JsonValue;
+    readonly "subagents.delegate.start": JsonValue;
+    readonly "voice_agent.start": JsonValue;
 };

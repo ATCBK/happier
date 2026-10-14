@@ -1,18 +1,5 @@
-import {
-    HomeAuditListInputV1Schema,
-    HomeAuditListResultV1Schema,
-    HomeGovernanceErrorV1Schema,
-    HomeMailDeliveryGetInputV1Schema,
-    HomeMailDeliveryReadinessV1Schema,
-    HomeMailDeliveryTestInputV1Schema,
-    HomeMailDeliveryTestResultV1Schema,
-    HomeSettingsGetInputV1Schema,
-    HomeSettingsInvalidErrorV1Schema,
-    HomeSettingsProjectionV1Schema,
-    HomeSettingsSetInputV1Schema,
-    homeGovernanceErrorHttpStatusV1,
-    normalizeVerifiedEmail,
-} from "@happier-dev/protocol";
+import { HomeAuditListInputV1Schema, HomeAuditListResultV1Schema, HomeGovernanceErrorV1Schema, HomeMailDeliveryGetInputV1Schema, HomeMailDeliveryReadinessV1Schema, HomeMailDeliveryTestInputV1Schema, HomeMailDeliveryTestResultV1Schema, HomeSettingsGetInputV1Schema, HomeSettingsInvalidErrorV1Schema, HomeSettingsProjectionV1Schema, HomeSettingsSetInputV1Schema, homeGovernanceErrorHttpStatusV1 } from '@happier-dev/protocol/home/governance';
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import { z } from "zod";
 
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";

@@ -228,9 +228,10 @@ jobs:
     name: Gate — select and prepare shared workspace
     if: ${{ !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
     runs-on: ubuntu-latest
-    # Longest complete cold preparation: 44m52s; twice that duration rounded up.
+    # Longest complete shared preparation: 53m22s in run 38398608504.
+    # Twice that duration rounded up gives 110 minutes.
     # This is hang protection, not a performance target.
-    timeout-minutes: 90
+    timeout-minutes: 110
     permissions:
       contents: read
     outputs:
@@ -243,7 +244,7 @@ jobs:
       HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
     steps:
       - name: Shared preparation hang protection
-        run: echo "The 90-minute hang guard is based on twice the longest complete 44m52s preparation."
+        run: echo "The 110-minute hang guard is based on twice the longest complete 53m22s preparation."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
@@ -438,8 +439,10 @@ jobs:
     needs: [gate-prepare]
     if: ${{ needs.gate-prepare.outputs.packages != '[]' }}
     runs-on: ubuntu-latest
-    # No complete eight-part unit duration exists yet. Use the platform job
-    # deadline until this run establishes a measured hang-protection baseline.
+    # Complete UI partitions in run 38398608504 took up to 2h10m.
+    # Twice that duration plus rounding headroom gives a 270-minute hang guard.
+    # The grouped host suite retains the platform's existing job deadline.
+    timeout-minutes: ${{ matrix.package == 'ui' && 270 || 360 }}
     permissions:
       contents: read
     strategy:
@@ -453,7 +456,7 @@ jobs:
       HAPPIER_GATE_TRIAGE_BASELINE: ${{ github.workspace }}/scripts/ci/gate-triage-baseline.json
     steps:
       - name: Unit completion measurement
-        run: echo "All selected unit suites must reach a terminal result; no performance-target cutoff is imposed."
+        run: echo "UI hang protection is 270 minutes, derived from complete partition measurements; this is not a performance target."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -637,7 +640,7 @@ jobs:
   gate:
     name: Gate
     if: ${{ always() && !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
-    needs: [gate-prepare, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract]
+    needs: [gate-prepare, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract, installers-smoke-windows]
     runs-on: ubuntu-latest
     # Normally terminating aggregate: 6s; twice that sample rounded up.
     timeout-minutes: 1
@@ -2110,7 +2113,7 @@ jobs:
             --release-channel "${INSTALLERS_RELEASE_CHANNEL}"
 
   installers-smoke-windows:
-    if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_installers_smoke) }}
+    if: ${{ !inputs.select_jobs_explicitly || inputs.run_installers_smoke }}
     name: Installer Smoke (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
@@ -2147,11 +2150,22 @@ jobs:
         with:
           args: --frozen-lockfile --ignore-engines
 
+      - name: Verify Windows installer security contracts
+        shell: pwsh
+        run: node --test scripts/release/installers_security.test.mjs
+
+      - name: Verify Windows scheduled task contracts
+        shell: pwsh
+        working-directory: packages/cli-common
+        run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts src/service/windows.test.ts
+
       - name: Prepare release validation workspaces
+        if: ${{ inputs.select_jobs_explicitly || !((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
         shell: pwsh
         run: node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/cli-common @happier-dev/release-runtime
 
       - name: Run unified installer smoke
+        if: ${{ inputs.select_jobs_explicitly || !((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}

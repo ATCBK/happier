@@ -64,6 +64,29 @@ describe('shared local-service inventory store', () => {
         resetLocalServiceInventoryStoreForTests();
     });
 
+    it.each(['unavailable', 'rejection'] as const)('rearms the real watch transport after fresh publication overtakes %s', async failure => {
+        const watches: Array<{ resolve(value: unknown): void; reject(error: unknown): void }> = [];
+        rpc.machine.mockImplementation(async (request: { method: string }) => {
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+                return await new Promise((resolve, reject) => { watches.push({ resolve, reject }); });
+            }
+            return { protocolVersion: 1, snapshot };
+        });
+        const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
+        const unsubscribe = subscribeLocalServiceInventoryStore(key, () => {});
+        await vi.waitFor(() => expect(watches).toHaveLength(1));
+        const fresh = LocalServiceInventorySnapshotV1Schema.parse({ ...snapshot, generatedAt: 2_000 });
+        publishLocalServiceInventorySnapshot(key, fresh);
+        if (failure === 'rejection') watches[0]!.reject(new Error('offline'));
+        else watches[0]!.resolve({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+        await vi.waitFor(() => expect(watches).toHaveLength(2));
+        const changed = LocalServiceInventorySnapshotV1Schema.parse({ ...snapshot, generatedAt: 3_000, entries: [] });
+        watches[1]!.resolve({ protocolVersion: 1, changed: true, snapshot: changed });
+        await vi.waitFor(() => expect(getLocalServiceInventoryState(key).generatedAt).toBe(3_000));
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState(key))).toEqual([]);
+        unsubscribe();
+    });
+
     it('fetches once for a key regardless of how many consumers subscribe', async () => {
         const snapshotClient = rpc.snapshot.mockResolvedValue({
             protocolVersion: 1,

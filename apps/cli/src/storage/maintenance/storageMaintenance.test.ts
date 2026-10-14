@@ -15,6 +15,14 @@ import { createTrashStore, resolveTrashOsUserId } from '../trash/trashStore';
 import { createStorageMaintenance } from './storageMaintenance';
 import { createStorageService } from '../storageService';
 import { readStoragePathIdentity, removeStoragePath } from '../trash/removeStoragePath';
+import { createDaemonStorageVitalsBindings } from '@/daemon/resources/createDaemonStorageVitalsBindings';
+import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
+import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
+import { createLinuxMachineVitalsReader } from '@/daemon/vitals/readers/linux';
+import { createLinuxVitalsFixture } from '@/daemon/vitals/readers/linux.testkit';
+import { HappierStorageSummaryV1Schema, TrashEntryV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
 // The Node timer module is the external clock boundary; use Vitest's same fake clock.
 const clockBoundary = vi.hoisted(() => ({ onArm: undefined as (() => void) | undefined }));
@@ -59,7 +67,8 @@ async function fixture(withRecording = false, readIdle?: () => boolean | Promise
   }] : [], mediaWriter: createBrowserRecordingSessionMediaWriter({ workingDirectory: home,
     pathAllowanceRegistry: createTransferPathAllowanceRegistry(), resolveSessionMediaTarget: recording => ({ sessionId: 'recording-session', messageLocalId: recording.recordingId }) }) });
   let scans = 0;
-  const logs = createLogRetentionOwner({ happyHomeDir: home, currentLogPaths: () => [join(logDir, 'current.log')],
+  let logPasses = 0;
+  const logs = createLogRetentionOwner({ happyHomeDir: home, currentLogPaths: () => { logPasses++; return [join(logDir, 'current.log')]; },
     env: { HAPPIER_CRASHED_SESSION_LOG_KEEP_COUNT: '1' }, onError: error => errors.push(error) });
   const maintenance = createStorageMaintenance({ readPolicy: () => policy, subscribePolicy: subscribe(policyListeners), subscribeVolumes: subscribe(volumeListeners),
     isIdle: () => readIdle ? readIdle() : idle, subscribeIdle: subscribe(idleListeners), isOnPower: () => power, subscribePower: subscribe(idleListeners),
@@ -86,7 +95,7 @@ async function fixture(withRecording = false, readIdle?: () => boolean | Promise
     },
     setPolicy(patch: Partial<typeof policy>) { policy = { ...policy, ...patch }; for (const listener of policyListeners) listener(); },
     setIdlePower(nextIdle: boolean, nextPower: boolean) { idle = nextIdle; power = nextPower; for (const listener of idleListeners) listener(); },
-    get scans() { return scans; } };
+    get logPasses() { return logPasses; }, get scans() { return scans; } };
 }
 
 describe('one due-time storage maintenance owner with real retained files', () => {
@@ -97,6 +106,103 @@ describe('one due-time storage maintenance owner with real retained files', () =
   beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); vi.setSystemTime(new Date('2026-10-11T09:00:00Z')); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
   afterAll(async () => { await disposeNative?.(); await fs.rm(scratch, { recursive: true, force: true }); });
+
+  it('projects sampler edges into real maintenance and Storage without idle work or no-op Trash invalidation', async () => {
+    const f = await fixture();
+    const os = await createLinuxVitalsFixture();
+    const mountLine = (id: number, mount: string) => `${id} 0 8:${id} / ${mount} rw - ext4 /dev/fixture${id} rw\n`;
+    await os.put('/proc/self/mountinfo', mountLine(1, scratch));
+    await os.put('/sys/class/power_supply/AC/type', 'Mains\n');
+    await os.put('/sys/class/power_supply/AC/online', '1\n');
+    let available = 500;
+    let sampled = createDeferred<void>();
+    const sampler = createMachineVitalsSampler({
+      readers: createLinuxMachineVitalsReader({ root: os.root, homePath: f.home,
+        statfs: async () => ({ bsize: 4096, blocks: 1000, bfree: available, bavail: available, files: 100, ffree: 50 }) }),
+      historyStore: await createMinuteHistoryStore({ directory: join(f.home, 'vitals') }),
+      monotonicMs: () => Date.now(), onTick: () => sampled.resolve(), onError: error => f.errors.push(error),
+    });
+    await sampler.start();
+    const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => f.errors.push(error) });
+    const activityLog = await createActivityLog({ activeServerDir: f.home, resourceSummary });
+    const binding = createDaemonStorageVitalsBindings(sampler);
+    const service = createStorageService({ machineId: 'machine', homeDir: f.home, custodianAccountId: 'custodian',
+      activityLog, readPolicy: f.readPolicy, ...binding, subscribeChanges: listener => {
+        const releases = [f.subscribePolicy(listener), binding.subscribeVolumes(listener)];
+        return () => { for (const release of releases) release(); };
+      },
+      catalog: { happyHomeDir: f.home, activeServerDir: f.home, tempRoot: join(f.home, 'absent-temp'),
+        readProjects: () => ({ status: 'ready', projects: [] }) } });
+    const store = await service.maintenanceTrash();
+    const maintenance = createStorageMaintenance({ ...binding, readPolicy: f.readPolicy, subscribePolicy: f.subscribePolicy,
+      isIdle: f.isIdle, subscribeIdle: f.subscribeIdle, getTrashStore: async () => store, logs: f.logs,
+      recordings: f.recordings, runScheduledScan: async () => {
+        await service.scanStart({ machineId: 'machine', target: { folderPath: f.home } }, { actor: { accountId: 'custodian', custodianAccountId: 'custodian',
+          kind: 'person', assertCurrentAuthority: async () => {} } });
+      }, activityLog, actorAccountId: 'custodian', onError: error => f.errors.push(error) });
+    const releaseDemand = sampler.demand('live');
+    let storageWakes = 0;
+    const releaseStorage = service.subscribe(() => { storageWakes++; });
+    async function tick() {
+      sampled = createDeferred<void>();
+      await vi.advanceTimersByTimeAsync(2000); await sampled.promise;
+    }
+    try {
+      const oldLog = await f.writeLog('retained.log', 2);
+      const path = join(f.home, 'cache-to-retain'); await fs.mkdir(path); await fs.writeFile(join(path, 'bytes'), 'retained');
+      const entry = await (await store.prepare({ path, title: 'Retained', batchId: 'sampler', size,
+        movedBy: { accountId: 'custodian', kind: 'person' } })).commit();
+      await maintenance.start();
+      const initial = HappierStorageSummaryV1Schema.parse(await service.summary());
+      const before = f.logPasses;
+      storageWakes = 0;
+      // requestPass is the existing queue's settlement fence. Subtract its one
+      // explicit pass per tick to measure work requested by the ten sampler ticks.
+      for (let i = 0; i < 10; i++) { await tick(); await maintenance.requestPass(); }
+      expect.soft(f.logPasses - before - 10, 'idle maintenance passes for ten unchanged two-second samples').toBe(0);
+      expect.soft(storageWakes, 'unchanged samples and no-op reconciliation must not wake Storage').toBe(0);
+      const afterIdle = HappierStorageSummaryV1Schema.parse(await service.summary());
+      expect.soft(afterIdle.revision).toBe(initial.revision);
+      expect.soft(afterIdle.sizedAt).toBe(initial.sizedAt);
+      MachineVitalsSampleV1Schema.parse(sampler.latest());
+      storageWakes = 0; await store.reconcile();
+      expect.soft(storageWakes, 'a committed Trash entry requires no reconciliation notification').toBe(0);
+
+      available = 400;
+      const beforeCapacity = f.logPasses;
+      await tick(); await maintenance.requestPass();
+      expect.soft(f.logPasses - beforeCapacity - 1, 'capacity changes update Storage without retention work').toBe(0);
+      const afterCapacity = HappierStorageSummaryV1Schema.parse(await service.summary());
+      expect(afterCapacity.volumes[0].freeBytes).toBe(400 * 4096);
+      expect(afterCapacity.sizedAt).toBe(initial.sizedAt);
+
+      const otherVolume = join(scratch, 'returning-volume'); await fs.mkdir(otherVolume);
+      await os.put('/proc/self/mountinfo', mountLine(1, scratch) + mountLine(2, otherVolume));
+      const beforeVolume = f.logPasses;
+      await tick(); await maintenance.requestPass();
+      expect(f.logPasses - beforeVolume - 1, 'a newly mounted volume must reach maintenance').toBe(1);
+      const afterVolume = HappierStorageSummaryV1Schema.parse(await service.summary());
+      expect(afterVolume.volumes).toHaveLength(2);
+      expect(afterVolume.sizedAt).toBeGreaterThan(initial.sizedAt);
+
+      const beforePower = f.logPasses;
+      await os.put('/sys/class/power_supply/AC/online', '0\n');
+      await tick(); await maintenance.requestPass();
+      expect(f.logPasses - beforePower - 1, 'an AC edge must reach maintenance').toBe(1);
+      expect(binding.isOnPower()).toBe(false);
+
+      f.setPolicy({ logRetentionDays: 1, trashEmptyAfterDays: 1 });
+      await maintenance.requestPass();
+      await expect(fs.lstat(oldLog)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(TrashEntryV1Schema.parse(await store.read(entry.entryId)).emptiesAt).toBe(entry.movedAt + day);
+      releaseDemand(); await sampler.stop();
+      await vi.advanceTimersByTimeAsync(entry.movedAt + day - Date.now()); await maintenance.requestPass();
+      expect(await store.list()).toEqual([]);
+      expect((await activityLog.list({ range: 'today' })).entries.some(row => row.kind === 'housekeeping')).toBe(true);
+      expect(f.errors).toEqual([]);
+    } finally { releaseStorage(); releaseDemand(); await sampler.stop(); maintenance.stop(); service.dispose(); resourceSummary.stop();
+      f.maintenance.stop(); await os.cleanup(); }
+  });
 
   it('composes due volume scans through fresh idle/power admission, edge resumption and disabling pending work', async () => {
     let idle = true; let scheduled = false; let closeMakesBusy = false;
@@ -298,6 +404,14 @@ describe('one due-time storage maintenance owner with real retained files', () =
 
   it('does not lose a policy edge during the awaited real Trash reconciliation', async () => {
     const f = await fixture(); await f.writeLog('old.log', 40); const future = await f.writeLog('young.log', 2);
+    const path = join(f.home, 'pending-receipt'); await fs.mkdir(path); await fs.writeFile(join(path, 'bytes'), 'retained');
+    const prepared = await f.store.prepare({ path, title: 'Pending receipt', batchId: 'recovery', size,
+      movedBy: { accountId: 'custodian', kind: 'person' } });
+    // Fail the real Activity filesystem boundary after retirement commits, so
+    // reconciliation has a genuine receipt change to publish during its pass.
+    const activity = join(f.home, 'machine-guard'); await fs.rename(activity, `${activity}-saved`); await fs.writeFile(activity, 'blocked');
+    await expect(prepared.commit()).rejects.toThrow();
+    await fs.unlink(activity); await fs.rename(`${activity}-saved`, activity);
     let changed = false;
     const release = f.store.subscribe(() => {
       if (!changed) { changed = true; f.setPolicy({ logRetentionDays: 1 }); }

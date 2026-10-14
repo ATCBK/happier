@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -480,6 +480,9 @@ describe('SDK workflow hook resumption', () => {
   });
 
   it('reopens the exact completed child through an authenticated SubagentStart hook', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-sdk-hook-resume-'));
+    const transcriptPath = join(root, 'claude-provider-session-1.jsonl');
+    await writeFile(transcriptPath, '');
     const terminalHost = createTerminalHostFixture();
     const exec = createSdkExecFixture();
     const sessionHooks = createSessionHooksFixture();
@@ -503,8 +506,15 @@ describe('SDK workflow hook resumption', () => {
       if (!hookRequest?.onSessionHook) throw new Error('session hook server was not started');
       await hookRequest.onSessionHook('claude-provider-session-1', {
         hook_event_name: 'SessionStart', session_id: 'claude-provider-session-1', source: 'startup',
-        transcript_path: '/tmp/claude-provider-session-1.jsonl',
+        transcript_path: transcriptPath,
       });
+      await hookRequest.onSessionHook('claude-provider-session-1', {
+        hook_event_name: 'UserPromptSubmit', session_id: 'claude-provider-session-1', prompt: 'run agents',
+      });
+      await appendFile(transcriptPath, JSON.stringify({ type: 'user', uuid: 'accepted-run-agents',
+        sessionId: 'claude-provider-session-1', timestamp: new Date().toISOString(), message: { content: 'run agents' } }) + '\n');
+      // Materialize the accepted native prompt before exercising known-child resumption.
+      await vi.waitFor(() => expect(ctx.agentRuntime.transcripts.followSource).toHaveBeenCalledOnce());
       const launch = {
         type: 'assistant', session_id: 'claude-provider-session-1', uuid: 'hook-child-launch',
         message: { role: 'assistant', content: ['a', 'b'].map(id => ({ type: 'tool_use', id, name: 'Agent', input: { description: id } })) },
@@ -541,6 +551,6 @@ describe('SDK workflow hook resumption', () => {
       });
       await vi.waitFor(() => expect(records.at(-1)).toMatchObject({ status: 'complete', completedAgents: 2 }));
 
-    } finally { await runtime.resetOrDisposeRuntime(); }
+    } finally { await runtime.resetOrDisposeRuntime(); await rm(root, { recursive: true, force: true }); }
   });
 });

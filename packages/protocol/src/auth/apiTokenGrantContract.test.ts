@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { AccountApiTokensCreateActionInputV1Schema } from './accountApiTokens.js';
 import { API_TOKEN_SOCKET_EVENT_ACTIONS, resolveSocketRpcSessionAuthorization, SESSION_RPC_METHODS } from '../rpc/index.js';
-import { API_TOKEN_FULL_GRANT_V1, evaluateApiTokenGrantV1, resolveApiTokenSessionCapabilityCeilingV1 } from './apiTokenGrant.js';
+import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema, StoredApiTokenGrantV1Schema, evaluateApiTokenGrantV1, resolveApiTokenSessionCapabilityCeilingV1 } from './apiTokenGrant.js';
 
 describe('scoped credential public ingress', () => {
+  it('preserves exact Automation authority through persisted reads and rejects unknown restrictions', () => {
+    const input = AccountApiTokensCreateActionInputV1Schema.parse({
+      tokenId: '11111111-1111-4111-8111-111111111111', label: 'Brief',
+      grant: { ...API_TOKEN_FULL_GRANT_V1, automationIds: ['brief'] },
+    });
+    expect(StoredApiTokenGrantV1Schema.parse(JSON.parse(JSON.stringify(input.grant)))).toEqual(input.grant);
+    for (const schema of [ApiTokenGrantV1Schema, StoredApiTokenGrantV1Schema]) {
+      expect(schema.safeParse({ ...input.grant, otherAutomationRestriction: ['other'] }).success).toBe(false);
+      expect(schema.safeParse({ ...input.grant, automationIds: { ids: ['brief'] } }).success).toBe(false);
+    }
+    expect(StoredApiTokenGrantV1Schema.parse(API_TOKEN_FULL_GRANT_V1)).toEqual(API_TOKEN_FULL_GRANT_V1);
+  });
   it('accepts a strict creation grant while refusing unknown grant authority', () => {
     const input = {
       tokenId: '11111111-1111-4111-8111-111111111111', label: 'Leads',

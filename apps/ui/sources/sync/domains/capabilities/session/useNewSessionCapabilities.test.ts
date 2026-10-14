@@ -13,6 +13,11 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { SpawnCapabilitiesPreviewOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
+import { EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -39,6 +44,67 @@ describe('useNewSessionCapabilities', () => {
         } });
         transport.mockReset();
         transport.mockResolvedValue(previewResponse);
+    });
+    async function seedPortableCatalogs() {
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const account = await captureLazyActionAccountContext(serverId);
+        let skillId: string;
+        try {
+            const created = await account.createArtifactDocument({ header: { v: 1, kind: 'prompt_bundle.v2', title: 'Review', bundleSchemaId: 'skills.skill_md_v1' },
+                body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+                    contentBase64: Buffer.from('---\nname: review\ndescription: Review changes\n---\nRead the changes.').toString('base64') }] }) });
+            skillId = created.artifactId;
+        } finally { account.dispose(); }
+        const rules = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [{
+            id: 'review-everywhere', skillId, target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1,
+        }] } }] });
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: async () => ({ body: await (await rules.handle(PROMPT_LIBRARY_ROWS_ROUTE_V1))!.json() }) });
+        const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server-portable', name: 'portable',
+            transport: 'stdio', stdio: { command: 'portable-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
+            bindings: [{ id: 'portable-everywhere', serverId: 'server-portable', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] });
+        homes.answer(serverId, MCP_SERVER_CATALOG_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } } });
+        transport.mockClear();
+        return skillId;
+    }
+
+    it('previews an ephemeral draft through the real Action and Account catalogs without inventing Machine delivery facts', async () => {
+        const skillId = await seedPortableCatalogs();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const receipt = await createDefaultActionExecutor().execute('sessions.spawn.capabilities.preview', {
+            machineId: EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1, agentId: 'codex',
+            capabilitySelection: { mcp: { forceExcludeServerIds: ['server-portable'] } },
+        }, { serverId, surface: 'ui', authority: 'present_user' });
+        const preview = SpawnCapabilitiesPreviewOutputV1Schema.parse(receipt.ok ? receipt.result : undefined);
+        expect(preview).toMatchObject({ ok: true, machinePlatform: null,
+            mcp: { strictMode: false, detected: [], items: [{ id: 'server-portable', selected: false, reason: 'session_removed',
+                preview: { serverId: 'server-portable', selected: false, portability: 'portable' } }] },
+            skills: { items: expect.arrayContaining([{ kind: 'skill', id: skillId, name: 'review', selected: true, selectable: true,
+                reason: 'rule_on', decidedBy: { ruleId: 'review-everywhere', target: 'allMachines', agentQualified: false }, sessionOverride: null }]),
+                plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] } },
+            applyTiming: { mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' } } });
+        expect(transport.mock.calls.some(([input]) => isPreviewRequest(input))).toBe(false);
+    });
+
+    it('demands a full temporary-computer draft preview and refreshes skill overrides through the same Action', async () => {
+        const skillId = await seedPortableCatalogs();
+        const { useNewSessionCapabilities } = await import('./useNewSessionCapabilities');
+        const hook = await renderHook(() => {
+            const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+            return useNewSessionCapabilities({ machineId: null, directory: '/unobserved', agentId: 'codex',
+                targetServerId: serverId, portableOnly: true, selection, setSelection });
+        });
+        expect(hook.getCurrent().previewStatus).toBe('idle');
+        expect(hook.getCurrent().preview).toBeNull();
+        await act(async () => { hook.getCurrent().demandPreview(); });
+        await vi.waitFor(() => expect(hook.getCurrent().previewStatus, hook.getCurrent().error ?? '').toBe('ready'));
+        expect(hook.getCurrent().preview?.skills.items.find(item => item.id === skillId)).toMatchObject({ selected: true, reason: 'rule_on' });
+        expect(hook.getCurrent().mcpPreview?.managed).toEqual([expect.objectContaining({ serverId: 'server-portable', selected: true })]);
+        await act(async () => { hook.getCurrent().setItem('skill', skillId, 'off'); });
+        await vi.waitFor(() => expect(hook.getCurrent().preview?.skills.items.find(item => item.id === skillId))
+            .toMatchObject({ selected: false, reason: 'session_removed', sessionOverride: 'removed' }));
+        expect(hook.getCurrent().preview?.mcp.items[0]?.selected).toBe(true);
+        expect(SpawnCapabilitiesPreviewOutputV1Schema.safeParse(hook.getCurrent().preview).success).toBe(true);
+        expect(transport.mock.calls.some(([input]) => isPreviewRequest(input))).toBe(false);
     });
     it('observes a host acknowledgment from metadata even while a demanded preview still says pending', async () => {
         const sessionId = 'c123456789012345678901234';

@@ -2,8 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { SessionSystemRecordStoredSchema, tryWriteServerEnabledBitInPlace, ApprovalRequestV2Schema,
-  ActionApprovalRequestCreatedResultSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
+import { SessionSystemRecordStoredSchema, tryWriteServerEnabledBitInPlace, type SessionSystemRecordStored } from '@happier-dev/protocol';
 import { SessionBoardMutationV1Schema, SessionBoardMutationResultV1Schema } from '@happier-dev/protocol/sessions/board';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
@@ -47,6 +46,10 @@ vi.mock('socket.io-client', async (importOriginal) =>
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
   ).createSocketIoClientBoundary(importOriginal),
 );
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+  return createModalModuleMock({ confirmResult: true }).module;
+});
 // The physical browser frame is the only substituted boundary: transcript demand, the
 // controller, primary-mount resolution, the widget host and the hosted adapter stay real.
 const frames = vi.hoisted(() => ({ active: 0, maximum: 0 }));
@@ -151,7 +154,6 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
   };
   const fixture = createSessionSystemRecordHttpFixture(boundary);
   const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'reader', encryptionMode: 'plain' });
-  const requests: string[] = [];
   const features = createRootLayoutFeaturesResponse();
   if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Missing Board feature declaration');
   const connection = await restoreServerAccountForTest({
@@ -160,7 +162,6 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
     accountId: 'reader',
     request: async (url, init) => {
       const path = new URL(String(url)).pathname;
-      requests.push(`${init?.method ?? 'GET'} ${path}${new URL(String(url)).search}`);
       if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
       if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -195,15 +196,10 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
     { serverId: connection.home.id, surface: 'ui', authority: 'present_user' });
   expect(executed, JSON.stringify(executed)).toMatchObject({ ok: true });
   if (!executed.ok) throw new Error(`Visual publication failed: ${executed.errorCode}`);
-  const approval = ActionApprovalRequestCreatedResultSchema.parse(executed.result);
-  expect(records.some(row => row.address.kind === 'item.v1')).toBe(false);
-  const decision = await decideApprovalAsInbox(connection.home.id, approval.artifactId, 'approve');
-  expect(decision, JSON.stringify({ approval: artifacts.readPlainBody(approval.artifactId), requests })).toMatchObject({
-    ok: true, result: { status: 'executed' },
-  });
-  const settled = ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(approval.artifactId) ?? 'null'));
-  if (settled.execution?.ok !== true) throw new Error('The published visual must have an approved execution result');
-  const acknowledged = getActionSpec('session.board.item.upsert').outputSchema.parse(settled.execution.result);
+  // The canonical UI front door confirms the present user's intent, then returns
+  // its mutation acknowledgement. A durable Inbox request is a separate policy.
+  const acknowledged = getActionSpec('session.board.item.upsert').outputSchema.parse(executed.result);
+  expect(records.filter(row => row.address.kind === 'item.v1')).toHaveLength(1);
   if (viewer === 'view') boundary.effectiveAccess = SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'view',
     sources: [{ kind: 'direct', shareId: 'reader-grant' }], capabilities: projectSessionAccessCapabilitiesV1({
       owner: false, grants: [{ accessLevel: 'view', canApprovePermissions: false }],
@@ -378,6 +374,8 @@ describe('live inline transcript visuals', () => {
       .find((node) => node.props.overflowTriggerTestID === 'transcript-board-widget-visual-actions')
       ?.props.actions.find((action: { id: string }) => action.id === 'pin-to-board');
     await vi.waitFor(() => expect(readPin()).toBeTruthy());
+    // This Board port has no present-user confirmation, so its ordinary
+    // dangerous layout mutation still follows the real durable Inbox path.
     const priorApprovals = new Set(artifacts.list().map(row => row.id));
     await act(async () => { readPin()?.onPress?.(); });
     await vi.waitFor(() => expect(artifacts.list().some(row => !priorApprovals.has(row.id))).toBe(true));

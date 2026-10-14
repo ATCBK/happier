@@ -1,27 +1,25 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createCanonicalJsonSigningInput } from '../../../../crypto/canonicalJson.js';
 
 export const PeerMachineRpcCommandReceiptIssuerV1Schema = lazyZodSchema(() => z.enum(['ui', 'daemon']));
 
-export const PeerMachineRpcCommandReceiptRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const PeerMachineRpcCommandReceiptRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     issuer: PeerMachineRpcCommandReceiptIssuerV1Schema,
-    issuedAtMs: z.number().int().nonnegative(),
-    requestHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-    replayKey: z.string().min(1),
-    resultHash: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
-  })
-  .strict());
+    issuedAtMs: z.number().check(z.int(), z.nonnegative()),
+    requestHash: z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/)),
+    replayKey: z.string().check(z.minLength(1)),
+    resultHash: z.optional(z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/))),
+  }));
 
-export const PeerMachineRpcCommandReceiptSuccessV1Schema = lazyZodSchema(() => PeerMachineRpcCommandReceiptRequestV1Schema.extend({
+export const PeerMachineRpcCommandReceiptSuccessV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PeerMachineRpcCommandReceiptRequestV1Schema, {
   issuer: z.literal('daemon'),
-  resultHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-}).strict());
+  resultHash: z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/)),
+})));
 
 export type PeerMachineRpcCommandReceiptIssuerV1 = z.infer<typeof PeerMachineRpcCommandReceiptIssuerV1Schema>;
 export type PeerMachineRpcCommandReceiptRequestV1 = z.infer<typeof PeerMachineRpcCommandReceiptRequestV1Schema>;

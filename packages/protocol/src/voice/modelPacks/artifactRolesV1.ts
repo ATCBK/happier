@@ -1,26 +1,26 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { assertManifestPathsSafe, assertModelPackFilePathPortable } from './pathSafety.js';
 
-const ArtifactPathV1Schema = lazyZodSchema(() => z.string().min(1).max(512).superRefine((path, ctx) => {
+const ArtifactPathV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(512), z.superRefine((path, ctx) => {
   try {
     assertModelPackFilePathPortable(path);
   } catch {
     ctx.addIssue({ code: 'custom', message: 'Artifact paths must be canonical portable relative POSIX paths.' });
   }
-}));
+})));
 
-export const VoiceModelPackFileArtifactV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackFileArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('file'),
   path: ArtifactPathV1Schema,
-}).strict());
+}));
 export type VoiceModelPackFileArtifactV1 = z.infer<typeof VoiceModelPackFileArtifactV1Schema>;
 
-export const VoiceModelPackDirectoryArtifactV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackDirectoryArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('directory_prefix'),
   path: ArtifactPathV1Schema,
-}).strict());
+}));
 export type VoiceModelPackDirectoryArtifactV1 = z.infer<typeof VoiceModelPackDirectoryArtifactV1Schema>;
 
 export const VoiceModelPackSupportArtifactKindV1Schema = lazyZodSchema(() => z.enum([
@@ -31,38 +31,38 @@ export const VoiceModelPackSupportArtifactKindV1Schema = lazyZodSchema(() => z.e
 export type VoiceModelPackSupportArtifactKindV1 = z.infer<typeof VoiceModelPackSupportArtifactKindV1Schema>;
 
 /** Exact non-runtime bytes retained with an installed model pack. */
-export const VoiceModelPackSupportArtifactV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackSupportArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('file'),
   kind: VoiceModelPackSupportArtifactKindV1Schema,
   path: ArtifactPathV1Schema,
-}).strict());
+}));
 export type VoiceModelPackSupportArtifactV1 = z.infer<typeof VoiceModelPackSupportArtifactV1Schema>;
 
-export const VoiceModelPackTransducerArtifactsV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackTransducerArtifactsV1Schema = lazyZodSchema(() => z.strictObject({
   encoder: VoiceModelPackFileArtifactV1Schema,
   decoder: VoiceModelPackFileArtifactV1Schema,
   joiner: VoiceModelPackFileArtifactV1Schema,
   tokens: VoiceModelPackFileArtifactV1Schema,
-}).strict());
+}));
 export type VoiceModelPackTransducerArtifactsV1 = z.infer<typeof VoiceModelPackTransducerArtifactsV1Schema>;
 
-export const VoiceModelPackKokoroArtifactsV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackKokoroArtifactsV1Schema = lazyZodSchema(() => z.strictObject({
   model: VoiceModelPackFileArtifactV1Schema,
   voices: VoiceModelPackFileArtifactV1Schema,
   tokens: VoiceModelPackFileArtifactV1Schema,
   data: VoiceModelPackDirectoryArtifactV1Schema,
-}).strict());
+}));
 export type VoiceModelPackKokoroArtifactsV1 = z.infer<typeof VoiceModelPackKokoroArtifactsV1Schema>;
 
-export const VoiceModelPackTransducerArtifactContractV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackTransducerArtifactContractV1Schema = lazyZodSchema(() => z.strictObject({
   family: z.enum(['sherpa_zipformer_streaming', 'sherpa_parakeet_offline']),
   artifacts: VoiceModelPackTransducerArtifactsV1Schema,
-}).strict());
+}));
 
-export const VoiceModelPackKokoroArtifactContractV1Schema = lazyZodSchema(() => z.object({
+export const VoiceModelPackKokoroArtifactContractV1Schema = lazyZodSchema(() => z.strictObject({
   family: z.literal('sherpa_kokoro_offline'),
   artifacts: VoiceModelPackKokoroArtifactsV1Schema,
-}).strict());
+}));
 
 export const VoiceModelPackArtifactContractV1Schema = lazyZodSchema(() => z.discriminatedUnion('family', [
   VoiceModelPackTransducerArtifactContractV1Schema,
@@ -126,7 +126,7 @@ export function resolveVoiceModelPackArtifactsV1(
     family: runtime?.family,
     artifacts: runtime?.artifacts,
   });
-  const parsedSupportArtifacts = z.array(VoiceModelPackSupportArtifactV1Schema).max(32).parse(supportArtifacts);
+  const parsedSupportArtifacts = z.array(VoiceModelPackSupportArtifactV1Schema).check(z.maxLength(32)).parse(supportArtifacts);
   const manifestPaths = files.map((file) => file.path);
   assertManifestPathsSafe({ files });
 

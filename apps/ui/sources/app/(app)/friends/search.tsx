@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React, { useState, useCallback } from 'react';
 import type { ScrollView, ScrollViewProps } from 'react-native';
 import { View } from 'react-native';
@@ -196,11 +197,11 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     searchSection: {
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     searchContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         position: 'relative',
     },
     searchInput: {
@@ -208,8 +209,8 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 12,
-        paddingHorizontal: 16,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
         fontSize: 16,
         color: theme.colors.text.primary,
     },
@@ -221,43 +222,43 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     errorText: {
-        paddingHorizontal: 16,
-        paddingTop: 6,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s6,
         fontSize: 13,
         color: theme.colors.status.error,
     },
     resultsGroup: {
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     resultsSection: {
         minHeight: 200,
     },
     resultsList: {
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
     },
     separator: {
         height: 1,
         backgroundColor: theme.colors.border.default,
-        marginHorizontal: 16,
-        marginVertical: 8,
+        marginHorizontal: theme.space.s16,
+        marginVertical: theme.space.s8,
     },
     loadingContainer: {
         alignItems: 'center',
-        padding: 32,
+        padding: theme.space.s32,
     },
     loadingText: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
         fontSize: 16,
         color: theme.colors.text.secondary,
     },
     noResultsContainer: {
         alignItems: 'center',
-        padding: 32,
+        padding: theme.space.s32,
     },
     noResultsText: {
         fontSize: 16,
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     noResultsHint: {
         fontSize: 14,
@@ -265,14 +266,13 @@ const styles = StyleSheet.create((theme) => ({
         textAlign: 'center',
     },
     helpContainer: {
-        padding: 32,
+        padding: theme.space.s32,
         alignItems: 'center',
     },
     helpTitle: {
-        fontSize: 17,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     helpText: {
         fontSize: 15,

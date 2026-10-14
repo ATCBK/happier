@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { CodeBlockViewFrame } from '@/components/ui/code/blocks/CodeBlockViewFrame';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -37,56 +37,46 @@ function formatLogs(logs: readonly PlanChecklistLogEntry[]): string {
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 10,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 16,
+        gap: theme.space.s10,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s16,
     },
     details: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     detailsTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'semiBold'),
     },
     detailsBody: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     errorCard: {
-        gap: 6,
+        gap: theme.space.s6,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: theme.colors.state.danger.foreground,
         backgroundColor: theme.colors.surface.base,
-        padding: 12,
+        padding: theme.space.s12,
     },
     errorLabel: {
-        ...Typography.default('semiBold'),
         color: theme.colors.state.danger.foreground,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
         textTransform: 'uppercase',
         letterSpacing: 0.4,
     },
     errorTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
     },
     errorMessage: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     logsLabel: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
         textTransform: 'uppercase',
         letterSpacing: 0.4,
     },
@@ -103,16 +93,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: motionTokens.press.opacity,
     },
     copyButtonText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
     },
     emptyText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     codeText: {
         ...Typography.mono(),
@@ -134,7 +120,7 @@ export type PlanChecklistRowDetailsProps = Readonly<{
 
 export const PlanChecklistRowDetails = React.memo(function PlanChecklistRowDetails(props: PlanChecklistRowDetailsProps) {
     const styles = stylesheet;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const logText = React.useMemo(() => formatLogs(props.logs ?? []), [props.logs]);
     const hasLogs = Boolean(logText.trim().length > 0);
     const hasDetails = typeof props.renderDetails === 'function';

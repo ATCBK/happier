@@ -154,7 +154,10 @@ async function listOpenCodeContentCandidates(params: Parameters<typeof listOpenC
   if (params.cursor && (!cursor || cursor.query !== query || cursor.source !== sourceIdentity)) {
     throw new Error('OpenCode content cursor is invalid for this source query.');
   }
-  const control = createExternalSessionContentSearchControl(params);
+  const control = createExternalSessionContentSearchControl({
+    signal: params.signal,
+    deadlineAtMs: params.scanDeadlineAtMs ?? params.deadlineAtMs,
+  });
   const listed = await listOpenCodeSessionCandidates({ ...params, searchTarget: undefined, searchTerm: undefined, searchMode: undefined,
     cursor: cursor?.candidateCursor ?? undefined, limit: cursor?.candidateLimit ?? params.limit });
   let offset = cursor?.offset ?? 0;
@@ -476,6 +479,7 @@ export async function listOpenCodeSessionCandidates(params: Readonly<{
   searchMode?: 'fast' | 'full';
   searchTarget?: 'metadata' | 'content';
   deadlineAtMs?: number;
+  scanDeadlineAtMs?: number;
   signal?: AbortSignal;
   env?: Readonly<Record<string, string | undefined>>;
   managedEndpointRead?: AgentExternalSessionsManagedEndpointRead;

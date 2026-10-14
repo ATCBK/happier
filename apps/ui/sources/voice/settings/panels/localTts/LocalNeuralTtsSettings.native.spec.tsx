@@ -374,7 +374,9 @@ describe('LocalNeuralTtsSettings (native)', () => {
       rightElementOutsidePressable: true,
     }));
 
-    const accessory = await renderScreen(voiceMenu?.props.items[0].rightElement);
+    const accessoryElement = voiceMenu?.props.items[0].rightElement;
+    if (!React.isValidElement(accessoryElement)) throw new Error('Expected the native preview accessory');
+    const accessory = await renderScreen(accessoryElement);
     const previewButton = accessory.tree.root.findByType('Pressable');
     expect(previewButton.props.accessibilityRole).toBe('button');
     expect(previewButton.props.accessibilityLabel).toBe(t('settingsVoice.realtimeProviders.catalog.preview', { voice: 'Heart' }));
@@ -394,9 +396,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
       featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
       voice: { providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'tts-machine' } },
     }), { features: createRootLayoutFeaturesResponse({ features: {
-      execution: { runs: { enabled: true } },
-      machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
-    }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+      machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
+    }, capabilities: { machines: { ...createRootLayoutFeaturesResponse().capabilities.machines, liveStream: { serverRouted: { disabledReason: null, caps: {
       maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
       maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
     } } } } } }) });

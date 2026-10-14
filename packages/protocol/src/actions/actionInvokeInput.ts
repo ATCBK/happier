@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { defineProtocolJsonValue, defineProtocolObject, type ProtocolSchemaInput, type ProtocolSchemaOutput } from '../plugins/actions/protocolComposableSchema.js';
@@ -11,6 +11,6 @@ export const ActionInvokeInputProtocolSchema = defineProtocolObject({
 export type ActionInvokeInput = ProtocolSchemaOutput<typeof ActionInvokeInputProtocolSchema>;
 // Dynamic invocation admits untrusted author input at the existing host boundary;
 // the portable parser remains the only owner of its validated JSON output.
-export const ActionInvokeInputSchema: z.ZodType<ActionInvokeInput,
+export const ActionInvokeInputSchema: z.ZodMiniType<ActionInvokeInput,
   Omit<ProtocolSchemaInput<typeof ActionInvokeInputProtocolSchema>, 'input'> & { input?: unknown }
 > = asProtocolZod(ActionInvokeInputProtocolSchema);

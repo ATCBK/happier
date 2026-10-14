@@ -20,6 +20,10 @@ import { PendingResetStartsReadInputV1Schema, PendingResetStartsReadResultV1Sche
 import { evaluatePendingResetStartReadinessV1 } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
 import type { ProviderAccountUsageWaitingWorkV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { mapCryptoBatchWithYield } from '@/sync/encryption/cryptoBatchYield';
+import { getRandomBytes } from '@/platform/cryptoRandom';
+import { ProviderAccountUsagePageProjectionReadV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema,
+    buildProviderAccountUsagePageProjectionV1,
+    sealProviderAccountUsagePageProjectionV1, openProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 
 export type ProviderAccountUsageQuotaReadOptions = Readonly<{
     accountMode: 'plain' | 'e2ee'; request?: ServerFetch; assertCurrent?: () => void;
@@ -36,11 +40,14 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
     const resolution = sourceJson === null ? null : QualifiedConnectedServiceUsageSourceResolutionV4Schema.parse(sourceJson);
     const material = options.accountMode === 'e2ee' ? options.material ?? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : undefined;
     const recordJson = resolution ? await requestProviderAccountUsageJson(credentials, `/v4/connect/qualified/provider-account-usage/record?recordId=${encodeURIComponent(resolution.recordId)}`, options) : null;
-    const progressive = options.readAllHistory && request.history && resolution;
+    const progressive = options.readAllHistory && (request.history || request.projection) && resolution;
     const enteredMonthlyPrice = recordJson !== null && !progressive ? await options.readEnteredMonthlyPrice?.() : undefined;
     options.assertCurrent?.();
     let current = resolution && recordJson !== null ? openProviderAccountUsageRecordV4({ recordId: resolution.recordId, enteredMonthlyPrice, accountMode: options.accountMode, material, record: QualifiedProviderAccountUsageRecordResponseV4Schema.parse(recordJson) }) : null;
     if (current && resolution && current.recordKey.accountSubjectId !== resolution.providerAccountId) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
+    if (request.projection && resolution) return await readProviderAccountUsageProjectedQuota(credentials, request, {
+        ...options, material,
+    }, resolution.recordId, current, recordJson);
     const historyRequest = request.history;
     if (options.readAllHistory && historyRequest && resolution) {
         let history: ConnectedServiceQuotaGetResultV1['history'];
@@ -92,6 +99,93 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
         ? { nowMs: options.nowMs ?? Date.now(), waitingWork: undefined }
         : await readProviderAccountUsageWaitingWork(credentials, request, current, options);
     return projectProviderAccountUsageQuotaReadV1({ input: request, current, ...(request.history ? { history: page && resolution ? await openHistoryPageWithYield({ recordId: resolution.recordId, accountMode: options.accountMode, material, page }, options) : { entries: [], nextCursor: null } } : {}), nowMs, targets: options.targets, waitingWork });
+}
+
+/** The B owner materializes exact accepted observations once; Plans never carries raw history trees. */
+async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentials, request: ConnectedServiceQuotaGetInputV1,
+    options: ProviderAccountUsageQuotaReadOptions, recordId: string, initialCurrent: ProviderAccountUsageSnapshotV1 | null, recordJson: unknown): Promise<ConnectedServiceQuotaGetResultV1> {
+    const demand = request.projection!;
+    const assertCurrent = () => { options.signal?.throwIfAborted(); options.assertCurrent?.(); };
+    let current = initialCurrent;
+    let history: ConnectedServiceQuotaGetResultV1['history'];
+    let waitingWork: ProviderAccountUsageWaitingWorkV1 | undefined;
+    let active = true;
+    const project = () => projectProviderAccountUsageQuotaReadV1({ input: request, current, history, coalesceHistory: true,
+        waitingWork, targets: options.targets, nowMs: options.nowMs ?? Date.now() });
+    const publish = () => { assertCurrent(); options.readAllHistory?.onProgress(project()); };
+    publish();
+    const pending = options.includePendingWork === false ? Promise.resolve() : readProviderAccountUsageWaitingWork(credentials, request, current, options).then(value => {
+        if (!active) return;
+        waitingWork = value.waitingWork; publish();
+    });
+    const price = current && options.readEnteredMonthlyPrice ? options.readEnteredMonthlyPrice().then(enteredMonthlyPrice => {
+        if (!active) return;
+        assertCurrent();
+        current = openProviderAccountUsageRecordV4({ recordId, enteredMonthlyPrice, accountMode: options.accountMode,
+            material: options.material, record: QualifiedProviderAccountUsageRecordResponseV4Schema.parse(recordJson) });
+        publish();
+    }) : Promise.resolve();
+    try {
+        await Promise.all([pending, price, (async () => {
+            const query = { recordId, projection: demand };
+            const raw = await requestProviderAccountUsageJson(credentials, `/v4/connect/qualified/provider-account-usage/history?${new URLSearchParams({
+                query: encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema, query),
+            }).toString()}`, options);
+            if (!active) return;
+            if (!raw) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
+            const read = ProviderAccountUsagePageProjectionReadV1Schema.parse(raw);
+            const stored = read.projection;
+            const opened = stored ? openProviderAccountUsagePageProjectionV1({ recordId, accountMode: options.accountMode,
+                material: options.material, content: stored.content }) : null;
+            if (stored && opened && (stored.recordId !== recordId || opened.range.startAtMs !== stored.demand.range.startAtMs
+                || opened.range.endAtMs !== stored.demand.range.endAtMs || opened.history.entries.length !== stored.observationCount
+                || opened.range.startAtMs > demand.range.startAtMs
+                || JSON.stringify(opened.history.entries.length ? (({ id, observedAtMs }) => ({ id, observedAtMs }))(opened.history.entries.at(-1)!) : null) !== JSON.stringify(stored.frontier))) {
+                throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
+            }
+            let entries = opened?.history.entries ?? [];
+            if (!read.complete) {
+                const range = { startAtMs: opened?.range.startAtMs ?? demand.range.startAtMs,
+                    endAtMs: Math.max(opened?.range.endAtMs ?? 0, demand.range.endAtMs) };
+                let cursor = stored?.frontier ?? undefined;
+                let pageSize = 100; // The incumbent B transport's initial page size, not a projection/retention bound.
+                do {
+                    const page = await requestProviderAccountUsageHistoryPage(credentials, { recordId,
+                        history: { range, pageSize, ...(cursor ? { cursor } : {}) } }, options);
+                    if (!active) return;
+                    if (!page) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
+                    const next = await openHistoryPageWithYield({ recordId, accountMode: options.accountMode, material: options.material, page }, options);
+                    if (!active) return;
+                    entries = [...entries, ...next.entries];
+                    pageSize += next.entries.length;
+                    cursor = next.nextCursor ?? undefined;
+                } while (cursor);
+                const projection = buildProviderAccountUsagePageProjectionV1({ recordId, range, history: { entries, nextCursor: null } });
+                const last = entries.at(-1);
+                const body = ProviderAccountUsagePageProjectionWriteV1Schema.parse({ recordId,
+                    demand: { range, resolution: demand.resolution }, frontier: last ? { id: last.id, observedAtMs: last.observedAtMs } : null,
+                    observationCount: entries.length, content: sealProviderAccountUsagePageProjectionV1({ projection,
+                        accountMode: options.accountMode, material: options.material, randomBytes: getRandomBytes }) });
+                assertCurrent();
+                const response = await (options.request ?? serverFetch)('/v4/connect/qualified/provider-account-usage/history', {
+                    method: 'PUT', signal: options.signal, headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                }, { includeAuth: false, ...(options.expectedActiveServer ? { expectedActiveServer: options.expectedActiveServer } : {}) });
+                if (!active) return;
+                assertCurrent();
+                if (!response.ok) {
+                    const code = response.status === 401 || response.status === 403 ? 'denied'
+                        : response.status === 409 ? 'provider_account_usage_projection_conflict' : 'provider_account_usage_projection_write_failed';
+                    throw new HappyError(code, false, { status: response.status, kind: response.status === 401 || response.status === 403 ? 'auth' : 'server', code });
+                }
+            } else if (!opened) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
+            if (!active) return;
+            assertCurrent();
+            history = { entries: entries.filter(entry => entry.observedAtMs >= demand.range.startAtMs && entry.observedAtMs < demand.range.endAtMs), nextCursor: null };
+            publish();
+        })()]);
+        return project();
+    } finally { active = false; }
 }
 
 async function openHistoryPageWithYield(input: Parameters<typeof openProviderAccountUsageHistoryPageV4>[0],

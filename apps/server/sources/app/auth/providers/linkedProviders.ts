@@ -1,9 +1,9 @@
 import { describeLinkedIdsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { isAccountIdentityEligibleForGenericPresentation } from "@/app/auth/methods/registry";
 import type { Tx } from "@/storage/inTx";
-import type { LinkedProvider } from "@happier-dev/protocol";
+import type { LinkedProvider } from '@happier-dev/protocol/account/profile';
 
-export type { LinkedProvider } from "@happier-dev/protocol";
+export type { LinkedProvider } from '@happier-dev/protocol/account/profile';
 
 interface LinkedIdentityPresentationRow {
     accountId: string;

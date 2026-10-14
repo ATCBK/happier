@@ -1,7 +1,4 @@
-import {
-    AutomationRunCauseSchema,
-    type AutomationRunCause,
-} from "@happier-dev/protocol";
+import { AutomationRunCauseSchema, type AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
 import type { Prisma } from "@prisma/client";
 
 import { automationRunCauseSelect, automationRunItemSelect } from "./automationPersistenceSelect";

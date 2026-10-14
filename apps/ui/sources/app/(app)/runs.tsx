@@ -196,7 +196,7 @@ export default function RunsScreen() {
         accessibilityLabel={t('runs.a11y.refresh')}
         onPress={() => void load('retry')}
         hitSlop={10}
-        style={({ pressed }) => ({ padding: 4, opacity: pressed ? motionTokens.press.opacity : 1 })}
+        style={({ pressed }) => ({ padding: theme.space.s4, opacity: pressed ? motionTokens.press.opacity : 1 })}
       >
         <Icon name="arrow-clockwise" size={20} color={headerTint} />
       </Pressable>

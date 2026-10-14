@@ -17,6 +17,10 @@ data class MachineRemoteAlert(
     @JvmStatic fun parse(remoteMessage: RemoteMessage): MachineRemoteAlert? {
       val raw = remoteMessage.data["body"] ?: return null
       val payload = try { JSONObject(raw) } catch (_: Throwable) { return null }
+      return parse(payload)
+    }
+
+    @JvmStatic fun parse(payload: JSONObject): MachineRemoteAlert? {
       if (payload.keys().asSequence().toSet() != setOf("type", "v", "serverId", "accountId", "machineId", "phase", "previewBehavior")) return null
       if (payload.opt("type") != "machine_alert") return null
       val version = payload.opt("v") as? Number ?: return null

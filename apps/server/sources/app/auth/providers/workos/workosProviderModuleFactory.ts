@@ -13,7 +13,7 @@ import {
     type WorkosTeamExternalReferenceV1,
 } from "./workosOAuthAdapter";
 import { normalizeAndValidateWorkosProfile } from "./normalizeAndValidateWorkosProfile";
-import { normalizeVerifiedEmail } from "@happier-dev/protocol";
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 
 export type WorkosProviderModuleInput = Readonly<{
     providerInstanceId: string;

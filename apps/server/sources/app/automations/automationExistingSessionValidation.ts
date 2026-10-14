@@ -1,15 +1,8 @@
 import type { Tx } from "@/storage/inTx";
 import { evaluateExistingSessionAutomationEligibility } from "@happier-dev/agents";
 import { openPlainAccountSettingsDbValue } from "@/app/encryption/accountSettingsStorage";
-import {
-    AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    AutomationTemplateEnvelopeSchema,
-    LegacyEncryptedAutomationTemplateEnvelopeSchema,
-    LegacyPlainAutomationTemplateEnvelopeSchema,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-    type AutomationTemplateEnvelope,
-} from "@happier-dev/protocol";
+import { AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND, AutomationTemplateEnvelopeSchema, LegacyEncryptedAutomationTemplateEnvelopeSchema, LegacyPlainAutomationTemplateEnvelopeSchema, type AutomationTemplateEnvelope } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
+import { SESSION_METADATA_LAYOUT_VERSION_V1, validateSessionOwnerMetadataEnvelopeForAccountModeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import type { AutomationTargetType } from "./automationTypes";
 import { AutomationValidationError } from "./automationValidation";

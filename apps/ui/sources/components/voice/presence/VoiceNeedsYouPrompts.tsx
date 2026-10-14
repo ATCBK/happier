@@ -64,13 +64,11 @@ export const VoiceNeedsYouPrompts = React.memo(function VoiceNeedsYouPrompts(pro
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     note: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
     },
 }));

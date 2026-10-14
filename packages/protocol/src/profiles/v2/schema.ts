@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BackendTargetKeyV2InputSchema,
@@ -26,7 +26,7 @@ export const LEGACY_AI_LAUNCH_RESERVED_ENV_NAMES_V1 = Object.freeze(new Set([
   'GEMINI_API_KEY', 'GEMINI_MODEL', 'GOOGLE_GENAI_USE_VERTEXAI',
 ]));
 
-const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => z.preprocess((value) => {
+const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
   const ref = record.ref;
@@ -40,7 +40,7 @@ const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => z.preprocess((va
       ),
     },
   };
-}, SessionModelSelectionV1Schema));
+}), SessionModelSelectionV1Schema));
 
 /**
  * Where a Session authored from this profile should run. This is a
@@ -53,10 +53,10 @@ const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => z.preprocess((va
 export const LaunchProfilePlacementPreferenceV1Schema = lazyZodSchema(() => z.union([
   z.literal('automatic'),
   z.literal('ask'),
-  z.object({
+  z.strictObject({
     fixed: SessionExecutionTargetV1Schema,
-    directory: z.string().trim().min(1).max(10_000).optional(),
-  }).strict(),
+    directory: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000))),
+  }),
 ]));
 export type LaunchProfilePlacementPreferenceV1 = z.infer<typeof LaunchProfilePlacementPreferenceV1Schema>;
 
@@ -72,24 +72,24 @@ export const LaunchProfileCheckoutPreferenceV1Schema = lazyZodSchema(() => z.enu
 ]));
 export type LaunchProfileCheckoutPreferenceV1 = z.infer<typeof LaunchProfileCheckoutPreferenceV1Schema>;
 
-export const LaunchProfileV2Schema = lazyZodSchema(() => z.object({
+export const LaunchProfileV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   id: LaunchProfileIdV2Schema,
-  name: z.string().trim().min(1).max(100),
-  description: z.string().max(500).optional(),
-  extraEnvironmentVariables: z.array(EnvironmentVariableSchema).max(256).default([]),
-  envVarRequirements: z.array(EnvVarRequirementSchema).max(256).optional(),
-  defaultPermissionModeByTargetKey: z.record(BackendTargetKeyV2InputSchema, z.enum(SESSION_PERMISSION_MODES)).default({}),
-  defaultPersistenceModeByTargetKey: z.record(BackendTargetKeyV2InputSchema, z.enum(['persisted', 'direct'])).default({}),
-  compatibilityByTargetKey: z.record(BackendTargetKeyV2InputSchema, z.boolean()).default({}),
-  preferredAgentTargetKey: BackendTargetKeyV2InputSchema.optional(),
-  preferredModelSelection: LaunchProfileModelSelectionV1Schema.optional(),
-  placement: LaunchProfilePlacementPreferenceV1Schema.optional(),
-  checkout: LaunchProfileCheckoutPreferenceV1Schema.optional(),
-  codingPromptBehaviorOverrides: CodingPromptBehaviorOverridesV1Schema.optional(),
-  createdAt: z.number().finite().nonnegative(),
-  updatedAt: z.number().finite().nonnegative(),
-}).strict().superRefine((profile, ctx) => {
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(100)),
+  description: z.optional(z.string().check(z.maxLength(500))),
+  extraEnvironmentVariables: z._default(z.array(EnvironmentVariableSchema).check(z.maxLength(256)), []),
+  envVarRequirements: z.optional(z.array(EnvVarRequirementSchema).check(z.maxLength(256))),
+  defaultPermissionModeByTargetKey: z._default(z.record(BackendTargetKeyV2InputSchema, z.enum(SESSION_PERMISSION_MODES)), {}),
+  defaultPersistenceModeByTargetKey: z._default(z.record(BackendTargetKeyV2InputSchema, z.enum(['persisted', 'direct'])), {}),
+  compatibilityByTargetKey: z._default(z.record(BackendTargetKeyV2InputSchema, z.boolean()), {}),
+  preferredAgentTargetKey: z.optional(BackendTargetKeyV2InputSchema),
+  preferredModelSelection: z.optional(LaunchProfileModelSelectionV1Schema),
+  placement: z.optional(LaunchProfilePlacementPreferenceV1Schema),
+  checkout: z.optional(LaunchProfileCheckoutPreferenceV1Schema),
+  codingPromptBehaviorOverrides: z.optional(CodingPromptBehaviorOverridesV1Schema),
+  createdAt: z.number().check(z.nonnegative()),
+  updatedAt: z.number().check(z.nonnegative()),
+}).check(z.superRefine((profile, ctx) => {
   if (profile.preferredAgentTargetKey !== undefined
     && profile.preferredModelSelection !== undefined
     && profile.preferredAgentTargetKey !== profile.preferredModelSelection.ref.agentTargetKey) {
@@ -119,7 +119,7 @@ export const LaunchProfileV2Schema = lazyZodSchema(() => z.object({
       ctx.addIssue({ code: 'custom', path: ['envVarRequirements', index, 'name'], message: 'Environment requirement is owned by agent/provider routing' });
     }
   });
-}));
+})));
 
 export type LaunchProfileV2 = z.infer<typeof LaunchProfileV2Schema>;
 
@@ -127,11 +127,11 @@ export type LaunchProfileV2 = z.infer<typeof LaunchProfileV2Schema>;
  * safeExtend preserves the sole owner's routing, uniqueness and target refinements.
  * New logical Profile authoring continues to use LaunchProfileV2Schema;
  * publication retains the admitted body's identity through this schema. */
-export const StoredLaunchProfileV2Schema = lazyZodSchema(() => LaunchProfileV2Schema.safeExtend({
+export const StoredLaunchProfileV2Schema = lazyZodSchema(() => z.safeExtend(LaunchProfileV2Schema, {
   id: ProfileRecordIdV1Schema,
-  name: z.string().min(1).max(100),
-  extraEnvironmentVariables: z.array(EnvironmentVariableSchema).default([]),
-  envVarRequirements: z.array(EnvVarRequirementSchema).optional(),
+  name: z.string().check(z.minLength(1), z.maxLength(100)),
+  extraEnvironmentVariables: z._default(z.array(EnvironmentVariableSchema), []),
+  envVarRequirements: z.optional(z.array(EnvVarRequirementSchema)),
 }));
 
 export function validateLaunchProfileV2ReservedEnvironment(

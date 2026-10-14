@@ -25,6 +25,9 @@ import { createStablePluginDeclarativeModel } from './declarativeModel.js';
 import { createStablePluginSettingsModels } from './settingsDescriptors.js';
 import type { PluginPortableReleaseManifestV1 } from '../../availability/v1.js';
 import { createPluginContributionIdentity } from '../../contributionIdentity.js';
+import type { PluginUiArtifactsManifestEntryV2 } from '../../ui/uiArtifactsManifest.js';
+import { PLUGIN_UI_HOST_API_VERSION_V1 } from '../../ui/hostApiDefinition.js';
+import { isPluginUiHostApiVersionCompatibleWithVersionV1 } from '../../ui/hostApi.js';
 
 type DescriptiveContribution<T> = Readonly<{
     pluginId: string;
@@ -51,6 +54,34 @@ export type PluginUiProjectedEntryCandidate = Readonly<Record<string, unknown> &
     pluginId?: string;
     contributionKind: string;
 }>;
+
+/** Shared executable presentation facts; the caller retains selection and compatibility authority. */
+export function projectPluginReactNativeArtifactEntryV1(input: Readonly<{
+    pluginId: string;
+    pluginVersion: string;
+    contributionId: string;
+    artifactId: string;
+    artifact?: PluginUiArtifactsManifestEntryV2;
+    artifactSelectionOwner?: 'accountRelease' | 'daemonProjection';
+    generatedOwnerKind: string;
+    requiredHostMethods: readonly string[];
+    exportName?: string;
+    runtime: Readonly<Record<string, unknown>>;
+}>): PluginUiProjectedEntryCandidate {
+    return Object.freeze({
+        id: `reactNativeBundle:${input.pluginId}:${input.contributionId}`,
+        pluginId: input.pluginId, pluginVersion: input.pluginVersion,
+        contributionKind: 'reactNativeBundle', contributionId: input.contributionId,
+        ...(input.artifactSelectionOwner ? { artifactSelectionOwner: input.artifactSelectionOwner } : {}), generatedV2: true,
+        generatedOwnerKind: input.generatedOwnerKind, requiredHostMethods: input.requiredHostMethods,
+        entry: Object.freeze({ artifactId: input.artifact?.artifactId ?? input.artifactId, exportName: input.exportName ?? 'renderSurface' }),
+        compatibility: input.artifact ? Object.freeze({ hostUiApiRange: input.artifact.hostUiApiRange }) : undefined,
+        hostApi: Object.freeze({ minVersion: input.artifact?.hostUiApiRange ?? PLUGIN_UI_HOST_API_VERSION_V1,
+            methods: Object.freeze([...input.requiredHostMethods]) }),
+        fallback: Object.freeze({ kind: 'unavailable' }),
+        ...(input.artifact ? { artifactGraph: input.artifact } : {}), runtime: input.runtime,
+    });
+}
 type DeclarativeProjectionHostRuntimeContext = Readonly<{
     modelsByRendererKey?: Readonly<Record<string, StablePluginDeclarativeModel | undefined>>;
 }>;
@@ -780,15 +811,20 @@ export function projectPluginUiPresentationEntriesV1(params: Readonly<{
 export function projectPluginUiDeclarationEntriesV1(params: Readonly<{
     registry: PluginUiPresentationRegistryV1;
     modelsByRendererKey?: Readonly<Record<string, StablePluginDeclarativeModel | undefined>>;
+    artifactEntries?: readonly PluginUiProjectedEntryCandidate[];
 }>): PluginDeclaredUiEntriesV1 {
     const entriesById: Record<string, PluginUiProjectedEntryCandidate> = {};
+    for (const entry of params.artifactEntries ?? []) addEntry(entriesById, entry);
     projectPluginUiTranslationsV1(params.registry, entriesById, undefined);
     projectPluginUiPresentationEntriesV1({ ...params, entriesById });
     return PluginDeclaredUiEntriesV1Schema.parse(entriesById);
 }
 
 /** Adapts already-admitted immutable declarations, never machine execution facts. */
-export function projectPluginPortableUiDeclarationsV1(manifest: PluginPortableReleaseManifestV1): PluginDeclaredUiEntriesV1 {
+export function projectPluginPortableUiDeclarationsV1(
+    manifest: PluginPortableReleaseManifestV1,
+    hostBundledArtifacts?: readonly PluginUiArtifactsManifestEntryV2[],
+): PluginDeclaredUiEntriesV1 {
     const pluginId = manifest.id;
     const ui = manifest.contributes.ui;
     const contributions = <T extends Readonly<{ id: string }>>(definitions: readonly T[]) => definitions.map(definition => ({
@@ -797,7 +833,7 @@ export function projectPluginPortableUiDeclarationsV1(manifest: PluginPortableRe
     }));
     const registry = {
         uiRenderersV2: contributions(ui.renderers),
-        uiViewsV2: contributions(ui.views),
+        uiViewsV2: contributions(hostBundledArtifacts ? ui.views.filter(view => view.target.kind === 'app') : ui.views),
         uiSettingsPagesV2: contributions(ui.settingsPages),
         uiSettingsGroupsV2: contributions(ui.settingsGroups),
         uiTranslationsV2: ui.translations.map(definition => ({ pluginId, pluginVersion: manifest.version, definition })),
@@ -833,5 +869,24 @@ export function projectPluginPortableUiDeclarationsV1(manifest: PluginPortableRe
             // unavailable while preserving other admitted presentation declarations.
         }
     }
-    return projectPluginUiDeclarationEntriesV1({ registry, modelsByRendererKey });
+    const artifactEntries = registry.uiRenderersV2.flatMap(renderer => {
+        const definition = renderer.definition;
+        if (definition.kind !== 'reactNative') return [];
+        const candidates = hostBundledArtifacts?.filter(artifact => artifact.tier === 'reactNative'
+            && artifact.artifactId === definition.artifact) ?? [];
+        if (candidates.length !== 1) return [];
+        const artifact = candidates[0]!;
+        const compatible = isPluginUiHostApiVersionCompatibleWithVersionV1(PLUGIN_UI_HOST_API_VERSION_V1, artifact.hostUiApiRange);
+        return [projectPluginReactNativeArtifactEntryV1({
+            pluginId, pluginVersion: manifest.version, contributionId: definition.id,
+            artifactId: artifact.artifactId, artifact, generatedOwnerKind: 'renderer',
+            requiredHostMethods: definition.requiredHostMethods ?? [],
+            runtime: Object.freeze({ state: compatible ? 'loadable' : 'blocked', diagnostics: compatible ? [] : ['generated_ui_host_api_mismatch'],
+                decision: { state: compatible ? 'load' : 'blocked', reason: compatible ? 'compatible' : 'generated_ui_host_api_mismatch',
+                    diagnostics: compatible ? [] : ['generated_ui_host_api_mismatch'] },
+                ...(compatible ? { cacheKey: artifact.digest, cacheIdentity: { artifactDigest: artifact.digest },
+                    loadPolicy: { source: 'installedArtifact' } } : {}) }),
+        })];
+    });
+    return projectPluginUiDeclarationEntriesV1({ registry, modelsByRendererKey, artifactEntries });
 }

@@ -41,6 +41,10 @@ async function main() {
   try {
     const res = await runNodeTestFiles(testFiles, {
       cwd: packageRoot,
+      // Preparation publishes through its finite owner before this separate
+      // test envelope. Managed-child custody still owns cancellation/cleanup.
+      admission: { repoDir: monorepoRoot || packageRoot, admissionClass: 'validation',
+        dependencyInstallDir: monorepoRoot || packageRoot },
       env: sanitizeStackTestRunnerEnv(process.env, {
         isolatedStackRoot: temporary.root,
         repoDir: monorepoRoot || packageRoot,

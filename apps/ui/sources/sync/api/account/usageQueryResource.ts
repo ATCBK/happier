@@ -36,7 +36,8 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
 import { getProviderAccountUsageCacheState, subscribeProviderAccountUsageCache } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
-import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, subscribeQualifiedQuotaSnapshotEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, subscribeQualifiedQuotaSnapshotEntry, type QualifiedQuotaSnapshotStoreEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { shouldHideQuotaForCredentialStatus } from '@/sync/domains/connectedServices/shouldHideQuotaForCredentialStatus';
 import { getCachedServerFeaturesSnapshot, subscribeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
@@ -64,8 +65,15 @@ function readOpenedQuotaScope(context: UsageQueryAccountContext) {
         })) };
 }
 
+/** Unknown admission can retain facts; a refusal or known replacement cannot. */
+function canRetainQuotaRead(admitted: Pick<QualifiedQuotaSnapshotStoreEntry, 'supported' | 'usageRecordId'>,
+    read: ConnectedServiceQuotaGetResultV1): boolean {
+    return admitted.supported !== false
+        && (admitted.usageRecordId === null || admitted.usageRecordId === read.current?.recordId);
+}
+
 /** Observe already-admitted B; this path never probes, decrypts or refreshes a provider. */
-function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQueryBatchResult): NonNullable<Parameters<typeof resolveUsagePageAggregation>[0]['quota']> {
+function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQueryBatchResult): OpenedQuotaRead {
     const scope = readOpenedQuotaScope(context);
     if (!scope) return { status: 'unknown', errorCode: 'account_profile_unavailable' };
     if (scope.sources.length === 0) return scope.state.profile.connectedAccountsV4.length === 0
@@ -76,7 +84,11 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     const rows = getProviderAccountUsageCacheState().entriesByCredentialScope[scope.providerScope] ?? {};
     const retainedBySource = new Map(previous?.results.flatMap(slice => slice.quota ?? [])
         .map(value => [createCanonicalJsonSigningInput(value.source), value]));
+    const previousBySource = new Map(previous?.results.flatMap(slice => slice.sources)
+        .filter(state => state.source.startsWith('quota:'))
+        .map(state => [state.source, state]));
     const value: ConnectedServiceQuotaGetResultV1[] = [];
+    const sources: UsageQuerySourceState[] = [];
     let pending = false;
     let unavailable = false;
     let stale = false;
@@ -84,22 +96,51 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     for (const { source, key } of scope.sources) {
         const admitted = getQualifiedQuotaSnapshotEntry(key);
         const row = admitted.supported === true && admitted.usageRecordId ? rows[admitted.usageRecordId] : undefined;
-        pending ||= admitted.loading || row?.loading === true;
-        if (!row?.snapshot || row.snapshot.recordId !== admitted.usageRecordId) {
-            unavailable = true;
-            const retained = retainedBySource.get(createCanonicalJsonSigningInput(source));
-            if (retained) { value.push(retained); stale = true; }
+        const sourceKey = `quota:${createCanonicalJsonSigningInput(source)}`;
+        const candidate = retainedBySource.get(createCanonicalJsonSigningInput(source));
+        const retained = candidate && canRetainQuotaRead(admitted, candidate) ? candidate : undefined;
+        const previousState = previousBySource.get(sourceKey);
+        const settled = previousState && previousState.status !== 'pending' && previousState.status !== 'not_loaded' ? previousState : undefined;
+        // The initial cache observation is a revision of the same Resource too.
+        // A vendor reread cannot replace its settled history or qualified state
+        // with a current-only projection before the admitted history read answers.
+        // The Action may settle before this independent cache has hydrated at all.
+        if (retained?.current && settled && admitted.error === null && !row?.hadError
+            && (!row?.snapshot || row.snapshot.recordId === retained.current.recordId)) {
+            value.push(retained);
+            sources.push(settled);
+            stale ||= settled.status !== 'available';
             continue;
         }
-        stale ||= admitted.error !== null || row.hadError || nowMs >= row.snapshot.fetchedAtMs + row.snapshot.staleAfterMs;
+        pending ||= (admitted.loading || row?.loading === true) && (!row?.snapshot || !wasConnectedServiceQuotaObserved(row.snapshot));
+        if (!row?.snapshot || row.snapshot.recordId !== admitted.usageRecordId) {
+            unavailable = true;
+            if (retained) {
+                value.push(retained);
+                // The Action may already have current facts while its history
+                // is still pending and the independent cache is unhydrated.
+                // Retaining those facts must retain their source state too:
+                // omitting it fabricates a settled headline until the next page.
+                if (previousState) sources.push(previousState);
+                stale = true;
+            }
+            continue;
+        }
+        const rowStale = admitted.error !== null || row.hadError || nowMs >= row.snapshot.fetchedAtMs + row.snapshot.staleAfterMs;
+        stale ||= rowStale;
+        // A newly batched Usage entry may have no previous result of its own,
+        // but this Account-scoped cache has already witnessed the allowance.
+        if (wasConnectedServiceQuotaObserved(row.snapshot)) sources.push({ source: sourceKey,
+            status: rowStale ? 'stale' : 'available', asOfMs: row.snapshot.fetchedAtMs });
+        else sources.push(previousState ?? { source: sourceKey, status: 'not_loaded' });
         value.push(projectProviderAccountUsageQuotaReadV1({ input: { source }, current: row.snapshot, nowMs,
             targets: areServerAccountScopesEqual(scope.state.settingsScope, context.accountLifetime.scope)
                 ? scope.state.settings.usagePacingTargetsV1 : undefined,
             waitingWork: { status: 'unavailable', reason: 'read_failed' } }));
     }
     if (value.length) {
-        const clocks = value.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
-        return { status: unavailable || pending ? 'partial' : stale ? 'stale' : 'available', value,
+        const clocks = value.flatMap(row => row.current && wasConnectedServiceQuotaObserved(row.current) ? [row.current.fetchedAtMs] : []);
+        return { status: unavailable || pending ? 'partial' : stale ? 'stale' : 'available', value, sources,
             ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}) };
     }
     return { status: pending ? 'pending' : scope.sources.every(({ key }) => getQualifiedQuotaSnapshotEntry(key).supported === false)
@@ -179,7 +220,8 @@ async function withUiConnectedServiceReader<T>(context: UsageQueryAccountContext
     } finally { account.dispose(); }
 }
 
-async function readUiQuota(context: UsageQueryAccountContext, input: ConnectedServiceQuotaGetInputV1, signal?: AbortSignal) {
+export async function readUiQuota(context: UsageQueryAccountContext, input: ConnectedServiceQuotaGetInputV1,
+    signal?: AbortSignal): Promise<ConnectedServiceQuotaGetResultV1> {
     return await withUiConnectedServiceReader(context, signal, read => read(input));
 }
 
@@ -247,30 +289,61 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         endAtMs: Math.max(...periods.map(period => period.endMs ?? nowMs)) };
     if (range.endAtMs <= range.startAtMs) return { status: 'unknown', errorCode: 'quota_query_range_empty' };
     const retainedBySource = new Map(opened.value?.map(value => [createCanonicalJsonSigningInput(value.source), value]));
+    const admissionBySource = new Map(scope.sources.map(({ source, key }) => [createCanonicalJsonSigningInput(source), key]));
+    for (const value of previous?.results.flatMap(result => result.quota ?? []) ?? []) {
+        const key = createCanonicalJsonSigningInput(value.source);
+        const admissionKey = admissionBySource.get(key);
+        if (!admissionKey || !canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(admissionKey), value)) continue;
+        const observed = retainedBySource.get(key);
+        if (!observed?.current || observed.current.recordId === value.current?.recordId) retainedBySource.set(key, value);
+    }
     const progressValues = scope.sources.map(({ source }) => retainedBySource.get(createCanonicalJsonSigningInput(source)) ?? null);
     // Account reads settle independently. Keep their qualified identity even
     // when a failed read has no current facts to disclose.
-    const sources: UsageQuerySourceState[] = scope.sources.map(({ source }) => ({
-        source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'pending',
-    }));
+    const settledBySource = new Map(opened.sources
+        ?.filter(state => state.status !== 'pending' && state.status !== 'not_loaded')
+        .map(state => [state.source, state]));
+    const sources: UsageQuerySourceState[] = scope.sources.map(({ source }, index) => {
+        const key = `quota:${createCanonicalJsonSigningInput(source)}`;
+        return progressValues[index] && settledBySource.get(key) || { source: key, status: 'pending' };
+    });
     const failures = new Map<number, string>();
     const projectQuota = (status: 'available' | 'partial' | 'stale' | 'error'): OpenedQuotaRead => {
         const value = progressValues.filter((row): row is ConnectedServiceQuotaGetResultV1 => row !== null);
-        const clocks = value.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
+        const clocks = value.flatMap(row => row.current && wasConnectedServiceQuotaObserved(row.current) ? [row.current.fetchedAtMs] : []);
         // A failure answering first cannot turn the still-unanswered accounts
         // into an empty/insufficient allowance result.
-        const aggregateStatus = value.length ? status : sources.some(source => source.status === 'pending') ? 'pending'
+        const aggregateStatus = value.length ? sources.every(source => source.status === 'available') ? 'available' : status === 'available' ? 'partial' : status
+            : sources.some(source => source.status === 'pending') ? 'pending'
             : failures.size ? 'error' : status;
         return { status: aggregateStatus, sources: [...sources], ...(value.length ? { value } : {}), ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}),
             ...(failures.size && !value.length ? { errorCode: [...failures.values()][0] } : {}) };
     };
-    const publishProgress = (index: number, value: ConnectedServiceQuotaGetResultV1 | null): void => {
+    const publishProgress = (index: number, value: ConnectedServiceQuotaGetResultV1 | null, settled = false): void => {
         requireCurrent(context, signal);
+        // Warm reads retain their last settled facets until this source answers. Cold
+        // reads still publish each admitted page; denials/errors take the path below.
+        if (!settled && !failures.has(index) && retainedBySource.has(createCanonicalJsonSigningInput(scope.sources[index]!.source))
+            && settledBySource.has(sources[index]!.source)) {
+            onProgress?.(projectQuota('partial'));
+            return;
+        }
+        const retained = retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
+        const unobservedReplacement = value?.current && !wasConnectedServiceQuotaObserved(value.current)
+            && retained?.current && wasConnectedServiceQuotaObserved(retained.current)
+            && retained.current.recordId === value.current.recordId
+            && canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(scope.sources[index]!.key), retained);
+        if (unobservedReplacement) value = retained;
         progressValues[index] = value;
         const failure = failures.get(index);
         sources[index] = { source: sources[index]!.source,
-            status: failure ? value ? 'stale' : 'error' : value?.history?.nextCursor === null ? 'available' : 'partial',
-            ...(value?.current ? { asOfMs: value.current.fetchedAtMs } : {}),
+            // Admitted current/history facts remain usable during the read.
+            // Incompleteness alone cannot say whether its producer is still running.
+            // Allowance/history has answered at its last page, independently of
+            // the Pending-work and price facets that may still be reading.
+            status: failure ? value ? 'stale' : 'error' : unobservedReplacement ? 'stale' : settled || value?.pageProjection || value?.history?.nextCursor === null
+                ? value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'available' : 'partial' : 'pending',
+            ...(value?.current && wasConnectedServiceQuotaObserved(value.current) ? { asOfMs: value.current.fetchedAtMs } : {}),
             ...(failure ? { errorCode: failure } : {}),
         };
         onProgress?.(projectQuota('partial'));
@@ -287,11 +360,19 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         failures.set(index, code);
         if (['denied', 'permission_denied', 'stale_surface'].includes(code)) { publishProgress(index, null); return; }
         const accepted = acceptedBySource.get(index);
+        const retained = retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
+        // A failed replacement has not supplied a newer complete history. Keep
+        // the same settled allowance and pace, with the source marked stale.
+        if ((retained?.history || retained?.pageProjection) && settledBySource.has(sources[index]!.source)
+            && (!accepted?.current || accepted.current.recordId === retained.current?.recordId)) {
+            publishProgress(index, retained);
+            return;
+        }
         const projected = accepted ? projectProviderAccountUsageQuotaReadV1({ input: { source: scope.sources[index]!.source },
-            current: accepted.current, history: accepted.history, targets: accepted.targets,
+            current: accepted.current, history: accepted.history, pageProjection: accepted.pageProjection, targets: accepted.targets,
             waitingWork: accepted.waitingWork, nowMs: Date.now() })
             : retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
-        const value = projected ? accepted?.history ? projected
+        const value = projected ? accepted?.history || accepted?.pageProjection ? projected
             : { ...projected, unusedCapacity: { historyStatus: 'unavailable' as const, windows: [] } } : null;
         publishProgress(index, value);
     };
@@ -300,9 +381,9 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     try {
         await withUiConnectedServiceReader(context, signal, async read => Promise.all(scope.sources.map(async ({ source }, index) => {
             try {
-                const accepted = await read({ source, history: { range, pageSize: 100 } });
+                const accepted = await read({ source, projection: { range, resolution: 'accepted_observations' } });
                 acceptedBySource.set(index, accepted);
-                publishProgress(index, accepted);
+                publishProgress(index, accepted, true);
             } catch (error) { failSource(index, error); }
         })), { readAllHistory: { onProgress: value => {
             const index = sourceIndices.get(createCanonicalJsonSigningInput(value.source));
@@ -523,10 +604,8 @@ export async function readUiUsageQueryBatch(
     };
     const publish = (): void => {
         if (!options?.onProgress) return;
-        if (!previous && ![...accounting.values()].some(snapshot => snapshot.value)
-            && !quota.value?.length && !howYouWork?.some(snapshot => snapshot.detail.status !== 'unknown')
-            && !quota.sources?.some(source => source.status === 'error')
-            && !queries.every(query => accounting.get(getUsageQueryKey(query))?.status !== 'pending')) return;
+        // Read identity and pending sources are useful before the first facts.
+        // The mounted body model keeps a source-only revision as a placeholder.
         const batch = compose();
         admittedPrevious = batch;
         options.onProgress(batch);
@@ -659,6 +738,11 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     const existing = accountStores.get(lifetime);
     if (existing) return existing.store;
     const evidenceAbort = new AbortController();
+    // Allowances belong to this Account, not a page's accounting batch. Keep
+    // their latest Resource revision across navigation, including zero views.
+    // New query ranges still read their own history; these facts seed the body
+    // until that replacement answers, rather than claiming its range is read.
+    let allowance: Pick<UsageQueryBatchResult['results'][number], 'key' | 'requestedQuery' | 'shownQuery' | 'quota' | 'sources' | 'pending'> | undefined;
     const sessionInputs = new Map<string, { seq: number | undefined; basis: string; needsAdmission: boolean;
         value?: SessionInputEvidence; read: Promise<SessionInputEvidence | null> }>();
     const readSessionState = (id: string) => {
@@ -732,18 +816,33 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 if (reference.hostRead !== 'usage.query') throw Object.assign(new Error('Unsupported host read'), { code: 'unsupported_method' });
                 const entry = owner.store.getEntry(reference);
                 const retained = entry.getSnapshot().value;
-                const previous = retained ? decodeUsageQueryResource(retained) : undefined;
+                const ownPrevious = retained ? decodeUsageQueryResource(retained) : undefined;
+                const sharedAllowance = allowance;
+                const previous = ownPrevious && sharedAllowance ? { ...ownPrevious, results: ownPrevious.results.map(slice => ({
+                    ...slice, quota: sharedAllowance.quota,
+                    sources: [...slice.sources.filter(source => source.source !== 'quota' && !source.source.startsWith('quota:')),
+                        ...sharedAllowance.sources],
+                })) } : ownPrevious ?? (sharedAllowance ? { v: 1 as const, results: [sharedAllowance] } : undefined);
                 const contentFor = async (batch: UsageQueryBatchResult): Promise<ResourceContent> => {
                     requireCurrent(sharedContext, options?.signal);
-                    const bytes = new TextEncoder().encode(JSON.stringify(batch));
-                    const digest = await computePluginUiArtifactSha256Digest(bytes);
-                    requireCurrent(sharedContext, options?.signal);
-                    const content = { contentType: 'application/json', bytes, digest } as const;
+                    const first = batch.results[0];
+                    if (first) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
+                        quota: first.quota, sources: first.sources.filter(source => source.source === 'quota' || source.source.startsWith('quota:')),
+                        pending: first.sources.some(source => (source.source === 'quota' || source.source.startsWith('quota:')) && source.status === 'pending') };
                     const current = entry.getSnapshot().value;
                     // Reconcile each revision against the same entry's admitted
                     // value so unrelated slices keep their selected references.
-                    const reconciled = retainUsageQueryResultReferences(batch, previous);
-                    decodedValues.set(content, retainUsageQueryResultReferences(reconciled, current ? decodeUsageQueryResource(current) : undefined));
+                    const reconciled = retainUsageQueryResultReferences(batch, ownPrevious);
+                    const currentBatch = current ? decodeUsageQueryResource(current) : undefined;
+                    const value = retainUsageQueryResultReferences(reconciled, currentBatch);
+                    // Reuse the entry's bytes as well as its decoded value. A
+                    // terminal read commonly repeats its last progress revision.
+                    if (current && value === currentBatch) return current;
+                    const bytes = new TextEncoder().encode(JSON.stringify(value));
+                    const digest = await computePluginUiArtifactSha256Digest(bytes);
+                    requireCurrent(sharedContext, options?.signal);
+                    const content = { contentType: 'application/json', bytes, digest } as const;
+                    decodedValues.set(content, value);
                     return content;
                 };
                 let queuedProgress: UsageQueryBatchResult | null = null;

@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { hkdf } from '@noble/hashes/hkdf';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha2';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../../crypto/base64.js';
 
@@ -77,10 +77,7 @@ export function serializeCanonicalJsonForSessionMutationEqualityV1(
   }
 }
 
-export const SessionMutationEqualityBase64UrlSha256V1Schema = lazyZodSchema(() => z.string().regex(
-  /^[A-Za-z0-9_-]{43}$/u,
-  'Expected an unpadded base64url SHA-256 value',
-));
+export const SessionMutationEqualityBase64UrlSha256V1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u, 'Expected an unpadded base64url SHA-256 value')));
 
 /**
  * The closed evidence a client may submit so the canonical mutation owner can
@@ -89,8 +86,8 @@ export const SessionMutationEqualityBase64UrlSha256V1Schema = lazyZodSchema(() =
  * can only compare, never calculate, so it cannot confirm a guessed plaintext.
  */
 export const SessionMutationEqualityEvidenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('plainDigest'), digest: SessionMutationEqualityBase64UrlSha256V1Schema }).strict(),
-  z.object({ kind: z.literal('e2eeTag'), tag: SessionMutationEqualityBase64UrlSha256V1Schema }).strict(),
+  z.strictObject({ kind: z.literal('plainDigest'), digest: SessionMutationEqualityBase64UrlSha256V1Schema }),
+  z.strictObject({ kind: z.literal('e2eeTag'), tag: SessionMutationEqualityBase64UrlSha256V1Schema }),
 ]));
 export type SessionMutationEqualityEvidenceV1 = z.infer<typeof SessionMutationEqualityEvidenceV1Schema>;
 

@@ -1,7 +1,13 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReplaceSessionVoiceInclusionsRequestSchema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
-import { createSessionFixture } from '@/dev/testkit';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -35,7 +41,7 @@ function replacementRequests() {
 }
 function includeProjection(serverId: string, sessionId: string) {
     const row = buildSessionListRenderableFromSession(createSessionFixture({ id: sessionId, serverId,
-        viewer: { follow: { follows: true, notificationLevel: 'all_messages', includeInVoice: true } },
+        viewer: createSessionViewerFixture({ follow: { follows: true, notificationLevel: 'all_messages', includeInVoice: true } }),
     }));
     storage.setState(current => ({
         sessionListRowsByServerId: { ...current.sessionListRowsByServerId,
@@ -71,12 +77,12 @@ beforeEach(async () => {
     const sessions = Object.fromEntries([
         ['s1', 'Primary session'], ['s2', 'Tracked session'], ['s3', 'Session Setup'], ['s4', 'leeroy'],
     ].map(([id, title]) => [id!, createSessionFixture({ id: id!, serverId: a,
-        metadata: { ...createSessionFixture().metadata, summary: { text: title!, updatedAt: 1 } } })]));
+        metadata: { ...fixtureMetadata, summary: { text: title!, updatedAt: 1 } } })]));
     storage.setState({
         sessions,
         sessionListRowsByServerId: { [a]: {
             s4: buildSessionListRenderableFromSession(createSessionFixture({ id: 's4', serverId: a, updatedAt: 10,
-                metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix' } })),
+                metadata: { ...fixtureMetadata, summaryText: 'Session QA Voice Matrix' } })),
         } },
         ordinarySessionListMembershipByServerId: { [a]: ['s4'] },
         sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {},
@@ -186,7 +192,7 @@ describe('voice session target actions', () => {
     });
     it('returns the visible lookup title when a stale raw title normalizes to the same lookup text', async () => {
         storage.setState(current => ({ sessions: { ...current.sessions, s4: createSessionFixture({ id: 's4', serverId: a,
-            metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix!' }, updatedAt: 10,
+            metadata: { ...fixtureMetadata, summaryText: 'Session QA Voice Matrix!' }, updatedAt: 10,
         }) } }));
         const result = await setPrimaryActionSessionId({ sessionId: null, sessionTitle: 'Session QA Voice Matrix',
             corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },

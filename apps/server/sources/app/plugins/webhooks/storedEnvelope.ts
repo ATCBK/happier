@@ -1,15 +1,9 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
-import {
-    StoredPluginWebhookDeliveryContentV1Schema,
-    encodeBase64,
-    sealBoxBundle,
-    serializePluginWebhookDeliveryContentV1,
-    serializeStoredPluginWebhookDeliveryContentV1,
-    type PluginWebhookDeliveryContentV1,
-    type StoredPluginWebhookDeliveryContentV1,
-    type ContentPublicKeyFingerprint,
-} from "@happier-dev/protocol";
+import { StoredPluginWebhookDeliveryContentV1Schema, serializePluginWebhookDeliveryContentV1, serializeStoredPluginWebhookDeliveryContentV1, type PluginWebhookDeliveryContentV1, type StoredPluginWebhookDeliveryContentV1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
+import { type ContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 
 import {
     deriveAccountEncryptionCurrentnessFromRow,

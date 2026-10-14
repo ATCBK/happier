@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -200,7 +201,7 @@ export function presentReconcileHomesSheet(input: Readonly<{ foundCount: number 
             title: t(phone ? 'homesJourneys.phone.reconcileTitle' : 'homesJourneys.reconcileTitle'),
             subtitle: phone ? t('homesJourneys.phone.reconcileLead') : t('homesJourneys.reconcileLead', { count: input.foundCount }),
             phonePresentation: 'sheet',
-            dimensions: { width: 560 },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide },
             testID: 'reconcile-homes-sheet',
         },
     });

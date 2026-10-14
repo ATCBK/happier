@@ -310,7 +310,8 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
         );
         if (!confirmed || !isEditorCurrent()) return;
         try {
-            const execution = await executeAction('agents.acp.backends.delete', { backendId: existing.id, ...authority });
+            const execution = await executeAction('agents.acp.backends.delete', { backendId: existing.id, ...authority },
+                { presentUserConfirmation: { actionId: 'agents.acp.backends.delete' } });
             if (!execution.ok) throw new Error(execution.errorCode);
             AgentsAcpBackendsDeleteOutputV1Schema.parse(execution.result);
         }

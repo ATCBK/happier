@@ -3,7 +3,6 @@ import type { ScmDiffSummaryResult, ScmDiffSummaryResultEdit } from '@happier-de
 
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
 import { useScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
-import { Modal } from '@/modal';
 import { applySavedScmDiffSummaryResult, deleteSavedScmDiffSummaryResults } from '@/sync/ops/scmDiffSummary/generate';
 import type { ScmCommitPlanOperationResult } from '@/sync/ops/scmDiffSummary/results';
 import { machineScmDiffCommit } from '@/sync/ops/scm/machineScm';
@@ -51,8 +50,9 @@ export function useScmCommitPlan(params: Readonly<{
     const proposal = React.useMemo<CommitProposal | null>(() => (supportedComparison && comparison && plan && comparison.source.kind === 'workingTree'
         ? buildCommitProposal({ comparison, plan, application })
         : null), [application, comparison, plan, supportedComparison]);
-    const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready'
-        : supportedComparison && planOutput && (planOutput.state === 'pending' || planOutput.state === 'writing') ? 'writing' : 'none';
+    const isGenerating = supportedComparison && (viewModel?.status === 'starting'
+        || planOutput?.state === 'pending' || planOutput?.state === 'writing');
+    const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready' : isGenerating ? 'writing' : 'none';
     const [busy, setBusy] = React.useState(false);
     const key = viewModel?.requestKey ?? null;
     // Progress timers belong to the foreground reader, not the machine Action's lifetime.
@@ -189,12 +189,10 @@ export function useScmCommitPlan(params: Readonly<{
             ...(!proposal.locked && proposal.landedCount === 0 ? {
                 onDiscard: () => {
                     void (async () => {
-                        const confirmed = await Modal.confirm(t('commitProposal.footer.discard'), t('commitProposal.discardBody'), {
-                            confirmText: t('commitProposal.footer.discard'), destructive: true,
-                        });
-                        if (!confirmed || !current() || !bound.scope) return;
+                        if (!current() || !bound.scope) return;
                         if (onlyCommitPlan) {
                             const deleted = await operations.delete({ cwd, resultId: saved.resultId, expectedRevision: saved.revision });
+                            if (!current()) return;
                             if (deleted.success) deleteSavedScmDiffSummaryResults(bound.scope, [deleted.resultId]);
                             else setError(deleted.error);
                             return;
@@ -230,6 +228,7 @@ export function useScmCommitPlan(params: Readonly<{
     return {
         proposal,
         phase,
+        isGenerating,
         actions,
         busy,
         error: bound.error,

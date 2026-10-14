@@ -69,13 +69,14 @@ describe('EntityDragCarriedPreview refusal settlement', () => {
             expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('quiet');
             expect(runtime.getSnapshot().phase).toBe('pending');
             await act(async () => { publishAppliedActiveServerSnapshot({ serverId: 'other-home', serverUrl: 'https://other-home.test', generation: 2 }); });
-            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            // A write merely on its way is shown by its row, so the floating card is gone.
+            expect(screen.findHostByTestId('pending-home-card')).toBeNull();
             await act(async () => { publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 3 }, false); });
-            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            expect(screen.findHostByTestId('pending-home-card')).toBeNull();
             await act(async () => { publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 3 }); });
             expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('quiet');
             await act(async () => { storage.setState({ endpointStatus: 'online' }); });
-            expect(screen.findHostByTestId('pending-home-card')!.props.dataSet.outcome).toBe('pending');
+            expect(screen.findHostByTestId('pending-home-card')).toBeNull();
             await act(async () => { finish({ status: 'applied' }); await result; });
             expect(await result).toEqual({ status: 'applied' });
             expect(execute).toHaveBeenCalledTimes(1);
@@ -110,7 +111,7 @@ describe('EntityDragCarriedPreview refusal settlement', () => {
         const position = screen.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')[0]!;
         await act(async () => { position.props.onLayout({ nativeEvent: { layout: { width: 260, height: 100 } } }); });
         const positionStyle = position.props.style[0] as { left: number; top: number };
-        expect(screen.findHostByTestId('carried-card')?.props.dataSet.outcome).toBe('pending');
+        expect(screen.findHostByTestId('carried-card')).toBeNull();
         // Native source geometry can arrive after pickup; settlement must use its current origin.
         sourceBounds = { x: 10, y: 20, width: 300, height: 40 };
         await act(async () => { finish({ status: 'refused', reason: { code: 'reports_to_forbidden', message: 'Lead cannot take reports' } }); await release; });

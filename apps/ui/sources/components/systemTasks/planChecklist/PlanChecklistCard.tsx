@@ -26,7 +26,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         backgroundColor: theme.colors.surface.base,
     },

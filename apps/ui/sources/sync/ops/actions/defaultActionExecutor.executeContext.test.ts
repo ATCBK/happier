@@ -3,6 +3,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createScmCapabilities } from '@happier-dev/protocol/scm';
 import { ApprovalRequestSchema, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent, projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -120,12 +121,13 @@ const APPROVAL_REQUIRED_ACTIONS_SETTINGS = {
  * approval for the Actions these cases defer. The settings are served at the
  * Home's real settings route, which the captured Account context reads.
  */
-async function addHome(options: Readonly<{ collaboration?: boolean }> = {}): Promise<string> {
+async function addHome(options: Readonly<{ collaboration?: boolean; currentAccount?: boolean }> = {}): Promise<string> {
     const serverId = await harness.addHome({
         name: 'Home A',
         serverUrl: 'https://home-a.example',
         serverIdentityId: SERVER_IDENTITY_ID,
         accountId: ACCOUNT_ID,
+        ...(options.currentAccount ? { currentAccount: true } : {}),
     });
     harness.answer(serverId, '/v2/account/settings', {
         body: { content: { t: 'plain', v: APPROVAL_REQUIRED_ACTIONS_SETTINGS }, version: 1 },
@@ -874,16 +876,17 @@ describe('withDefaultActionExecuteContext', () => {
     });
 
     it('routes a created trusted-plugin approval to exact-daemon generation validation without local fallback', async () => {
-        rpc.machine.mockResolvedValueOnce({
-            ok: false,
-            errorCode: 'approval_stale',
-            error: 'approval_stale',
-        });
-
-        const serverId = await addHome();
+        const serverId = await addHome({ currentAccount: true });
         const { createDefaultActionExecutor } = await loadExecutor();
         const executor = createDefaultActionExecutor();
         harness.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId: ACCOUNT_ID })] });
+        // The approving app enters through the authenticated Home Action route;
+        // the Home forwards the original plugin custody to its exact daemon.
+        harness.answer(serverId, 'POST /v1/actions/approval.request.decide', { select: (input) => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+            return { body: { v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId,
+                execution: { ok: false, errorCode: 'approval_stale', error: 'approval_stale' } } };
+        } });
         const created = await executor.execute(
             'review.start',
             { sessionId: 'session-1', engineIds: ['codex'], instructions: 'Review this change.' },
@@ -929,12 +932,14 @@ describe('withDefaultActionExecuteContext', () => {
             { serverId, surface: 'ui', authority: 'present_user' },
         )).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
 
-        expect(rpc.machine).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        expect(harness.requestsFor('/v1/actions/approval.request.decide')).toEqual([expect.objectContaining({
             serverId,
-            machineId: 'machine-1',
-            method: RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
-            payload: { artifactId },
-        }));
+            input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-1' },
+                input: { artifactId, decision: 'approve', serverIdentityId: SERVER_IDENTITY_ID, originServerId: serverId },
+            }),
+        })]);
+        expect(rpc.machine).not.toHaveBeenCalled();
     });
 
     it('prepares an E2EE Runner source key after the shared UI Action commits an edge', async () => {
@@ -1221,7 +1226,10 @@ describe('withDefaultActionExecuteContext', () => {
     });
 
     it('resumes fresh-folder consent from the exact Home snapshot before navigating', async () => {
-        const serverId = await addHome();
+        // The detail reader requests accessProjectionVersion=1 only after this
+        // Home enables Session sharing; the answer below is that current shape.
+        const serverId = await addHome({ collaboration: true });
+        harness.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-a', accountId: ACCOUNT_ID })] });
         harness.answer(serverId, '/v1/account/encryption/currentness', { body: {
             mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         } });
@@ -1239,9 +1247,13 @@ describe('withDefaultActionExecuteContext', () => {
         const { createDefaultActionExecutor } = await loadExecutor();
         const openSession = vi.fn();
 
-        await expect(createDefaultActionExecutor({ openSession }).execute('session.open', {
+        const resumed = await createDefaultActionExecutor({ openSession }).execute('session.open', {
             sessionId: 'session-a', approvedNewDirectoryCreation: true,
-        }, { serverId })).resolves.toMatchObject({ ok: false, errorCode: 'SESSION_DIRECTORY_MISSING' });
+        }, { serverId });
+        expect(resumed, JSON.stringify({ resumed, paths: harness.requests.map(({ path }) => path) }))
+            .toMatchObject({ ok: false, errorCode: 'SESSION_DIRECTORY_MISSING' });
+        expect(harness.requestsFor('/v2/sessions/session-a?accessProjectionVersion=1'))
+            .toEqual([expect.objectContaining({ serverId })]);
         expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-a', preferScoped: true, accountId: ACCOUNT_ID,
             payload: expect.objectContaining({ directory: '/managed/session-a', approvedNewDirectoryCreation: true }),

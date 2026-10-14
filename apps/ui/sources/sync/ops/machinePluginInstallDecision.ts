@@ -51,7 +51,7 @@ export type MachinePluginInstallDecisionOutcome = Readonly<{
 
 export type MachinePluginInstallDecisionResult =
     | Readonly<{ supported: true; outcome: MachinePluginInstallDecisionOutcome }>
-    | Readonly<{ supported: false; reason: 'not-supported' | 'error' }>;
+    | Readonly<{ supported: false; reason: 'not-supported' | 'error'; detail: string | null }>;
 
 /** One human review owner for mounted Actions and already-prepared daemon changes. */
 export async function reviewMachinePluginInstallationAsPresentUser(
@@ -100,6 +100,12 @@ function readNonEmptyString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+}
+
+function readErrorDetail(value: unknown): string | null {
+    if (value instanceof Error) return readNonEmptyString(value.message);
+    if (!isRecord(value)) return readNonEmptyString(value);
+    return readNonEmptyString(value.message) ?? readNonEmptyString(value.code);
 }
 
 function parseOutcome(value: unknown): MachinePluginInstallDecisionOutcome | null {
@@ -156,7 +162,7 @@ export async function machinePluginInstallDecision(
             });
         } else {
             if (!opts.isAuthorityCurrent()) {
-                return { supported: false, reason: 'error' };
+                return { supported: false, reason: 'error', detail: 'Plugin installation authority changed before the decision was sent' };
             }
             rawPayload = { v: 1, ...opts.decision };
             const payload = HostPrivatePluginInstallDecisionV1Schema.parse(rawPayload);
@@ -171,13 +177,13 @@ export async function machinePluginInstallDecision(
         }
         const response = rawPayload;
         if (isRpcMethodNotFoundResult(response)) {
-            return { supported: false, reason: 'not-supported' };
+            return { supported: false, reason: 'not-supported', detail: null };
         }
         const outcome = parseOutcome(response);
         return outcome
             ? { supported: true, outcome }
-            : { supported: false, reason: 'error' };
-    } catch {
-        return { supported: false, reason: 'error' };
+            : { supported: false, reason: 'error', detail: 'The daemon returned an invalid plugin installation decision response' };
+    } catch (error) {
+        return { supported: false, reason: 'error', detail: readErrorDetail(error) };
     }
 }

@@ -24,10 +24,10 @@ import type { WidgetSpecimenFrames } from './widgetSpecimenTypes';
 
 const stylesheet = StyleSheet.create((theme) => ({
     page: { flex: 1, backgroundColor: theme.colors.background.canvas },
-    pageContent: { padding: 24, gap: 24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
+    pageContent: { padding: theme.space.s24, gap: theme.space.s24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
     pageOnly: { padding: 0 },
-    frame: { gap: 8 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.tertiary },
+    frame: { gap: theme.space.s8 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.tertiary },
 }));
 
 export function WidgetsSpecimen(props: Readonly<{ only: string | null; phone: boolean }>) {

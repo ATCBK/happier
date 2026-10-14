@@ -425,8 +425,8 @@ describe('disconnecting this computer from a removed Home (R15)', () => {
         await mkdir(join(root, 'services'));
         await writeFile(path, renderWindowsScheduledTaskWrapperPs1({ workingDirectory: root, programArgs: ['happier.exe', 'daemon', 'start-sync'], env: { HAPPIER_HOME_DIR: root, HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable', HAPPIER_ACTIVE_SERVER_ID: 'company.profile', HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'pinned', HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service', HAPPIER_DAEMON_SERVICE_MANAGED_BY: 'desktop' }, stdoutPath: join(root, 'out.log'), stderrPath: join(root, 'err.log') }));
       }
-      const readServices = async () => (await discoverHappierServices({ platform: 'win32', roots: [{ path: join(root, 'services'), scope: 'user' }], commands: { run: ({ args }) => {
-        if (args.includes('CSV')) return `"\\Happier\\${label}","N/A"\r\n`;
+      const readServices = async () => (await discoverHappierServices({ platform: 'win32', roots: [{ path: join(root, 'services'), scope: 'user' }], commands: { run: ({ cmd, args }) => {
+        if (cmd === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'))) return JSON.stringify(['\\Happier\\' + label]);
         if (args.includes('/XML')) return `<Task><Arguments>-File "${path}"</Arguments></Task>`;
         return `TaskName: \\Happier\\${label}\r\nStatus: Ready\r\n`;
       } } })).services;

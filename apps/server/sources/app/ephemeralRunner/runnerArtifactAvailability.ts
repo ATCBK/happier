@@ -13,7 +13,7 @@ import { resolveReleaseAssetBundle } from '@happier-dev/release-runtime/assets';
 import { fetchGitHubReleaseByTag, readGitHubReleaseHttpStatus } from '@happier-dev/release-runtime/github';
 import { parseReleaseManifestV1 } from '@happier-dev/release-runtime/releaseManifest';
 import { DEFAULT_MINISIGN_PUBLIC_KEY, resolveVerifiedReleaseArtifactDigest } from '@happier-dev/release-runtime/releaseArtifactVerification';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type RunnerArtifactUnavailableReasonV1 =
     | 'publication_unavailable'

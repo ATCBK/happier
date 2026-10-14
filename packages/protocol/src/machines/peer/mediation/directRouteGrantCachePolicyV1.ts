@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const DIRECT_ROUTE_GRANT_TTL_MS = Object.freeze({
   boundedTransferSingle: 10 * 60_000,
@@ -19,8 +19,8 @@ export const DIRECT_ROUTE_GRANT_TTL_MS = Object.freeze({
 } as const);
 
 export const DirectRouteGrantCachePolicyV1Schema = lazyZodSchema(() => z.object({
-  ttlMs: z.number().int().positive(),
-  renewable: z.boolean().default(false),
+  ttlMs: z.number().check(z.int(), z.positive()),
+  renewable: z._default(z.boolean(), false),
 }));
 
 export type DirectRouteGrantCachePolicyV1 = z.infer<typeof DirectRouteGrantCachePolicyV1Schema>;

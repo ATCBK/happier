@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
+import { renderHook } from '@/dev/testkit';
 
-import { resolveScrollOffsetForVisibleRect } from './useScrollRectIntoView';
+import { resolveScrollOffsetForVisibleRect, useScrollRectIntoViewRegistry } from './useScrollRectIntoView';
 
 const metrics = Object.freeze({
     offsetY: 0,
@@ -59,4 +61,24 @@ describe('resolveScrollOffsetForVisibleRect', () => {
             alignment: 'center',
         })).toBeNull();
     });
+});
+
+it('reveals an empty-string row key instead of treating it as no active row', async () => {
+    const hook = await renderHook(() => useScrollRectIntoViewRegistry({ activeKey: '', animated: false }));
+    const offsets: number[] = [];
+    // Physical scrolling and measured geometry are the ScrollView boundary.
+    hook.getCurrent().scrollRef.current = {
+        scrollTo: ({ y }: { y: number }) => offsets.push(y),
+    } as unknown as import('react-native').ScrollView;
+    await act(async () => {
+        const scroll = hook.getCurrent();
+        scroll.onScroll({ nativeEvent: {
+            contentOffset: { y: 450 },
+            layoutMeasurement: { height: 100 },
+            contentSize: { height: 1000 },
+        } });
+        scroll.registerItemLayout('')({ nativeEvent: { layout: { y: 0, height: 40 } } });
+    });
+    expect(offsets).toContain(0);
+    await hook.unmount();
 });

@@ -13,7 +13,7 @@ import { parseMarkdownSpans } from './parseMarkdownSpans';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
 import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { EnrichedMarkdownTextAdapter } from './enriched/EnrichedMarkdownTextAdapter';
 import type { MarkdownRenderingProfile } from './rendering/MarkdownRenderingProfile';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -259,7 +259,7 @@ function MarkdownOptionButton(props: {
     onOptionLongPress?: OptionLongPressHandler,
     findRanges?: readonly FindTextRange[],
 }) {
-    const feedback = useTemporaryCopyFeedback();
+    const feedback = useHappierCopyFeedback();
     const feedbackKey = String(props.index);
     const longPressConsumedRef = React.useRef(false);
     const option = React.useMemo<Option>(() => ({ title: props.item }), [props.item]);

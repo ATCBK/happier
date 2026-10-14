@@ -226,40 +226,36 @@ const VoiceBriefRow = React.memo(function VoiceBriefRow(props: Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     // The recovery button keeps its own width under the notes; it never stretches across the column.
     unavailable: {
-        gap: 8,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     head: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 4,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s4,
     },
     grow: {
         flexGrow: 1,
     },
     note: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     block: {
         alignSelf: 'stretch',
     },
     groupTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 12.5,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 2,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s2,
     },
     dot: {
         width: 14,
@@ -267,7 +263,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     prompts: {
-        paddingHorizontal: 12,
-        paddingBottom: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s10,
     },
 }));

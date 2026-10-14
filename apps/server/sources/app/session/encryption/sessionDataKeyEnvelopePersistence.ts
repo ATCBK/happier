@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { parseEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { encodeBase64 } from "privacy-kit";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

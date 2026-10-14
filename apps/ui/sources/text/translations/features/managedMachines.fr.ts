@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "Vérifie ces ressources avant d’effacer le compte. Effacer les données Happier ne les supprimera pas chez le fournisseur.",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `Ils peuvent aussi lire les connexions utilisées pour cette session : ${purposes}, ainsi que l’accès Happier de cette session.`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service} (connexion native)`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `Tourne sur ${machine} de ${owner}`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier donne à ${machine} une connexion valable uniquement pour cette session.`,
         fullSignIn: ({ machine }: { machine: string }) => `Ta connexion Happier est stockée sur ${machine} pendant cette session. Les personnes ayant un accès terminal ou agent sur cette machine peuvent l’utiliser pour accéder à ton compte Happier.`,

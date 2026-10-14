@@ -35,6 +35,9 @@ export function isPluginSurfaceMachineBound(params: Readonly<{
     const methods = readRequiredPluginSurfaceHostMethods(params.renderer.requiredHostMethods
         ?? record(params.renderer.model)?.requiredHostMethods ?? artifact?.requiredHostMethods);
     if (methods === null) return false;
+    // Mounted contribution points are read from the selected daemon even when
+    // its renderer can also present Account data without required host methods.
+    if (params.projection?.installedPackagesById[params.pluginId]?.declaresContributionPoints === true) return true;
     // The same Resource methods also serve Account-owned borrowed host reads.
     // Only the selected member's declared daemon Resource capability implies a target.
     // requiredHostMethods is the renderer's compatibility minimum, not an

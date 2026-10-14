@@ -7,10 +7,8 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } 
 import tweetnacl from 'tweetnacl';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
-import { encodeBase64 } from '@/encryption/base64';
 import { createMachineDataEncryptionKeyV1 } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
@@ -24,11 +22,14 @@ const nativeStorage = vi.hoisted(() => ({
     values: new Map<string, string>(),
     beforeRead: undefined as ((key: string) => Promise<void>) | undefined,
 }));
-installTokenStorageWebPlatformMocks({ secureStore: () => ({
+const nativeStorageBoundary = {
     getItemAsync: async (key: string) => { await nativeStorage.beforeRead?.(key); return nativeStorage.values.get(key) ?? null; },
     setItemAsync: async (key: string, value: string) => { nativeStorage.values.set(key, value); },
     deleteItemAsync: async (key: string) => { nativeStorage.values.delete(key); },
-}) });
+};
+installTokenStorageWebPlatformMocks({ secureStore: () => nativeStorageBoundary });
+const { encodeBase64 } = await import('@/encryption/base64');
+const { createEncryptionFromAuthCredentials } = await import('@/auth/encryption/createEncryptionFromAuthCredentials');
 // Route replacement is an external navigation boundary; mounted Action and Auth lifetimes remain real.
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 // Reset before the real manager starts: its generation state shares this runtime's lifetime.
@@ -504,6 +505,7 @@ describe('AuthContext with the production connection manager', () => {
         let request: import('@happier-dev/protocol/approvals/approvalRequestV1').ApprovalRequestV2 | null = null;
         const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'account.signOut': { approvalRequiredSurfaces: ['ui'] } },
             ...(entrypoint === 'delete-waived' ? { approvalWaivedSurfaces: { 'account.delete': ['agent'] } } : {}) });
+        let credentialReplacedDuringGuard = false;
         if (entrypoint === 'stale-forget') {
             // Another actor installs its credential during the actual OS keychain read.
             // TokenStorage parsing, first-key custody and Auth admission are not mocked.
@@ -511,6 +513,7 @@ describe('AuthContext with the production connection manager', () => {
                 if (!key.includes('pending_external_auth')) return;
                 nativeStorage.beforeRead = undefined;
                 await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, replacement);
+                credentialReplacedDuringGuard = true;
             };
         }
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
@@ -660,6 +663,7 @@ describe('AuthContext with the production connection manager', () => {
             }
             const approved = await executor.execute('approval.request.decide', { artifactId: 'logout', decision: 'approve' }, context);
             if (entrypoint === 'stale-forget') {
+                expect(credentialReplacedDuringGuard).toBe(true);
                 expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(replacement);
                 expect(await TokenStorage.getCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toEqual(other);
                 expect(approved).toMatchObject({ ok: false });
@@ -728,10 +732,11 @@ describe('AuthContext with the production connection manager', () => {
                 logout: options => auth.logout({ ...options, target: { serverId: homeA.id, serverUrl: homeA.serverUrl }, expectedCredentials: original }),
             }).then(() => null, (error: unknown) => error);
             expect(failure).toBeInstanceOf(AccountDeletedLocalCleanupError);
+            if (!(failure instanceof AccountDeletedLocalCleanupError)) throw new Error('Expected retryable Account deletion cleanup');
             expect(erasures).toEqual([homeA.serverUrl]);
             await act(async () => { await profiles.setActiveServerId(homeB.id, { scope: 'device' }); await auth.refreshFromActiveServer(); });
             expect(getCurrentAuth()?.credentials).toEqual(other);
-            await act(async () => { await expect((failure as AccountDeletedLocalCleanupError).retryLocalCleanup()).resolves.toEqual({ kind: 'completed' }); });
+            await act(async () => { await expect(failure.retryLocalCleanup()).resolves.toEqual({ kind: 'completed' }); });
             expect(erasures).toEqual([homeA.serverUrl]);
             expect(await TokenStorage.getCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.id })).toBeNull();
             expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.id })).toEqual(other);

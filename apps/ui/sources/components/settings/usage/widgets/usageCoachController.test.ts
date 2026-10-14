@@ -7,11 +7,13 @@ import {
   getUsageQueryKey,
   normalizeUsageQuery,
 } from '@happier-dev/protocol/inputs/usageQuery';
-import { evaluateUsageCoach } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
+import { evaluateUsageCoach, applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
+import { UsageCoachPreferencesV1Schema } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createUsageCoachController } from './usageCoachController';
+import { projectUsageCoachFindings } from './usageCoachPresentation';
 
 const ANCHOR = 'usage.exampleCoachSetting';
 const PREFERENCES = 'usage.coachPreferences';
@@ -181,6 +183,23 @@ function harness(options: Readonly<{ approve?: boolean }> = {}) {
 }
 
 describe('Usage Coach widget controller', () => {
+  it('shows refreshed canonical findings after snooze expiry or an external restore in the same mount', async () => {
+    const { controller, store } = harness();
+    const rows = (nowMs: number) => projectUsageCoachFindings(applyUsageCoachPreferences(evaluation,
+      UsageCoachPreferencesV1Schema.parse(store.get(PREFERENCES)), nowMs).findings, controller.getSnapshot(), nowMs);
+    try {
+      expect((await controller.snooze(query, finding.evidenceKey, 5000)).ok).toBe(true);
+      expect(rows(4999).visible).toEqual([]);
+      expect(rows(5000).visible.map(row => row.evidenceKey)).toEqual([finding.evidenceKey]);
+      await controller.snooze(query, finding.evidenceKey, 9000);
+      store.set(PREFERENCES, { v: 1, suppressions: [] });
+      expect(rows(5001).visible.map(row => row.evidenceKey)).toEqual([finding.evidenceKey]);
+      await controller.dismiss(query, finding.evidenceKey);
+      expect(rows(10000).visible).toEqual([]);
+      store.set(PREFERENCES, { v: 1, suppressions: [] });
+      expect(rows(10001).visible.map(row => row.evidenceKey)).toEqual([finding.evidenceKey]);
+    } finally { controller.dispose(); }
+  });
   it('keeps digest opt-in within the captured Account and refuses an invalid Automation destination', async () => {
     const { controller, retire } = harness();
     const suggestion = resolveUsagePageAggregation({ queries: [query] }).results[0]!.coach!.digestSuggestion!;
@@ -240,7 +259,7 @@ describe('Usage Coach widget controller', () => {
     expect(controller.getSnapshot()).toMatchObject({ applied: [], error: { evidenceKey: finding.evidenceKey }, pending: [] });
   });
 
-  it('dismisses and snoozes the exact evidence through Account preferences and hides it in this mount', async () => {
+  it('dismisses and snoozes the exact evidence through Account preferences', async () => {
     const { controller, store } = harness();
     expect((await controller.dismiss(query, finding.evidenceKey)).ok).toBe(
       true,
@@ -248,9 +267,6 @@ describe('Usage Coach widget controller', () => {
     expect(store.get(PREFERENCES)).toMatchObject({
       suppressions: [{ kind: 'dismissed', evidenceKey: finding.evidenceKey }],
     });
-    expect(controller.getSnapshot().hiddenEvidenceKeys).toEqual([
-      finding.evidenceKey,
-    ]);
     expect((await controller.snooze(query, finding.evidenceKey, 5000)).ok).toBe(
       true,
     );
@@ -264,7 +280,6 @@ describe('Usage Coach widget controller', () => {
     await controller.dismiss(query, finding.evidenceKey);
     expect((await controller.dismiss(query, finding.evidenceKey, false)).ok).toBe(true);
     expect(store.get(PREFERENCES)).toMatchObject({ suppressions: [] });
-    expect(controller.getSnapshot().hiddenEvidenceKeys).toEqual([]);
   });
 
   it('drops a late result once the captured Account retires', async () => {

@@ -1,11 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import {
-    classifyLiveActivityApnsDeliveryResponse,
-    HAPPIER_FOCUS_LIVE_ACTIVITY_NAME,
-    LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES,
-    LiveActivityRemoteUpdateRequestV1Schema,
-} from "@happier-dev/protocol";
+import { classifyLiveActivityApnsDeliveryResponse } from '@happier-dev/protocol/activity/live/apnsDelivery';
+import { HAPPIER_FOCUS_LIVE_ACTIVITY_NAME, LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES, LiveActivityRemoteUpdateRequestV1Schema } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import { z } from "zod";
 
 import { buildDirectApnsLiveActivityHttp2Request } from "@/app/activity/liveActivities/providers/directApnsLiveActivityProvider";

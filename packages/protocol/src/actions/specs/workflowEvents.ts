@@ -1,19 +1,19 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { AutomationEligibleEventsCatalogV1Schema } from '../../daemon/automationEligibleEvents.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
-export const WorkflowEventsListInputV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
-  serverId: z.string().trim().min(1).optional(),
-}).strict());
+export const WorkflowEventsListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type WorkflowEventsListInputV1 = z.output<typeof WorkflowEventsListInputV1Schema>;
 
 /** Current declarations and setup facts, not configured source instances or source custody admission. */
-export const WorkflowEventsListOutputV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
+export const WorkflowEventsListOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
   events: AutomationEligibleEventsCatalogV1Schema,
-}).strict());
+}));
 export type WorkflowEventsListOutputV1 = z.output<typeof WorkflowEventsListOutputV1Schema>;
 
 export const WORKFLOW_EVENT_CATALOG_ACTION_SPECS_V1 = [{

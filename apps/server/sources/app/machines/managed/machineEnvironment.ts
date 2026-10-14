@@ -1,10 +1,7 @@
-import {
-    MachineEnvironmentApplyInputV1Schema, MachineEnvironmentReportInputV1Schema,
-    MachineEnvironmentResolveResultV1Schema, ManagedMachineEnvironmentSetupV1Schema,
-    ManagedMutationInputV1Schema, createStoredReadSchema, parseSavedSecretRefV1,
-    type MachineEnvironmentApplyInputV1, type MachineEnvironmentReportInputV1,
-    type ManagedMachineActionInputV1, type ManagedMachineV1,
-} from '@happier-dev/protocol';
+import { MachineEnvironmentApplyInputV1Schema, MachineEnvironmentReportInputV1Schema, MachineEnvironmentResolveResultV1Schema, ManagedMutationInputV1Schema, type MachineEnvironmentApplyInputV1, type MachineEnvironmentReportInputV1, type ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineEnvironmentSetupV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { inTx, type Tx } from '@/storage/inTx';
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';

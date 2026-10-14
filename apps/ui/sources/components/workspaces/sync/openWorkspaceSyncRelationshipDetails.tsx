@@ -11,6 +11,7 @@ import {
 } from './WorkspaceSyncConflictDetailsView';
 import { createWorkspaceSyncConflictDetailsResource } from './workspaceSyncConflictDetailsTab';
 import { formatWorkspaceSyncRelationshipTitle } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type WorkspaceSyncRelationshipDetailsModalProps = CustomModalInjectedProps & Readonly<{
     resource: WorkspaceSyncConflictDetailsResource;
@@ -39,7 +40,7 @@ export function openWorkspaceSyncConflictDetails(resource: WorkspaceSyncConflict
             // scroller traps narrow/large-text content and can strand actions.
             bodyScroll: 'none',
             testID: 'workspace-sync-relationship-details-modal',
-            dimensions: { size: 'md', width: 640, maxHeightRatio: 0.92 },
+            dimensions: { size: 'md', width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92 },
         },
     });
 }

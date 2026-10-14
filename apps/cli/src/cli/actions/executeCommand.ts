@@ -486,6 +486,28 @@ export async function runCompiledActionCliCommand(params: Readonly<{
     if (observation) process.removeListener('SIGINT', onInterrupt);
   }
 
+  const payload = result.ok ? unwrapCliActionSuccessPayload(result.result) : undefined;
+  if (result.ok) {
+    if (await tryHandleApprovalRequestCreated({ envelopeKind: kind, json, result: payload,
+      executionPlacement: resolveActionExecutionPlacementForInput(command.spec, input) })) return;
+    // The Action succeeded; its outcome union may still report a pending or
+    // refused operation. Classify that canonical payload before generic nested
+    // failure normalization discards the domain-specific receipt.
+    const classified = presentation?.classifyResult?.(payload, context) ?? null;
+    if (classified) {
+      await reportFailure({
+        json,
+        kind,
+        failure: classified,
+        extraFields: presentation?.failureFields?.(classified, context) ?? null,
+        humanSuffix: presentation?.describeFailure?.(classified, context) ?? null,
+        unexpected: false,
+        help: null,
+      });
+      return;
+    }
+  }
+
   const normalized = normalizeActionExecuteResult(result);
   if (!normalized.ok) {
     const failure: ActionCliFailure = {
@@ -506,26 +528,17 @@ export async function runCompiledActionCliCommand(params: Readonly<{
     return;
   }
 
-  const payload = unwrapCliActionSuccessPayload(normalized.data);
-  if (await tryHandleApprovalRequestCreated({ envelopeKind: kind, json, result: payload,
-    executionPlacement: resolveActionExecutionPlacementForInput(command.spec, input) })) return;
-  // The Action succeeded; the operation may still not have taken effect. The
-  // presenter classifies that once, over the canonical payload, and the result
-  // is reported with the same vocabulary as every other failure.
-  const classified = presentation?.classifyResult?.(payload, context) ?? null;
-  if (classified) {
-    await reportFailure({
-      json,
-      kind,
-      failure: classified,
-      extraFields: presentation?.failureFields?.(classified, context) ?? null,
-      humanSuffix: presentation?.describeFailure?.(classified, context) ?? null,
-      unexpected: false,
-      help: null,
-    });
-    return;
+  if (params.consumeSuccess) {
+    try {
+      if (await params.consumeSuccess(payload)) return;
+    } catch (error) {
+      const mapped = mapUnknownErrorToControlError(error);
+      await reportFailure({ json, kind,
+        failure: { errorCode: mapped.code, ...(mapped.message ? { errorMessage: mapped.message } : {}) },
+        extraFields: null, humanSuffix: null, unexpected: mapped.unexpected, help: null });
+      return;
+    }
   }
-  if (params.consumeSuccess && await params.consumeSuccess(payload)) return;
   if (presentation?.presentSuccess) {
     try {
       if (await presentation.presentSuccess(payload, context)) return;

@@ -1,7 +1,7 @@
 import { afterTx, type Tx } from "@/storage/inTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
-import { projectAccountNameToLegacyFieldsV1 } from "@happier-dev/protocol";
+import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import {
     buildSessionSharedUpdate,
     buildSessionShareRevokedUpdate,

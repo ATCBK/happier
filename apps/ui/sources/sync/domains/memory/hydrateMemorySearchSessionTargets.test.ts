@@ -5,6 +5,11 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, sealEncryptedDataKeyEnvelopeV1,
+    sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol';
+import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { encodeBase64 } from '@/encryption/base64';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -70,6 +75,60 @@ function sessionReads(options: Readonly<{
 }
 
 describe('hydrateMemorySearchSessionTargets', () => {
+    it.each([0, 1] as const)('authorizes indexed encrypted message hits through the exact Account reader and real metadata codec (layout %s)', async (layout) => {
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const secret = new Uint8Array(32).fill(7);
+        const sessionKey = new Uint8Array(32).fill(8);
+        const writer = await Encryption.create(secret);
+        await writer.initializeSessions(new Map([['local-1', sessionKey]]));
+        const seed = createSessionFixture({ id: 'local-1', serverId: 'server-a', seq: 22 });
+        const owner = createSessionOwnerMetadataV1({ metadata: seed.metadata });
+        if (!owner.ok) throw new Error('Expected canonical fixture owner metadata');
+        const dataEncryptionKey = encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+            dataKey: sessionKey, recipientPublicKey: writer.contentDataKey,
+            randomBytes: length => new Uint8Array(length).fill(3),
+        }), 'base64');
+        const record = SessionCurrentProjectionRecordV1Schema.parse({
+            id: seed.id, seq: seed.seq, createdAt: seed.createdAt, updatedAt: seed.updatedAt,
+            active: seed.active, activeAt: seed.activeAt, archivedAt: null,
+            encryptionMode: 'e2ee', metadataLayoutVersion: layout,
+            metadata: await writer.getSessionEncryption(seed.id)!.encryptRaw(layout === 1
+                ? projectSessionSharedMetadataV1({ metadata: seed.metadata }) : seed.metadata),
+            ...(layout === 1 ? { ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({
+                material: { type: 'legacy', secret }, ownerMetadata: owner.ownerMetadata,
+                randomBytes: length => new Uint8Array(length).fill(4),
+            }) } : {}),
+            metadataVersion: seed.metadataVersion, dataEncryptionKey,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: seed.access!.capabilities },
+            responsibleAccountId: null, responsibleAccount: null, share: null,
+            agentState: null, agentStateVersion: 0, pendingCount: 0, pendingVersion: 0,
+        });
+        const reader = await Encryption.create(secret);
+        const authority: ServerAccountRequestAuthority = {
+            ...createRequestAuthority(async path => {
+                if (path === '/v1/account/encryption/currentness') return Response.json(AccountEncryptionCurrentnessResponseSchema.parse({
+                    mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing-current', contentKeyFingerprint: 'content-current',
+                    updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' },
+                }));
+                if (path.startsWith('/v2/sessions/local-1')) return Response.json({ session: record });
+                throw new Error(`Unexpected encrypted Session request: ${path}`);
+            }),
+            context: { scope: 'scoped', timeoutMs: 5_000, targetServerId: 'server-a',
+                targetServerUrl: 'https://server-a.example.test', targetAccountId: 'account-a', token: 'token-a',
+                credentials: { token: 'token-a', secret: encodeBase64(secret, 'base64') }, encryption: reader },
+        };
+        const hit = { sessionId: seed.id, seqFrom: 3, seqTo: 22,
+            createdAtFromMs: 10, createdAtToMs: 20, summary: 'Amber orchard', score: 0.5 };
+        const result = await authorizeMemorySearchResult({
+            result: MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [hit] }),
+            serverId: 'server-a', accountId: 'account-a', authority,
+            accountLifetime: { isCurrent: () => true, onRetire: () => ({ dispose: () => undefined }) },
+            readSessionForServerScope: readMemorySearchSessionForServerScope, concurrencyLimit: 2,
+        });
+        expect(MemorySearchResultV1Schema.parse(result)).toEqual({ v: 1, ok: true, hits: [hit] });
+        expect(findSessionListLookupSession(storage.getState(), { serverId: 'server-a', sessionId: seed.id })?.session)
+            .toMatchObject({ seq: 22, metadata: seed.metadata, metadataLayoutVersion: layout, encryptedContentAvailability: 'ready' });
+    });
     it('keeps daemon-authorized document hits outside Session visibility hydration', async () => {
         const document = {
             type: 'artifact' as const, ref: { kind: 'doc' as const, serverId: 'server-a', artifactId: 'doc-1' },

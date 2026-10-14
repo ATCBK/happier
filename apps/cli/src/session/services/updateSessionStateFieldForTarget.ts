@@ -62,6 +62,9 @@ function resolveMetadataPortFailureCode(
     ? (error as { code: string }).code
     : '';
   if (code === 'metadata_tuple_conflict') return 'conflict';
+  if (code === 'account_encryption_currentness_unavailable'
+    || code === 'metadata_privacy_upgrade_required'
+    || code === 'session_publisher_authority_lost') return code;
   if (code === 'unsupported' || code === 'conflict' || code === 'forbidden' || code === 'unknown_error') {
     return code;
   }
@@ -128,11 +131,11 @@ export async function updateSessionStateFieldForTarget<F extends SessionStateFie
           portFailureCode = resolveMetadataPortFailureCode(error);
           return {
             ok: false,
-            reason: portFailureCode === 'session_not_found'
-              || portFailureCode === 'session_id_ambiguous'
-              || portFailureCode === 'encryption_material_unavailable'
-              ? 'unknown_error'
-              : portFailureCode,
+            reason: portFailureCode === 'unsupported'
+              || portFailureCode === 'conflict'
+              || portFailureCode === 'forbidden'
+              ? portFailureCode
+              : 'unknown_error',
           };
         }
       },

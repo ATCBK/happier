@@ -18,6 +18,8 @@
  * from a UI/plugin/RPC caller and never exposes raw pid/port authority.
  */
 
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
+
 export type TerminalProcessRegistration = Readonly<{
     workspacePath: string;
     sessionId?: string;
@@ -99,6 +101,7 @@ export function createTerminalProcessRegistry(): TerminalProcessRegistry {
             for (const pid of pids) {
                 keyByPid.set(pid, input.terminalKey);
             }
+            invalidateProcessLaunchDiscovery();
         },
         unregister(input) {
             const existing = recordsByKey.get(input.terminalKey);

@@ -1,15 +1,6 @@
-import {
-    PEER_MEDIATION_OBSERVABILITY_DELTA_SOCKET_EVENT,
-    PEER_MEDIATION_OBSERVABILITY_SNAPSHOT_SOCKET_EVENT,
-    PEER_MEDIATION_OBSERVABILITY_SUBSCRIBE_SOCKET_EVENT,
-    PEER_MEDIATION_OBSERVABILITY_UNSUBSCRIBE_SOCKET_EVENT,
-    FeaturesResponseSchema,
-    PeerMediationObservabilityDeltaV1Schema,
-    PeerMediationObservabilitySnapshotV1Schema,
-    PeerMediationObservabilitySubscribeRequestV1Schema,
-    PeerMediationObservabilityUnsubscribeRequestV1Schema,
-    readServerEnabledBit,
-} from "@happier-dev/protocol";
+import { PEER_MEDIATION_OBSERVABILITY_DELTA_SOCKET_EVENT, PEER_MEDIATION_OBSERVABILITY_SNAPSHOT_SOCKET_EVENT, PEER_MEDIATION_OBSERVABILITY_SUBSCRIBE_SOCKET_EVENT, PEER_MEDIATION_OBSERVABILITY_UNSUBSCRIBE_SOCKET_EVENT, PeerMediationObservabilityDeltaV1Schema, PeerMediationObservabilitySnapshotV1Schema, PeerMediationObservabilitySubscribeRequestV1Schema, PeerMediationObservabilityUnsubscribeRequestV1Schema } from '@happier-dev/protocol/machines/peer/mediation/observability/v1';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 
 import { readHomeEffectiveEnv, resolveServerFeaturesForGating } from "@/app/features/catalog/serverFeatureGate";
 

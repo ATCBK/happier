@@ -1,4 +1,4 @@
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import { isServerOwnerUserId, resolveServerOwnerUserIds } from "@/app/features/serverOwners";
 import { db } from "@/storage/db";

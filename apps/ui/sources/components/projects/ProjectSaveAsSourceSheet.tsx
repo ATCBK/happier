@@ -12,6 +12,7 @@ import { t } from '@/text';
 
 import { ProjectSourceDetail } from './sources/ProjectSourceDetail';
 import type { ProjectsListModel } from './useProjectsListModel';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type SaveAsSourceHost = Pick<
   ProjectsListModel,
@@ -132,7 +133,7 @@ export function useProjectRowCreationActions(host: SaveAsSourceHost) {
             testID: 'projects-save-as-source',
             scrollHost: 'body',
             bodyScroll: 'none',
-            dimensions: { width: 640, maxHeightRatio: 0.86, size: 'lg' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'lg' },
             phonePresentation: 'sheet',
           },
           onRequestClose: dismissSourceCreation,

@@ -63,6 +63,13 @@ function matchesPattern(pattern: readonly string[], segments: readonly string[])
 const translate = (key: string) => key;
 
 describe('settingsRouteRegistry', () => {
+    it('opens Found in the MCP collection without interpreting it as a server identity', () => {
+        expect(resolveSettingsNestedRouteName('mcp', '/settings/mcp/found')).toBe('found');
+        expect(resolveSettingsRouteParentPathname('/settings/mcp/found')).toBe('/settings/mcp');
+        const files = listSettingsRouteFiles();
+        expect(files).toContain('mcp/found');
+        expect(files).not.toContain('mcp/on-machine');
+    });
     it('resolves saved provisioner and preset destinations inside the Machines collection', () => {
         expect(resolveSettingsNestedRouteName('machines', '/settings/machines/add/custom.compute%3Avm'))
             .toBe('add/[provisioner]');
@@ -77,7 +84,7 @@ describe('settingsRouteRegistry', () => {
         expect(definitions.map(({ name }) => name).filter((name) => !rootScreens.has(name))).toEqual([]);
         expect(definitions.find(({ name }) => name === 'prompts')?.options.headerTitle).toBe('settings.prompts');
         // The Slot layout still resolves descendant titles and back targets from this same registry.
-        expect(resolveSettingsRouteTitleKey('/settings/prompts/assets')).toBe('promptLibrary.externalAssets');
+        expect(resolveSettingsRouteTitleKey('/settings/prompts/assets')).toBe('capabilities.skillsFound.title');
         expect(resolveSettingsRouteTitleKey('/settings/prompts/docs/doc-1')).toBe('promptLibrary.editPrompt');
         expect(resolveSettingsRouteParentPathname('/settings/prompts/docs/doc-1')).toBe('/settings/prompts/docs');
     });

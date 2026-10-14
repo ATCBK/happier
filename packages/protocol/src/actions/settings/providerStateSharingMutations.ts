@@ -1,11 +1,11 @@
 import type { AccountSettings } from '../../account/settings/accountSettings.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const AgentProviderStateSharingChangeV1Schema = z.object({
-    agentId: z.string().trim().min(1),
-    configMode: z.enum(['linked', 'copied', 'isolated']).optional(),
-    stateMode: z.enum(['shared', 'isolated']).optional(),
-}).strict().refine(value => value.configMode !== undefined || value.stateMode !== undefined);
+export const AgentProviderStateSharingChangeV1Schema = z.strictObject({
+    agentId: z.string().check(z.trim(), z.minLength(1)),
+    configMode: z.optional(z.enum(['linked', 'copied', 'isolated'])),
+    stateMode: z.optional(z.enum(['shared', 'isolated'])),
+}).check(z.refine(value => value.configMode !== undefined || value.stateMode !== undefined));
 
 type SharingSettings = AccountSettings['connectedServicesProviderStateSharingSettingsV1'];
 export type ProviderStateSharingSettingsMutationV1 = (current: SharingSettings) => SharingSettings | null;

@@ -16,7 +16,7 @@ import { endpointProtocolLabel } from '@/providers/connection/endpointProtocolLa
 import { ProviderIcon } from '@/providers/connection/ProviderIcon';
 import { t } from '@/text';
 import { ProviderErrorItems } from '../ProviderErrorItems';
-import { ProviderApprovalPendingBanner } from '../ProviderPageParts';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { ProviderKeyEntryItem } from './ProviderKeyEntryItem';
 import { ProviderFieldRow } from './ProviderFieldRow';
 
@@ -121,10 +121,11 @@ export function BuiltInProviderAuthoringView(props: Readonly<{
                 }}
             />
             {props.pendingApproval ? (
-                <ProviderApprovalPendingBanner
-                    testID="settings-provider-authoring-approval"
-                    providerName={props.providerName ?? t('settingsProviders.authoring.providerTitle')}
-                    onOpen={props.pendingApproval.onOpen}
+                <ActionApprovalPendingNotice presentation="banner" testID="settings-provider-authoring-approval"
+                    message={t('settingsProvidersCollection.approvalPendingTitle')}
+                    description={t('settingsProvidersCollection.approvalPendingDescription', { provider: props.providerName ?? t('settingsProviders.authoring.providerTitle') })}
+                    openLabel={t('settingsProvidersCollection.openApproval')}
+                    onOpenApproval={props.pendingApproval.onOpen}
                 />
             ) : null}
             {props.error ? <ItemGroup><ProviderErrorItems error={props.error} retry={props.errorRetry} /></ItemGroup> : null}

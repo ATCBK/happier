@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z as mini } from 'zod/mini';
 import {
     SessionModelSelectionV1Schema,
     SessionInitialTriggerV1Schema,
@@ -18,6 +19,7 @@ import {
     buildNewSessionAuthoringDraftFromTempData,
     buildSessionAuthoringDraftFromServerStartSpawnDraftV1,
     buildSessionServerStartSpawnDraftV1FromAuthoringDraft,
+    applySessionServerStartSpawnDraftEdits,
     buildPersistedNewSessionDraftFromAuthoringDraft,
     buildSessionSpawnNewInputV2FromAuthoringDraft,
     buildManagedAcquireAgentStartV1FromAuthoringDraft,
@@ -86,6 +88,45 @@ function intervalAutomationDraft(params: Readonly<{
 }
 
 describe('sessionAuthoringDraftAdapters', () => {
+    it('preserves every unedited strict recipe field while authoring Agent, directory and tool or folder edits', () => {
+        const seed = SessionServerStartSpawnDraftV1Schema.parse({
+            executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+            directory: { kind: 'path', path: '/before' },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            modelSelection: modelSelection('agent:happier.agent.claude/claude', 'sonnet'),
+            profileId: 'profile', roleId: 'intake', title: 'Intake', memoryEnabled: false,
+            allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny',
+            organizationPlacement: { folderId: 'intake', tagIds: ['mail'] },
+            permissionMode: 'read-only', agentModeId: 'plan',
+            configuration: { mode: { value: 'plan', updatedAtMs: 7 }, model: { value: 'sonnet', updatedAtMs: 8 },
+                permissionIntent: { value: 'read-only', updatedAtMs: 9 },
+                options: { reasoning: { value: 'high', updatedAtMs: 10 } },
+                providerSessionResume: { kind: 'provider_session.v1', providerSessionId: 'native-session' } },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false,
+                forceIncludeServerIds: ['wilson-intake'], forceExcludeServerIds: [] } },
+            connectedServices: { v: 2, bindingsByServiceId: {
+                'happier.service.github/github': { source: 'connected', selection: 'profile', profileId: 'github' } } },
+            terminal: { mode: 'tmux', tmux: { sessionName: 'intake' } },
+            transcriptStorage: 'direct', primaryTeamId: 'team',
+        });
+        const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.agent', localId: 'review' } };
+        const edited = applySessionServerStartSpawnDraftEdits({
+            draft: seed, edits: { agentTarget, directory: { kind: 'path', path: '/after' } }, configurationUpdatedAtMs: 99,
+        });
+        expect(SessionServerStartSpawnDraftV1Schema.parse(edited)).toEqual({
+            ...seed, agentTarget, directory: { kind: 'path', path: '/after' },
+            modelSelection: { ...seed.modelSelection, ref: { ...seed.modelSelection?.ref, agentTargetKey: 'agent:acme.agent/review' } },
+        });
+        const restricted = applySessionServerStartSpawnDraftEdits({
+            draft: edited, edits: { allowedTools: [], unlistedTools: 'ask',
+                organizationPlacement: { folderId: null, tagIds: ['mail'] }, permissionMode: 'default' },
+            configurationUpdatedAtMs: 100,
+        });
+        expect(restricted).toEqual({ ...edited, allowedTools: [], unlistedTools: 'ask',
+            organizationPlacement: { folderId: null, tagIds: ['mail'] }, permissionMode: 'default',
+            configuration: { ...edited.configuration, permissionIntent: { value: 'default', updatedAtMs: 100 } } });
+    });
+
     it('preserves MCP and skill session overrides through persisted drafts and temporary handoffs', () => {
         const capabilitySelection = {
             mcp: { v: 1 as const, managedServersEnabled: true, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] },
@@ -137,7 +178,7 @@ describe('sessionAuthoringDraftAdapters', () => {
         expect(continuation).toEqual(spawnAuthoring);
     });
     it('round-trips initial triggers with the draft and includes them in the atomic spawn input', () => {
-        const initialTriggers = SessionInitialTriggerV1Schema.array().parse([{
+        const initialTriggers = mini.array(SessionInitialTriggerV1Schema).parse([{
             trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'everyMatch' } },
             target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
             executionTarget: { kind: 'session' },

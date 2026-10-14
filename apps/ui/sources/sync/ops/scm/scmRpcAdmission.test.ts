@@ -32,7 +32,7 @@ describe('SCM producer policy admission', () => {
             call: async () => wire,
         });
         expect(response).toBe(wire);
-        if (!response.success || !('snapshot' in response) || !response.snapshot) throw new Error('Expected status snapshot');
+        if (!('success' in response) || !response.success || !('snapshot' in response) || !response.snapshot) throw new Error('Expected status snapshot');
         const mapped = mapProtocolSnapshotToUiSnapshot(response.snapshot, 'machine:/repo');
         expect(mapped.entries).toEqual(ScmStatusSnapshotResponseSchema.parse(wire).snapshot?.entries);
         expect(mapped.hostingProvider).toMatchObject({ urlSafety: { allowedSchemes: ['https:'] } });

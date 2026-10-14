@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type { ActionExecuteFailure, ActionExecuteResult } from '../../actions/actionExecutionResult.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from '../../actions/executor/types.js';
@@ -33,109 +33,109 @@ import { McpImportPreviewV1Schema, McpImportCommitV1Schema, McpImportValuesV1Sch
 import { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '../../account/settings/personalSavedSecretActionsV1.js';
 export { MCP_SERVER_ACTION_IDS_V1, isMcpServerActionIdV1, type McpServerActionIdV1 } from './serverActionIdsV1.js';
 
-const revision = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const revision = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 const catalogRevision = lazyZodSchema(() => z.union([revision, z.literal('absent')]));
-const identity = lazyZodSchema(() => z.string().min(1));
-const createItem = lazyZodSchema(() => z.object({ entry: McpServerCatalogEntryV1Schema,
-  where: ReachRulesChangeV1Schema.optional() }).strict());
-const serverWrite = lazyZodSchema(() => z.object({ expectedRevision: catalogRevision,
-  entry: McpServerCatalogEntryV1Schema, configOverrides: z.array(McpServerConfigOverrideV1Schema).optional() }).strict());
+const identity = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const createItem = lazyZodSchema(() => z.strictObject({ entry: McpServerCatalogEntryV1Schema,
+  where: z.optional(ReachRulesChangeV1Schema) }));
+const serverWrite = lazyZodSchema(() => z.strictObject({ expectedRevision: catalogRevision,
+  entry: McpServerCatalogEntryV1Schema, configOverrides: z.optional(z.array(McpServerConfigOverrideV1Schema)) }));
 const serverCreate = lazyZodSchema(() => z.union([
-  createItem.extend({ expectedRevision: catalogRevision }).strict(),
-  z.object({ expectedRevision: catalogRevision, entries: z.array(createItem) }).strict(),
-  z.object({ expectedRevision: catalogRevision, from: z.object({ registry: RegistryItemPointerV1Schema }).strict(),
-    name: z.string().optional(), title: z.string().optional(), inputs: z.record(z.string(), ValueRefV1Schema).optional(),
-    remote: z.object({ auth: z.object({ kind: z.literal('oauth') }).strict() }).strict().optional(),
-    where: ReachRulesChangeV1Schema.optional() }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(createItem, { expectedRevision: catalogRevision })),
+  z.strictObject({ expectedRevision: catalogRevision, entries: z.array(createItem) }),
+  z.strictObject({ expectedRevision: catalogRevision, from: z.strictObject({ registry: RegistryItemPointerV1Schema }),
+    name: z.optional(z.string()), title: z.optional(z.string()), inputs: z.optional(z.record(z.string(), ValueRefV1Schema)),
+    remote: z.optional(z.strictObject({ auth: z.strictObject({ kind: z.literal('oauth') }) })),
+    where: z.optional(ReachRulesChangeV1Schema) }),
 ]));
 const serverUpdate = lazyZodSchema(() => z.union([serverWrite,
-  z.object({ expectedRevision: catalogRevision, serverId: identity, from: z.object({ registry: RegistryItemPointerV1Schema }).strict(),
-    inputs: z.record(z.string(), ValueRefV1Schema).optional() }).strict(),
+  z.strictObject({ expectedRevision: catalogRevision, serverId: identity, from: z.strictObject({ registry: RegistryItemPointerV1Schema }),
+    inputs: z.optional(z.record(z.string(), ValueRefV1Schema)) }),
 ]));
 const serverListEntry = lazyZodSchema(() => {
   const { id, name, title, description, transport, createdAt, updatedAt } = McpServerCatalogEntryV1Schema.shape;
-  return z.object({ id, name, title, description, transport, createdAt, updatedAt }).strict();
+  return z.strictObject({ id, name, title, description, transport, createdAt, updatedAt });
 });
 const bindingListEntry = McpServerRuleV1Schema;
-const listCatalog = lazyZodSchema(() => z.object({ v: McpServerCatalogV1Schema.shape.v,
+const listCatalog = lazyZodSchema(() => z.strictObject({ v: McpServerCatalogV1Schema.shape.v,
   servers: z.array(z.union([serverListEntry, McpPluginItemMetadataV1Schema])), bindings: z.array(bindingListEntry),
-  pluginItemsStatus: z.enum(['ready', 'unavailable']).optional() }).strict());
+  pluginItemsStatus: z.optional(z.enum(['ready', 'unavailable'])) }));
 const listSnapshot = lazyZodSchema(() => z.discriminatedUnion('status', [
-  McpServerCatalogSnapshotV1Schema.options[0], McpServerCatalogSnapshotV1Schema.options[1],
-  McpServerCatalogSnapshotV1Schema.options[2].extend({ catalog: listCatalog }),
-  McpServerCatalogSnapshotV1Schema.options[3].extend({ catalog: listCatalog }),
+  McpServerCatalogSnapshotV1Schema._zod.def.options[0], McpServerCatalogSnapshotV1Schema._zod.def.options[1],
+  z.extend(McpServerCatalogSnapshotV1Schema._zod.def.options[2], { catalog: listCatalog }),
+  z.extend(McpServerCatalogSnapshotV1Schema._zod.def.options[3], { catalog: listCatalog }),
 ]));
 const readResult = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('plugin'), server: McpPluginItemMetadataV1Schema, bindings: z.array(McpServerRuleV1Schema),
-    settings: McpServerPluginSettingsV1Schema.optional(), revision: catalogRevision }).strict(),
+  z.strictObject({ status: z.literal('plugin'), server: McpPluginItemMetadataV1Schema, bindings: z.array(McpServerRuleV1Schema),
+    settings: z.optional(McpServerPluginSettingsV1Schema), revision: catalogRevision }),
   McpServerCatalogSnapshotV1Schema,
-  z.object({ status: z.literal('present'), server: McpServerCatalogEntryV1Schema,
+  z.strictObject({ status: z.literal('present'), server: McpServerCatalogEntryV1Schema,
     bindings: z.array(McpServerRuleV1Schema), revision: catalogRevision,
-    authority: z.enum(['active', 'inactive']), complete: z.boolean(), diagnostics: z.array(McpServerCatalogDiagnosticV1Schema) }).strict(),
-  z.object({ status: z.literal('not-found'), serverId: identity, revision: catalogRevision }).strict(),
+    authority: z.enum(['active', 'inactive']), complete: z.boolean(), diagnostics: z.array(McpServerCatalogDiagnosticV1Schema) }),
+  z.strictObject({ status: z.literal('not-found'), serverId: identity, revision: catalogRevision }),
 ]));
 
-const toolsListResult = lazyZodSchema(() => z.object({
-  serverId: identity, revision: catalogRevision, snapshot: McpServerToolsSnapshotV1Schema.optional(),
-  settings: z.object({ default: McpServerToolPolicyV1Schema.shape.default,
-    tools: McpToolSettingsV1Schema }).strict(),
-  tools: z.array(McpServerToolsSnapshotV1Schema.shape.tools.element.extend({
+const toolsListResult = lazyZodSchema(() => z.strictObject({
+  serverId: identity, revision: catalogRevision, snapshot: z.optional(McpServerToolsSnapshotV1Schema),
+  settings: z.strictObject({ default: McpServerToolPolicyV1Schema.shape.default,
+    tools: McpToolSettingsV1Schema }),
+  tools: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerToolsSnapshotV1Schema.shape.tools._zod.def.element, {
     setting: z.union([McpToolSettingV1Schema, z.literal('inherit')]), source: z.enum(['tool', 'server_default']),
-  }).strict()),
-  tokens: z.number().nonnegative().nullable(),
-  perAgent: z.object({ status: z.enum(['ready', 'unavailable']), machineId: identity.optional(), agents: z.array(z.object({
-    agentId: identity, approval: z.enum(['native', 'host']).nullable(), off: z.enum(['hidden', 'blocked']).nullable(),
-    loading: z.enum(['every_turn', 'on_demand']), tokens: z.number().nonnegative().nullable(),
-  }).strict()) }).strict(),
-}).strict());
+  }))),
+  tokens: z.nullable(z.number().check(z.nonnegative())),
+  perAgent: z.strictObject({ status: z.enum(['ready', 'unavailable']), machineId: z.optional(identity), agents: z.array(z.strictObject({
+    agentId: identity, approval: z.nullable(z.enum(['native', 'host'])), off: z.nullable(z.enum(['hidden', 'blocked'])),
+    loading: z.enum(['every_turn', 'on_demand']), tokens: z.nullable(z.number().check(z.nonnegative())),
+  })) }),
+}));
 
 /** Semantic requests are closed and use the one catalog revision, never item-local versions. */
 export const MCP_SERVER_ACTION_INPUT_SCHEMAS_V1 = {
-  'mcp.servers.list': lazyZodSchema(() => z.object({}).strict()),
-  'mcp.servers.read': lazyZodSchema(() => z.object({ serverId: identity }).strict()),
-  'mcp.servers.tools.list': lazyZodSchema(() => z.object({ serverId: identity }).strict()),
-  'mcp.servers.tools.set': lazyZodSchema(() => McpServerToolSettingsPatchV1Schema.extend({ serverId: identity }).strict()),
+  'mcp.servers.list': lazyZodSchema(() => z.strictObject({})),
+  'mcp.servers.read': lazyZodSchema(() => z.strictObject({ serverId: identity })),
+  'mcp.servers.tools.list': lazyZodSchema(() => z.strictObject({ serverId: identity })),
+  'mcp.servers.tools.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerToolSettingsPatchV1Schema, { serverId: identity }))),
   'mcp.servers.create': serverCreate,
   'mcp.servers.update': serverUpdate,
-  'mcp.servers.duplicate': lazyZodSchema(() => createItem.extend({ expectedRevision: catalogRevision, serverId: identity }).strict()),
-  'mcp.servers.delete': lazyZodSchema(() => z.object({ expectedRevision: catalogRevision,
-    serverId: identity, removeBindings: z.boolean() }).strict()),
+  'mcp.servers.duplicate': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(createItem, { expectedRevision: catalogRevision, serverId: identity }))),
+  'mcp.servers.delete': lazyZodSchema(() => z.strictObject({ expectedRevision: catalogRevision,
+    serverId: identity, removeBindings: z.boolean() })),
   'mcp.servers.test': lazyZodSchema(() => z.union([
-    DaemonMcpServersTestAuthoringRequestSchema.options[0].strict(), DaemonMcpServersTestAuthoringRequestSchema.options[1].strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[0]), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[1]),
   ])),
-  'mcp.found.list': lazyZodSchema(() => DaemonMcpServersDetectRequestSchema.strict().extend({ machineId: identity.optional() })),
-  'mcp.servers.import': lazyZodSchema(() => z.object({ expectedRevision: catalogRevision.optional(),
-    source: z.discriminatedUnion('kind', [z.object({ kind: z.literal('paste'), text: z.string() }).strict(),
-      z.object({ kind: z.literal('link'), url: z.string() }).strict()]), dryRun: z.boolean(),
-    values: McpImportValuesV1Schema.optional(), where: ReachRulesChangeV1Schema.optional() }).strict()),
-  'mcp.found.adopt': lazyZodSchema(() => z.object({ expectedRevision: catalogRevision.optional(), machineId: identity,
-    items: z.array(DetectedMcpServerV1Schema), where: ReachRulesChangeV1Schema.optional(),
-    values: z.union([McpImportValuesV1Schema, z.record(z.string(), z.record(z.string(), McpImportValueChoiceV1Schema))]).optional() }).strict()),
-  'mcp.servers.signIn.start': lazyZodSchema(() => z.object({ serverId: identity, stepUp: z.boolean().optional() }).strict()),
+  'mcp.found.list': lazyZodSchema(() => z.extend((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersDetectRequestSchema), { machineId: z.optional(identity) })),
+  'mcp.servers.import': lazyZodSchema(() => z.strictObject({ expectedRevision: z.optional(catalogRevision),
+    source: z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('paste'), text: z.string() }),
+      z.strictObject({ kind: z.literal('link'), url: z.string() })]), dryRun: z.boolean(),
+    values: z.optional(McpImportValuesV1Schema), where: z.optional(ReachRulesChangeV1Schema) })),
+  'mcp.found.adopt': lazyZodSchema(() => z.strictObject({ expectedRevision: z.optional(catalogRevision), machineId: identity,
+    items: z.array(DetectedMcpServerV1Schema), where: z.optional(ReachRulesChangeV1Schema),
+    values: z.optional(z.union([McpImportValuesV1Schema, z.record(z.string(), z.record(z.string(), McpImportValueChoiceV1Schema))])) })),
+  'mcp.servers.signIn.start': lazyZodSchema(() => z.strictObject({ serverId: identity, stepUp: z.optional(z.boolean()) })),
 } as const;
 export const MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'mcp.servers.list': listSnapshot,
   'mcp.servers.read': readResult,
   'mcp.servers.tools.list': toolsListResult,
-  'mcp.servers.tools.set': lazyZodSchema(() => z.object({ revision,
-    previous: McpServerToolSettingsPatchV1Schema.extend({ tools: McpServerToolSettingsPatchV1Schema.shape.tools.unwrap() }).strict(),
-  }).strict()),
+  'mcp.servers.tools.set': lazyZodSchema(() => z.strictObject({ revision,
+    previous: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerToolSettingsPatchV1Schema, { tools: McpServerToolSettingsPatchV1Schema.shape.tools._zod.def.innerType })),
+  })),
   'mcp.servers.create': McpServerCatalogRowMutationResponseV1Schema,
   'mcp.servers.update': McpServerCatalogRowMutationResponseV1Schema,
   'mcp.servers.duplicate': McpServerCatalogRowMutationResponseV1Schema,
   'mcp.servers.delete': lazyZodSchema(() => z.union([McpServerCatalogRowMutationResponseV1Schema,
-    McpServerCatalogRowMutationResponseV1Schema.options[0].extend({ signOut: z.union([
-      z.object({ status: z.literal('revoked'), remoteStatus: z.enum(['remoteRevoked', 'remoteUnsupported', 'remoteNotAttempted']) }).strict(),
-      z.object({ status: z.literal('not_connected') }).strict(),
-      z.object({ status: z.literal('pending') }).strict(),
-    ]) }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerCatalogRowMutationResponseV1Schema._zod.def.options[0], { signOut: z.union([
+      z.strictObject({ status: z.literal('revoked'), remoteStatus: z.enum(['remoteRevoked', 'remoteUnsupported', 'remoteNotAttempted']) }),
+      z.strictObject({ status: z.literal('not_connected') }),
+      z.strictObject({ status: z.literal('pending') }),
+    ]) })),
   ])),
   'mcp.servers.test': DaemonMcpServersTestResponseSchema,
   'mcp.found.list': DaemonMcpServersDetectResponseSchema,
   'mcp.servers.import': lazyZodSchema(() => z.union([McpImportPreviewV1Schema, McpImportCommitV1Schema])),
   'mcp.found.adopt': McpImportCommitV1Schema,
-  'mcp.servers.signIn.start': lazyZodSchema(() => z.object({ attemptId: identity, authorizationUrl: z.url(),
-    expiresAtMs: z.number().int().nonnegative(), machineId: identity }).strict()),
+  'mcp.servers.signIn.start': lazyZodSchema(() => z.strictObject({ attemptId: identity, authorizationUrl: z.url(),
+    expiresAtMs: z.number().check(z.int(), z.nonnegative()), machineId: identity })),
 } as const;
 export type McpServerActionRequestV1 = Readonly<{ actionId: McpServerActionIdV1 | 'mcp.rules.set'; input: unknown; context: ActionExecutorContext }>;
 export type McpServerToolAgentFactV1 = Readonly<{ agentId: string }>
@@ -161,7 +161,7 @@ export type McpServerActionPortsV1 = Readonly<{
 }>;
 
 const catalogFailureCodes = new Set<string>([
-  ...McpServerCatalogSnapshotV1Schema.options[1].shape.reason.options,
+  ...McpServerCatalogSnapshotV1Schema._zod.def.options[1].shape.reason.options,
   'invalid-mutation', 'reference-conflict', 'outcome_unknown', 'server_scope_mismatch',
   'not_authenticated', 'permission_denied', 'admission_unavailable', 'invalid_action_output',
   'machine_unreachable', 'mcp_catalog_unavailable',
@@ -210,6 +210,9 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
       }
       const snapshot = await ports.readCatalog(context);
       if (snapshot.status !== 'ready' || snapshot.authority !== 'active') return { ok: true, result: { ok: false, code: 'catalog_unavailable' } };
+      if (inputRules.expectedRevision !== undefined && inputRules.expectedRevision !== snapshot.revision) {
+        return { ok: true, result: { ok: false, code: 'conflict' } };
+      }
       const ids = inputRules.items.map(item => 'serverId' in item ? item.serverId
         : snapshot.catalog.servers.find(server => server.name === item.name)?.id);
       const pluginAdmissionNeeded = ids.some(id => id !== undefined && isMcpPluginItemIdV1(id) && !snapshot.catalog.servers.some(server => server.id === id));
@@ -264,10 +267,10 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
         // Lists disclose metadata without guessing which literals are secrets.
         result = snapshot.status === 'ready' || snapshot.status === 'partial'
           ? { ...snapshot, catalog: { v: snapshot.catalog.v,
-            servers: [...snapshot.catalog.servers.map(entry => serverListEntry.strip().parse(entry)),
+            servers: [...snapshot.catalog.servers.map(entry => lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(serverListEntry)).parse(entry)),
               ...(pluginItems ?? []).map(item => McpPluginItemMetadataV1Schema.parse(item))],
             ...(ports.readPluginItems ? { pluginItemsStatus: pluginItems === null ? 'unavailable' : 'ready' } : {}),
-            bindings: snapshot.catalog.bindings.map(entry => bindingListEntry.strip().parse(entry)),
+            bindings: snapshot.catalog.bindings.map(entry => lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(bindingListEntry)).parse(entry)),
           } } : snapshot;
         break;
       }

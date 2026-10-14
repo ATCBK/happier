@@ -15,8 +15,8 @@ const styles = StyleSheet.create((theme) => ({
     page: {
         flex: 1,
         alignItems: 'center' as const,
-        paddingHorizontal: 16,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
         backgroundColor: theme.colors.background.canvas,
     },
     content: {
@@ -26,7 +26,7 @@ const styles = StyleSheet.create((theme) => ({
     routeClose: {
         alignSelf: 'stretch',
         alignItems: 'flex-end',
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
 }));
 

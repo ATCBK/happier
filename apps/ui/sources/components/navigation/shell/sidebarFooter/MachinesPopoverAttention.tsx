@@ -208,7 +208,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     name: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         flex: 1,
         color: theme.colors.text.primary,
     },

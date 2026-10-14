@@ -51,7 +51,7 @@ function NotificationChoice(props: Readonly<{ sessionId: string; sourceTurnId: s
     const message = props.mode === 'turn' ? t('sessionWork.notify.turnFinished') : t('sessionWork.notify.needsYou');
     const match = (set: WorkflowTriggerSetV1) => {
         const then = set.target ? readTriggerThen(set.target) : null;
-        if (!set.enabled || set.health !== 'available' || then?.kind !== 'notifyMe' || then.message !== message) return null;
+        if (!set.enabled || set.health !== 'available' || then?.kind !== 'notifyMe') return null;
         return set.triggers.find((trigger) => trigger.kind === 'sessionLifecycle' && trigger.enabled
             && trigger.status.state === 'waiting' && trigger.remainingOccurrences !== 0
             && trigger.sourceSessionId === props.sessionId

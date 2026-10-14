@@ -183,10 +183,10 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
 
 const styles = StyleSheet.create((theme) => ({
     body: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     quiet: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

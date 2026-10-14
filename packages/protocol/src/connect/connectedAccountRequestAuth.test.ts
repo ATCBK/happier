@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER,
@@ -23,24 +23,24 @@ import {
   RequestAuthFailureOutcomeV1Schema,
 } from './connectedAccountRequestAuth.js';
 
-const requestAuthHttpVectors = z.object({
+const requestAuthHttpVectors = z.strictObject({
   v: z.literal(1),
-  paths: z.object({
+  paths: z.strictObject({
     lookup: z.string(),
     authFailure: z.string(),
     quotaFailure: z.string(),
-  }).strict(),
-  responses: z.array(z.object({
+  }),
+  responses: z.array(z.strictObject({
     name: z.string(),
-    status: z.number().int(),
+    status: z.number().check(z.int()),
     body: z.unknown(),
-  }).strict()),
-  invalidResponses: z.array(z.object({
+  })),
+  invalidResponses: z.array(z.strictObject({
     name: z.string(),
-    status: z.number().int(),
+    status: z.number().check(z.int()),
     body: z.unknown(),
-  }).strict()),
-}).strict().parse(JSON.parse(readFileSync(
+  })),
+}).parse(JSON.parse(readFileSync(
   new URL('./connectedAccountRequestAuthHttpV1.vectors.json', import.meta.url),
   'utf8',
 )));

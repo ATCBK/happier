@@ -8,6 +8,14 @@ function normalizeTimestamp(value: number): number | null {
   return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
 }
 
+/**
+ * A `not_loaded` snapshot is the placeholder that makes an account addressable before its first
+ * provider read: its observation and fetch instants are the epoch, not a time anything was read.
+ */
+export function wasConnectedServiceQuotaObserved(snapshot: Readonly<{ state: string }>): boolean {
+  return snapshot.state !== 'not_loaded';
+}
+
 export function isConnectedServiceQuotaObservationAtOrBeforeNow(input: Readonly<{
   observedAtMs: number;
   nowMs: number;

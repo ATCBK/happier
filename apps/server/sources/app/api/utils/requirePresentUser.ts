@@ -1,13 +1,13 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { PRESENT_USER_REQUIRED_ERROR } from "./apiTokenRouteAdmission";
 
 export { PRESENT_USER_REQUIRED_ERROR } from "./apiTokenRouteAdmission";
 
 // Route imports can reach this guard while the admission module is still initializing.
 // Resolve its shared error code at parse time rather than capture an undefined literal.
-export const PresentUserRequiredResponseSchema = z.lazy(() => z.object({
+export const PresentUserRequiredResponseSchema = z.lazy(() => z.strictObject({
     error: z.literal(PRESENT_USER_REQUIRED_ERROR),
-}).strict());
+}));
 
 type AuthenticatedRouteRequest = Readonly<{
     /** Set only by `enableAuthentication`; absent authority fails closed. */

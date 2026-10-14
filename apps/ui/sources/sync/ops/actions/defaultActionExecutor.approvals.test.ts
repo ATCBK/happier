@@ -691,10 +691,10 @@ describe('createDefaultActionExecutor approvals', () => {
             localId: 'ui-input-1', requestedAction: { v: 1, kind: 'steer_if_active' },
         });
     });
-    it('does not replay an MCP approval locally when its exact daemon origin is unavailable', async () => {
+    it('fails an Account approval with missing Home identity before replay', async () => {
         await expect(executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'approve' }, context()))
-            .resolves.toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'approval_origin_unavailable' } } });
-        expectFailedApproval('artifact-1', 'approval_origin_unavailable');
+            .resolves.toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } } });
+        expectFailedApproval('artifact-1');
     });
     it('requires an exact Home scope before creating a surfaced UI approval', async () => {
         await homes.requireUiApproval(homeId, 'review.start');
@@ -706,11 +706,13 @@ describe('createDefaultActionExecutor approvals', () => {
         expect(outgoing).toEqual([]);
     });
     it('does not use local Session cache absence to bypass exact-daemon approval replay', async () => {
+        // Stop is Machine-placed; title changes now belong to the Account owner.
+        await seedApproval('artifact-stop-no-cache', approvalRequest('session.stop'));
         const { getStorage } = await import('@/sync/domains/state/storage');
         getStorage().setState({ sessions: {} });
-        await expect(executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'approve' }, context()))
+        await expect(executor.execute('approval.request.decide', { artifactId: 'artifact-stop-no-cache', decision: 'approve' }, context()))
             .resolves.toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'approval_origin_unavailable' } } });
-        expectFailedApproval('artifact-1', 'approval_origin_unavailable');
+        expectFailedApproval('artifact-stop-no-cache', 'approval_origin_unavailable');
     });
     it('does not replay an approved MCP stop locally without its exact daemon origin', async () => {
         await seedApproval('artifact-stop', approvalRequest('session.stop'));

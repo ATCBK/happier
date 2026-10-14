@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { buildSettingArtifacts } from './buildSettingArtifacts.js';
 import { defineSettingDefinitions, type SettingDefinitionMap } from './settingDefinition.js';
@@ -61,7 +61,7 @@ describe('buildSettingArtifacts', () => {
     expect(() =>
       buildSettingArtifacts({
         badSetting: {
-          schema: z.number().int(),
+          schema: z.number().check(z.int()),
           default: 'not-a-number',
           description: 'Invalid default',
           storageScope: 'account',
@@ -174,7 +174,7 @@ describe('buildSettingArtifacts', () => {
     expect(() =>
       buildSettingArtifacts({
         bucketedCount: {
-          schema: z.number().int().nonnegative(),
+          schema: z.number().check(z.int(), z.nonnegative()),
           default: 0,
           description: 'Count bucketed by privacy policy',
           storageScope: 'account',
@@ -192,7 +192,7 @@ describe('buildSettingArtifacts', () => {
     expect(() =>
       buildSettingArtifacts({
         countOnly: {
-          schema: z.number().int().nonnegative(),
+          schema: z.number().check(z.int(), z.nonnegative()),
           default: 0,
           description: 'Count-only privacy policy',
           storageScope: 'account',

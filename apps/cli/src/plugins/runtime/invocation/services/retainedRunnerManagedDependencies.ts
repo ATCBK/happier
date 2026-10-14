@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 
 import { resolveInstallablesRegistry } from '@happier-dev/protocol/installables/registry';
-import type { PluginHostAccessRequestV2 } from '@happier-dev/protocol';
+import type { PluginHostAccessRequestV2, PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type {
@@ -50,8 +50,9 @@ function sourceSpec(
     pluginId: string,
     rootPath: string,
     manifestAuthority: 'external' | 'bundled_first_party',
+    sourceCustody: PluginSourceCustodyV1,
 ) {
-    return manifestAuthority === 'bundled_first_party'
+    return manifestAuthority === 'bundled_first_party' && sourceCustody.kind !== 'development'
         ? Object.freeze({
             kind: 'bundled' as const,
             locator: pluginId,
@@ -77,6 +78,7 @@ export async function createRetainedRunnerManagedDependenciesHost(
         retention: RunnerManagedDependencyRetentionV1;
         agentManifestAuthority:
             'external' | 'bundled_first_party';
+        runnerSnapshotIdentity?: string;
         env?: NodeJS.ProcessEnv;
     }>,
 ): Promise<Pick<StablePluginManagedDependenciesHost, 'resolveExecutable'>> {
@@ -166,7 +168,6 @@ export async function createRetainedRunnerManagedDependenciesHost(
             const sourceCustody
             of params.retention.sourceCustodies
         ) {
-            if (sourceCustody.kind === 'development') return unavailable();
             const custodyIdentity = runnerPluginSourceCustodyIdentity(
                 sourceCustody,
             );
@@ -218,6 +219,9 @@ export async function createRetainedRunnerManagedDependenciesHost(
                 pluginId,
                 custody: sourceCustody,
                 manifestAuthority,
+                ...(params.runnerSnapshotIdentity
+                    ? { runnerSnapshotIdentity: params.runnerSnapshotIdentity }
+                    : {}),
             });
             if (manifestAuthority !== attested.manifestAuthority) return unavailable();
             const occurrenceId = attested.managedGeneration;
@@ -252,8 +256,8 @@ export async function createRetainedRunnerManagedDependenciesHost(
                             : 'external' as const,
                     source: Object.freeze({
                         kind:
-                            manifestAuthority
-                                === 'bundled_first_party'
+                            manifestAuthority === 'bundled_first_party'
+                                && sourceCustody.kind !== 'development'
                                 ? 'bundled' as const
                                 : 'path' as const,
                     }),
@@ -264,6 +268,7 @@ export async function createRetainedRunnerManagedDependenciesHost(
                         pluginId,
                         rootPath,
                         manifestAuthority,
+                        sourceCustody,
                     ),
                     definition,
                 }));

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   MachineLiveStreamInputControlKindV1Schema,
@@ -13,15 +13,13 @@ import { BACKABLE_SIMULATOR_STREAM_CONTROLS_V1 } from './runtimeActionBacking.js
 
 export const SimulatorPlatformV1Schema = lazyZodSchema(() => z.enum(['ios', 'android']));
 
-export const SimulatorStreamControlsV1Schema = lazyZodSchema(() => z
-  .object({
-    requestKeyframe: z.boolean().optional().default(false),
-    snapshot: z.boolean().optional().default(false),
-    setQuality: z.boolean().optional().default(false),
-    setFps: z.boolean().optional().default(false),
-    setScale: z.boolean().optional().default(false),
-  })
-  .strict());
+export const SimulatorStreamControlsV1Schema = lazyZodSchema(() => z.strictObject({
+    requestKeyframe: z._default(z.optional(z.boolean()), false),
+    snapshot: z._default(z.optional(z.boolean()), false),
+    setQuality: z._default(z.optional(z.boolean()), false),
+    setFps: z._default(z.optional(z.boolean()), false),
+    setScale: z._default(z.optional(z.boolean()), false),
+  }));
 
 export const DEFAULT_SIMULATOR_STREAM_CONTROLS_V1 = {
   requestKeyframe: false,
@@ -31,42 +29,36 @@ export const DEFAULT_SIMULATOR_STREAM_CONTROLS_V1 = {
   setScale: false,
 } as const;
 
-export const SimulatorCaptureCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
-    status: z.literal('available').optional().default('available'),
-    sourceId: z.string().min(1),
-    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).min(1),
+export const SimulatorCaptureCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
+    status: z._default(z.optional(z.literal('available')), 'available'),
+    sourceId: z.string().check(z.minLength(1)),
+    supportedCodecs: z.array(MachineLiveStreamCodecIdV1Schema).check(z.minLength(1)),
     inputMode: MachineLiveStreamInputModeV1Schema,
-    supportedInputKinds: z.array(MachineLiveStreamInputControlKindV1Schema).optional(),
-    streamControls: SimulatorStreamControlsV1Schema.optional(),
-  })
-  .strict());
+    supportedInputKinds: z.optional(z.array(MachineLiveStreamInputControlKindV1Schema)),
+    streamControls: z.optional(SimulatorStreamControlsV1Schema),
+  }));
 
-export const SimulatorCaptureUnavailableV1Schema = lazyZodSchema(() => z
-  .object({
+export const SimulatorCaptureUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
     status: z.literal('unavailable'),
-    sourceId: z.string().min(1).optional(),
-    reasonCode: z.string().min(1),
-  })
-  .strict());
+    sourceId: z.optional(z.string().check(z.minLength(1))),
+    reasonCode: z.string().check(z.minLength(1)),
+  }));
 
 export const SimulatorCaptureV1Schema = lazyZodSchema(() => z.union([
   SimulatorCaptureCapabilitiesV1Schema,
   SimulatorCaptureUnavailableV1Schema,
 ]));
 
-export const SimulatorDeviceResourceV1Schema = lazyZodSchema(() => z
-  .object({
+export const SimulatorDeviceResourceV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    simulatorId: z.string().min(1),
+    simulatorId: z.string().check(z.minLength(1)),
     platform: SimulatorPlatformV1Schema,
-    deviceId: z.string().min(1),
-    displayName: z.string().min(1),
-    appId: z.string().min(1).optional(),
+    deviceId: z.string().check(z.minLength(1)),
+    displayName: z.string().check(z.minLength(1)),
+    appId: z.optional(z.string().check(z.minLength(1))),
     capture: SimulatorCaptureV1Schema,
-    unavailableReason: z.string().min(1).optional(),
-  })
-  .strict());
+    unavailableReason: z.optional(z.string().check(z.minLength(1))),
+  }));
 
 export type SimulatorPlatformV1 = z.infer<typeof SimulatorPlatformV1Schema>;
 export type SimulatorStreamControlsV1 = z.infer<typeof SimulatorStreamControlsV1Schema>;

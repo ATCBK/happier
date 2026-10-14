@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -169,8 +170,8 @@ export const ToolFileDiffListView = React.memo<ToolFileDiffListViewProps>(({
 
 const styles = StyleSheet.create((theme) => ({
     titleRow: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
     },
     titleText: {
         fontSize: 13,
@@ -178,21 +179,20 @@ const styles = StyleSheet.create((theme) => ({
         fontFamily: 'monospace',
     },
     headerControlButton: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
     },
     headerControlButtonText: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        fontWeight: '600',
     },
     headerControlsRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));

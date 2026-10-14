@@ -9,6 +9,7 @@ import {
   resolveExecutionRunRuntimeBackendId,
 } from '@/agent/runtime/bridges/executionRun/backendTargets';
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
+import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import { extractVoiceActionsFromAssistantText } from '@happier-dev/protocol/voice/actions';
 import { canAppendVoiceAgentOutputEventsV1, createVoiceAgentOutputTurnV1, fitVoiceAgentOutputTextV1, ingestVoiceAgentOutputEventV1, VOICE_OUTPUT_INCOMPLETE_TEXT } from '@happier-dev/protocol/voice/outputEvents';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -111,6 +112,7 @@ export class VoiceAgentManager {
   private readonly voiceAgents = new Map<string, VoiceAgentInstance>();
   private readonly startingVoiceAgents = new Map<string, {
     cancelled: boolean;
+    runtime: ExecutionRunHostRuntime | null;
     provisionalCleanup: (() => Promise<void>) | null;
     settled: Promise<void>;
     resolveSettled: () => void;
@@ -173,8 +175,32 @@ export class VoiceAgentManager {
    * stable occurrence across chat and isolated-commit runtime replacement.
    */
   readCurrentRuntimeAuthority(voiceAgentId: string): VoiceAgentRuntimeAuthorityV1 | null {
-    if (this.disposed || this.startingVoiceAgents.has(voiceAgentId) || this.retiringVoiceAgents.has(voiceAgentId)) {
-      return null;
+    if (this.startingVoiceAgents.has(voiceAgentId)) return null;
+    const occurrence = this.readCurrentRuntimeOccurrence(voiceAgentId);
+    if (!occurrence) return null;
+    return Object.freeze({
+      runtimeState: occurrence.activeTurnAdmissionWitness ? 'active_turn' : 'idle',
+      activeTurnId: occurrence.activeTurnAdmissionWitness?.turnId ?? null,
+    });
+  }
+
+  /**
+   * Actual nested-runtime custody, including provisioning. An accepted start
+   * with no constructed runtime supplies no proof. Readiness above remains
+   * unpublished until startup settles; chat/commit replacement stays here.
+   */
+  readCurrentRuntimeOccurrence(voiceAgentId: string): Readonly<{
+    runtime: ExecutionRunHostRuntime;
+    activeTurnAdmissionWitness: AgentInvocationTurnAdmissionWitness | null;
+  }> | null {
+    if (this.disposed || this.retiringVoiceAgents.has(voiceAgentId)) return null;
+    const starting = this.startingVoiceAgents.get(voiceAgentId);
+    if (starting) {
+      if (starting.cancelled || !starting.runtime || starting.runtime.getRuntimeLifetimeSignal().aborted) return null;
+      try {
+        return { runtime: starting.runtime,
+          activeTurnAdmissionWitness: starting.runtime.readActiveTurnAdmissionWitness?.() ?? null };
+      } catch { return null; }
     }
     const voiceAgent = this.voiceAgents.get(voiceAgentId);
     if (!voiceAgent) return null;
@@ -193,10 +219,7 @@ export class VoiceAgentManager {
     if (commitActive === null || (chatActive && commitActive)) return null;
     const runtime = commitActive ? voiceAgent.commitBackend : voiceAgent.chatBackend;
     if (!runtime) return null;
-    return Object.freeze({
-      runtimeState: chatActive || commitActive ? 'active_turn' : 'idle',
-      activeTurnId: (commitActive ?? chatActive)?.turnId ?? null,
-    });
+    return { runtime, activeTurnAdmissionWitness: commitActive ?? chatActive ?? null };
   }
 
   private unsubscribeBestEffort(unsubscribe: () => void): void {
@@ -691,6 +714,7 @@ export class VoiceAgentManager {
     });
     const startOccurrence = {
       cancelled: false,
+      runtime: null as ExecutionRunHostRuntime | null,
       provisionalCleanup: null as (() => Promise<void>) | null,
       settled: startSettled,
       resolveSettled: resolveStartSettled,
@@ -744,6 +768,7 @@ export class VoiceAgentManager {
         start: { intent: 'voice_agent' },
         ...(params.connectedServices !== undefined ? { connectedServices: params.connectedServices } : {}),
       }));
+      startOccurrence.runtime = chatBackend;
       // The start occurrence owns one cleanup handle as soon as a runtime exists.
       // Stop may invoke it while provisioning or READY is still pending; the
       // runtime WeakMap and the instance disposer make the eventual start catch

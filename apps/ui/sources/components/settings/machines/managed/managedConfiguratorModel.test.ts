@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MachineProvisionerContributionV1Schema, MachineProvisionerOptionsResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { ManagedCredentialSelectionV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/publicTypes';
+import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { writeInputPath } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import { FlyLaunchQueryV1Schema, FlyLaunchV1Schema } from '../../../../../../../packages/plugins/machine-fly/src/machine/schemas';
 import { CRABBOX_PLUGIN } from '../../../../../../../packages/plugins/machine-crabbox/src/manifest';
@@ -25,6 +25,29 @@ const options = { choices: [
 ] };
 
 describe('managed configurator draft owner', () => {
+    it('projects immutable nested native choices into an independent mutable wire snapshot', () => {
+        const launch = { sizes: [2, 4] };
+        Object.freeze(launch.sizes);
+        Object.freeze(launch);
+        const native = { ...provisioner, descriptor: { ...descriptor, launchSchema: {
+            type: 'object', properties: { sizes: { type: 'array', items: { type: 'integer' } } },
+            required: ['sizes'], additionalProperties: false,
+        } satisfies PluginJsonSchemaV2 } };
+        const draft = selectManagedConfiguratorChoice(refreshManagedConfiguratorOptions(
+            createManagedConfiguratorDraft({ provisioner: native, controller, name: 'Guest' }),
+            { choices: [{ id: 'native', title: 'Native', launch }] },
+        ), 'native');
+
+        const choices = managedConfiguratorFacts(draft)?.launch.choices;
+        expect(choices).toEqual(launch);
+        if (!choices || typeof choices !== 'object' || Array.isArray(choices) || !Array.isArray(choices.sizes)) {
+            throw new Error('Expected native sizes in the wire snapshot');
+        }
+        choices.sizes.push(8);
+        expect(choices.sizes).toEqual([2, 4, 8]);
+        expect(draft.selected?.launch).toEqual({ sizes: [2, 4] });
+    });
+
     it('admits a Devcontainer review query entered through its declared shared Action fields', () => {
         const descriptor = MachineProvisionerContributionV1Schema.parse(DEVCONTAINER_PLUGIN.manifest.contributes.machineProvisioners?.[0]);
         const action = DEVCONTAINER_PLUGIN.manifest.contributes.actions.find(action => action.id === descriptor.actions.options)!;

@@ -1,8 +1,4 @@
-import {
-    TeamCredentialResourceAdministrationCapabilitiesV1Schema,
-    type TeamCredentialDisclosureCeilingV1,
-    type TeamCredentialResourceAdministrationCapabilitiesV1,
-} from "@happier-dev/protocol/teams";
+import { TeamCredentialResourceAdministrationCapabilitiesV1Schema, type TeamCredentialDisclosureCeilingV1, type TeamCredentialResourceAdministrationCapabilitiesV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 
 type AdministrationCapabilityInput = Readonly<{
     resource: Readonly<{

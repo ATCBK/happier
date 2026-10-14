@@ -107,6 +107,7 @@ describe('AddToBoardButton library recovery', () => {
             </AppShellPluginUiProjectionValueProvider>, layout,
         );
         await flushHookEffects({ cycles: 4 });
+        expect(options(screen)).toContainEqual(expect.objectContaining({ id: 'widget:plugin-acme.widgets/counter' }));
         await act(async () => { screen.findByType(SelectionList).props.onSelect('widget:plugin-acme.widgets/counter'); });
         await flushHookEffects({ cycles: 4 });
         // Picking is the preview, never the add.

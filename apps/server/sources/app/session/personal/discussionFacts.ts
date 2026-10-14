@@ -1,4 +1,4 @@
-import type { SessionDiscussionAttentionFactsV1 } from "@happier-dev/protocol";
+import type { SessionDiscussionAttentionFactsV1 } from '@happier-dev/protocol/sessions/discussions/models';
 
 import type { Tx } from "@/storage/inTx";
 import {

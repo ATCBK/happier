@@ -247,7 +247,7 @@ describe('Claude native External Sessions contribution', () => {
         expect(JSON.stringify(after)).toContain('live project B answer');
     });
 
-    it('fails candidate discovery and transcript reads closed when projects escapes the admitted config root', async () => {
+    it('fails candidate discovery and transcript reads closed when a project escapes linked shared state', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-native-projects-root-escape-'));
         roots.push(root);
         const configDir = join(root, '.claude');
@@ -265,7 +265,10 @@ describe('Claude native External Sessions contribution', () => {
             'utf8',
         );
         await mkdir(configDir, { recursive: true });
-        await symlink(outsideProjectsDir, join(configDir, 'projects'), 'dir');
+        const sharedProjectsDir = join(root, 'shared-projects');
+        await mkdir(sharedProjectsDir);
+        await symlink(sharedProjectsDir, join(configDir, 'projects'), 'dir');
+        await symlink(join(outsideProjectsDir, projectId), join(sharedProjectsDir, projectId), 'dir');
 
         const contribution = createClaudeExternalSessionsContribution({
             env: { HAPPIER_CLAUDE_CONFIG_DIR: configDir },

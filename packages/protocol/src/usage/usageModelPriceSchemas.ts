@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 /** Exact price identities only; vendor/platform-specific tariffs remain distinct.
@@ -11,38 +11,37 @@ export function canonicalUsageModelPriceId(modelId: string | null | undefined): 
   return current === 'claude-haiku-4-5-20251001' ? 'claude-haiku-4-5' : current;
 }
 
-const rate = lazyZodSchema(() => z.number().finite().nonnegative());
-export const UsageModelPriceRatesSchema = lazyZodSchema(() => z.object({
+const rate = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const UsageModelPriceRatesSchema = lazyZodSchema(() => z.strictObject({
   inputUsdPerMillion: rate, outputUsdPerMillion: rate,
-  cacheReadUsdPerMillion: rate.optional(), cacheWriteUsdPerMillion: rate.optional(), reasoningUsdPerMillion: rate.optional(),
-}).strict());
+  cacheReadUsdPerMillion: z.optional(rate), cacheWriteUsdPerMillion: z.optional(rate), reasoningUsdPerMillion: z.optional(rate),
+}));
 export type UsageModelPriceRates = z.infer<typeof UsageModelPriceRatesSchema>;
-export const UsageModelPriceEntrySchema = lazyZodSchema(() => UsageModelPriceRatesSchema.extend({
-  provider: z.string().min(1).optional(), sourceUrl: z.string().url().optional(),
-}).strict());
-export const UsageModelPriceProvenanceSchema = lazyZodSchema(() => z.object({
+export const UsageModelPriceEntrySchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(UsageModelPriceRatesSchema, {
+  provider: z.optional(z.string().check(z.minLength(1))), sourceUrl: z.optional(z.string().check(z.url())),
+})));
+export const UsageModelPriceProvenanceSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('litellm'), origin: z.enum(['bundled', 'fetched', 'cached']),
-  asOfMs: z.number().int().nonnegative(), revision: z.string().min(1),
-  fetchStatus: z.enum(['ready', 'disabled', 'error']), errorCode: z.string().min(1).optional(),
-}).strict());
+  asOfMs: z.number().check(z.int(), z.nonnegative()), revision: z.string().check(z.minLength(1)),
+  fetchStatus: z.enum(['ready', 'disabled', 'error']), errorCode: z.optional(z.string().check(z.minLength(1))),
+}));
 export type UsageModelPriceProvenance = z.infer<typeof UsageModelPriceProvenanceSchema>;
-export const UsageModelPriceCatalogSchema = lazyZodSchema(() => z.object({
-  v: z.literal(1), models: z.record(z.string().trim().min(1), UsageModelPriceEntrySchema),
+export const UsageModelPriceCatalogSchema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), models: z.record(z.string().check(z.trim(), z.minLength(1)), UsageModelPriceEntrySchema),
   provenance: UsageModelPriceProvenanceSchema,
-}).strict());
+}));
 export type UsageModelPriceCatalog = z.infer<typeof UsageModelPriceCatalogSchema>;
 export const UsageModelPriceOverrideSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  UsageModelPriceRatesSchema.omit({ reasoningUsdPerMillion: true }).extend({ kind: z.literal('rates') }).strict(),
-  z.object({ kind: z.literal('map'), modelId: z.string().trim().min(1) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(UsageModelPriceRatesSchema, { reasoningUsdPerMillion: true }), { kind: z.literal('rates') })),
+  z.strictObject({ kind: z.literal('map'), modelId: z.string().check(z.trim(), z.minLength(1)) }),
 ]));
 // Zod records intentionally omit __proto__; reject it instead of acknowledging a lost setting.
-export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => z.preprocess((value, context) => {
+export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => z.pipe(z.transform((value, context) => {
   if (value !== null && typeof value === 'object' && Object.hasOwn(value, '__proto__')) {
-    context.addIssue({ code: 'custom', path: ['__proto__'], message: 'Reserved record key' });
+    context.issues.push({ code: 'custom', path: ['__proto__'], message: 'Reserved record key', input: context.value });
   }
   return value;
-}, z.record(z.string().trim().min(1), UsageModelPriceOverrideSchema)
-  .superRefine((overrides, context) => {
+}), z.record(z.string().check(z.trim(), z.minLength(1)), UsageModelPriceOverrideSchema).check(z.superRefine((overrides, context) => {
     for (const id of Object.keys(overrides)) {
       const seen = new Set<string>();
       let current = id;
@@ -57,5 +56,5 @@ export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => z.preprocess
         current = override.modelId;
       }
     }
-  })));
+  }))));
 export type UsageModelPriceOverridesV1 = z.infer<typeof UsageModelPriceOverridesV1Schema>;

@@ -170,7 +170,7 @@ function serializeRetainedStateWrite<T>(runId: string, write: () => Promise<T>):
   return next;
 }
 
-async function readRetainedExecutionRunRecord(runId: string): Promise<RetainedExecutionRunRecord | null> {
+export async function readRetainedExecutionRunRecord(runId: string): Promise<RetainedExecutionRunRecord | null> {
   const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
   try {
     return createStoredReadSchema(RetainedExecutionRunRecordSchema).parse(storage.openJson({

@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { spawn } from 'node:child_process';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import type { AgentContribution } from '../agents.js';
 import type { AgentSessionRuntime, AgentSessionOpenRequest } from '../agentRuntime/session.js';
@@ -11,8 +11,8 @@ import { runAgentMcpToolPolicyContract, type AgentMcpToolPolicyContractInput,
 // This fake Agent is the kit's test subject, not a stand-in for a first-party leaf.
 // Its server receives actual HTTP calls; the same strict request/result schemas
 // validate producer output and the fixture consumer.
-const requestSchema = z.object({ server: z.string(), tool: z.string() }).strict();
-const responseSchema = z.object({ ok: z.literal(true) }).strict();
+const requestSchema = z.strictObject({ server: z.string(), tool: z.string() });
+const responseSchema = z.strictObject({ ok: z.literal(true) });
 const agent = { id: 'mcp-kit-fixture', title: 'Kit fixture', primary: 'sessions', runtime: { kind: 'custom' },
     capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true },
         tools: { delivery: 'native_mcp' } } } satisfies AgentContribution;
@@ -91,7 +91,7 @@ function harness(native: boolean): AgentMcpToolPolicyContractInput {
                 child.once('error', reject);
                 child.once('close', code => code === 0 ? resolve() : reject(new Error(`Shell fixture exit ${code}`)));
             });
-            return z.object({ argv: z.array(z.string()), env: z.record(z.string(), z.string()) }).strict().parse(JSON.parse(Buffer.concat(chunks).toString()));
+            return z.strictObject({ argv: z.array(z.string()), env: z.record(z.string(), z.string()) }).parse(JSON.parse(Buffer.concat(chunks).toString()));
         },
         async invokeTool(runtime, request) {
             const session = state.get(runtime)!;

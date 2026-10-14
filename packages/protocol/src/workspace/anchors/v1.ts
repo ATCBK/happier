@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const LINE_CONTENT_HASH_PREFIX = 'lh1:';
 const LineContentHashV1Schema = lazyZodSchema(() => z.templateLiteral([
   LINE_CONTENT_HASH_PREFIX,
-  z.string().regex(/^[0-9a-f]{16}$/),
+  z.string().check(z.regex(/^[0-9a-f]{16}$/)),
 ]));
 const FNV_OFFSET_BASIS = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
@@ -40,37 +40,37 @@ export function computeLineContentHashV1(line: string): LineContentHashV1 {
 export const WorkspaceAnchorV1Schema = lazyZodSchema(() => z.union([
   z.object({
     kind: z.literal('fileLine'),
-    startLine: z.number().int().positive(),
-    lineHash: LineContentHashV1Schema.optional(),
+    startLine: z.number().check(z.int(), z.positive()),
+    lineHash: z.optional(LineContentHashV1Schema),
   }),
   z.object({
     kind: z.literal('diffLine'),
-    startLine: z.number().int().positive(),
+    startLine: z.number().check(z.int(), z.positive()),
     side: z.enum(['before', 'after']),
-    oldLine: z.number().int().positive().nullable(),
-    newLine: z.number().int().positive().nullable(),
-    lineHash: LineContentHashV1Schema.optional(),
+    oldLine: z.nullable(z.number().check(z.int(), z.positive())),
+    newLine: z.nullable(z.number().check(z.int(), z.positive())),
+    lineHash: z.optional(LineContentHashV1Schema),
   }),
   z.object({
     kind: z.literal('line'),
     filePath: z.string(),
-    line: z.number().int().positive(),
-    side: z.enum(['before', 'after']).optional(),
-    lineHash: LineContentHashV1Schema.optional(),
+    line: z.number().check(z.int(), z.positive()),
+    side: z.optional(z.enum(['before', 'after'])),
+    lineHash: z.optional(LineContentHashV1Schema),
   }),
   z.object({
     kind: z.literal('range'),
     filePath: z.string(),
-    startLine: z.number().int().positive(),
-    endLine: z.number().int().positive(),
-    side: z.enum(['before', 'after']).optional(),
-    startLineHash: LineContentHashV1Schema.optional(),
-    endLineHash: LineContentHashV1Schema.optional(),
-    selectedTextHash: LineContentHashV1Schema.optional(),
-  }).refine((anchor) => anchor.endLine >= anchor.startLine, {
+    startLine: z.number().check(z.int(), z.positive()),
+    endLine: z.number().check(z.int(), z.positive()),
+    side: z.optional(z.enum(['before', 'after'])),
+    startLineHash: z.optional(LineContentHashV1Schema),
+    endLineHash: z.optional(LineContentHashV1Schema),
+    selectedTextHash: z.optional(LineContentHashV1Schema),
+  }).check(z.refine((anchor) => anchor.endLine >= anchor.startLine, {
     message: 'endLine must be greater than or equal to startLine',
     path: ['endLine'],
-  }),
+  })),
 ]));
 
 export type WorkspaceAnchorV1 = z.infer<typeof WorkspaceAnchorV1Schema>;
@@ -86,13 +86,13 @@ export const WorkspaceAnchorSnapshotV1Schema = lazyZodSchema(() => z.object({
 export type WorkspaceAnchorSnapshotV1 = z.infer<typeof WorkspaceAnchorSnapshotV1Schema>;
 
 export const WorkspaceAnchorsResolveRequestV1Schema = lazyZodSchema(() => z.object({
-  workspacePath: z.string().min(1),
+  workspacePath: z.string().check(z.minLength(1)),
   comments: z.array(z.object({
-    id: z.string().optional(),
-    filePath: z.string().min(1),
+    id: z.optional(z.string()),
+    filePath: z.string().check(z.minLength(1)),
     source: WorkspaceAnchorSourceV1Schema,
     anchor: WorkspaceAnchorV1Schema,
-    snapshot: WorkspaceAnchorSnapshotV1Schema.optional(),
+    snapshot: z.optional(WorkspaceAnchorSnapshotV1Schema),
   })),
 }));
 export type WorkspaceAnchorsResolveRequestV1 = z.infer<typeof WorkspaceAnchorsResolveRequestV1Schema>;
@@ -109,14 +109,14 @@ export const WorkspaceAnchorResolutionStatusV1Schema = lazyZodSchema(() => z.enu
 export type WorkspaceAnchorResolutionStatusV1 = z.infer<typeof WorkspaceAnchorResolutionStatusV1Schema>;
 
 export const WorkspaceAnchorResolutionV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().optional(),
+  id: z.optional(z.string()),
   filePath: z.string(),
   originalAnchor: WorkspaceAnchorV1Schema,
-  resolvedAnchor: WorkspaceAnchorV1Schema.optional(),
+  resolvedAnchor: z.optional(WorkspaceAnchorV1Schema),
   status: WorkspaceAnchorResolutionStatusV1Schema,
-  confidence: z.number().min(0).max(1),
-  reason: z.string().optional(),
-  preview: WorkspaceAnchorSnapshotV1Schema.optional(),
+  confidence: z.number().check(z.minimum(0), z.maximum(1)),
+  reason: z.optional(z.string()),
+  preview: z.optional(WorkspaceAnchorSnapshotV1Schema),
 }));
 export type WorkspaceAnchorResolutionV1 = z.infer<typeof WorkspaceAnchorResolutionV1Schema>;
 

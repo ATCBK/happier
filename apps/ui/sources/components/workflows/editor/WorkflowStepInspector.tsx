@@ -47,10 +47,10 @@ import { workflowEditorStyles } from './workflowEditorStyles';
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     scopeLabel: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     /**
@@ -61,31 +61,31 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: theme.margins.sm,
+        columnGap: theme.space.s8,
         rowGap: 0,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
     },
     fieldName: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
     },
     resetTarget: {
         marginLeft: 'auto',
     },
     inheritedBadge: {
-        ...Typography.default('regular'),
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
     },
     overrideBadge: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     resetAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     control: {
-        paddingBottom: theme.margins.sm,
+        paddingBottom: theme.space.s8,
     },
 }));
 

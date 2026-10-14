@@ -66,6 +66,9 @@ export async function shouldRetainTrackedTerminalHostExitMarker(input: Readonly<
   const sessionId = tracked.happySessionId?.trim();
   if (sessionId) {
     const attachment = await readTerminalHostAttachmentState({ happyHomeDir: input.happyHomeDir, sessionId });
+    const terminal = tracked.happySessionMetadataFromLocalWebhook?.terminal ?? tracked.hostedTerminal;
+    if (attachment.status === 'absent' && !tracked.publishedTerminalControlServiceabilityAttachmentId
+      && (!terminal?.mode || terminal.mode === 'plain')) return false;
     const presentation = await resolveTrackedSessionTerminalPresentation(
       tracked, attachment.status === 'present' ? attachment.info.handle.kind : 'plain',
     );
@@ -96,6 +99,8 @@ export async function resolveTrackedSessionTerminalHostExitCandidate(input: Read
   const sessionId = tracked.happySessionId?.trim();
   if (!sessionId) return null;
   const terminal = tracked.happySessionMetadataFromLocalWebhook?.terminal ?? tracked.hostedTerminal;
+  if (!attachmentInfo && !tracked.publishedTerminalControlServiceabilityAttachmentId
+    && (!terminal?.mode || terminal.mode === 'plain')) return null;
   if (attachmentInfo?.version !== 2) {
     const optionalPresentation = (await resolveTrackedSessionTerminalPresentation(
       tracked, attachmentInfo?.handle.kind ?? 'plain',

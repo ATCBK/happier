@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
@@ -37,12 +37,12 @@ function isClosedSchema(schema: PluginJsonSchemaV2): boolean {
     && [...(schema.anyOf ?? []), ...(schema.oneOf ?? []), ...(schema.allOf ?? [])].every(isClosedSchema);
 }
 
-const strictPortableSchema = lazyZodSchema(() => PluginJsonSchemaV2Schema.superRefine((value, context) => {
+const strictPortableSchema = lazyZodSchema(() => PluginJsonSchemaV2Schema.check(z.superRefine((value, context) => {
   try {
     normalizePluginJsonSchema(value);
     if (!isClosedSchema(value)) context.addIssue({ code: 'custom', message: 'Managed native declarations require recursively closed object schemas.' });
   } catch { context.addIssue({ code: 'custom', message: 'Invalid portable managed native schema.' }); }
-}));
+})));
 const local = () => asProtocolZod(PluginContributionLocalIdSchema);
 function nestedProjection(schema: PluginJsonSchemaV2): PluginJsonSchemaV2 {
   const { $schema: _dialect, ...projection } = normalizePluginJsonSchema(schema);
@@ -51,30 +51,30 @@ function nestedProjection(schema: PluginJsonSchemaV2): PluginJsonSchemaV2 {
 
 // This is the public manifest/classic-schema consumer seam. Facts have their
 // existing Mini owners; there is no second provider-facts validation tree.
-export const MachineProvisionerContributionV1Schema = lazyZodSchema(() => z.object({
+export const MachineProvisionerContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: local(), title: PluginLocalizedStringV2Schema, icon: PluginActionIconV2Schema,
-  resourceKind: z.string().trim().min(1),
-  kindTitle: PluginLocalizedStringV2Schema.optional(), description: PluginLocalizedStringV2Schema.optional(),
+  resourceKind: z.string().check(z.trim(), z.minLength(1)),
+  kindTitle: z.optional(PluginLocalizedStringV2Schema), description: z.optional(PluginLocalizedStringV2Schema),
   launchSchema: strictPortableSchema, resourceSchema: strictPortableSchema,
-  schemaVersion: z.number().int().positive(),
-  platforms: z.array(z.enum(['darwin', 'linux', 'win32'])).min(1).refine(values => new Set(values).size === values.length),
+  schemaVersion: z.number().check(z.int(), z.positive()),
+  platforms: z.array(z.enum(['darwin', 'linux', 'win32'])).check(z.minLength(1), z.refine(values => new Set(values).size === values.length)),
   prerequisites: z.array(PluginDeclaredExecutableRefSchema),
   billing: BillingCapabilitiesV1Schema, retention: RetentionCapabilitiesV1Schema,
-  actions: z.object({ check: local(), options: local().optional(), acquire: local(), bootstrap: local(), inspect: local(), power: local().optional(), destroy: local(), rebuild: local().optional() }).strict(),
+  actions: z.strictObject({ check: local(), options: z.optional(local()), acquire: local(), bootstrap: local(), inspect: local(), power: z.optional(local()), destroy: local(), rebuild: z.optional(local()) }),
   // References the existing options Action editor, not a second duration
   // schema or an observed resource expiry. The unit belongs to that raw input.
-  nativeDurationInput: z.object({ path: InputPathSchema, unit: z.enum(['milliseconds', 'seconds']) }).strict().optional(),
+  nativeDurationInput: z.optional(z.strictObject({ path: InputPathSchema, unit: z.enum(['milliseconds', 'seconds']) })),
   // Where the provider's own id for a created resource lives in its resource value (the id its console
   // shows), so a host can name it without guessing native field names. Display only, never an identity.
-  resourceIdPath: InputPathSchema.optional(),
-  bootstrapTransport: z.object({ kind: z.literal('native'), exec: local(), putFile: local() }).strict().optional(),
-  bootstrapCredential: z.object({ kind: z.enum(['ssh', 'native-token']) }).strict().optional(),
+  resourceIdPath: z.optional(InputPathSchema),
+  bootstrapTransport: z.optional(z.strictObject({ kind: z.literal('native'), exec: local(), putFile: local() })),
+  bootstrapCredential: z.optional(z.strictObject({ kind: z.enum(['ssh', 'native-token']) })),
   // Waive only a positively qualified native launch variant. Omission keeps
   // the Action's declared purpose required; this never grants HostAccess.
-  credentialPurposeRequirements: z.array(z.object({ purpose: local(), optionalWhen: InputPredicateSchema }).strict()).optional(),
-  reconciliation: z.object({ nativeOperationSchema: strictPortableSchema, action: local(), cleanup: local().optional(),
-    continueAcquire: z.literal(true).optional() }).strict().optional(),
-}).strict().superRefine((descriptor, context) => {
+  credentialPurposeRequirements: z.optional(z.array(z.strictObject({ purpose: local(), optionalWhen: InputPredicateSchema }))),
+  reconciliation: z.optional(z.strictObject({ nativeOperationSchema: strictPortableSchema, action: local(), cleanup: z.optional(local()),
+    continueAcquire: z.optional(z.literal(true)) })),
+}).check(z.superRefine((descriptor, context) => {
   const purposes = new Set<string>();
   descriptor.credentialPurposeRequirements?.forEach((requirement, index) => {
     const paths = readInputPredicatePaths(requirement.optionalWhen);
@@ -96,7 +96,7 @@ export const MachineProvisionerContributionV1Schema = lazyZodSchema(() => z.obje
   if (descriptor.retention.supportedIntents.includes('rebuild') && !descriptor.actions.rebuild) {
     context.addIssue({ code: 'custom', path: ['actions', 'rebuild'], message: 'Advertised rebuild requires a replacement-resource Action.' });
   }
-}));
+})));
 export type MachineProvisionerContributionV1 = z.infer<typeof MachineProvisionerContributionV1Schema>;
 
 /** One purpose requirement owner shared by acquisition, retained roles and configuration. */
@@ -122,7 +122,7 @@ export function readMachineProvisionerActionRolesV1(descriptor: MachineProvision
   ]);
 }
 
-export function validateMachineProvisionerContributionsV1(value: Readonly<{ machineProvisioners: readonly MachineProvisionerContributionV1[]; actions: readonly PluginActionContributionV2[] }>, context: z.RefinementCtx): void {
+export function validateMachineProvisionerContributionsV1(value: Readonly<{ machineProvisioners: readonly MachineProvisionerContributionV1[]; actions: readonly PluginActionContributionV2[] }>, context: z.core.$RefinementCtx): void {
   const seen = new Set<string>();
   value.machineProvisioners.forEach((descriptor, index) => {
     if (seen.has(descriptor.id)) context.addIssue({ code: 'custom', path: ['machineProvisioners', index, 'id'], message: 'Duplicate machine provisioner id.' });
@@ -197,14 +197,14 @@ const machineProvisionerOptionsResult = lazyDefinition(() => mini.strictObject({
 }));
 export const MachineProvisionerCheckResultV1Schema = lazyZodSchema(() => z.lazy(() => machineProvisionerCheckResult));
 export const MachineProvisionerOptionsResultV1Schema = lazyZodSchema(() => z.lazy(() => machineProvisionerOptionsResult));
-export const MachineProvisionersListResultV1Schema = lazyZodSchema(() => z.object({ controller: mini.optional(ManagedControllerV1Schema), provisioners: z.array(z.object({
-  contribution: asProtocolZod(PluginContributionIdentityV1Schema), occurrenceId: z.string().min(1),
+export const MachineProvisionersListResultV1Schema = lazyZodSchema(() => z.strictObject({ controller: mini.optional(ManagedControllerV1Schema), provisioners: z.array(z.strictObject({
+  contribution: asProtocolZod(PluginContributionIdentityV1Schema), occurrenceId: z.string().check(z.minLength(1)),
   descriptor: MachineProvisionerContributionV1Schema,
-  credentialPurposes: z.array(z.object({
+  credentialPurposes: z.optional(z.array(z.strictObject({
     purpose: QualifiedConnectedAccountPurposeV1Schema,
-    options: z.array(z.object({ value: asProtocolZod(QualifiedConnectedAccountRefSchema), label: z.string().min(1) }).strict()),
-  }).strict()).optional(),
-}).strict()) }).strict().superRefine((result, context) => {
+    options: z.array(z.strictObject({ value: asProtocolZod(QualifiedConnectedAccountRefSchema), label: z.string().check(z.minLength(1)) })),
+  }))),
+})) }).check(z.superRefine((result, context) => {
   result.provisioners.forEach((entry, entryIndex) => {
     if (entry.credentialPurposes === undefined) return;
     if (!result.controller) context.addIssue({ code: 'custom', path: ['controller'], message: 'Credential choices require their exact controller.' });
@@ -216,7 +216,7 @@ export const MachineProvisionersListResultV1Schema = lazyZodSchema(() => z.objec
       seen.add(purpose.purpose);
     });
   });
-}));
+})));
 export type MachineProvisionerCheckResultV1 = mini.infer<typeof MachineProvisionerCheckResultV1Schema>;
 export type MachineProvisionerOptionsResultV1 = mini.infer<typeof MachineProvisionerOptionsResultV1Schema>;
 export type MachineProvisionersListResultV1 = z.infer<typeof MachineProvisionersListResultV1Schema>;

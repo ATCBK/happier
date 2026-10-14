@@ -2,6 +2,7 @@ import { t } from '@/text';
 
 import type { SessionCompanionPlacement } from './layout/resolveSessionCompanionPlacement';
 import type { SessionCompanionPreferenceV1 } from './state/sessionCompanionPreference';
+import { resolveSessionCompanionItemCount } from './state/sessionCompanionPreference';
 
 export type SessionCompanionHeaderOperation =
     | 'show'
@@ -41,12 +42,13 @@ type SessionCompanionHeaderIntentInput = Readonly<{
 export function resolveSessionCompanionHeaderIntent(
     input: SessionCompanionHeaderIntentInput,
 ): SessionCompanionHeaderIntent {
+    const itemCount = resolveSessionCompanionItemCount(input);
     if (!input.visible) {
         const operation = input.isPhone ? 'show_and_open_full' : 'show';
         return {
             operation,
             accessibility: input.isPhone ? 'open_full' : 'show',
-            itemCount: input.itemCount,
+            itemCount,
             expanded: false,
             checked: false,
         };
@@ -56,7 +58,7 @@ export function resolveSessionCompanionHeaderIntent(
         return {
             operation: 'open_full',
             accessibility: 'open_full',
-            itemCount: input.itemCount,
+            itemCount,
             expanded: false,
             checked: true,
         };
@@ -66,17 +68,18 @@ export function resolveSessionCompanionHeaderIntent(
         return {
             operation: 'hide',
             accessibility: 'hide',
-            itemCount: input.itemCount,
+            itemCount,
             expanded: true,
             checked: true,
         };
     }
 
-    if (input.placement.kind === 'collapsed_control' && input.placement.reason === 'preference') {
+    if (input.placement.kind === 'measuring_rail'
+        || input.placement.kind === 'collapsed_control' && input.placement.reason === 'preference') {
         return {
             operation: 'expand',
             accessibility: 'expand',
-            itemCount: input.itemCount,
+            itemCount,
             expanded: false,
             checked: true,
         };
@@ -85,7 +88,7 @@ export function resolveSessionCompanionHeaderIntent(
     return {
         operation: 'open_full',
         accessibility: 'open_full',
-        itemCount: input.itemCount,
+        itemCount,
         expanded: false,
         checked: true,
     };
@@ -124,5 +127,6 @@ export function shouldOpenFullCompanionAfterShow(input: Readonly<{
     applied: SessionCompanionPreferenceV1;
     resolvePlacement: (preference: SessionCompanionPreferenceV1) => SessionCompanionPlacement;
 }>): boolean {
-    return input.resolvePlacement(input.applied).kind !== 'reserved_rail';
+    const placement = input.resolvePlacement(input.applied);
+    return placement.kind !== 'reserved_rail' && placement.kind !== 'measuring_rail';
 }

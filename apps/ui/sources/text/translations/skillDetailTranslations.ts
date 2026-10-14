@@ -97,8 +97,9 @@ export type SkillDetailTranslation = Readonly<{
     checking: string;
     projectNote: string;
     noAgent: string;
-    moreOnline: (params: Count) => string;
     offlineCount: (params: Count) => string;
+    summaryOn: (params: Readonly<{ agents: string; machine: string }>) => string;
+    summaryOnMany: (params: Readonly<{ agents: string; count: number }>) => string;
   }>;
   details: Readonly<{
     title: string;
@@ -226,8 +227,9 @@ const en: SkillDetailTranslation = {
     checking: 'Checking…',
     projectNote: 'Inside a project, the project’s own copy can still win.',
     noAgent: 'No agent here gets it',
-    moreOnline: ({ count }) => `${count} more`,
     offlineCount: ({ count }) => `${count} offline`,
+    summaryOn: ({ agents, machine }) => `${agents} on ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} on ${count} machines`,
   },
   details: {
     title: 'Details',
@@ -362,8 +364,9 @@ const ca: SkillDetailTranslation = {
     projectNote:
       'Dins d’un projecte, la còpia pròpia del projecte encara pot guanyar.',
     noAgent: 'Cap agent d’aquí la rep',
-    moreOnline: ({ count }) => `${count} més`,
     offlineCount: ({ count }) => `${count} fora de línia`,
+    summaryOn: ({ agents, machine }) => `${agents} a ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} a ${count} màquines`,
   },
   details: {
     title: 'Detalls',
@@ -499,8 +502,9 @@ const de: SkillDetailTranslation = {
     projectNote:
       'In einem Projekt kann die eigene Kopie des Projekts trotzdem gewinnen.',
     noAgent: 'Kein Agent hier bekommt ihn',
-    moreOnline: ({ count }) => `${count} weitere`,
     offlineCount: ({ count }) => `${count} offline`,
+    summaryOn: ({ agents, machine }) => `${agents} auf ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} auf ${count} Geräten`,
   },
   details: {
     title: 'Details',
@@ -636,8 +640,9 @@ const es: SkillDetailTranslation = {
     projectNote:
       'Dentro de un proyecto, la copia propia del proyecto aún puede ganar.',
     noAgent: 'Ningún agente de aquí la recibe',
-    moreOnline: ({ count }) => `${count} más`,
     offlineCount: ({ count }) => `${count} sin conexión`,
+    summaryOn: ({ agents, machine }) => `${agents} en ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} en ${count} máquinas`,
   },
   details: {
     title: 'Detalles',
@@ -773,8 +778,9 @@ const fr: SkillDetailTranslation = {
     projectNote:
       'Dans un projet, la copie propre au projet peut encore l’emporter.',
     noAgent: 'Aucun agent ici ne le reçoit',
-    moreOnline: ({ count }) => `${count} de plus`,
     offlineCount: ({ count }) => `${count} hors ligne`,
+    summaryOn: ({ agents, machine }) => `${agents} sur ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} sur ${count} machines`,
   },
   details: {
     title: 'Détails',
@@ -909,8 +915,9 @@ const it: SkillDetailTranslation = {
     projectNote:
       'In un progetto, la copia propria del progetto può ancora vincere.',
     noAgent: 'Nessun agente qui la riceve',
-    moreOnline: ({ count }) => `Altre ${count}`,
     offlineCount: ({ count }) => `${count} offline`,
+    summaryOn: ({ agents, machine }) => `${agents} su ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} su ${count} macchine`,
   },
   details: {
     title: 'Dettagli',
@@ -1044,8 +1051,9 @@ const ja: SkillDetailTranslation = {
     projectNote:
       'プロジェクト内では、プロジェクト自身のコピーが優先されることがあります。',
     noAgent: 'ここにはスキルを受け取るエージェントがいません',
-    moreOnline: ({ count }) => `ほか ${count} 台`,
     offlineCount: ({ count }) => `オフライン ${count} 台`,
+    summaryOn: ({ agents, machine }) => `${machine}: ${agents}`,
+    summaryOnMany: ({ agents, count }) => `${count} 台: ${agents}`,
   },
   details: {
     title: '詳細',
@@ -1178,8 +1186,9 @@ const pl: SkillDetailTranslation = {
     checking: 'Sprawdzanie…',
     projectNote: 'W projekcie nadal może wygrać własna kopia projektu.',
     noAgent: 'Żaden agent tutaj jej nie dostaje',
-    moreOnline: ({ count }) => `Jeszcze ${count}`,
     offlineCount: ({ count }) => `Offline: ${count}`,
+    summaryOn: ({ agents, machine }) => `${agents} na ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} na maszynach: ${count}`,
   },
   details: {
     title: 'Szczegóły',
@@ -1315,8 +1324,9 @@ const pt: SkillDetailTranslation = {
     projectNote:
       'Dentro de um projeto, a cópia própria do projeto ainda pode ganhar.',
     noAgent: 'Nenhum agente aqui a recebe',
-    moreOnline: ({ count }) => `Mais ${count}`,
     offlineCount: ({ count }) => `${count} offline`,
+    summaryOn: ({ agents, machine }) => `${agents} em ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} em ${count} máquinas`,
   },
   details: {
     title: 'Detalhes',
@@ -1450,8 +1460,9 @@ const ru: SkillDetailTranslation = {
     projectNote:
       'Внутри проекта всё ещё может победить собственная копия проекта.',
     noAgent: 'Ни один агент здесь его не получает',
-    moreOnline: ({ count }) => `Ещё ${count}`,
     offlineCount: ({ count }) => `Не в сети: ${count}`,
+    summaryOn: ({ agents, machine }) => `${agents} на ${machine}`,
+    summaryOnMany: ({ agents, count }) => `${agents} на устройствах: ${count}`,
   },
   details: {
     title: 'Подробности',
@@ -1578,8 +1589,9 @@ const zhHans: SkillDetailTranslation = {
     checking: '正在检查…',
     projectNote: '在项目内，项目自己的副本仍可能优先。',
     noAgent: '这里没有智能体会获得它',
-    moreOnline: ({ count }) => `另外 ${count} 台`,
     offlineCount: ({ count }) => `${count} 台离线`,
+    summaryOn: ({ agents, machine }) => `${machine} 上的 ${agents}`,
+    summaryOnMany: ({ agents, count }) => `${count} 台设备上的 ${agents}`,
   },
   details: {
     title: '详情',
@@ -1704,8 +1716,9 @@ const zhHant: SkillDetailTranslation = {
     checking: '正在檢查…',
     projectNote: '在專案內，專案自己的副本仍可能優先。',
     noAgent: '這裡沒有代理會取得它',
-    moreOnline: ({ count }) => `另外 ${count} 台`,
     offlineCount: ({ count }) => `${count} 台離線`,
+    summaryOn: ({ agents, machine }) => `${machine} 上的 ${agents}`,
+    summaryOnMany: ({ agents, count }) => `${count} 台裝置上的 ${agents}`,
   },
   details: {
     title: '詳細資料',

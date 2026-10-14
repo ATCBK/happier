@@ -148,9 +148,9 @@ WorkflowAgentRow.displayName = 'WorkflowAgentRow';
 
 const styles = StyleSheet.create((theme) => ({
     row: {
-        gap: theme.margins.xs,
-        paddingVertical: theme.margins.xs,
-        paddingHorizontal: theme.margins.xs,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s4,
         borderRadius: theme.borderRadius.md,
     },
     rowExpanded: {
@@ -165,7 +165,7 @@ const styles = StyleSheet.create((theme) => ({
     mainRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     iconColumn: {
         width: 18,
@@ -174,18 +174,18 @@ const styles = StyleSheet.create((theme) => ({
     },
     body: {
         flex: 1,
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     title: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     metrics: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
     preview: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

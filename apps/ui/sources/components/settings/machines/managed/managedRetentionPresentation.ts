@@ -83,14 +83,13 @@ export function describeRetentionConsequence(
       ? t('managedRetention.consequence.untilDeleteBilled')
       : t('managedRetention.consequence.untilDelete');
   if (retention.effect === 'delete') {
-    const when =
-      retention.kind === 'unused'
-        ? { duration: formatRetentionDuration(retention.afterMs) }
-        : { time: formatTime(retention.at) };
-    if ('duration' in when)
+    if (retention.kind === 'unused') {
+      const when = { duration: formatRetentionDuration(retention.afterMs) };
       return billed
         ? t('managedRetention.consequence.deleteBilled', when)
         : t('managedRetention.consequence.delete', when);
+    }
+    const when = { time: formatTime(retention.at) };
     return billed
       ? t('managedRetention.consequence.deleteAtBilled', when)
       : t('managedRetention.consequence.deleteAt', when);

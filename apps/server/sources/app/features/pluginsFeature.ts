@@ -1,10 +1,6 @@
 import type { FeaturesPayloadDelta } from "./types";
-import {
-    PluginDataCollectionsCapabilitiesSchema,
-    PluginUiArtifactHostingCapabilityV1Schema,
-    type PluginDataCollectionsCapabilities,
-    type PluginUiArtifactHostingCapabilityV1,
-} from "@happier-dev/protocol";
+import { PluginDataCollectionsCapabilitiesSchema, type PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
+import { PluginUiArtifactHostingCapabilityV1Schema, type PluginUiArtifactHostingCapabilityV1 } from '@happier-dev/protocol/plugins/availability/v1';
 
 import { readPluginsFeatureEnv, type PluginsFeatureEnv } from "./catalog/readFeatureEnv";
 

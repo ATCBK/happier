@@ -1,14 +1,4 @@
-import {
-    acceptPasswordTextV1,
-    decodePasswordCredentialFieldV1,
-    E2eeAccountPasswordCredentialV1Schema,
-    PASSWORD_DERIVED_AUTH_KEY_BYTES_V1,
-    PasswordWrappedRecoverySecretV1Schema,
-    type E2eeAccountPasswordCredentialV1,
-    type PasswordTextRejectionReasonV1,
-    type PasswordWrappedRecoverySecretV1,
-    type PlainAccountPasswordCredentialV1,
-} from '@happier-dev/protocol';
+import { acceptPasswordTextV1, decodePasswordCredentialFieldV1, E2eeAccountPasswordCredentialV1Schema, PASSWORD_DERIVED_AUTH_KEY_BYTES_V1, PasswordWrappedRecoverySecretV1Schema, type E2eeAccountPasswordCredentialV1, type PasswordTextRejectionReasonV1, type PasswordWrappedRecoverySecretV1, type PlainAccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 
 import { hashPasswordMaterial, verifyPasswordMaterial } from './passwordMaterialVerifier';
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ScmBranchIntegrationOperationSchema = lazyZodSchema(() => z.enum(['merge', 'rebase']));
 export type ScmBranchIntegrationOperation = z.infer<typeof ScmBranchIntegrationOperationSchema>;
@@ -7,22 +7,22 @@ export type ScmBranchIntegrationOperation = z.infer<typeof ScmBranchIntegrationO
 export const ScmRepositoryOperationKindSchema = lazyZodSchema(() => z.enum(['merge', 'rebase', 'revert', 'cherry_pick']));
 export type ScmRepositoryOperationKind = z.infer<typeof ScmRepositoryOperationKindSchema>;
 
-export const ScmOperationStateSchema = lazyZodSchema(() => z.object({
+export const ScmOperationStateSchema = lazyZodSchema(() => z.strictObject({
   kind: ScmRepositoryOperationKindSchema,
-  sourceRef: z.string().nullable().optional(),
-  replayCommit: z.string().optional(),
-  baseOid: z.string().optional(),
-  headOid: z.string().optional(),
-  unresolvedCount: z.number().int().nonnegative().optional(),
-  conflicts: z.array(z.object({
+  sourceRef: z.optional(z.nullable(z.string())),
+  replayCommit: z.optional(z.string()),
+  baseOid: z.optional(z.string()),
+  headOid: z.optional(z.string()),
+  unresolvedCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  conflicts: z.optional(z.array(z.strictObject({
     path: z.string(),
     kind: z.string(),
-    indexStages: z.object({ base: z.string().optional(), ours: z.string().optional(), theirs: z.string().optional() }).strict().optional(),
-  }).strict()).optional(),
+    indexStages: z.optional(z.strictObject({ base: z.optional(z.string()), ours: z.optional(z.string()), theirs: z.optional(z.string()) })),
+  }))),
   canContinue: z.boolean(),
   canAbort: z.boolean(),
-  canSkip: z.boolean().optional(),
-}).strict().refine((state) => !state.canContinue || !state.unresolvedCount, {
+  canSkip: z.optional(z.boolean()),
+}).check(z.refine((state) => !state.canContinue || !state.unresolvedCount, {
   message: 'Unresolved conflicts prevent continuation', path: ['canContinue'],
-}));
+})));
 export type ScmOperationState = z.infer<typeof ScmOperationStateSchema>;

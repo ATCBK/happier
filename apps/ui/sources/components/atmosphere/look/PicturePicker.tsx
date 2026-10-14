@@ -218,7 +218,7 @@ function UserPictureLine(props: Readonly<{ localId: string }>) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  picker: { gap: 8 },
+  picker: { gap: theme.space.s8 },
   add: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',

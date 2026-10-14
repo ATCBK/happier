@@ -146,17 +146,13 @@ export const PromptDocApprovalDiff = React.memo(function PromptDocApprovalDiff(
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
-  container: { gap: 8 },
+  container: { gap: theme.space.s8 },
   conflict: {
-    ...Typography.default(),
-    fontSize: 12,
-    lineHeight: 17,
+    ...Typography.variant('meta'),
     color: theme.colors.state.warning.foreground,
   },
   quiet: {
-    ...Typography.default(),
-    fontSize: 12,
-    lineHeight: 17,
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

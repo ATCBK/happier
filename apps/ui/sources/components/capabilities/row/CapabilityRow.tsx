@@ -13,6 +13,7 @@ import {
   type CapabilityStatus,
 } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { Item } from '@/components/ui/lists/Item';
+import { SelectionCheckGlyph } from '@/components/ui/selection/SelectionCheckGlyph';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { Text } from '@/components/ui/text/Text';
 
@@ -26,12 +27,23 @@ export type CapabilityRowProps = Readonly<{
   status?: CapabilityStatus | null;
   /** Identity mark (MCP server mark, agent mark). Skills have none. */
   mark?: React.ReactNode;
+  /**
+   * A checklist row (first run's "Choose what your agents get"): a leading checkbox in the mark's column, and
+   * the whole row is the checkbox (its press toggles it).
+   */
+  checked?: boolean;
   /** Right action column (Add, Install, "In your library ✓"; on scope pages only, a `Switch`). */
   action?: React.ReactNode;
+  /** A quiet explanation under the facts, on the row's text edge (Found: "this copy wins on <machine>"). */
+  note?: React.ReactNode;
+  /** A wide action leaves its column on a narrow row (a phone) and sits under the text instead. */
+  stackActionWhenNarrow?: boolean;
   selected?: boolean;
   dimmed?: boolean;
   density?: 'page' | 'rail' | 'menu';
   onPress?: () => void;
+  /** A legend's rows stand without hairlines between them (a homepage map's legend); rows in a list keep them. */
+  divider?: false;
   /** Pointer over or keyboard focus on the row (a homepage map previews its reach); false when it leaves. */
   onPreviewChange?: (active: boolean) => void;
   testID: string;
@@ -47,7 +59,8 @@ export const CapabilityRow = React.memo(function CapabilityRow(
   props: CapabilityRowProps,
 ) {
   const density = props.density ?? 'page';
-  // Menu density recomposes on a narrow row (a phone sheet): the scope leaves its column for line 3.
+  // Menu density recomposes on a narrow row (a phone sheet): the scope leaves its column for line 3, and
+  // a wide action (`stackActionWhenNarrow`) leaves its column for the line under the text.
   const [narrow, setNarrow] = React.useState(false);
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
     setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width));
@@ -91,8 +104,22 @@ export const CapabilityRow = React.memo(function CapabilityRow(
     ) : (
       menuLine2
     );
-  const bottom = menu ? null : factsLine;
-  const right = menuNarrow ? (
+  const stackedAction =
+    props.stackActionWhenNarrow === true &&
+    narrow &&
+    !menu &&
+    props.action != null
+      ? props.action
+      : null;
+  const bottom =
+    menu || (factsLine === null && props.note == null && stackedAction === null) ? null : (
+      <>
+        {factsLine}
+        {props.note == null ? null : <View style={styles.note}>{props.note}</View>}
+        {stackedAction === null ? null : <View style={styles.stackedAction}>{stackedAction}</View>}
+      </>
+    );
+  const right = stackedAction !== null ? null : menuNarrow ? (
     (props.action ?? null)
   ) : menu ? (
     summary === null && props.action == null ? null : (
@@ -111,7 +138,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
     (props.action ?? null)
   );
   return (
-    <View {...(menu ? { onLayout } : {})}>
+    <View {...(menu || props.stackActionWhenNarrow === true ? { onLayout } : {})}>
       <Item
         title={props.title}
         {...(menu
@@ -119,15 +146,23 @@ export const CapabilityRow = React.memo(function CapabilityRow(
           : props.description == null ? {} : { subtitle: props.description })}
         subtitleLines={1}
         {...(menu || summary === null ? {} : { titleMeta: summary })}
-        {...(props.mark == null ? {} : { icon: dimmed ? <View style={styles.dimmed}>{props.mark}</View> : props.mark })}
+        {...(props.checked !== undefined
+          ? {
+              icon: <SelectionCheckGlyph state={props.checked ? 'checked' : 'unchecked'} />,
+              accessibilityRole: 'checkbox' as const,
+              accessibilityChecked: props.checked,
+            }
+          : props.mark == null ? {} : { icon: dimmed ? <View style={styles.dimmed}>{props.mark}</View> : props.mark })}
         {...(dimmed ? { titleStyle: styles.dimmed, subtitleStyle: styles.dimmed } : {})}
         {...(right === null ? {} : { rightElement: right })}
         {...(bottom === null
           ? {}
           : {
-              bottomElement: <View style={styles.facts}>{bottom}</View>,
+              bottomElement: <View style={density === 'page' ? styles.factsPage : styles.facts}>{bottom}</View>,
               bottomElementInset: 'text' as const,
             })}
+        // Facts sit right under the description: the row's own bottom padding moves below them.
+        {...(bottom !== null && density === 'page' ? { style: styles.factsFollow } : {})}
         {...(props.selected === undefined ? {} : { selected: props.selected })}
         {...(density === 'rail'
           ? { density: 'compact' as const, pressableStyle: collectionListStyles.row }
@@ -143,6 +178,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
         {...(menu ? { rowRole: 'menu' as const } : {})}
         {...(props.onPress === undefined ? {} : { onPress: props.onPress })}
         showChevron={false}
+        {...(props.divider === false ? { showDivider: false } : {})}
         testID={props.testID}
       />
     </View>
@@ -159,6 +195,10 @@ const styles = StyleSheet.create((theme) => ({
     fontVariant: ['tabular-nums'],
   },
   facts: { paddingTop: theme.space.s2, minWidth: 0 },
+  factsFollow: { paddingBottom: 0 },
+  factsPage: { paddingTop: theme.space.s4, minWidth: 0 },
+  note: { paddingTop: theme.space.s8, minWidth: 0 },
+  stackedAction: { paddingTop: theme.space.s8, alignItems: 'flex-start' },
   menuColumns: {
     flexDirection: 'row',
     alignItems: 'center',

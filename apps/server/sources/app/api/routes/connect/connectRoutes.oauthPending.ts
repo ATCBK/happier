@@ -1,7 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1,
-} from "@happier-dev/protocol";
+import type { AccountEncryptionMigrateExternalAuthBindingDigestV1 } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";

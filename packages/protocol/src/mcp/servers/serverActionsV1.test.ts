@@ -276,6 +276,7 @@ describe('canonical MCP Action owner', () => {
       env: {}, createdAt: 1, updatedAt: 1 }, binding: { id: 'rule', serverId: 'server', enabled: true,
       target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 } };
     expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse(draftTest).success).toBe(true);
+    expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse({ ...draftTest, unexpected: true }).success).toBe(false);
     expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse({ ...draftTest,
       binding: { ...draftTest.binding, overrides: { envPatch: { TOKEN: null } } } }).success).toBe(false);
     const byIdTest = { t: 'byId', machineId: 'machine', directory: '/repo', serverId: 'server' };

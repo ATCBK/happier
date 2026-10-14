@@ -10,6 +10,18 @@ import {
 } from './diffSummary.js';
 
 describe('SCM diff-summary cache protocol', () => {
+  it('separates investigated generation from evidence-only generation without changing the captured comparison identity', () => {
+    const base = { source: { kind: 'comparison' as const, comparisonId: 'exact-tree-pair' },
+      summarySchemaVersion: 1, resolvedSelector: { catalogId: 'model:one' } };
+    expect(buildScmDiffSummaryCacheKey({ ...base, investigateSurroundingFiles: true })).not.toBe(buildScmDiffSummaryCacheKey(base));
+    expect(buildScmDiffSummaryCacheKey({ ...base, investigateSurroundingFiles: false })).toBe(buildScmDiffSummaryCacheKey(base));
+  });
+  it('separates prose languages while preserving omitted-language cache keys', () => {
+    const base = { source: { kind: 'comparison' as const, comparisonId: 'exact-tree-pair' },
+      summarySchemaVersion: 1, resolvedSelector: { catalogId: 'model:one' } };
+    expect(buildScmDiffSummaryCacheKey({ ...base, outputLanguage: 'fr' })).not.toBe(buildScmDiffSummaryCacheKey(base));
+    expect(buildScmDiffSummaryCacheKey({ ...base, outputLanguage: 'fr' })).not.toBe(buildScmDiffSummaryCacheKey({ ...base, outputLanguage: 'de' }));
+  });
   it('keeps checkpoint identities durable, digest-independent and separated by evidence mode', () => {
     const base = { source: { kind: 'turnCheckpoint' as const,
       checkpointReceiptId: 'checkpoint.diff_computed',

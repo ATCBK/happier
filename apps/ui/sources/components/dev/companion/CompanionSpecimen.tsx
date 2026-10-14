@@ -105,9 +105,9 @@ const REFS = [
 
 const stylesheet = StyleSheet.create((theme) => ({
     page: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    pageContent: { padding: 24, gap: 24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
-    frame: { gap: 8 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.tertiary },
+    pageContent: { padding: theme.space.s24, gap: theme.space.s24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
+    frame: { gap: theme.space.s8 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.tertiary },
     rail: {
         width: 390,
         minHeight: 720,
@@ -116,9 +116,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderStartColor: theme.colors.border.default,
     },
     phone: { width: 390, minHeight: 760, backgroundColor: theme.colors.surface.base },
-    railHeader: { paddingStart: 12, paddingTop: 10, paddingBottom: 2 },
-    railTitle: { ...Typography.default('semiBold'), fontSize: 15, color: theme.colors.text.primary },
-    column: { paddingHorizontal: 12, paddingBottom: 12 },
+    railHeader: { paddingStart: theme.space.s12, paddingTop: theme.space.s10, paddingBottom: theme.space.s2 },
+    railTitle: {  ...Typography.variant('heading'), color: theme.colors.text.primary },
+    column: { paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s12 },
 }));
 
 function PlanItem(props: Readonly<{ activity: SessionAgentPlanActivity }>) {

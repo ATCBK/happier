@@ -1,7 +1,8 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { createStorageModuleMock, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
+import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installPendingMessagesCommonModuleMocks } from './pendingMessagesTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

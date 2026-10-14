@@ -96,13 +96,13 @@ export function WorkspaceScmBranchPopover(props: WorkspaceScmBranchPopoverProps)
                         style={({ pressed }) => ({
                             flexDirection: 'row',
                             alignItems: 'center',
-                            gap: 4,
+                            gap: theme.space.s4,
                             maxWidth: '100%',
                             opacity: pressed ? motionTokens.press.opacitySubtle : 1,
                         })}
                     >
                         <Icon name="git-branch" size={13} color={theme.colors.text.secondary} />
-                        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                        <Text numberOfLines={1} style={{ flexShrink: 1, ...Typography.variant('body', 'semiBold'), color: theme.colors.text.primary,  }}>
                             {props.currentBranch || t('files.detachedHead')}
                         </Text>
                         <Icon name={props.open ? 'caret-up' : 'caret-down'} size={11} color={theme.colors.text.tertiary} />
@@ -117,11 +117,11 @@ export function WorkspaceScmBranchPopover(props: WorkspaceScmBranchPopoverProps)
                         style={({ pressed }) => ({
                             flexDirection: 'row',
                             alignItems: 'center',
-                            gap: 6,
+                            gap: theme.space.s6,
                             opacity: disabled ? 0.6 : pressed ? motionTokens.press.opacitySubtle : 1,
                         })}
                     >
-                        <Text numberOfLines={1} style={{ fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                        <Text numberOfLines={1} style={{ ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary,  }}>
                             {props.currentBranch || t('files.detachedHead')}
                         </Text>
                         <Icon name={props.open ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.secondary} />
@@ -151,7 +151,7 @@ export function WorkspaceScmBranchPopover(props: WorkspaceScmBranchPopoverProps)
                             overflow: 'hidden',
                         }}
                     >
-                        <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 10 }}>
+                        <View style={{ paddingHorizontal: theme.space.s12, paddingTop: theme.space.s12, paddingBottom: theme.space.s10 }}>
                             <TextInput
                                 ref={inputRef}
                                 value={searchQuery}
@@ -168,15 +168,15 @@ export function WorkspaceScmBranchPopover(props: WorkspaceScmBranchPopoverProps)
                                     borderWidth: 1,
                                     borderColor: theme.colors.border.default,
                                     borderRadius: 10,
-                                    paddingHorizontal: 12,
-                                    paddingVertical: 8,
+                                    paddingHorizontal: theme.space.s12,
+                                    paddingVertical: theme.space.s8,
                                     backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
                                 }}
                             />
                         </View>
                         <ScrollView
                             style={{ maxHeight: 360 }}
-                            contentContainerStyle={{ paddingBottom: 8 }}
+                            contentContainerStyle={{ paddingBottom: theme.space.s8 }}
                             keyboardShouldPersistTaps="handled"
                             nestedScrollEnabled
                             testID="workspace-scm-branch-popover-scroll"

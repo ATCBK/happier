@@ -44,6 +44,36 @@ describe("accountRoutes v2 usage", () => {
         ]);
     });
 
+    it("keeps shared-session usage viewer-bound and retires the read when the grant is removed", async () => {
+        const [owner, reader, outsider] = await Promise.all(["owner", "reader", "outsider"].map(role =>
+            db.account.create({ data: { publicKey: `pk-usage-shared-${role}`, encryptionMode: "plain" }, select: { id: true } })));
+        const session = await db.session.create({ data: { accountId: owner.id, tag: "usage-shared",
+            encryptionMode: "plain", metadata: "{}" }, select: { id: true } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: reader.id, accessLevel: "view", canApprovePermissions: false } });
+        await db.usageEvent.create({ data: { accountId: owner.id, sessionId: session.id, observedAt: new Date(1000),
+            agentId: "claude", source: "runtime", scope: "turn_delta", inputTokens: 10, totalTokens: 10 } });
+        await db.sessionMessage.create({ data: { sessionId: session.id, seq: 1, content: { t: "plain", v: {} } } });
+        await withAuthenticatedTestApp(accountRoutes, async app => {
+            const query = (accountId: string) => app.inject({ method: "POST", url: "/v2/usage/query",
+                headers: { "content-type": "application/json", "x-test-user-id": accountId },
+                payload: { filters: { sessionIds: [session.id] }, includeMessageStats: true, includeInsights: true } });
+            expect((await query(owner.id)).json().totals.tokens.total).toBe(10);
+            const shared = await query(reader.id);
+            expect(shared.statusCode).toBe(200);
+            expect(shared.json()).toMatchObject({ totals: { eventCount: 0, tokens: { total: 0 } },
+                messageStats: { sessionCount: 0, messageCount: 0 } });
+            const legacy = await app.inject({ method: "POST", url: "/v1/usage/query",
+                headers: { "content-type": "application/json", "x-test-user-id": reader.id },
+                payload: { sessionId: session.id } });
+            expect(legacy.statusCode).toBe(200);
+            expect(legacy.json().usage).toEqual([]);
+            expect((await query(outsider.id)).statusCode).toBe(404);
+            await db.sessionShare.deleteMany({ where: { sessionId: session.id } });
+            expect((await query(reader.id)).statusCode).toBe(404);
+        });
+    });
+
     it("keeps adjacent v2 ranges disjoint while translating the retained inclusive v1 end", async () => {
         const account = await db.account.create({ data: { publicKey: "pk-query-boundary" }, select: { id: true } });
         const session = await db.session.create({ data: { accountId: account.id, tag: "query-boundary",

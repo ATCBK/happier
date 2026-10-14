@@ -8,7 +8,8 @@ import { t } from '@/text';
 import { Modal } from '@/modal';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
-import { WIDGET_MOVE_PENDING_CODE, WIDGET_MOVE_UNCHANGED_CODE, widgetEntitySourceRef } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+import { WIDGET_MOVE_PENDING_CODE, widgetEntitySourceRef } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+import { WIDGET_MOVE_UNCHANGED_CODE } from '@/components/ui/treeDragDrop/entityDropNoChange';
 export { widgetEntitySourceRef };
 
 export type WidgetEntityMovementAdmission = Readonly<

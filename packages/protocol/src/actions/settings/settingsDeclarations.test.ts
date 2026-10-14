@@ -8,6 +8,31 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it('keeps Account tool visibility human-owned across settings mutation routes', () => {
+    const declaration = readBuiltInSettingDeclarationV1('transcript.showToolCalls');
+    expect(declaration).toMatchObject({ presentUserOnly: true, surfaces: { agent: false, mcp: false } });
+    for (const actionId of ['settings.set', 'settings.reset', 'settings.invoke'] as const) {
+      const input = { anchor: 'transcript.showToolCalls', value: false };
+      expect(isPresentUserSettingWriteV1(actionId, input)).toBe(true);
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(isAccountSettingActionSurfaceAllowedV1(actionId, input, surface)).toBe(false);
+      }
+      for (const surface of ['ui', 'voice', 'cli'] as const) {
+        expect(isAccountSettingActionSurfaceAllowedV1(actionId, input, surface)).toBe(true);
+      }
+    }
+  });
+  it('owns MCP startup failure policy on Sessions and preserves its Account storage key', () => {
+    const declaration = readBuiltInSettingDeclarationV1('session.mcpServersStrictMode');
+    expect(declaration).toMatchObject({ pageId: 'session', sectionId: 'session.mcpServersReliability',
+      storage: { scope: 'account', key: 'mcpServersStrictMode', access: 'read_write' } });
+    if (!declaration) throw new Error('MCP failure policy declaration unavailable');
+    const settings = accountSettingsParse({ mcpServersStrictMode: false, transcriptShowToolCalls: false });
+    expect(readBuiltInAccountSettingValueV1(declaration, settings)).toBe(false);
+    expect(buildBuiltInAccountSettingMutationV1(declaration, settings, true)).toEqual({ mcpServersStrictMode: true });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, settings, 'stop')).toBeNull();
+    expect(BUILT_IN_SETTINGS_DECLARATIONS_V1.some(row => row.anchor.startsWith('mcp.preview.'))).toBe(false);
+  });
   it('reads and strictly mutates agent HTML network through the Account declaration without touching siblings', () => {
     const declaration = readBuiltInSettingDeclarationV1('transcript.agentHtmlNetworkPolicy');
     expect(declaration).not.toBeNull();
@@ -145,7 +170,6 @@ describe('portable built-in Settings declarations', () => {
     expect(readBuiltInAccountSettingValueV1(declaration, settings)).toBe(false);
     expect(buildBuiltInAccountSettingMutationV1(declaration, settings, true)).toEqual({ analyticsOptOut: false });
     expect(readBuiltInSettingDeclarationV1('delegation.approvalReviewerEnabled')?.presentUserOnly).toBe(true);
-    expect(readBuiltInSettingDeclarationV1('transcript.showToolCalls')?.surfaces).toEqual({ agent: false, mcp: false });
     expect(readBuiltInSettingDeclarationV1('voicePrivacy.diagnosticsEnabled')?.storage?.access).toBe('read_only');
     expect(readBuiltInSettingDeclarationV1('voicePrivacy.forgetVoiceAgentMemory')?.operation).toEqual(expect.objectContaining({
       kind: 'invoke', requiresHumanInteraction: true, requiresApproval: true,

@@ -22,7 +22,7 @@ import type { ProviderContributionV1 } from '../providers/contributions/v1.js';
 import { listLegacyAiLaunchProfileUnpromotedCredentialEnvironmentVariableNamesV1, requiresLegacyAiLaunchProfileProviderSourcePreparationV1 } from '../providers/migrations/legacyProfilesV1.js';
 import { LaunchProfileIdV2Schema } from './v2/profileId.js';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 export type AiLaunchProfileSourceV1 = Readonly<{
@@ -41,21 +41,21 @@ export type AiLaunchProfile = (HistoricalAiBackendProfileV1 | LaunchProfileV2) &
 /** Opened public results are closed; stored compatibility remains body-owner defined. */
 export const AiLaunchProfileV1Schema = lazyZodSchema(() => {
   const source = {
-    artifactId: LaunchProfileArtifactReferenceV1Schema.shape.artifactId.optional(),
-    secretBindings: ProfileSecretBindingsV1Schema.readonly().optional(),
-    shared: z.boolean().optional(), viewOnly: z.boolean().optional(),
-    revision: ArtifactRevisionV1Schema.readonly().optional(),
-    enabled: z.boolean().optional(),
-    promptStack: z.array(PromptStackEntryV1Schema).readonly().optional(),
-    skillSeeds: z.array(z.string().min(1)).readonly().optional(),
-    profileRecordRevision: ProfileRowRevisionV1Schema.optional(),
+    artifactId: z.optional(LaunchProfileArtifactReferenceV1Schema.shape.artifactId),
+    secretBindings: z.optional(z.readonly(ProfileSecretBindingsV1Schema)),
+    shared: z.optional(z.boolean()), viewOnly: z.optional(z.boolean()),
+    revision: z.optional(z.readonly(ArtifactRevisionV1Schema)),
+    enabled: z.optional(z.boolean()),
+    promptStack: z.optional(z.readonly(z.array(PromptStackEntryV1Schema))),
+    skillSeeds: z.optional(z.readonly(z.array(z.string().check(z.minLength(1))))),
+    profileRecordRevision: z.optional(ProfileRowRevisionV1Schema),
   };
   return z.union([
-    AIBackendProfileSchema.safeExtend({ ...source,
-      codingPromptBehaviorV1: HistoricalCodingPromptBehaviorProfileOverrideV1Schema.unwrap().strict().optional(),
-      codingPromptBehaviorOverrides: CodingPromptBehaviorOverridesV1Schema.optional(),
-    }).strict(),
-    StoredLaunchProfileV2Schema.safeExtend(source).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(AIBackendProfileSchema, { ...source,
+      codingPromptBehaviorV1: z.optional(z.catchall(HistoricalCodingPromptBehaviorProfileOverrideV1Schema._zod.def.innerType, z.never())),
+      codingPromptBehaviorOverrides: z.optional(CodingPromptBehaviorOverridesV1Schema),
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(StoredLaunchProfileV2Schema, source)),
   ]);
 });
 
@@ -321,13 +321,13 @@ export function readAiLaunchProfileRecords(raw: readonly unknown[], options?: Re
   return { raw, entries, diagnostics };
 }
 
-export const LegacyProfileRecordPreparationDiagnosticV1Schema = lazyZodSchema(() => z.object({
-  profileId: z.string().optional(),
-  index: z.number().int().nonnegative().optional(),
+export const LegacyProfileRecordPreparationDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
+  profileId: z.optional(z.string()),
+  index: z.optional(z.number().check(z.int(), z.nonnegative())),
   reason: z.enum(['future_version', 'malformed', 'artifact_unavailable', 'identity_mismatch',
     'duplicate_profile_id', 'unresolved_binding_profile', 'unresolved_stack_profile', 'unresolved_enabled_profile',
     'inline-secret-requires-promotion', 'unknown-secret-reference-carrier']),
-}).strict());
+}));
 export type LegacyProfileRecordPreparationDiagnosticV1 = z.infer<typeof LegacyProfileRecordPreparationDiagnosticV1Schema>;
 
 export type LegacyProfileRecordPreparationV1 = Readonly<{

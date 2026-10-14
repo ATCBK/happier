@@ -1,10 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import {
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    PeerTcpTunnelRelayEnvelopeSchema,
-    type PeerTcpTunnelRelayEnvelope,
-} from "@happier-dev/protocol";
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, PeerTcpTunnelRelayEnvelopeSchema, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
 import type { Redis } from "ioredis";
 import type { Server, Socket } from "socket.io";
 

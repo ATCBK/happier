@@ -3,7 +3,7 @@ import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@h
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES } from '@happier-dev/protocol/connect/connectedServiceUxDiagnostics';
 import type { AccountSettings, ConnectedAccountServiceKey, BuiltInLegacyConnectedAccountOperation, ConnectedServiceCredentialHealthV1, ConnectedServiceCredentialRecordV1, ConnectedServiceCredentialRevisionBoundaryV1, ConnectedServiceCredentialRevisionV1, ConnectedServiceExecutionAuthorityV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountCredentialSnapshotV4, QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type { ConnectedAccountHealthResult as PluginConnectedAccountHealthResult } from '@happier-dev/plugin-sdk/connected-accounts';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import type { ApiClient } from '@/api/api';
@@ -74,6 +74,7 @@ import type { ConnectedServiceProjectedCredentialPresence } from '../accountGrou
 import type {
   QualifiedConnectedAccountEstablishedRuntimeOwner,
 } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
+import type { ConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { readQualifiedConnectedAccountCredentialMaterial } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
 import type {
   QualifiedConnectedAccountV4Support,
@@ -679,6 +680,7 @@ export class ConnectedServiceRefreshCoordinator {
     runAccountOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
     allowNativeAccountState?: boolean;
     connectedAccountsOwner?: Parameters<typeof materializeConnectedServicesForSpawn>[0]['connectedAccountsOwner'];
+    activatePurposeBindings?: ConnectedAccountPurposeBindingOwner['activatePurposeBindings'];
     resolveQualifiedPurposeBindingSnapshot?: (input: Readonly<{
       agentId: CatalogAgentId;
       connectedServicesBindingsRaw: unknown;
@@ -3008,6 +3010,31 @@ export class ConnectedServiceRefreshCoordinator {
         resolveQualifiedRequestAuthPurposeBindingsFromSnapshot(
           qualifiedPurposeBindingSnapshot,
         );
+      const purposeConsumer = qualifiedPurposeBindingSnapshot?.purposes[0]?.consumer ?? null;
+      let rematerializationAuthorityCurrent = true;
+      const rematerializationPurposeLease = !target.exactPurposeBindingSubjectId
+        && qualifiedPurposeBindingSnapshot
+        && purposeConsumer
+        && this.params.activatePurposeBindings
+        ? this.params.activatePurposeBindings({
+            subject: {
+              kind: 'operation',
+              operationId: `connected-service-rematerialization:${randomUUID()}`,
+              consumer: purposeConsumer,
+              ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+              isCurrent: () => rematerializationAuthorityCurrent
+                && this.runtimeRegistry.listRefreshTargets().some((candidate) => (
+                  candidate.runtimeIdentityKey === target.runtimeIdentityKey
+                  && candidate.revision === target.revision
+                )),
+            },
+            purposes: qualifiedPurposeBindingSnapshot.purposes,
+            bindings: qualifiedPurposeBindingSnapshot.bindings,
+            ...(qualifiedPurposeBindingSnapshot.directMaterialOrigins
+              ? { directMaterialOrigins: qualifiedPurposeBindingSnapshot.directMaterialOrigins }
+              : {}),
+          })
+        : null;
       try {
         await this.runCurrentAccountOperation(() => materializeConnectedServicesForSpawn({
           agentId: target.agentId,
@@ -3027,8 +3054,9 @@ export class ConnectedServiceRefreshCoordinator {
             requestAuthPurposeBindings,
           },
           qualifiedPurposeBindingSnapshot,
-          ...(target.exactPurposeBindingSubjectId
-            ? { exactPurposeBindingSubjectId: target.exactPurposeBindingSubjectId }
+          ...(target.exactPurposeBindingSubjectId || rematerializationPurposeLease
+            ? { exactPurposeBindingSubjectId: target.exactPurposeBindingSubjectId
+                ?? rematerializationPurposeLease!.subjectId }
             : target.sessionId
             ? { purposeBindingSessionId: target.sessionId }
             : {}),
@@ -3058,6 +3086,9 @@ export class ConnectedServiceRefreshCoordinator {
           reason: boundConnectedServiceMaterializationDiagnosticValue(primaryDiagnostic.reason),
         });
         continue;
+      } finally {
+        rematerializationAuthorityCurrent = false;
+        rematerializationPurposeLease?.dispose();
       }
       rematerialized.push(target);
     }

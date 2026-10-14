@@ -90,29 +90,29 @@ WorkflowRunHeader.displayName = 'WorkflowRunHeader';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     headerRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     title: {
         flex: 1,
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     statusBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     statusLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     summary: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

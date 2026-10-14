@@ -29,23 +29,11 @@ import { resolveIsolatedStoredContentPublicShareOrigin } from '@/app/share/store
 import { registerArtifactHtmlViewerRoutes } from '../share/registerPublicShareViewerRoutes';
 import { readHomeConfigEnv } from '@/app/home/settings/homeSettings';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
-import {
-    ArtifactCallerAccessV1Schema,
-    ArtifactAccessGrantSetStorageInputV1Schema,
-    ArtifactAccessGrantRemoveInputV1Schema,
-    ArtifactAccessGrantsListResponseV1Schema,
-    ArtifactAccessGrantMutationResponseV1Schema,
-    ArtifactAccessRecipientCensusResponseV1Schema,
-    ArtifactRecipientKeyEnvelopeCommitInputV1Schema,
-    ArtifactRecipientKeyEnvelopeCommitResponseV1Schema,
-    ArtifactAccessErrorCodeV1Schema,
-    ArtifactRevisionListResponseV1Schema,
-    ArtifactStorageUsageV1Schema,
-    ArtifactQuotaExceededV1Schema,
-    ArtifactBlobWriteV1Schema, ArtifactBlobReadResponseV1Schema,
-    ArtifactHtmlPreviewResponseV1Schema,
-    ArtifactAccountEncryptionMigrationInventoryV1Schema,
-} from "@happier-dev/protocol";
+import { ArtifactCallerAccessV1Schema, ArtifactAccessGrantSetStorageInputV1Schema, ArtifactAccessGrantRemoveInputV1Schema, ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, ArtifactRecipientKeyEnvelopeCommitInputV1Schema, ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ArtifactAccessErrorCodeV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactRevisionListResponseV1Schema, ArtifactStorageUsageV1Schema, ArtifactQuotaExceededV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { ArtifactBlobWriteV1Schema, ArtifactBlobReadResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { ArtifactHtmlPreviewResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { ArtifactAccountEncryptionMigrationInventoryV1Schema } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
 
 const DEFAULT_ARTIFACT_LIST_LIMIT = 500;
 

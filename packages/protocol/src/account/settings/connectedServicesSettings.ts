@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BuiltInLegacyConnectedServiceBindingsV1IngressSchema,
@@ -29,7 +29,7 @@ import { resolveGeneratedSessionPresentationAgentIdV1 } from '../../agents/gener
 import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
 import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 
-const AgentIdSettingsKeySchema = lazyZodSchema(() => z.string().trim().min(1));
+const AgentIdSettingsKeySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 /** Normalize released Agent aliases once at settings ingress; an explicit current key wins. */
 function normalizeAgentKeyedSettings<T>(values: Record<string, T>): Record<string, T> {
@@ -41,19 +41,15 @@ function normalizeAgentKeyedSettings<T>(values: Record<string, T>): Record<strin
 }
 
 const ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape = {
-  serverId: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
-  teamId: z.string().trim().min(1),
-  expectedResourceRevision: z.number().int().nonnegative(),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
+  accountId: z.string().check(z.trim(), z.minLength(1)),
+  teamId: z.string().check(z.trim(), z.minLength(1)),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
 } as const;
 
 export const ConnectedServicesDefaultAuthTeamResourceBindingV2Schema = lazyZodSchema(() => z.union([
-  TeamResourceBrokeredConnectedServiceSelectionV2Schema.extend(
-    ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape,
-  ),
-  TeamResourceDirectConnectedServiceSelectionV2Schema.extend(
-    ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape,
-  ),
+  z.extend(TeamResourceBrokeredConnectedServiceSelectionV2Schema, ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape),
+  z.extend(TeamResourceDirectConnectedServiceSelectionV2Schema, ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape),
 ]));
 export type ConnectedServicesDefaultAuthTeamResourceBindingV2 = z.infer<
   typeof ConnectedServicesDefaultAuthTeamResourceBindingV2Schema
@@ -65,21 +61,21 @@ const ConnectedServicesDefaultAuthBindingsByServiceIdV2Schema = lazyZodSchema(()
     ConnectedServiceBindingSelectionV1Schema,
     ConnectedServicesDefaultAuthTeamResourceBindingV2Schema,
   ]),
-).superRefine((bindings, context) => {
+).check(z.superRefine((bindings, context) => {
   for (const serviceId of Object.keys(bindings)) {
     if (ConnectedAccountServiceKeySchema.safeParse(serviceId).success) continue;
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Invalid qualified Connected Account service key',
       path: [serviceId],
     });
   }
-}));
+})));
 
-export const ConnectedServicesDefaultAuthBindingsV2Schema = lazyZodSchema(() => z.object({
+export const ConnectedServicesDefaultAuthBindingsV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
-  bindingsByServiceId: ConnectedServicesDefaultAuthBindingsByServiceIdV2Schema.default({}),
-}).strict());
+  bindingsByServiceId: z._default(ConnectedServicesDefaultAuthBindingsByServiceIdV2Schema, {}),
+}));
 export type ConnectedServicesDefaultAuthBindingsV2 = z.infer<
   typeof ConnectedServicesDefaultAuthBindingsV2Schema
 >;
@@ -89,24 +85,19 @@ const ConnectedServicesDefaultAuthBindingsIngressSchema = lazyZodSchema(() => z.
   ConnectedServiceBindingsV1Schema,
 ]));
 
-export const ConnectedServicesDefaultAuthByAgentIdV1Schema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    bindingsByAgentId: z.record(AgentIdSettingsKeySchema, ConnectedServicesDefaultAuthBindingsIngressSchema).default({}),
-  })
-  .strict());
+export const ConnectedServicesDefaultAuthByAgentIdV1Schema = lazyZodSchema(() => z.strictObject({
+    v: z._default(z.literal(1), 1),
+    bindingsByAgentId: z._default(z.record(AgentIdSettingsKeySchema, ConnectedServicesDefaultAuthBindingsIngressSchema), {}),
+  }));
 
 /** Released bundled account settings used scalar service ids before qualified service identity. */
-const BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1Schema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    bindingsByAgentId: z.record(
+const BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
+    v: z._default(z.literal(1), 1),
+    bindingsByAgentId: z._default(z.record(
       AgentIdSettingsKeySchema,
       BuiltInLegacyConnectedServiceBindingsV1IngressSchema,
-    ).default({}),
-  })
-  .strict()
-  .transform((value) => ConnectedServicesDefaultAuthByAgentIdV1Schema.parse(value)));
+    ), {}),
+  }), z.transform((value) => ConnectedServicesDefaultAuthByAgentIdV1Schema.parse(value))));
 
 const ConnectedServicesDefaultAuthByAgentIdV1SourceSchema = lazyZodSchema(() => z
   .union([
@@ -115,8 +106,7 @@ const ConnectedServicesDefaultAuthByAgentIdV1SourceSchema = lazyZodSchema(() => 
   ]));
 
 export const BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema = lazyZodSchema(() =>
-  ConnectedServicesDefaultAuthByAgentIdV1SourceSchema
-  .catch({ v: 1 as const, bindingsByAgentId: {} }));
+  z.catch(ConnectedServicesDefaultAuthByAgentIdV1SourceSchema, { v: 1 as const, bindingsByAgentId: {} }));
 
 /**
  * Prospective 0.2 G2 ingress: the carrier is disjoint from released scalar
@@ -125,10 +115,10 @@ export const BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema =
  * Remove once predecessor-created additional defaults have all migrated.
  */
 export const BuiltInLegacyAdditionalConnectedServicesDefaultAuthByAgentIdV1IngressSchema = lazyZodSchema(() =>
-  ConnectedServicesDefaultAuthByAgentIdV1SourceSchema.transform((value) => ({
+  z.pipe(ConnectedServicesDefaultAuthByAgentIdV1SourceSchema, z.transform((value) => ({
     v: value.v,
     bindingsByAgentId: normalizeAgentKeyedSettings(value.bindingsByAgentId),
-  })),
+  }))),
 );
 
 export type ConnectedServicesDefaultAuthByAgentIdV1 = z.infer<
@@ -669,52 +659,41 @@ export type ConnectedServicesProviderStateSharingModeV1 = z.infer<
   typeof ConnectedServicesProviderStateSharingModeV1Schema
 >;
 
-export const ConnectedServicesProviderStateSharingPolicyV1Schema = lazyZodSchema(() => z
-  .object({
-    configMode: ConnectedServicesProviderConfigSharingModeV1Schema.default('linked'),
+export const ConnectedServicesProviderStateSharingPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+    configMode: z._default(ConnectedServicesProviderConfigSharingModeV1Schema, 'linked'),
     // Default to shared session state: most users connect multiple accounts for
     // usage/quota and expect their provider sessions to continue across accounts.
     // Turning this off (via `defaults.stateMode` or a per-agent `byAgentId`
     // override) is the opt-out. Providers whose descriptor reports
     // `state.supported: false` ignore `shared` and stay isolated.
-    stateMode: ConnectedServicesProviderStateSharingModeV1Schema.default('shared'),
-  })
-  .strict());
+    stateMode: z._default(ConnectedServicesProviderStateSharingModeV1Schema, 'shared'),
+  }));
 
 export type ConnectedServicesProviderStateSharingPolicyV1 = z.infer<
   typeof ConnectedServicesProviderStateSharingPolicyV1Schema
 >;
 
-const ConnectedServicesProviderStateSharingOverrideV1Schema = lazyZodSchema(() => z
-  .object({
-    configMode: ConnectedServicesProviderConfigSharingModeV1Schema.optional(),
-    stateMode: ConnectedServicesProviderStateSharingModeV1Schema.optional(),
-  })
-  .strict());
+const ConnectedServicesProviderStateSharingOverrideV1Schema = lazyZodSchema(() => z.strictObject({
+    configMode: z.optional(ConnectedServicesProviderConfigSharingModeV1Schema),
+    stateMode: z.optional(ConnectedServicesProviderStateSharingModeV1Schema),
+  }));
 
-const ConnectedServicesProviderStateSharingRiskAcknowledgementV1Schema = lazyZodSchema(() => z
-  .object({
-    sharedStatePrivacy: z.boolean().optional(),
-    symlinkUnavailable: z.boolean().optional(),
-  })
-  .strict());
+const ConnectedServicesProviderStateSharingRiskAcknowledgementV1Schema = lazyZodSchema(() => z.strictObject({
+    sharedStatePrivacy: z.optional(z.boolean()),
+    symlinkUnavailable: z.optional(z.boolean()),
+  }));
 
-export const ConnectedServicesProviderStateSharingSettingsV1Schema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    defaults: ConnectedServicesProviderStateSharingPolicyV1Schema.default({
+export const ConnectedServicesProviderStateSharingSettingsV1Schema = lazyZodSchema(() => z.pipe(z.catch(z.strictObject({
+    v: z._default(z.literal(1), 1),
+    defaults: z._default(ConnectedServicesProviderStateSharingPolicyV1Schema, {
       configMode: 'linked',
       stateMode: 'shared',
     }),
-    byAgentId: z
-      .record(AgentIdSettingsKeySchema, ConnectedServicesProviderStateSharingOverrideV1Schema)
-      .default({}),
-    acknowledgedRisksByAgentId: z
-      .record(AgentIdSettingsKeySchema, ConnectedServicesProviderStateSharingRiskAcknowledgementV1Schema)
-      .default({}),
-  })
-  .strict()
-  .catch({
+    byAgentId: z._default(z
+      .record(AgentIdSettingsKeySchema, ConnectedServicesProviderStateSharingOverrideV1Schema), {}),
+    acknowledgedRisksByAgentId: z._default(z
+      .record(AgentIdSettingsKeySchema, ConnectedServicesProviderStateSharingRiskAcknowledgementV1Schema), {}),
+  }), {
     v: 1,
     defaults: {
       configMode: 'linked',
@@ -722,12 +701,11 @@ export const ConnectedServicesProviderStateSharingSettingsV1Schema = lazyZodSche
     },
     byAgentId: {},
     acknowledgedRisksByAgentId: {},
-  })
-  .transform((value) => ({
+  }), z.transform((value) => ({
     ...value,
     byAgentId: normalizeAgentKeyedSettings(value.byAgentId),
     acknowledgedRisksByAgentId: normalizeAgentKeyedSettings(value.acknowledgedRisksByAgentId),
-  })));
+  }))));
 
 export type ConnectedServicesProviderStateSharingSettingsV1 = z.infer<
   typeof ConnectedServicesProviderStateSharingSettingsV1Schema

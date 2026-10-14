@@ -1,14 +1,14 @@
 import type { AgentPermissionIntentV1 } from '../../../runtime/permissionIntentV1.js';
 import type { McpServerToolPolicyV1, McpServerToolsSnapshotV1, McpToolAnnotationsV1 } from '../settingsV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { defineProtocolLiteral, defineProtocolObject, defineProtocolUnion } from '../../../plugins/actions/protocolComposableSchema.js';
 import { asProtocolZod } from '../../../plugins/actions/internalProtocolZodAdapter.js';
 
 export type McpToolDecisionV1 = Readonly<{ exposed: boolean; approval: 'allow' | 'ask' | 'deny'; effectClass: 'read' | 'write' | 'unknown'; source: 'tool' | 'server_default' | 'permission_mode' }>;
-export const McpToolDecisionV1Schema = lazyZodSchema(() => z.object({
+export const McpToolDecisionV1Schema = lazyZodSchema(() => z.strictObject({
   exposed: z.boolean(), approval: z.enum(['allow', 'ask', 'deny']), effectClass: z.enum(['read', 'write', 'unknown']), source: z.enum(['tool', 'server_default', 'permission_mode']),
-}).strict());
+}));
 export type McpToolLaunchPolicyV1 = Readonly<{ unlisted: 'allow' | 'ask' | 'deny'; tools: Readonly<Record<string, 'off' | 'allow' | 'ask' | 'deny'>> }>;
 const McpToolApprovalV1Definition = defineProtocolUnion([
   defineProtocolLiteral('allow'), defineProtocolLiteral('ask'), defineProtocolLiteral('deny'),
@@ -18,8 +18,8 @@ const McpToolLaunchPolicyV1Definition = defineProtocolObject({
   tools: defineProtocolObject({}, { policy: 'additive-open/preserve',
     additionalProperties: defineProtocolUnion([defineProtocolLiteral('off'), McpToolApprovalV1Definition]) }),
 }, { policy: 'closed' });
-export const McpToolLaunchPolicyV1Schema: z.ZodType<McpToolLaunchPolicyV1, McpToolLaunchPolicyV1> = asProtocolZod(McpToolLaunchPolicyV1Definition);
-export const McpToolLaunchPoliciesV1Schema: z.ZodType<Readonly<Record<string, McpToolLaunchPolicyV1>>, Readonly<Record<string, McpToolLaunchPolicyV1>>> = asProtocolZod(defineProtocolObject({}, {
+export const McpToolLaunchPolicyV1Schema: z.ZodMiniType<McpToolLaunchPolicyV1, McpToolLaunchPolicyV1> = asProtocolZod(McpToolLaunchPolicyV1Definition);
+export const McpToolLaunchPoliciesV1Schema: z.ZodMiniType<Readonly<Record<string, McpToolLaunchPolicyV1>>, Readonly<Record<string, McpToolLaunchPolicyV1>>> = asProtocolZod(defineProtocolObject({}, {
   policy: 'additive-open/preserve', additionalProperties: McpToolLaunchPolicyV1Definition,
 }));
 

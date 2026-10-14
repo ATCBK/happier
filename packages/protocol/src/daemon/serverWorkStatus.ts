@@ -1,42 +1,34 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const DaemonServerWorkCountersV1Schema = lazyZodSchema(() => z
-  .object({
-    accepted: z.number().int().nonnegative().default(0),
-    coalesced: z.number().int().nonnegative().default(0),
-    suppressed: z.number().int().nonnegative().default(0),
-    written: z.number().int().nonnegative().default(0),
-    failed: z.number().int().nonnegative().default(0),
-    deferred: z.number().int().nonnegative().default(0),
-    retried: z.number().int().nonnegative().default(0),
-  })
-  .passthrough());
+export const DaemonServerWorkCountersV1Schema = lazyZodSchema(() => z.looseObject({
+    accepted: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    coalesced: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    suppressed: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    written: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    failed: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    deferred: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+    retried: z._default(z.number().check(z.int(), z.nonnegative()), 0),
+  }));
 export type DaemonServerWorkCountersV1 = z.infer<typeof DaemonServerWorkCountersV1Schema>;
 
-export const DaemonServerWorkPurposeStatusV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonServerWorkPurposeStatusV1Schema = lazyZodSchema(() => z.looseObject({
     counters: DaemonServerWorkCountersV1Schema,
-  })
-  .passthrough());
+  }));
 export type DaemonServerWorkPurposeStatusV1 = z.infer<typeof DaemonServerWorkPurposeStatusV1Schema>;
 
-export const DaemonServerWorkKeyStatusV1Schema = lazyZodSchema(() => z
-  .object({
-    timeSinceLastSuccessMs: z.number().int().nonnegative().nullable(),
-    backoffReason: z.string().min(1).nullable(),
-    nextEligibleAt: z.number().int().nonnegative().nullable(),
-  })
-  .passthrough());
+export const DaemonServerWorkKeyStatusV1Schema = lazyZodSchema(() => z.looseObject({
+    timeSinceLastSuccessMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    backoffReason: z.nullable(z.string().check(z.minLength(1))),
+    nextEligibleAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type DaemonServerWorkKeyStatusV1 = z.infer<typeof DaemonServerWorkKeyStatusV1Schema>;
 
-export const DaemonServerWorkStatusV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonServerWorkStatusV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    pendingKeyCount: z.number().int().nonnegative(),
-    pendingPayloadBytes: z.number().int().nonnegative(),
-    purposes: z.record(z.string().min(1), DaemonServerWorkPurposeStatusV1Schema).default({}),
-    keys: z.record(z.string().min(1), DaemonServerWorkKeyStatusV1Schema).default({}),
-  })
-  .passthrough());
+    pendingKeyCount: z.number().check(z.int(), z.nonnegative()),
+    pendingPayloadBytes: z.number().check(z.int(), z.nonnegative()),
+    purposes: z._default(z.record(z.string().check(z.minLength(1)), DaemonServerWorkPurposeStatusV1Schema), {}),
+    keys: z._default(z.record(z.string().check(z.minLength(1)), DaemonServerWorkKeyStatusV1Schema), {}),
+  }));
 export type DaemonServerWorkStatusV1 = z.infer<typeof DaemonServerWorkStatusV1Schema>;

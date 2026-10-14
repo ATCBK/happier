@@ -9,6 +9,8 @@ const daemon = vi.hoisted(() => ({
   requestChange: vi.fn(),
   decideChange: vi.fn(),
   readStatus: vi.fn(),
+  readCatalog: vi.fn(),
+  listChanges: vi.fn(),
   confirm: vi.fn(),
 }));
 
@@ -21,6 +23,8 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
   requestDaemonPluginChange: daemon.requestChange,
   decideDaemonPluginChange: daemon.decideChange,
   readDaemonPluginChangeStatus: daemon.readStatus,
+  readDaemonPluginCatalog: daemon.readCatalog,
+  listDaemonPluginChanges: daemon.listChanges,
 }));
 
 vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({
@@ -50,6 +54,8 @@ beforeEach(() => {
   daemon.requestChange.mockReset();
   daemon.decideChange.mockReset();
   daemon.readStatus.mockReset();
+  daemon.readCatalog.mockReset();
+  daemon.listChanges.mockReset();
   daemon.confirm.mockReset();
 });
 
@@ -59,6 +65,26 @@ afterEach(() => {
 });
 
 describe('plugins command daemon mutations', () => {
+  it('enumerates outstanding plugin reviews with their daemon-issued ids', async () => {
+    daemon.readCatalog.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    daemon.listChanges.mockResolvedValue({ changes: [reviewRequired] });
+    const output = captureStdoutJsonOutput();
+    try {
+      await handlePluginsCommand(['list', '--json']);
+
+      expect(output.json()).toMatchObject({
+        ok: true,
+        kind: 'plugins_list',
+        data: {
+          plugins: [],
+          pendingChanges: [reviewRequired],
+        },
+      });
+    } finally {
+      output.restore();
+    }
+  });
+
   it('rejects the retired generation filter rather than silently reading other occurrences', async () => {
     const resolvePluginInvocationLogTarget = vi.fn(async () => ({
       kind: 'unavailable' as const,

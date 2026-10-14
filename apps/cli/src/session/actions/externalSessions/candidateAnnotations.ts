@@ -309,56 +309,60 @@ export async function annotateExternalSessionCandidates(
     if (params.candidates.length === 0) {
         return { candidates: params.candidates, annotationsIncomplete: false };
     }
-    throwIfAnnotationCancelled(params.signal);
-    const accountEncryptionCurrentness = await (
-        dependencies.getAccountEncryptionCurrentness
-        ?? fetchAccountEncryptionCurrentness
-    )({
-        token: params.credentials.token,
-        ...(params.signal === undefined ? {} : { signal: params.signal }),
-    });
     const candidateKeys = new Set(params.candidates.map((candidate) => (
         candidate.candidateKey ?? resolveExternalSessionCandidateIdentityKey(candidate)
     )));
     const annotations = new Map<string, CandidateAnnotation>();
-    const absorber: CandidateAnnotationAbsorber = {
-        credentials: params.credentials,
-        accountEncryptionMode: accountEncryptionCurrentness.mode,
-        decryptMetadata: dependencies.decryptMetadata,
-        candidateKeys,
-        expectedAgentId: params.agentId,
-        expectedMachineId: params.machineId,
-        expectedSourceKey: params.sourceKeyOwner.sourceKey,
-        resolveSourceKey: params.sourceKeyOwner.resolveSourceKey,
-        annotations,
-    };
-
-    const indexedLookupServed = await absorbAnnotationRowsThroughIndexedTagLookup({
-        absorber,
-        token: params.credentials.token,
-        tags: resolveCandidateAnnotationLookupTags({
-            machineId: params.machineId,
-            agentId: params.agentId,
-            source: params.source,
-            sourceKeyOwner: params.sourceKeyOwner,
-            candidates: params.candidates,
-        }),
-        lookupByTags: dependencies.lookupByTags ?? lookupSessionsByTags,
-        ...(params.signal === undefined ? {} : { signal: params.signal }),
-    });
-    const annotationsIncomplete = indexedLookupServed
-        ? false
-        : await absorbAnnotationRowsThroughBoundedScan({
-            absorber,
+    let annotationsIncomplete = true;
+    try {
+        throwIfAnnotationCancelled(params.signal);
+        const accountEncryptionCurrentness = await (
+            dependencies.getAccountEncryptionCurrentness
+            ?? fetchAccountEncryptionCurrentness
+        )({
             token: params.credentials.token,
-            maxPages: resolveAnnotationScanMaxPages(params.maxPages),
-            fetchPage: dependencies.fetchPage,
             ...(params.signal === undefined ? {} : { signal: params.signal }),
         });
-
-    // Retrieval is the expensive half; a caller that walked away before it
-    // finished must not have this page published on its behalf.
-    throwIfAnnotationCancelled(params.signal);
+        const absorber: CandidateAnnotationAbsorber = {
+            credentials: params.credentials,
+            accountEncryptionMode: accountEncryptionCurrentness.mode,
+            decryptMetadata: dependencies.decryptMetadata,
+            candidateKeys,
+            expectedAgentId: params.agentId,
+            expectedMachineId: params.machineId,
+            expectedSourceKey: params.sourceKeyOwner.sourceKey,
+            resolveSourceKey: params.sourceKeyOwner.resolveSourceKey,
+            annotations,
+        };
+        const indexedLookupServed = await absorbAnnotationRowsThroughIndexedTagLookup({
+            absorber,
+            token: params.credentials.token,
+            tags: resolveCandidateAnnotationLookupTags({
+                machineId: params.machineId,
+                agentId: params.agentId,
+                source: params.source,
+                sourceKeyOwner: params.sourceKeyOwner,
+                candidates: params.candidates,
+            }),
+            lookupByTags: dependencies.lookupByTags ?? lookupSessionsByTags,
+            ...(params.signal === undefined ? {} : { signal: params.signal }),
+        });
+        annotationsIncomplete = indexedLookupServed
+            ? false
+            : await absorbAnnotationRowsThroughBoundedScan({
+                absorber,
+                token: params.credentials.token,
+                maxPages: resolveAnnotationScanMaxPages(params.maxPages),
+                fetchPage: dependencies.fetchPage,
+                ...(params.signal === undefined ? {} : { signal: params.signal }),
+            });
+        throwIfAnnotationCancelled(params.signal);
+    } catch (error) {
+        if (!params.signal?.aborted) throw error;
+        // Annotation enriches an already-found native page. Cancellation stops
+        // further Account reads without discarding its hits or positive facts.
+        annotationsIncomplete = true;
+    }
     if (annotations.size === 0) {
         return { candidates: params.candidates, annotationsIncomplete };
     }

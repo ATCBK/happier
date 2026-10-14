@@ -22,6 +22,7 @@ import { useCurrentUiContextVoiceToolPort, type CurrentUiContextVoiceToolPort } 
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 import { useRouter } from 'expo-router';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
@@ -42,7 +43,7 @@ async function mountCurrentUiPort(withCommand = false) {
   function Publication() {
     const router = useRouter();
     const commands = React.useMemo(() => withCommand ? [{ key: 'open-voice-settings', title: 'Open Voice settings',
-      invoke: () => router.push('/settings/voice') }] : [], [router]);
+      invoke: () => router.push({ pathname: SETTINGS_ROUTES.voiceConversations }) }] : [], [router]);
     useCurrentUiContextLocalCommands(commands);
     usePublishCurrentUiContext(enrichment);
     mountedPort.current = useCurrentUiContextVoiceToolPort();

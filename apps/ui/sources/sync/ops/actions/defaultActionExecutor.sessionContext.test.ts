@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { createSessionFixture, renderHook, renderScreen } from '@/dev/testkit';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -52,7 +53,7 @@ describe('reviewed Session context through the default UI Action host', () => {
             return { body: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } } };
         } });
         const { useSessionCapabilities } = await import('@/sync/domains/capabilities/session/useSessionCapabilities');
-        const metadata = () => row.ownerMetadata?.t === 'plain' ? projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v }) : null;
+        const metadata = () => row.ownerMetadata?.t === 'plain' ? MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v })) : null;
         const { getStorage } = await import('@/sync/domains/state/storageStore');
         getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId, metadataLayoutVersion: 1,
             metadata: { path: '', host: '' }, ownerMetadataView: metadata(), metadataVersion: row.metadataVersion }) },
@@ -95,8 +96,8 @@ describe('reviewed Session context through the default UI Action host', () => {
     it('reorders and budgets Session-owned Context from mounted controls through real Home CAS without changing Notes', async () => {
         const serverId = await homes.addHome({ name: 'Context controls', serverUrl: 'https://context-controls.test', accountId: 'controls-owner' });
         const sessionId = 'c123456789012345678901234';
-        const entries = ['first', 'second'].map(id => ({ id, ref: { kind: 'doc', artifactId: id, serverId },
-            enabled: true, placement: 'system_append' }));
+        const entries = ['first', 'second'].map(id => ({ id, ref: { kind: 'doc' as const, artifactId: id, serverId },
+            enabled: true, placement: 'system_append' as const }));
         let row = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
             encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), metadataVersion: 4,
             ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: { memoryEnabled: false,
@@ -123,10 +124,12 @@ describe('reviewed Session context through the default UI Action host', () => {
         } });
         const render = () => {
             if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected plain owner metadata fixture');
-            const session = createSessionFixture({ id: sessionId, metadataVersion: row.metadataVersion });
-            return React.createElement(SessionContextSection, { serverId, session: {
-                ...session, metadata: { ...session.metadata, ...row.ownerMetadata.v },
-            } });
+            const session = createSessionFixture({ id: sessionId, metadataVersion: row.metadataVersion,
+                metadataLayoutVersion: 1, ownerMetadataView: MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({
+                    sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v,
+                })),
+            });
+            return React.createElement(SessionContextSection, { serverId, session });
         };
         const screen = await renderScreen(render());
         try {

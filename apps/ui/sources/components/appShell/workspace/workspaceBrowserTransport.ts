@@ -59,6 +59,8 @@ export function createWorkspaceBrowserTransport(input: Readonly<{
     guard?: (direction: -1 | 1, proceed: () => void) => boolean | Promise<boolean>;
     needsGuard?: (direction: -1 | 1) => boolean;
 }>): WorkspaceUrlTransport & Readonly<{
+    /** Preserve an explicit public-flow destination before scoped layout hydration can bind a tab. */
+    enterHref: (href: string, replace: boolean) => void;
     acceptPopState: (state: unknown, event?: PopStateEvent) => boolean;
 }> {
     // Workspace positions address restored views; native positions measure traversal deltas.
@@ -68,7 +70,25 @@ export function createWorkspaceBrowserTransport(input: Readonly<{
     let currentId: string | null = null;
     let authorizedId: string | null = null;
     let pending: { sourceId: string; targetId: string; delta: number; deciding: boolean } | null = null;
+    const writeHref = (href: string, replace: boolean) => {
+        pending = null;
+        authorizedId = null;
+        const id = replace ? browserEntryId(input.history.state) ?? input.createId() : input.createId();
+        currentId = id;
+        const state = input.history.state;
+        const next = { ...(state && typeof state === 'object' ? state : {}), id };
+        if (replace) input.history.replaceState(next, '', href);
+        else input.history.pushState(next, '', href);
+        return id;
+    };
     return {
+        enterHref(href, replace) {
+            const id = writeHref(href, replace);
+            // A replaced unbound URL must not retain the old tab's identity.
+            entries.delete(id);
+            currentPosition = readBrowserHistoryIndex(input.history) ?? null;
+            input.mirror(href);
+        },
         canTraverse(direction) {
             const availability = readBrowserHistoryNavigationAvailability(input.history);
             return availability ? direction === -1 ? availability.canNavigateBack : availability.canNavigateForward : undefined;
@@ -86,14 +106,7 @@ export function createWorkspaceBrowserTransport(input: Readonly<{
             }
         },
         commit(href, entry, replace, position) {
-            pending = null;
-            authorizedId = null;
-            const id = replace ? browserEntryId(input.history.state) ?? input.createId() : input.createId();
-            currentId = id;
-            const state = input.history.state;
-            const next = { ...(state && typeof state === 'object' ? state : {}), id };
-            if (replace) input.history.replaceState(next, '', href);
-            else input.history.pushState(next, '', href);
+            const id = writeHref(href, replace);
             currentPosition = readBrowserHistoryIndex(input.history) ?? position;
             entries.set(id, { entry, position, browserPosition: currentPosition });
             input.mirror(href);

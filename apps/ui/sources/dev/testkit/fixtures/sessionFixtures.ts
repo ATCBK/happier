@@ -8,8 +8,19 @@ import { V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protoc
 import { ABSENT_SESSION_FOLLOW_FACTS_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol';
 import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
-import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { QUIET_SESSION_PERSONAL_ATTENTION_V1, resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
+
+export function createSessionViewerFixture(overrides: Partial<SessionViewerProjectionV1> = {}): SessionViewerProjectionV1 {
+    const follow = overrides.follow ?? ABSENT_SESSION_FOLLOW_FACTS_V1;
+    return SessionViewerProjectionV1Schema.parse({
+        readState: { state: 'not_started' },
+        relevance: { relevant: follow.follows, reasons: follow.follows ? ['followed_by_me'] : [] },
+        attention: QUIET_SESSION_PERSONAL_ATTENTION_V1,
+        notification: resolveSessionEffectiveNotificationV1({ facts: follow, isSessionOwner: false }),
+        ...overrides, follow,
+    });
+}
 
 export function createSessionDataKeyFixture(fill = 7): Uint8Array {
     return new Uint8Array(ENCRYPTED_DATA_KEY_V1_BYTES).fill(fill);

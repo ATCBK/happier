@@ -755,20 +755,20 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   instructionsStateText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   instructionsStateSeparator: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   instructionsStateLink: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
   },
   instructionsStateQuiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

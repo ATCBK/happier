@@ -36,6 +36,7 @@ import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { UsageCoachSettingsGroup } from '../UsageCoachSettingsGroup';
 import {
   UsageBodyInsufficient,
+  UsageBodyReading,
   UsageCoverageLine,
   usagePeriodPhrase,
   useUsageAnalyticsView,
@@ -49,6 +50,7 @@ import {
   type UsageCoachController,
   type UsageCoachSnapshot,
 } from './usageCoachController';
+import { projectUsageCoachFindings } from './usageCoachPresentation';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Below this body width the Overview strip's three columns would crush their titles; it lists instead. */
@@ -74,7 +76,6 @@ const EMPTY_SNAPSHOT: UsageCoachSnapshot = {
   pending: [],
   applied: [],
   digest: null,
-  hiddenEvidenceKeys: [],
   error: null,
   approval: null,
   retired: true,
@@ -107,13 +108,14 @@ function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; te
   const sample = props.finding.evidenceSeries?.find(entry => entry.points.length > 1);
   if (!sample) return null;
   const last = sample.points[sample.points.length - 1]!;
-  const caption = formatMeasurement({ ...sample, value: last.value });
+  // The headline measurement is the finding's own figure; this line is the series' latest sample, which may differ.
+  const caption = t('usage.board.coach.latestSample', { value: formatMeasurement({ ...sample, value: last.value }) });
   return (
     <View style={styles.trend} testID={props.testID}>
       <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
         series={[{ id: sample.metric, label: caption, color: theme.colors.text.secondary,
           points: sample.points.map(point => ({ id: point.evidenceId, x: point.observedAtMs, y: point.value })) }]} />
-      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={1}>{caption}</Text>
+      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={2}>{caption}</Text>
     </View>
   );
 }
@@ -253,21 +255,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
         />
       </View>
     );
-  const hidden = new Set(snapshot.hiddenEvidenceKeys);
-  const visible = coach.findings.filter(
-    (finding) =>
-      !hidden.has(finding.evidenceKey) &&
-      !finding.state.dismissed &&
-      !(
-        finding.state.snoozedUntilMs !== null &&
-        finding.state.snoozedUntilMs > nowMs
-      ),
-  );
-  const suppressed = coach.findings.filter(finding => !visible.includes(finding));
-  const appliedOnly = snapshot.applied.filter(
-    (entry) =>
-      !visible.some((finding) => finding.evidenceKey === entry.evidenceKey),
-  );
+  const { visible, suppressed, appliedOnly } = projectUsageCoachFindings(coach.findings, snapshot, nowMs);
   const insufficient = coach.evaluations.filter(
     (
       row,
@@ -317,6 +305,8 @@ export function UsageCoachWidget(props: UsageBodyProps) {
       {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
       {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
       {visible.length === 0 && appliedOnly.length === 0 ? (
+        props.slice.sources.some(source => ['accounting', 'how_you_work'].includes(source.source) && source.status === 'pending')
+          && coach.currentness !== 'stale' ? <UsageBodyReading testID={`${props.testID}.loading`} /> :
         <SurfaceStateCard
           testID={`${props.testID}.empty`}
           kind="empty"

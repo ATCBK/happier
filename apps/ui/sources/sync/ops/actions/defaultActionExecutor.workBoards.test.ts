@@ -70,7 +70,9 @@ describe('Board Actions through captured Home Artifacts', () => {
         if (!moved.ok) throw new Error(moved.error);
         const board = currentBoard();
         expect(WorkBoardActionOutputSchemasV1['boards.apply'].parse(moved.result).board).toEqual(board);
-        const envelope = ArtifactBodyEnvelopeV1Schema.parse(decodePlainArtifactStoredContent(persistence.read('mine')!.body));
+        const storedBody = persistence.read('mine')?.body;
+        if (typeof storedBody !== 'string') throw new Error('Expected stored Board body');
+        const envelope = ArtifactBodyEnvelopeV1Schema.parse(decodePlainArtifactStoredContent(storedBody));
         expect(typeof envelope.body).toBe('string');
         // The mounted UI queue is the trusted live-membership port, not a second writer.
         // Account capture, Action schema/policy and execution all stay real above the Artifact boundary.

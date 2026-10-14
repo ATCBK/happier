@@ -191,6 +191,24 @@ describe('Home Customize entity reorder binding', () => {
         expect(screen.root.findAll(node => node.props.testIDPrefix === 'home-layout.g.group.width')).toHaveLength(0);
         expect(artifact.writes).toHaveLength(0);
     });
+    it('tells apart the groups placed from one saved group, and only those', async () => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        const child = (id: string) => ({ v: 1 as const, id, displayName: 'Daily usage', definition: { kind: 'builtin' as const, id: 'session_summary' as const }, bindings: {} });
+        const group = (id: string, title: string) => ({ kind: 'group' as const, id, title, width: 'full' as const, frameStyle: 'card' as const, dividers: 'hairline' as const,
+            children: [{ kind: 'widget' as const, instance: child(`${id}-child`) }] });
+        artifact.seed({ v: 1, order: [], hidden: [], items: [group('g1', 'Capacity copy'), group('g2', 'Capacity copy'), group('g3', 'Release room')] });
+        await import('@/sync/syncEngine');
+        restoreActionLoader = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-customize-copies.test', accountId: 'account-a', request: artifact.request });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /></AccountShell>);
+        await flushHookEffects({ cycles: 3 });
+        const subtitle = (id: string) => screen.root.findAll(node => node.props.testID === `home-layout.${id}` && 'subtitle' in node.props)[0]?.props.subtitle;
+        expect(subtitle('g1')).toBe('widgetFrame.groupCopyOf(count=1,index=1,total=2)');
+        expect(subtitle('g2')).toBe('widgetFrame.groupCopyOf(count=1,index=2,total=2)');
+        expect(subtitle('g3')).toBe('widgetFrame.groupCount(count=1)');
+    });
     it('names an unreachable Home when a preparatory read prevents a Customize write', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
         artifact.seed({ v: 1, items: [], order: ['setup'], hidden: ['setup'] });
@@ -415,8 +433,12 @@ describe('Home Customize entity reorder binding', () => {
         const effect = list().props.binding.resolve('setup', { anchorId: 'start', placement: 'before' });
         expect(effect.status).toBe('allowed');
         if (effect.status !== 'allowed') throw new Error('Expected the layout move to be admitted');
+        const projectMove = list().props.binding.projectMove;
+        if (!projectMove) throw new Error('Expected the Home layout placement owner to be bound');
+        const projectedOrder = projectMove('setup', { anchorId: 'start', placement: 'before' });
         await act(async () => { await list().props.binding.execute(effect.effect); });
         await flushHookEffects({ cycles: 3 });
+        expect(list().props.binding.items.map((item: { id: string }) => item.id)).toEqual(projectedOrder);
         expect(artifact.layout().order.indexOf('setup')).toBeLessThan(artifact.layout().order.indexOf('start'));
         // Acknowledged writes do not leave the mounted editor on the first Artifact revision.
         for (const [sectionId, anchorId] of [['start', 'setup'], ['attention', 'start']] as const) {

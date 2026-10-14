@@ -153,8 +153,8 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
         <View
             testID={props.testID}
             style={{
-                gap: 10,
-                padding: 12,
+                gap: theme.space.s10,
+                padding: theme.space.s12,
                 borderWidth: 1,
                 borderColor: theme.colors.border.default,
                 backgroundColor: theme.colors.surface.inset,
@@ -182,7 +182,7 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                 accessible
                 accessibilityRole="summary"
                 accessibilityLabel={detailsAccessibilityLabel}
-                style={{ gap: 4, direction: I18nManager.isRTL ? 'rtl' : 'ltr' }}
+                style={{ gap: theme.space.s4, direction: I18nManager.isRTL ? 'rtl' : 'ltr' }}
             >
                 <Text style={{ color: theme.colors.text.primary }}>
                     {pluginName}
@@ -202,7 +202,7 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                     </Text>
                 ))}
             </View>
-            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <View style={{ flexDirection: 'row', gap: theme.space.s8, flexWrap: 'wrap' }}>
                 <Pressable
                     onPress={disabled ? undefined : grant}
                     testID={props.testID ? `${props.testID}-grant` : undefined}
@@ -212,8 +212,8 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                     style={{
                         minHeight: minimumInteractiveTargetSize,
                         justifyContent: 'center',
-                        paddingHorizontal: 10,
-                        paddingVertical: 6,
+                        paddingHorizontal: theme.space.s10,
+                        paddingVertical: theme.space.s6,
                         backgroundColor: theme.colors.button.primary.background,
                         opacity: disabled ? 0.5 : 1,
                     }}
@@ -231,8 +231,8 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                     style={{
                         minHeight: minimumInteractiveTargetSize,
                         justifyContent: 'center',
-                        paddingHorizontal: 10,
-                        paddingVertical: 6,
+                        paddingHorizontal: theme.space.s10,
+                        paddingVertical: theme.space.s6,
                         borderWidth: 1,
                         borderColor: theme.colors.border.default,
                         opacity: disabled ? 0.5 : 1,

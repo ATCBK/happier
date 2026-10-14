@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { AIBackendProfileSchema } from './backendProfileSchema.js';
@@ -25,12 +25,11 @@ function isCanonicalProfileSavedSecretReference(value: string): boolean {
   try { parseSavedSecretRefV1(value); return true; } catch { return false; }
 }
 
-const ProfileSavedSecretReferenceV1Schema = lazyZodSchema(() => z.string()
-  .refine(isCanonicalProfileSavedSecretReference, 'Saved-secret reference must be canonical'));
+const ProfileSavedSecretReferenceV1Schema = lazyZodSchema(() => z.string().check(z.refine(isCanonicalProfileSavedSecretReference, 'Saved-secret reference must be canonical')));
 export const ProfileSecretBindingsV1Schema = lazyZodSchema(() => z.record(EnvVarRequirementSchema.shape.name,
   ProfileSavedSecretReferenceV1Schema));
 export const ProfileSecretBindingOverridesV1Schema = lazyZodSchema(() => z.record(EnvVarRequirementSchema.shape.name,
-  ProfileSavedSecretReferenceV1Schema.nullable()));
+  z.nullable(ProfileSavedSecretReferenceV1Schema)));
 
 /** Missing slots inherit shared defaults; explicit none suppresses only that private slot. */
 export function resolveEffectiveProfileSecretBindingsV1(defaultBindings: Readonly<Record<string, string>>,
@@ -44,21 +43,21 @@ export function resolveEffectiveProfileSecretBindingsV1(defaultBindings: Readonl
   return bindings;
 }
 
-export const ProfileRecordV1Schema = lazyZodSchema(() => z.object({
+export const ProfileRecordV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), id: ProfileRecordIdV1Schema,
   definition: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('inline'), profile: StoredLaunchProfileV2Schema }).strict(),
-    z.object({ kind: z.literal('artifact'), artifactId: z.string().min(1) }).strict(),
-    z.object({ kind: z.literal('legacy'), profile: AIBackendProfileSchema.strict() }).strict(),
+    z.strictObject({ kind: z.literal('inline'), profile: StoredLaunchProfileV2Schema }),
+    z.strictObject({ kind: z.literal('artifact'), artifactId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ kind: z.literal('legacy'), profile: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(AIBackendProfileSchema) }),
   ]),
   enabled: z.boolean(), promptStack: z.array(PromptStackEntryV1Schema),
-  skillSeeds: z.array(z.string().min(1)).default([]),
+  skillSeeds: z._default(z.array(z.string().check(z.minLength(1))), []),
   secretBindings: ProfileSecretBindingOverridesV1Schema,
-}).strict().superRefine((record, context) => {
+}).check(z.superRefine((record, context) => {
   if (record.definition.kind !== 'artifact' && record.definition.profile.id !== record.id) {
     context.addIssue({ code: 'custom', path: ['definition', 'profile', 'id'], message: 'Profile definition must match its record identity' });
   }
-}));
+})));
 export type ProfileRecordV1 = z.infer<typeof ProfileRecordV1Schema>;
 export const StoredProfileRecordV1Schema = createStoredReadSchema(ProfileRecordV1Schema);
 
@@ -83,8 +82,8 @@ export function hasChangedReadonlyProfileDefinitionV1(previous: ProfileRecordV1,
 
 /** Account-private transport, with no Resource key or grant semantics. */
 export const ProfileRecordContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: ProfileRecordV1Schema }).strict(),
-  z.object({ t: z.literal('encrypted'), c: z.string().min(1) }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: ProfileRecordV1Schema }),
+  z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]));
 export type ProfileRecordContentV1 = z.infer<typeof ProfileRecordContentV1Schema>;
 export const StoredProfileRecordContentV1Schema = createStoredReadSchema(ProfileRecordContentV1Schema);
@@ -143,12 +142,12 @@ export function isProfileCatalogAccountChangeEntityIdV1(entityId: string): boole
   return entityId === PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY || entityId === PROFILE_TRANSFER_ACCOUNT_KV_KEY
     || parseProfilePhysicalKey(entityId) !== null;
 }
-export const ProfileRowRevisionV1Schema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+export const ProfileRowRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 export const ProfileRowOperationV1Schema = lazyZodSchema(() => z.enum(['create', 'clone-legacy', 'attach-builtin', 'update', 'remove', 'import']));
 type ProfileRowOperationV1 = z.infer<typeof ProfileRowOperationV1Schema>;
 
 function validateProfileRecordMutationV1(input: Readonly<{ id: string; operation: ProfileRowOperationV1; record?: ProfileRecordV1 }>,
-  context: z.RefinementCtx, recordPath: readonly (string | number)[],
+  context: z.core.$RefinementCtx, recordPath: readonly (string | number)[],
 ): void {
   if (input.operation === 'create') {
     if (isHistoricalBuiltInAiLaunchProfileIdV1(input.id)) {
@@ -182,11 +181,11 @@ function validateProfileRecordMutationV1(input: Readonly<{ id: string; operation
   }
 }
 
-const ProfileRecordForMutationV1Schema = lazyZodSchema(() => z.object({
-  operation: ProfileRowOperationV1Schema.exclude(['remove']), record: ProfileRecordV1Schema,
-}).strict().superRefine((value, context) => validateProfileRecordMutationV1({
+const ProfileRecordForMutationV1Schema = lazyZodSchema(() => z.strictObject({
+  operation: z.enum(ProfileRowOperationV1Schema.options.filter((value): value is Exclude<(typeof ProfileRowOperationV1Schema.options)[number], 'remove'> => !(['remove'] as readonly string[]).includes(value))), record: ProfileRecordV1Schema,
+}).check(z.superRefine((value, context) => validateProfileRecordMutationV1({
   id: value.record.id, operation: value.operation, record: value.record,
-}, context, ['record'])));
+}, context, ['record']))));
 
 /** Admit opened semantic writes before sealing in the actual Account mode. Imports and reseals retain inherited bytes. */
 export function parseProfileRecordForMutationV1(input: Readonly<{
@@ -198,50 +197,50 @@ export function parseProfileRecordForMutationV1(input: Readonly<{
 }
 
 export const ProfileReferenceGuardRevisionV1Schema = lazyZodSchema(() => z.union([ProfileRowRevisionV1Schema, z.literal('absent')]));
-export const ProfileRowV1Schema = lazyZodSchema(() => z.object({
+export const ProfileRowV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema,
-  content: ProfileRecordContentV1Schema.nullable(),
-}).strict());
+  content: z.nullable(ProfileRecordContentV1Schema),
+}));
 export type ProfileRowV1 = z.infer<typeof ProfileRowV1Schema>;
-export const ProfileRowReadRequestV1Schema = lazyZodSchema(() => z.object({ id: ProfileRecordIdV1Schema }).strict());
+export const ProfileRowReadRequestV1Schema = lazyZodSchema(() => z.strictObject({ id: ProfileRecordIdV1Schema }));
 export type ProfileRowReadRequestV1 = z.infer<typeof ProfileRowReadRequestV1Schema>;
-export const ProfileRowStorageFailureV1Schema = lazyZodSchema(() => z.object({
+export const ProfileRowStorageFailureV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['account-not-found', 'account-inconsistent', 'account-mode-mismatch', 'invalid-stored-content', 'invalid-reference']),
-  reason: z.string().optional(),
-}).strict());
+  reason: z.optional(z.string()),
+}));
 export const ProfileRowReadResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('present'), revision: ProfileRowRevisionV1Schema, content: ProfileRecordContentV1Schema }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
-  z.object({ status: z.literal('deleted'), revision: ProfileRowRevisionV1Schema }).strict(),
+  z.strictObject({ status: z.literal('present'), revision: ProfileRowRevisionV1Schema, content: ProfileRecordContentV1Schema }),
+  z.strictObject({ status: z.literal('absent') }),
+  z.strictObject({ status: z.literal('deleted'), revision: ProfileRowRevisionV1Schema }),
   ProfileRowStorageFailureV1Schema,
 ]));
 export const ProfileRowsListResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({
-    status: z.literal('listed'), rows: z.array(ProfileRowV1Schema), nextCursor: z.string().min(1).nullable(),
+  z.strictObject({
+    status: z.literal('listed'), rows: z.array(ProfileRowV1Schema), nextCursor: z.nullable(z.string().check(z.minLength(1))),
     complete: z.boolean(), referenceGuardRevision: ProfileReferenceGuardRevisionV1Schema,
     transferControl: ProfileTransferRowReadResponseV1Schema,
-    diagnostics: z.array(z.object({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema,
-      reason: z.literal('invalid-stored-content') }).strict()),
-  }).strict(),
+    diagnostics: z.array(z.strictObject({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema,
+      reason: z.literal('invalid-stored-content') })),
+  }),
   ProfileRowStorageFailureV1Schema,
 ]));
 export type ProfileRowsListResponseV1 = z.infer<typeof ProfileRowsListResponseV1Schema>;
-export const ProfileLegacyCloneSourceV1Schema = lazyZodSchema(() => z.object({
+export const ProfileLegacyCloneSourceV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema,
-  artifactRevision: ArtifactRevisionV1Schema.extend({ artifactId: z.string().min(1) }).strict().optional(),
-}).strict());
+  artifactRevision: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactRevisionV1Schema, { artifactId: z.string().check(z.minLength(1)) }))),
+}));
 export type ProfileLegacyCloneSourceV1 = z.infer<typeof ProfileLegacyCloneSourceV1Schema>;
-export const ProfileRowMutationV1Schema = lazyZodSchema(() => z.object({
+export const ProfileRowMutationV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
   id: ProfileRecordIdV1Schema, operation: ProfileRowOperationV1Schema,
   expectedRevision: ProfileReferenceGuardRevisionV1Schema,
-  content: ProfileRecordContentV1Schema.nullable(),
-  referencedSavedSecretIds: z.array(ProfileSavedSecretReferenceV1Schema).default([]),
-  savedSecretRevisions: z.array(z.object({ resourceId: z.string().min(1), expectedRevision: ProfileRowRevisionV1Schema }).strict()).optional(),
+  content: z.nullable(ProfileRecordContentV1Schema),
+  referencedSavedSecretIds: z._default(z.array(ProfileSavedSecretReferenceV1Schema), []),
+  savedSecretRevisions: z.optional(z.array(z.strictObject({ resourceId: z.string().check(z.minLength(1)), expectedRevision: ProfileRowRevisionV1Schema }))),
   /** Explicit null proves that the opened opaque row selects no Artifact. */
-  artifactRevision: ArtifactRevisionV1Schema.extend({ artifactId: z.string().min(1) }).strict().nullable().optional(),
-  legacyCloneSource: ProfileLegacyCloneSourceV1Schema.optional(),
-  settingsCleanup: AccountSettingsCleanupV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  artifactRevision: z.optional(z.nullable((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactRevisionV1Schema, { artifactId: z.string().check(z.minLength(1)) })))),
+  legacyCloneSource: z.optional(ProfileLegacyCloneSourceV1Schema),
+  settingsCleanup: z.optional(AccountSettingsCleanupV1Schema),
+}).check(z.superRefine((value, context) => {
   if ((value.operation === 'clone-legacy') !== (value.legacyCloneSource !== undefined)
     || value.legacyCloneSource?.id === value.id) {
     context.addIssue({ code: 'custom', path: ['legacyCloneSource'], message: 'Only a detached legacy clone captures its distinct source' });
@@ -270,27 +269,27 @@ export const ProfileRowMutationV1Schema = lazyZodSchema(() => z.object({
   }
   validateProfileRecordMutationV1({ id: value.id, operation: value.operation,
     ...(value.content?.t === 'plain' ? { record: value.content.v } : {}) }, context, ['content', 'v']);
-}).transform(value => value.content?.t === 'plain' && value.operation !== 'remove'
+})), z.transform(value => value.content?.t === 'plain' && value.operation !== 'remove'
   ? { ...value, content: { t: 'plain' as const, v: parseProfileRecordForMutationV1({ operation: value.operation, record: value.content.v }) } }
-  : value));
+  : value)));
 export type ProfileRowMutationV1 = z.infer<typeof ProfileRowMutationV1Schema>;
 export const ProfileRowMutationResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('updated'), revision: ProfileRowRevisionV1Schema,
-    cursor: ProfileRowRevisionV1Schema, referenceGuardRevision: ProfileRowRevisionV1Schema }).strict(),
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1) }).strict(),
-  z.object({ status: z.literal('settings-conflict'), revision: ProfileRowRevisionV1Schema }).strict(),
+  z.strictObject({ status: z.literal('updated'), revision: ProfileRowRevisionV1Schema,
+    cursor: ProfileRowRevisionV1Schema, referenceGuardRevision: ProfileRowRevisionV1Schema }),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ status: z.literal('settings-conflict'), revision: ProfileRowRevisionV1Schema }),
   ProfileRowStorageFailureV1Schema,
 ]));
 export type ProfileRowMutationResponseV1 = z.infer<typeof ProfileRowMutationResponseV1Schema>;
 export const PROFILE_PROVIDER_CONVERSION_ROUTE_V1 = `${PROFILE_ROWS_ROUTE_V1}/provider-conversion` as const;
-export const ProfileProviderConversionMutationV1Schema = lazyZodSchema(() => z.object({
+export const ProfileProviderConversionMutationV1Schema = lazyZodSchema(() => z.strictObject({
   operation: z.literal('provider-conversion'), expectedAccountMode: z.enum(['plain', 'e2ee']),
   expectedSettingsVersion: ProfileRowRevisionV1Schema, expectedProfileTransferRevision: ProfileReferenceGuardRevisionV1Schema,
   expectedReferenceGuardRevision: ProfileReferenceGuardRevisionV1Schema,
-  profileCensus: z.array(z.object({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema }).strict()),
+  profileCensus: z.array(z.strictObject({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema })),
   providerMutation: ProviderConnectionsRowMutationV1Schema,
-  mutations: z.array(ProfileRowMutationV1Schema), nextSettings: AccountSettingsStoredContentEnvelopeSchema.nullable(),
-}).strict().superRefine((value, context) => {
+  mutations: z.array(ProfileRowMutationV1Schema), nextSettings: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
+}).check(z.superRefine((value, context) => {
   const captured = new Map(value.profileCensus.map(row => [row.id, row.revision]));
   if (captured.size !== value.profileCensus.length) context.addIssue({ code: 'custom', path: ['profileCensus'], message: 'Duplicate captured Profile identity' });
   const mutations = new Set<string>();
@@ -311,39 +310,39 @@ export const ProfileProviderConversionMutationV1Schema = lazyZodSchema(() => z.o
     && value.providerMutation.sourceSettingsVersion !== value.expectedSettingsVersion) {
     context.addIssue({ code: 'custom', path: ['providerMutation', 'sourceSettingsVersion'], message: 'Provider initialization must capture the same Settings source version' });
   }
-}));
+})));
 export type ProfileProviderConversionMutationV1 = z.infer<typeof ProfileProviderConversionMutationV1Schema>;
 export const ProfileProviderConversionResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('updated'), settingsVersion: ProfileRowRevisionV1Schema, providerRevision: ProfileRowRevisionV1Schema,
-    rows: z.array(ProfileRowV1Schema), referenceGuardRevision: ProfileReferenceGuardRevisionV1Schema }).strict(),
-  z.object({ status: z.literal('reference-conflict') }).strict(),
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1) }).strict(),
-  z.object({ status: z.literal('settings-conflict'), revision: ProfileRowRevisionV1Schema }).strict(),
-  z.object({ status: z.literal('provider-conflict'), revision: z.number().int().min(-1) }).strict(),
+  z.strictObject({ status: z.literal('updated'), settingsVersion: ProfileRowRevisionV1Schema, providerRevision: ProfileRowRevisionV1Schema,
+    rows: z.array(ProfileRowV1Schema), referenceGuardRevision: ProfileReferenceGuardRevisionV1Schema }),
+  z.strictObject({ status: z.literal('reference-conflict') }),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1)) }),
+  z.strictObject({ status: z.literal('settings-conflict'), revision: ProfileRowRevisionV1Schema }),
+  z.strictObject({ status: z.literal('provider-conflict'), revision: z.number().check(z.int(), z.minimum(-1)) }),
   ProfileRowStorageFailureV1Schema,
 ]));
 export type ProfileProviderConversionResponseV1 = z.infer<typeof ProfileProviderConversionResponseV1Schema>;
 export const ProfileReferenceGuardReadResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('ready'), revision: ProfileReferenceGuardRevisionV1Schema }).strict(),
+  z.strictObject({ status: z.literal('ready'), revision: ProfileReferenceGuardRevisionV1Schema }),
   ProfileRowStorageFailureV1Schema,
 ]));
 
 /** All introduced Profile rows participate in the incumbent atomic Account conversion. */
-export const AccountEncryptionMigrateProfileRowsDirectiveSchema = lazyZodSchema(() => z.object({
-  items: z.array(z.object({ id: ProfileRecordIdV1Schema, expectedRevision: ProfileRowRevisionV1Schema,
-    content: ProfileRecordContentV1Schema }).strict()),
+export const AccountEncryptionMigrateProfileRowsDirectiveSchema = lazyZodSchema(() => z.strictObject({
+  items: z.array(z.strictObject({ id: ProfileRecordIdV1Schema, expectedRevision: ProfileRowRevisionV1Schema,
+    content: ProfileRecordContentV1Schema })),
   expectedReferenceGuardRevision: ProfileReferenceGuardRevisionV1Schema,
-  transferControl: z.object({ expectedRevision: ProfileReferenceGuardRevisionV1Schema, content: ProfileTransferContentV1Schema.nullable() }).strict(),
-}).strict().superRefine((value, context) => {
+  transferControl: z.strictObject({ expectedRevision: ProfileReferenceGuardRevisionV1Schema, content: z.nullable(ProfileTransferContentV1Schema) }),
+}).check(z.superRefine((value, context) => {
   const seen = new Set<string>();
   value.items.forEach((item, index) => {
     if (seen.has(item.id)) context.addIssue({ code: 'custom', path: ['items', index, 'id'], message: 'Duplicate Profile conversion identity' });
     if (item.content.t === 'plain' && item.id !== item.content.v.id) context.addIssue({ code: 'custom', path: ['items', index, 'content'], message: 'Profile payload identity mismatch' });
     seen.add(item.id);
   });
-}));
+})));
 export type AccountEncryptionMigrateProfileRowsDirective = z.infer<typeof AccountEncryptionMigrateProfileRowsDirectiveSchema>;
-export const AccountEncryptionMigrateProfileRowsResultSchema = lazyZodSchema(() => z.object({
+export const AccountEncryptionMigrateProfileRowsResultSchema = lazyZodSchema(() => z.strictObject({
   rows: z.array(ProfileRowV1Schema), referenceGuardRevision: ProfileReferenceGuardRevisionV1Schema,
   transferControl: ProfileTransferRowReadResponseV1Schema,
-}).strict());
+}));

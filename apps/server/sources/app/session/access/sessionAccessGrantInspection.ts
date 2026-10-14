@@ -1,8 +1,4 @@
-import {
-    projectSessionAccessGrantTransitionsV1,
-    type SessionAccessGrantRowV1,
-    type SessionAccessGrantsListResponseV1,
-} from "@happier-dev/protocol";
+import { projectSessionAccessGrantTransitionsV1, type SessionAccessGrantRowV1, type SessionAccessGrantsListResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1 } from "@/app/account/profile/accountDisplayProfile";
 import { listSessionTeamCredentialBindingConsequencesInTx } from "@/app/teams/credentials/sessionBinding";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";

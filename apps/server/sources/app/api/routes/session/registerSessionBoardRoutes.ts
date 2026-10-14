@@ -1,20 +1,14 @@
 import { z } from "zod";
-import {
-    SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1,
-    SessionBoardMutationV1Schema,
-    SessionBoardMutationResultV1Schema,
-    SessionBoardErrorV1Schema,
-    SessionBoardFeatureGateErrorV1Schema,
-    sessionBoardMutationUsesLayoutV1,
-    type SessionBoardMutationV1,
-} from "@happier-dev/protocol/sessions/board";
+import { SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1 } from '@happier-dev/protocol/sessions/board/actions';
+import { SessionBoardMutationV1Schema, SessionBoardMutationResultV1Schema, sessionBoardMutationUsesLayoutV1, type SessionBoardMutationV1 } from '@happier-dev/protocol/sessions/board/mutations';
+import { SessionBoardErrorV1Schema, SessionBoardFeatureGateErrorV1Schema } from '@happier-dev/protocol/sessions/board/errors';
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import type { Fastify } from "../../types";
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { mutateSessionBoard } from "@/app/session/board/service";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
-import type { SessionSystemRecordCreatorV1 } from "@happier-dev/protocol";
+import type { SessionSystemRecordCreatorV1 } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecord';
 
 function readVerifiedVisualCreator(request: FastifyRequest): SessionSystemRecordCreatorV1 {
     const origin = request.externalActionExecutionAuthorized === true

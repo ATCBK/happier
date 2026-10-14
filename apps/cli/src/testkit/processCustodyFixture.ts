@@ -6,12 +6,12 @@ import { promisify } from 'node:util';
 import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
 
 /** Stage the current source-native helper at the real runtime asset boundary. */
-export async function createProcessCustodyFixture(): Promise<() => Promise<void>> {
+export async function createProcessCustodyFixture(input: Readonly<{ repoRoot?: string }> = {}): Promise<() => Promise<void>> {
     const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
     const scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-process-custody-fixture-')));
     const payload = join(scratch, 'native');
     try {
-        await stageProcessCustodyRuntime({ repoRoot: resolve('../..'), payloadDir: payload,
+        await stageProcessCustodyRuntime({ repoRoot: input.repoRoot ?? resolve('../..'), payloadDir: payload,
             target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
             runCommand: async (command, args, options) => { await promisify(execFile)(command, args, { cwd: options?.cwd, env: options?.env }); },
         });

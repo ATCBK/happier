@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { TeamCredentialRouteV1Schema } from '../../teams/credentials/resourceV1.js';
 import { PrincipalRefV1Schema, TeamPrincipalRefV1Schema, GroupPrincipalRefV1Schema } from '../../teams/principal.js';
 import { SessionAccessGrantV1Schema, SessionAccessLevelV1Schema, SessionGrantMutationV1Schema, type SessionAccessLevelV1 } from './sessionAccessGrantV1.js';
@@ -39,17 +39,17 @@ export type SessionAccessErrorCodeV1 = z.infer<typeof SessionAccessErrorCodeV1Sc
 
 export const SessionAccessPrincipalSummaryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   SessionAccessAccountSummaryV1Schema,
-  TeamPrincipalRefV1Schema.extend({ name: z.string() }).strict(),
-  GroupPrincipalRefV1Schema.extend({ name: z.string(), teamName: z.string() }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TeamPrincipalRefV1Schema, { name: z.string() })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(GroupPrincipalRefV1Schema, { name: z.string(), teamName: z.string() })),
 ]));
 export type SessionAccessPrincipalSummaryV1 = z.infer<typeof SessionAccessPrincipalSummaryV1Schema>;
 
-export const ResolveSessionAccessPrincipalsRequestV1Schema = lazyZodSchema(() => z.object({
+export const ResolveSessionAccessPrincipalsRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   subjects: z.array(PrincipalRefV1Schema),
   /** Optional primary-Team decision needed by a restored New Session draft. */
-  creationTeamId: z.string().min(1).optional(),
-}).strict());
+  creationTeamId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ResolveSessionAccessPrincipalsRequestV1 = z.infer<typeof ResolveSessionAccessPrincipalsRequestV1Schema>;
 
 /**
@@ -57,29 +57,29 @@ export type ResolveSessionAccessPrincipalsRequestV1 = z.infer<typeof ResolveSess
  * narrow projection: the draft needs the already-admitted default/floor and
  * display identity, not a second copy of Team policy or a Team directory.
  */
-export const SessionAccessCreationDecisionV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessCreationDecisionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  teamId: z.string().min(1),
+  teamId: z.string().check(z.minLength(1)),
   teamName: z.string(),
   requiredByPolicy: z.boolean(),
-  defaultGrant: z.object({ accessLevel: SessionAccessLevelV1Schema, canApprovePermissions: z.boolean() }).strict().nullable(),
+  defaultGrant: z.nullable(z.strictObject({ accessLevel: SessionAccessLevelV1Schema, canApprovePermissions: z.boolean() })),
   externalSharingPolicy: TeamExternalSharingPolicyV1Schema,
-}).strict());
+}));
 export type SessionAccessCreationDecisionV1 = z.infer<typeof SessionAccessCreationDecisionV1Schema>;
 
-export const ResolveSessionAccessPrincipalsResponseV1Schema = lazyZodSchema(() => z.object({
+export const ResolveSessionAccessPrincipalsResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   principals: z.array(SessionAccessPrincipalSummaryV1Schema),
-  creationDecision: SessionAccessCreationDecisionV1Schema.nullable().optional(),
-}).strict());
+  creationDecision: z.optional(z.nullable(SessionAccessCreationDecisionV1Schema)),
+}));
 export type ResolveSessionAccessPrincipalsResponseV1 = z.infer<typeof ResolveSessionAccessPrincipalsResponseV1Schema>;
 
-export const SessionAccessGrantTransitionsV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessGrantTransitionsV1Schema = lazyZodSchema(() => z.strictObject({
   accessLevels: z.array(SessionAccessLevelV1Schema),
   canChangePermissionDelegation: z.boolean(),
   canRemove: z.boolean(),
-  reason: SessionAccessErrorCodeV1Schema.optional(),
-}).strict());
+  reason: z.optional(SessionAccessErrorCodeV1Schema),
+}));
 export type SessionAccessGrantTransitionsV1 = z.infer<typeof SessionAccessGrantTransitionsV1Schema>;
 
 const SESSION_ACCESS_LEVEL_ORDER: readonly SessionAccessLevelV1[] = SessionAccessLevelV1Schema.options;
@@ -158,14 +158,14 @@ export function projectSessionAccessGrantTransitionsV1(
   };
 }
 
-export const SessionAccessGrantRowV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessGrantRowV1Schema = lazyZodSchema(() => z.strictObject({
   grant: SessionAccessGrantV1Schema,
   principal: SessionAccessPrincipalSummaryV1Schema,
   allowedTransitions: SessionAccessGrantTransitionsV1Schema,
-}).strict());
+}));
 export type SessionAccessGrantRowV1 = z.infer<typeof SessionAccessGrantRowV1Schema>;
 
-export const SessionAccessGrantsListRequestV1Schema = lazyZodSchema(() => z.object({ sessionId: z.string().min(1) }).strict());
+export const SessionAccessGrantsListRequestV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: z.string().check(z.minLength(1)) }));
 export type SessionAccessGrantsListRequestV1 = z.infer<typeof SessionAccessGrantsListRequestV1Schema>;
 
 /**
@@ -182,72 +182,72 @@ export type SessionAccessGrantsListRequestV1 = z.infer<typeof SessionAccessGrant
  * resource's display name travels, so an access edit can say what stops working
  * without disclosing the credential itself.
  */
-export const SessionTeamCredentialBindingConsequenceV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  teamId: z.string().min(1),
+export const SessionTeamCredentialBindingConsequenceV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  teamId: z.string().check(z.minLength(1)),
   displayName: z.string(),
   policy: z.enum(['team_visibility_required', 'team_context_required']),
-}).strict());
+}));
 export type SessionTeamCredentialBindingConsequenceV1 = z.infer<typeof SessionTeamCredentialBindingConsequenceV1Schema>;
 
 const listFields = {
   owner: SessionAccessAccountSummaryV1Schema,
   effectiveAccess: SessionEffectiveAccessV1Schema,
-  primaryTeamId: z.string().min(1).nullable(),
+  primaryTeamId: z.nullable(z.string().check(z.minLength(1))),
 };
 export const SessionAccessGrantsListResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('visibility', [
-  z.object({
+  z.strictObject({
     ...listFields,
     visibility: z.literal('complete'),
     grants: z.array(SessionAccessGrantRowV1Schema),
     // Manager-only, and absent on a Home that publishes no consequence preview.
     // A viewer who cannot manage access can neither remove a grant nor change
     // the context, so the `self` projection carries nothing to preview.
-    credentialBindingConsequences: z.array(SessionTeamCredentialBindingConsequenceV1Schema).optional(),
-  }).strict(),
-  z.object({ ...listFields, visibility: z.literal('self'), grants: z.tuple([]) }).strict(),
+    credentialBindingConsequences: z.optional(z.array(SessionTeamCredentialBindingConsequenceV1Schema)),
+  }),
+  z.strictObject({ ...listFields, visibility: z.literal('self'), grants: z.tuple([]) }),
 ]));
 export type SessionAccessGrantsListResponseV1 = z.infer<typeof SessionAccessGrantsListResponseV1Schema>;
 
 /** Admission condition for explicitly consented Run credential visibility. */
-export const RequiredSessionTeamCredentialV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  expectedResourceRevision: z.number().int().nonnegative(),
+export const RequiredSessionTeamCredentialV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
   deliveryMode: TeamCredentialRouteV1Schema,
-}).strict());
+}));
 export type RequiredSessionTeamCredentialV1 = z.infer<typeof RequiredSessionTeamCredentialV1Schema>;
 
-export const SetSessionAccessGrantRequestV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  ...SessionGrantMutationV1Schema.options[0].shape,
+export const SetSessionAccessGrantRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  ...SessionGrantMutationV1Schema._zod.def.options[0].shape,
   subject: PrincipalRefV1Schema,
-  requiredTeamCredential: RequiredSessionTeamCredentialV1Schema.optional(),
-}).strict().superRefine(({ sessionId: _sessionId, requiredTeamCredential: _requiredTeamCredential, ...grant }, ctx) => {
+  requiredTeamCredential: z.optional(RequiredSessionTeamCredentialV1Schema),
+}).check(z.superRefine(({ sessionId: _sessionId, requiredTeamCredential: _requiredTeamCredential, ...grant }, ctx) => {
   const parsed = SessionGrantMutationV1Schema.safeParse(grant);
   if (!parsed.success) for (const issue of parsed.error.issues) {
     ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
   }
-}));
+})));
 export type SetSessionAccessGrantRequestV1 = z.infer<typeof SetSessionAccessGrantRequestV1Schema>;
-export const SetSessionAccessGrantResponseV1Schema = lazyZodSchema(() => z.object({
+export const SetSessionAccessGrantResponseV1Schema = lazyZodSchema(() => z.strictObject({
   changed: z.boolean(), grant: SessionAccessGrantV1Schema,
-}).strict());
+}));
 export type SetSessionAccessGrantResponseV1 = z.infer<typeof SetSessionAccessGrantResponseV1Schema>;
 
-export const RemoveSessionAccessGrantRequestV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1), subject: PrincipalRefV1Schema,
-}).strict());
+export const RemoveSessionAccessGrantRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)), subject: PrincipalRefV1Schema,
+}));
 export type RemoveSessionAccessGrantRequestV1 = z.infer<typeof RemoveSessionAccessGrantRequestV1Schema>;
-export const RemoveSessionAccessGrantResponseV1Schema = lazyZodSchema(() => z.object({
+export const RemoveSessionAccessGrantResponseV1Schema = lazyZodSchema(() => z.strictObject({
   changed: z.boolean(), subject: PrincipalRefV1Schema,
-}).strict());
+}));
 export type RemoveSessionAccessGrantResponseV1 = z.infer<typeof RemoveSessionAccessGrantResponseV1Schema>;
 
-export const SetSessionAccessContextRequestV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1), primaryTeamId: z.string().min(1).nullable(),
-}).strict());
+export const SetSessionAccessContextRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)), primaryTeamId: z.nullable(z.string().check(z.minLength(1))),
+}));
 export type SetSessionAccessContextRequestV1 = z.infer<typeof SetSessionAccessContextRequestV1Schema>;
-export const SetSessionAccessContextResponseV1Schema = lazyZodSchema(() => z.object({
-  changed: z.boolean(), primaryTeamId: z.string().min(1).nullable(),
-}).strict());
+export const SetSessionAccessContextResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  changed: z.boolean(), primaryTeamId: z.nullable(z.string().check(z.minLength(1))),
+}));
 export type SetSessionAccessContextResponseV1 = z.infer<typeof SetSessionAccessContextResponseV1Schema>;

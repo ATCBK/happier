@@ -943,7 +943,7 @@ const styles = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('rowTitle'),
   },
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   ringValue: {
@@ -956,7 +956,7 @@ const styles = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('heroTitle'),
   },
   ringUnit: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

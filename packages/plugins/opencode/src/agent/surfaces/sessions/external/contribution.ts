@@ -396,12 +396,13 @@ export function createOpenCodeExternalSessionsContribution(params: Readonly<{
           searchMode: request.searchMode,
           searchTarget: request.searchTarget,
           deadlineAtMs: request.deadlineAtMs,
+          scanDeadlineAtMs: request.scanDeadlineAtMs,
           signal: request.signal,
           env,
           managedEndpointRead: request.managedEndpointRead,
         });
         const after = invocationFailure(request);
-        if (after && (listed.contentCoverage !== 'partial' || request.signal.aborted)) return after;
+        if (after) return after;
         const candidates = listed.candidates.map(mapCandidate);
         const value = {
           candidates,

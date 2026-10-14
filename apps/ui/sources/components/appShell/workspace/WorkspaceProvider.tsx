@@ -17,7 +17,7 @@ import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue, type 
 import type { DestinationNavigation } from './DestinationInstanceHost';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
 import { createWorkspaceActionAdapter, selectWorkspaceTabsToClose, workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
-import { registerMountedWorkspaceAction } from './workspaceActionRuntime';
+import { executeWorkspaceUiAction, registerMountedWorkspaceAction } from './workspaceActionRuntime';
 import { admitWorkspaceSingletonState, workspaceSingletonDestinationIds } from './workspaceDestinationPolicy';
 import { selectWorkspaceClosableTabIds, type WorkspaceState } from './workspaceState';
 import { resolvePhoneWorkspaceTabHref } from './workspacePhoneProjection';
@@ -60,6 +60,8 @@ export function WorkspaceProvider(props: Readonly<{
      * Web destinations retain their workspace host when only the viewport changes.
      */
     phone?: boolean;
+    /** Authenticated public web flows may enter a destination before its shell is presented. */
+    entry?: boolean;
     /** A web shell awaiting onboarding teardown must not lend its editable routes to Expo. */
     deferred?: boolean;
     catalog: readonly CompactAppDestination[];
@@ -86,18 +88,19 @@ export function WorkspaceProvider(props: Readonly<{
         return `${pathname}${query.size ? `?${query}` : ''}`;
     })();
     const phone = props.phone === true && !props.enabled;
+    const entry = props.entry === true && Platform.OS === 'web';
     // Width changes presentation, never the owner or lifetime of an admitted web destination.
     const routeDestination = resolveDestinationRefFromHref(props.catalog, routeHref);
     // Deferred web admission precedes shell presentation during onboarding
     // teardown. Lending an editable body to Expo while the shell is absent
     // would consume its handoff before the retained host can take custody.
     // Native phones still lend their routes to the native stack.
-    const canHostRoutes = props.enabled || ((phone || props.deferred === true) && Platform.OS === 'web');
+    const canHostRoutes = props.enabled || entry || ((phone || props.deferred === true) && Platform.OS === 'web');
     const ownsHref = React.useCallback((href: string) => canHostRoutes
         && resolveDestinationRefFromHref(props.catalog, href) !== null, [canHostRoutes, props.catalog]);
     const ownsRoute = ownsHref(routeHref);
     const hostsMobileWeb = phone && Platform.OS === 'web' && ownsRoute;
-    const hostsRoute = props.enabled || hostsMobileWeb;
+    const hostsRoute = props.enabled || hostsMobileWeb || (entry && ownsRoute);
     const phoneTransport = phone && !hostsMobileWeb;
     const phoneTabHref = phone ? resolvePhoneWorkspaceTabHref(props.catalog, routeHref) : null;
     const [initialTab] = React.useState(() => {
@@ -119,8 +122,8 @@ export function WorkspaceProvider(props: Readonly<{
         scopeKey: string | null; titles: Readonly<Record<string, WorkspaceDestinationTitle>>;
     }>>({ scopeKey, titles: {} });
     const destinationTitles = publishedTitles.scopeKey === scopeKey ? publishedTitles.titles : NO_DESTINATION_TITLES;
-    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
-    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
+    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
+    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
     const publishDestinationTitle = React.useCallback((tabId: string, ref: DestinationRef, title: string | null) => {
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
@@ -224,9 +227,10 @@ export function WorkspaceProvider(props: Readonly<{
                 await runGuardedTabNavigation(closing.tabIds, () => {
                     const selection = selectWorkspaceTabsToClose(latest.current.owner.getState(), request.actionId, request.input);
                     if (!selection || selection.groupId !== closing.groupId || selection.tabIds.length !== closing.tabIds.length
-                        || selection.tabIds.some((id, index) => id !== closing.tabIds[index])) return;
+                        || selection.tabIds.some((id, index) => id !== closing.tabIds[index])) return false;
                     if (phone) runtime.initialized = true;
                     outcome = execute(request.actionId, request.input);
+                    return outcome.ok;
                 }, {
                     includeActiveGuard: state.focusedGroupId === closing.groupId
                         && closing.tabIds.includes(state.groups[closing.groupId].activeTabId),
@@ -309,6 +313,73 @@ export function WorkspaceProvider(props: Readonly<{
         });
         if (result !== true) fireAndForget(result, { tag: 'Workspace.closeTabs' });
     }, [isCurrentUiOwner, runtime]);
+    const openHref = React.useCallback((href: string, options?: WorkspaceOpenOptions) => {
+        const canEnter = () => entry && latest.current.entry && latest.current.scopeKey === scopeKey
+            && latest.current.phoneTransport === phoneTransport && runtime.browser !== null;
+        if (canEnter() && resolveDestinationRefFromHref(latest.current.catalog, href)) {
+            // Exact-Home refresh can finish while the scoped layout is still
+            // hydrating. Browser custody retains the intent; normal restoration
+            // admits that URL once ready, without lending it to Expo's index.
+            runNavigation(() => {
+                if (!canEnter()) return;
+                if (!latest.current.owner.isReady) runtime.browser?.enterHref(href, options?.replace === true);
+                else {
+                    runtime.initialized = true;
+                    runtime.adapter.openHref(href, options);
+                }
+            });
+            return true;
+        }
+        if (!isCurrentUiOwner() || !latest.current.hostsRoute
+            || !resolveDestinationRefFromHref(latest.current.catalog, href)) return false;
+        runUiNavigation(() => {
+            runtime.initialized = true;
+            runtime.adapter.openHref(href, options);
+        });
+        return true;
+    }, [entry, isCurrentUiOwner, phoneTransport, runUiNavigation, runtime, scopeKey]);
+    const tabNavigations = React.useMemo(() => new Map<string, DestinationNavigation>(), [runtime]);
+    const navigationForTab = React.useCallback((tabId: string): DestinationNavigation => {
+        const existing = tabNavigations.get(tabId);
+        if (existing) return existing;
+        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean) => {
+            if (!isCurrentUiOwner()) return;
+            const resolved = resolveHref(href);
+            if (!openHref(resolved, { tabId, replace })) {
+                runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));
+            }
+        };
+        const retainCurrent = () => {
+            if (!isCurrentUiOwner() || !latest.current.owner.getState().tabs[tabId]?.preview) return;
+            runtime.adapter.dispatch({ type: 'promoteTab', tabId });
+        };
+        const navigation: DestinationNavigation = {
+            retainCurrent,
+            push: (href) => navigate(href, false),
+            pushRetainingCurrent: (href) => {
+                if (!isCurrentUiOwner()) return;
+                const resolved = resolveHref(href);
+                if (!resolveDestinationRefFromHref(latest.current.catalog, resolved)) return;
+                const state = latest.current.owner.getState();
+                const group = Object.values(state.groups).find(candidate => candidate.tabIds.includes(tabId));
+                if (!group) return;
+                // No departure guard: the editor keeps its identity, local state and dirty baseline.
+                // Promotion prevents a later preview open from retiring that retained draft.
+                retainCurrent();
+                runtime.adapter.openHref(resolved, { mode: 'newTab', groupId: group.id });
+            },
+            replace: (href) => navigate(href, true),
+            back: () => {
+                if (!isCurrentUiOwner()) return;
+                if (runtime.browser) runtime.adapter.step(-1);
+                else guardTraversal(-1, () => runtime.adapter.step(-1), 'history');
+            },
+            canGoBack: () => runtime.adapter.canGoBack,
+            setParams: (values) => { if (isCurrentUiOwner()) runtime.adapter.setParams(tabId, values); },
+        };
+        tabNavigations.set(tabId, navigation);
+        return navigation;
+    }, [guardTraversal, isCurrentUiOwner, openHref, runUiNavigation, runtime, tabNavigations]);
     const phoneOnTab = phoneTabHref !== null;
     const phoneControls = React.useMemo<WorkspacePhoneControls | null>(() => {
         if (!phone || !owner.isReady) return null;
@@ -331,55 +402,17 @@ export function WorkspaceProvider(props: Readonly<{
                 if (group) activateTab(group.id, tabId);
             },
             closeTab: (tabId) => {
-                const state = latest.current.owner.getState();
-                const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
-                if (group) closeTabs(group.id, [tabId], false);
-            },
-        };
-    }, [activateTab, closeTabs, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
-
-    const openHref = React.useCallback((href: string, options?: WorkspaceOpenOptions) => {
-        if (!isCurrentUiOwner() || !latest.current.hostsRoute
-            || !resolveDestinationRefFromHref(latest.current.catalog, href)) return false;
-        runUiNavigation(() => { runtime.adapter.openHref(href, options); });
-        return true;
-    }, [isCurrentUiOwner, runUiNavigation, runtime]);
-    const tabNavigations = React.useMemo(() => new Map<string, DestinationNavigation>(), [runtime]);
-    const navigationForTab = React.useCallback((tabId: string): DestinationNavigation => {
-        const existing = tabNavigations.get(tabId);
-        if (existing) return existing;
-        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean) => {
-            const resolved = resolveHref(href);
-            if (!openHref(resolved, { tabId, replace })) {
-                runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));
-            }
-        };
-        const navigation: DestinationNavigation = {
-            push: (href) => navigate(href, false),
-            pushRetainingCurrent: (href) => {
                 if (!isCurrentUiOwner()) return;
-                const resolved = resolveHref(href);
-                if (!resolveDestinationRefFromHref(latest.current.catalog, resolved)) return;
                 const state = latest.current.owner.getState();
-                const group = Object.values(state.groups).find(candidate => candidate.tabIds.includes(tabId));
-                if (!group) return;
-                // No departure guard: the editor keeps its identity, local state and dirty baseline.
-                // Promotion prevents a later preview open from retiring that retained draft.
-                runtime.adapter.dispatch({ type: 'promoteTab', tabId });
-                runtime.adapter.openHref(resolved, { mode: 'newTab', groupId: group.id });
+                if (!state.tabs[tabId]) return;
+                fireAndForget(executeWorkspaceUiAction({ actionId: 'workspace.tabs.close', input: { tabId } }, href => {
+                    const focused = latest.current.owner.getState();
+                    const navigation = navigationForTab(focused.groups[focused.focusedGroupId].activeTabId);
+                    (navigation.pushRetainingCurrent ?? navigation.push)(href);
+                }), { tag: 'Workspace.phone.close' });
             },
-            replace: (href) => navigate(href, true),
-            back: () => {
-                if (!isCurrentUiOwner()) return;
-                if (runtime.browser) runtime.adapter.step(-1);
-                else guardTraversal(-1, () => runtime.adapter.step(-1), 'history');
-            },
-            canGoBack: () => runtime.adapter.canGoBack,
-            setParams: (values) => { if (isCurrentUiOwner()) runtime.adapter.setParams(tabId, values); },
         };
-        tabNavigations.set(tabId, navigation);
-        return navigation;
-    }, [guardTraversal, isCurrentUiOwner, openHref, runUiNavigation, runtime, tabNavigations]);
+    }, [activateTab, isCurrentUiOwner, navigationForTab, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
     const navigation = React.useMemo<WorkspaceNavigationContextValue>(() => ({
         // Scoped restoration grants the retained host custody synchronously.
         // Transport initialization adopts the URL in a layout effect; it is

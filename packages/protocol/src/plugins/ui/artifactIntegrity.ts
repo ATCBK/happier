@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 
@@ -11,9 +11,7 @@ function isPluginUiArtifactDigestV1(value: string): value is PluginUiArtifactDig
   return SHA256_HEX_DIGEST_PATTERN.test(value);
 }
 
-export const PluginUiArtifactDigestV1Schema = lazyZodSchema(() => z.string().trim().refine(
-  isPluginUiArtifactDigestV1,
-));
+export const PluginUiArtifactDigestV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.refine(isPluginUiArtifactDigestV1)));
 
 type TypeEqual<Left, Right> = (
   <Value>() => Value extends Left ? 1 : 2
@@ -25,12 +23,12 @@ type PluginUiArtifactDigestV1SchemaOutputContract = AssertType<
   TypeEqual<z.output<typeof PluginUiArtifactDigestV1Schema>, PluginUiArtifactDigestV1>
 >;
 
-export const PluginUiArtifactIntegrityBindingV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiArtifactIntegrityBindingV1Schema = lazyZodSchema(() => z.strictObject({
   digest: PluginUiArtifactDigestV1Schema,
-  pluginId: z.string().trim().min(1),
-  contributionId: z.string().trim().min(1),
-  artifactKind: z.string().trim().min(1),
-}).strict());
+  pluginId: z.string().check(z.trim(), z.minLength(1)),
+  contributionId: z.string().check(z.trim(), z.minLength(1)),
+  artifactKind: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginUiArtifactIntegrityBindingV1 =
   z.infer<typeof PluginUiArtifactIntegrityBindingV1Schema>;
 

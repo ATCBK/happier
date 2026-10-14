@@ -11,7 +11,9 @@ import {
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import {
   MachineStorageTrashMoveInputV1Schema,
+  MachineStorageDeleteNowInputV1Schema,
   type MachineStorageTrashMoveInputV1,
+  type MachineStorageDeleteNowInputV1,
   type StorageItemV1,
   type StorageReasonV1,
 } from '@happier-dev/protocol/storage/storageV1';
@@ -19,7 +21,7 @@ import {
 export type ResourceProposalVerdict = StorageItemV1['verdict'];
 
 export const RESOURCE_PROPOSAL_ACTION_IDS = [
-  'machines.storage.trash.move', 'machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp',
+  'machines.storage.trash.move', 'machines.storage.deleteNow', 'machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp',
 ] as const;
 
 /** One requested item: what the agent claimed when it proposed, and the admitted operand itself. */
@@ -36,6 +38,7 @@ export type ResourceProposalItem = Readonly<{
 
 export type ResourceProposalModel = Readonly<{
   kind: 'storage' | 'processes';
+  storageMode: 'trash' | 'delete' | null;
   actionId: typeof RESOURCE_PROPOSAL_ACTION_IDS[number];
   machineId: string;
   serverId: string | null;
@@ -50,37 +53,40 @@ export type ResourceProposalModel = Readonly<{
 }>;
 
 function readStorage(
-  args: MachineStorageTrashMoveInputV1,
+  args: MachineStorageTrashMoveInputV1 | MachineStorageDeleteNowInputV1,
+  actionId: 'machines.storage.trash.move' | 'machines.storage.deleteNow',
 ): ResourceProposalModel {
   return {
     kind: 'storage',
-    actionId: 'machines.storage.trash.move',
+    storageMode: actionId === 'machines.storage.deleteNow' ? 'delete' : 'trash',
+    actionId,
     machineId: args.machineId,
     serverId: args.serverId ?? null,
     items: args.items.map((item) => ({
       key: item.ref.itemId,
       path: item.ref.path,
-      claimedVerdict: item.claimedVerdict,
-      reason: item.reason ?? null,
+      claimedVerdict: 'claimedVerdict' in item ? item.claimedVerdict : 'check',
+      reason: 'reason' in item ? item.reason ?? null : null,
       owner: null,
       operand: item,
     })),
-    notIncluded: args.notIncluded ?? [],
-    goalBytes: args.goalBytes ?? null,
-    emptyAfter: args.emptyAfter === true,
-    retry: args.retry !== undefined,
+    notIncluded: 'notIncluded' in args ? args.notIncluded ?? [] : [],
+    goalBytes: 'goalBytes' in args ? args.goalBytes ?? null : null,
+    emptyAfter: 'emptyAfter' in args && args.emptyAfter === true,
+    retry: 'retry' in args && args.retry !== undefined,
     args,
   };
 }
 
 function readProcesses(
   args: MachineProcessesStopInputV1 | MachineProcessesKillInputV1 | MachineProcessesCleanUpInputV1,
-  actionId: Exclude<ResourceProposalModel['actionId'], 'machines.storage.trash.move'>,
+  actionId: Exclude<ResourceProposalModel['actionId'], 'machines.storage.trash.move' | 'machines.storage.deleteNow'>,
 ): ResourceProposalModel {
   const targets: readonly MachineProcessTargetV1[] = 'targets' in args
     ? args.targets : args.refs.map(ref => ({ ref, expect: { level: 'left_behind' } }));
   return {
     kind: 'processes',
+    storageMode: null,
     actionId,
     machineId: args.machineId,
     serverId: args.serverId ?? null,
@@ -112,7 +118,11 @@ export function readResourceProposalApproval(
     const parsed = MachineStorageTrashMoveInputV1Schema.safeParse(
       approval.actionArgs,
     );
-    return parsed.success ? readStorage(parsed.data) : null;
+    return parsed.success ? readStorage(parsed.data, approval.actionId) : null;
+  }
+  if (approval.actionId === 'machines.storage.deleteNow') {
+    const parsed = MachineStorageDeleteNowInputV1Schema.safeParse(approval.actionArgs);
+    return parsed.success ? readStorage(parsed.data, approval.actionId) : null;
   }
   if (approval.actionId === 'machines.processes.stop') {
     const parsed = MachineProcessesStopInputV1Schema.safeParse(

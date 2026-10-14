@@ -1,4 +1,4 @@
-import type { PluginMachineMaterializationRefV1 } from "@happier-dev/protocol";
+import type { PluginMachineMaterializationRefV1 } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
 
 import { db } from "@/storage/db";
 

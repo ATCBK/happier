@@ -791,7 +791,11 @@ async function waitForNextInput<Mode, Message>(
         messageQueue: opts.messageQueue,
         waitForMetadataUpdate: opts.session.waitForMetadataUpdate,
         waitForAdmissionChange: opts.waitForAdmissionChange,
-        waitForContextOnlyInputChange: opts.waitForContextOnlyInputChange ?? undefined,
+        // Context sources can remain ready until taken. Pending custody prevents
+        // taking them below, so arm only queue/metadata/admission wakes until
+        // Pending changes; otherwise the same retained wake spins this runner.
+        waitForContextOnlyInputChange: opts.session.hasPendingProviderInput?.()
+          ? undefined : opts.waitForContextOnlyInputChange ?? undefined,
         controller,
         metadataWaitRetryBackoffMs,
       }).then((winner) => {

@@ -477,7 +477,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `backendId` (text, required): Id
+- `backendId` (text, required): Agent
 
 ## `agents.acp.backends.get`
 
@@ -524,9 +524,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `backend.id` (text, required): Id
 - `backend.name` (text, required): Name
-- `backend.title` (text, required): Title
-- `backend.launch.command` (text, required): Command
-- `backend.launch.args` (text_list): Arguments
+- `backend.title` (text, required): Agent
+- `backend.launch` (json, required): Launch
+- `backend.description` (textarea): Description
+- `backend.env` (json): Environment variables
+- `backend.auth` (json): Sign-in
+- `backend.runtime` (json): Runtime behavior
+- `backend.defaultMode` (text): Default mode
+- `backend.defaultModel` (text): Default model
+- `backend.capabilities` (json): Capabilities
+- `backend.origin` (json): Source
+- `backend.compatibility` (json): Compatibility
+- `backend.createdAt` (text): Created at
+- `backend.updatedAt` (text): Updated at
+- `dryRun` (boolean): Preview only
+- `expectedRevision` (text): Reviewed revision
+- `sourceSettingsVersion` (text): Reviewed settings version
 
 ## `agents.backends.list`
 
@@ -3312,20 +3325,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `content` (text, required): Content — Base64-encoded file bytes
 - `expectedHash` (text): Expected current SHA-256
 
-## `daemon.promptAssets.delete`
-
-**Delete prompt asset** — Delete a provider-native prompt asset through the daemon prompt asset adapter registry.
-
-- Safety: `danger`; side effect: `danger`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
 ## `devices.simulator.input.button`
 
 **Press simulator hardware button** — Press a device button on the simulator, such as Home or volume.
@@ -4708,7 +4707,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -4722,7 +4721,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -5421,9 +5420,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `machineId` (text): Machine id
-- `agentId` (text): Agent id
-- `definitionId` (text): Definition id
+- `machineId` (text): Machine
+- `agentId` (text): Agent
+- `definitionId` (text): Custom agent
 - `intent` (text): Intent
 - `consent.vendorRecipe` (boolean): Allow the vendor install recipe
 - `force` (boolean): Reinstall an installed agent
@@ -5440,8 +5439,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `machineId` (text): Machine id
-- `jobId` (text): Job id
+- `machineId` (text): Machine
+- `jobId` (text): Install job
 
 ## `machines.agents.install.status`
 
@@ -5552,9 +5551,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `machineId` (text, required): Machine id
-- `agentId` (text, required): Agent id
-- `definitionId` (text): Definition id
+- `machineId` (text, required): Machine
+- `agentId` (text, required): Agent
+- `definitionId` (text): Custom agent
 
 ## `machines.capabilities.install`
 
@@ -7069,8 +7068,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `items` (json, required): Items
-- `change` (json, required): Rules change
+- `items.[].serverId` (text): MCP server
+- `items.[].name` (text): MCP server
+- `change.write.place` (json): Where
+- `change.write.state` (select): Change
+- `change.write.agentId` (text): Agent
+- `change.rules` (json): Replacement rules
 
 ## `mcp.servers.create`
 
@@ -7989,11 +7992,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `source` (json): Source
+- `path` (text): Local path or package
+- `machineId` (text): Machine
+- `kind` (select): Install from
+- `selector` (text): Package selection
+- `integrity` (text): Integrity
+- `sdkRegistryOrigin` (url): SDK registry
+- `dev` (boolean): Development install
+- `dryRun` (boolean): Preview only
+- `force` (boolean): Replace existing install
 
 ## `plugins.list`
 
-**List plugins** — List installed plugins with source and load diagnostics.
+**List plugins** — List installed plugins plus daemon-owned pending changes with the issued ids needed to rejoin them.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -8556,7 +8568,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -8826,27 +8838,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `label` (text): Label
 - `pinned` (boolean): Pinned
 
-## `prompt_asset.export`
-
-**Export prompt asset** — Export a prompt doc or skill bundle from the Happier library to a provider-native asset.
-
-- Safety: `danger`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `artifactId` (text, required): Artifact id
-- `machineId` (text, required): Machine id
-- `assetTypeId` (text, required): Asset type id
-- `scope` (select, required): Scope
-- `directory` (text): Project directory
-- `targetPath` (text): Document path
-- `targetName` (text): Skill name
-- `installMode` (select): Install mode
-
 ## `prompt_bundle.update`
 
 **Update prompt bundle** — Update a skill bundle stored in the Happier prompt library.
@@ -8941,7 +8932,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `prompt_registry.install`
 
-**Install prompt registry skill** — Import a skill bundle from a registry and optionally export it to an external skills location.
+**Install prompt registry skill** — Import a skill bundle from a registry into the Happier library.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `none` result; `deferred` flow.
@@ -8954,11 +8945,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `machineId` (text, required): Machine id
 - `sourceId` (text, required): Source id
 - `itemId` (text, required): Item id
-- `installTarget.assetTypeId` (text): Target asset type
-- `installTarget.scope` (select): Target scope
-- `installTarget.directory` (text): Project directory
-- `installTarget.targetName` (text): Target skill name
-- `installTarget.installMode` (select): Install mode
 
 ## `prompts.invocation.create`
 
@@ -9523,7 +9509,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url, required): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.sources.delete`
 
@@ -9537,7 +9529,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.sources.detect`
 
@@ -9551,7 +9549,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url, required): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.sources.list`
 
@@ -9565,7 +9569,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.sources.token.set`
 
@@ -9579,7 +9589,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.sources.update`
 
@@ -9593,7 +9609,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sourceId` (text): Registry
+- `title` (text): Name
+- `url` (url): Address
+- `kinds` (multiselect): Contains
+- `enabled` (boolean): Enabled
+- `token` (json): Saved Secret
+- `npmRegistryProfileId` (text): npm profile
 
 ## `registries.updates.check`
 
@@ -11165,6 +11187,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `modelSelector.profileId` (text): Model profile id
 - `modelSelector.modelId` (text): Model id
 - `modelSelector.backendTargetKey` (text): Backend target key
+- `investigateSurroundingFiles` (boolean): Read surrounding files at captured endpoints
 
 ## `scm.diffSummary.refine`
 
@@ -11895,6 +11918,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `query` (json, required): Memory search query
 - `machineIds` (json): Machine ids
+- `retryUnreachableMachines` (boolean): Retry unreachable machines
 - `mode` (select): Search mode
 
 ## `search.settings.get`
@@ -11938,7 +11962,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `secretId` (text): Saved Secret
+- `name` (text): Name
+- `kind` (select): Kind
 
 ## `secrets.delete`
 
@@ -11952,7 +11978,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `secretId` (text): Saved Secret
+- `name` (text): Name
+- `kind` (select): Kind
 
 ## `secrets.list`
 
@@ -11966,7 +11994,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `secretId` (text): Saved Secret
+- `name` (text): Name
+- `kind` (select): Kind
 
 ## `secrets.shared.create`
 
@@ -12064,7 +12094,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `secretId` (text): Saved Secret
+- `name` (text): Name
+- `kind` (select): Kind
 
 ## `servers.list`
 
@@ -12459,9 +12491,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session
-- `kind` (text, required): Kind
+- `kind` (select, required): Capability
 - `id` (text, required): Item
-- `state` (text, required): State
+- `state` (select, required): Change
 - `reason` (textarea): Reason
 
 ## `session.checkpoint`
@@ -12484,10 +12516,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Rollback code to checkpoint** — Apply a checkpoint-backed code rollback for the selected session turn.
 
 - Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13456,7 +13488,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13787,10 +13819,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Rollback conversation** — Roll back conversation state in the selected session.
 
 - Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13983,7 +14015,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `mcp`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -14515,7 +14547,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -14899,7 +14931,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `name` (text, required): Name
+- `description` (textarea): Description
+- `files` (json, required): Files
+- `where` (json): Where it is on
 
 ## `skills.delete`
 
@@ -14913,7 +14948,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
+- `expectedRevision` (text, required): Reviewed revision
 
 ## `skills.duplicate`
 
@@ -14927,7 +14963,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
 
 ## `skills.export`
 
@@ -14955,7 +14991,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `machineId` (text, required): Machine
+- `items` (json, required): Found skills
+- `where` (json): Where it is on
 
 ## `skills.found.list`
 
@@ -14997,7 +15035,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `source` (json, required): Source
+- `selectPaths` (text_list): Selected folders
+- `where` (json): Where it is on
+- `dryRun` (boolean): Preview only
 
 ## `skills.list`
 
@@ -15025,7 +15066,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
+- `machineId` (text, required): Machine
+- `agents` (text_list): Agents
 
 ## `skills.machine.uninstall`
 
@@ -15039,7 +15082,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
+- `machineId` (text, required): Machine
+- `force` (boolean): Remove modified files
 
 ## `skills.read`
 
@@ -15067,8 +15112,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `items` (json, required): Items
-- `change` (json, required): Rules change
+- `items.[].skillId` (text): Skill
+- `items.[].name` (text): Skill
+- `change.write.place` (json): Where
+- `change.write.state` (select): Change
+- `change.write.agentId` (text): Agent
+- `change.rules` (json): Replacement rules
 
 ## `skills.update`
 
@@ -15082,7 +15131,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
+- `expectedRevision` (text, required): Reviewed revision
+- `name` (text): Name
+- `description` (textarea): Description
+- `files` (json): File changes
+- `updatePolicy` (select): Updates
 
 ## `skills.updates.apply`
 
@@ -15096,7 +15150,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `skillId` (text, required): Skill
+- `expectedRevision` (text, required): Reviewed revision
+- `choices` (json): File choices
 
 ## `skills.updates.diff`
 
@@ -16651,7 +16707,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -18838,11 +18894,11 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Add machine to workspace** — Link a selected Workspace to a folder on another machine. Attaching an existing folder preserves its contents; creating from this Workspace replaces them.
 
-- Safety: `safe`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 

@@ -521,7 +521,7 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
         }
         return selected.has(statement) ? [statement.getText(full)] : [];
       });
-      if (!statements.some(text => /import \{ z \} from ['"]zod['"]/u.test(text))) statements.unshift("import { z } from 'zod';");
+      if (!statements.some(text => /import \{ z \} from ['"]zod(?:\/mini)?['"]/u.test(text))) statements.unshift("import { z } from 'zod';");
       overlays.set(path, statements.join('\n') + '\n');
     }
     const rootPath = resolve(protocol, 'actions/actionDtoDerivation.ts');
@@ -563,6 +563,20 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
     if (file.parseDiagnostics.length) throw Error('Schema projection did not parse');
     const transformed = ts.transform(file.statements[0].type, [context => {
       const visit = node => {
+        if (ts.isTypeLiteralNode(node) && node.members.some(member => ts.isPropertySignature(member)
+          && member.type?.kind !== ts.SyntaxKind.NeverKeyword)) {
+          // A Zod catchall(never) closes unknown keys, not its declared fields.
+          // Checker flattening prints that closure as an impossible index beside
+          // known properties. Keep their structural DTO and excess-field checks;
+          // a standalone empty-record index remains a meaningful operand.
+          const members = node.members.filter(member => !(ts.isIndexSignatureDeclaration(member)
+            && member.type?.kind === ts.SyntaxKind.NeverKeyword
+            && member.parameters.length === 1
+            && member.parameters[0].type?.kind === ts.SyntaxKind.StringKeyword));
+          if (members.length !== node.members.length) {
+            return ts.visitEachChild(ts.factory.updateTypeLiteralNode(node, members), visit, context);
+          }
+        }
         if (ts.isMappedTypeNode(node)) {
           const name = node.typeParameter.name.text;
           const alreadyScoped = parameters.has(name);
@@ -665,7 +679,8 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
     if (name === 'PluginDeclarativeComposerApplyEffectV1') {
       const schema = symbolIn(path, name + 'Schema');
       const location = schema.valueDeclaration ?? schema.declarations[0];
-      const output = checker.getPropertyOfType(checker.getTypeOfSymbolAtLocation(schema, location), '_output');
+      const internals = checker.getPropertyOfType(checker.getTypeOfSymbolAtLocation(schema, location), '_zod');
+      const output = internals && checker.getPropertyOfType(checker.getTypeOfSymbolAtLocation(internals, location), 'output');
       if (!output) throw Error('Missing canonical declarative effect schema output');
       projectedType = checker.getTypeOfSymbolAtLocation(output, location);
     }

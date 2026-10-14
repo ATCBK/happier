@@ -270,6 +270,7 @@ export type TriageEntrySessionStartControllerV1 = Readonly<{
 }>;
 
 export type TriagePendingPullRequestReviewV1 = Readonly<{
+    actionId: TriageActionV1['actionId'];
     sessionId: Extract<TriageStartEntrySessionResultV1, Readonly<{ type: 'linked' }>>['sessionId'];
     review: NonNullable<Extract<
         TriageStartEntrySessionResultV1,
@@ -683,6 +684,7 @@ export function createTriageEntrySessionStartController(
                 && result.review !== undefined
                 && reviewInstructions !== undefined
                 ? {
+                    actionId: request.action.actionId,
                     sessionId: result.sessionId,
                     review: result.review,
                     instructions: reviewInstructions,

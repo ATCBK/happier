@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ComposerAttachmentAuthorPresentationV1Schema,
@@ -16,16 +16,16 @@ import type { JsonValue } from '../../json/strictJsonValue.js';
 import type { PluginJsonValueV2 } from './publicTypes.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
-const ComposerAttachmentMessageV1Schema = lazyZodSchema(() => z.string().min(1).max(512));
+const ComposerAttachmentMessageV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(512)));
 function rejectDuplicateAttachmentInstanceIds(
   values: readonly Readonly<{ instanceId: string }>[],
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const seen = new Set<string>();
   values.forEach((value, index) => {
     if (seen.has(value.instanceId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [index, 'instanceId'],
         message: 'Composer attachment callback batches must not repeat an instance id.',
       });
@@ -34,21 +34,19 @@ function rejectDuplicateAttachmentInstanceIds(
   });
 }
 
-const ComposerAttachmentPrepareInstanceV1Schema = lazyZodSchema(() => z.object({
+const ComposerAttachmentPrepareInstanceV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   key: ComposerAttachmentKeyV1Schema,
   value: ComposerAttachmentValueV1Schema,
-  content: ComposerStagedMediaContentV1Schema.optional(),
-}).strict());
+  content: z.optional(ComposerStagedMediaContentV1Schema),
+}));
 
 /** Exact input for one current-generation prepare callback. */
-export const ComposerAttachmentPrepareRequestV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentPrepareRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   localId: PendingLocalIdSchema,
-  attachments: z.array(ComposerAttachmentPrepareInstanceV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+  attachments: z.array(ComposerAttachmentPrepareInstanceV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentPrepareRequestWireV1 = z.infer<typeof ComposerAttachmentPrepareRequestV1Schema>;
 type ComposerAttachmentValueReplacedV1<TRecord, TValue extends JsonValue> = Readonly<
   Omit<TRecord, 'value'> & Readonly<{ value: TValue }>
@@ -65,19 +63,19 @@ export type ComposerAttachmentPrepareRequestV1<
   }>
 >;
 
-const ComposerAttachmentPrepareReadyOutcomeV1Schema = lazyZodSchema(() => z.object({
+const ComposerAttachmentPrepareReadyOutcomeV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   status: z.literal('ready'),
   value: ComposerAttachmentValueV1Schema,
-  content: ComposerStagedMediaContentV1Schema.optional(),
-  presentation: ComposerAttachmentAuthorPresentationV1Schema.optional(),
-}).strict());
-const ComposerAttachmentPrepareBlockedOutcomeV1Schema = lazyZodSchema(() => z.object({
+  content: z.optional(ComposerStagedMediaContentV1Schema),
+  presentation: z.optional(ComposerAttachmentAuthorPresentationV1Schema),
+}));
+const ComposerAttachmentPrepareBlockedOutcomeV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   status: z.enum(['invalid', 'unavailable', 'failed']),
   retryable: z.boolean(),
-  message: ComposerAttachmentMessageV1Schema.optional(),
-}).strict());
+  message: z.optional(ComposerAttachmentMessageV1Schema),
+}));
 export const ComposerAttachmentPrepareOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   ComposerAttachmentPrepareReadyOutcomeV1Schema,
   ComposerAttachmentPrepareBlockedOutcomeV1Schema,
@@ -91,11 +89,9 @@ export type ComposerAttachmentPrepareOutcomeV1<
 > | Exclude<ComposerAttachmentPrepareOutcomeWireV1, Readonly<{ status: 'ready' }>>;
 
 /** Exact result shape. The host also checks one outcome per requested id. */
-export const ComposerAttachmentPrepareResultV1Schema = lazyZodSchema(() => z.object({
-  attachments: z.array(ComposerAttachmentPrepareOutcomeV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+export const ComposerAttachmentPrepareResultV1Schema = lazyZodSchema(() => z.strictObject({
+  attachments: z.array(ComposerAttachmentPrepareOutcomeV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentPrepareResultWireV1 = z.infer<typeof ComposerAttachmentPrepareResultV1Schema>;
 export type ComposerAttachmentPrepareResultV1<
   TPrepared extends JsonValue = PluginJsonValueV2,
@@ -104,20 +100,18 @@ export type ComposerAttachmentPrepareResultV1<
   & Readonly<{ attachments: readonly ComposerAttachmentPrepareOutcomeV1<TPrepared>[] }>
 >;
 
-const ComposerAttachmentResolvedInstanceV1Schema = lazyZodSchema(() => z.object({
+const ComposerAttachmentResolvedInstanceV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   key: ComposerAttachmentKeyV1Schema,
   value: ComposerAttachmentValueV1Schema,
-}).strict());
+}));
 
 /** Exact input for fresh resolution immediately before an Agent dispatch. */
-export const ComposerAttachmentResolveRequestV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentResolveRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   localId: PendingLocalIdSchema,
-  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentResolveRequestWireV1 = z.infer<typeof ComposerAttachmentResolveRequestV1Schema>;
 export type ComposerAttachmentResolveRequestV1<
   TPrepared extends JsonValue = JsonValue,
@@ -139,13 +133,11 @@ export type ComposerAttachmentInvocationScopeV2 = PluginExecutionScopeV1;
  * Additive run-capable resolution request. V1 remains the exact Session-only
  * callback contract; detached execution is never represented by a Session id.
  */
-export const ComposerAttachmentResolveRequestV2Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentResolveRequestV2Schema = lazyZodSchema(() => z.strictObject({
   scope: ComposerAttachmentInvocationScopeV2Schema,
   localId: PendingLocalIdSchema,
-  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentResolveRequestWireV2 = z.infer<typeof ComposerAttachmentResolveRequestV2Schema>;
 export type ComposerAttachmentResolveRequestV2<
   TPrepared extends JsonValue = JsonValue,
@@ -159,18 +151,18 @@ export type ComposerAttachmentResolveRequestV2<
   }>
 >;
 
-const ComposerAttachmentResolveReadyOutcomeV1Schema = lazyZodSchema(() => z.object({
+const ComposerAttachmentResolveReadyOutcomeV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   status: z.literal('ready'),
-  context: z.string().min(1).optional(),
-  data: ComposerAttachmentValueV1Schema.optional(),
-}).strict());
-const ComposerAttachmentResolveBlockedOutcomeV1Schema = lazyZodSchema(() => z.object({
+  context: z.optional(z.string().check(z.minLength(1))),
+  data: z.optional(ComposerAttachmentValueV1Schema),
+}));
+const ComposerAttachmentResolveBlockedOutcomeV1Schema = lazyZodSchema(() => z.strictObject({
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   status: z.enum(['unavailable', 'notFound', 'invalid', 'failed']),
   retryable: z.boolean(),
-  message: ComposerAttachmentMessageV1Schema.optional(),
-}).strict());
+  message: z.optional(ComposerAttachmentMessageV1Schema),
+}));
 export const ComposerAttachmentResolveOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   ComposerAttachmentResolveReadyOutcomeV1Schema,
   ComposerAttachmentResolveBlockedOutcomeV1Schema,
@@ -179,11 +171,9 @@ type ComposerAttachmentResolveOutcomeWireV1 = z.infer<typeof ComposerAttachmentR
 export type ComposerAttachmentResolveOutcomeV1 = ComposerAttachmentResolveOutcomeWireV1;
 
 /** Exact result shape. The host enforces all-or-none dispatch separately. */
-export const ComposerAttachmentResolveResultV1Schema = lazyZodSchema(() => z.object({
-  attachments: z.array(ComposerAttachmentResolveOutcomeV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+export const ComposerAttachmentResolveResultV1Schema = lazyZodSchema(() => z.strictObject({
+  attachments: z.array(ComposerAttachmentResolveOutcomeV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentResolveResultWireV1 = z.infer<typeof ComposerAttachmentResolveResultV1Schema>;
 export type ComposerAttachmentResolveResultV1 = Readonly<
   Omit<ComposerAttachmentResolveResultWireV1, 'attachments'>
@@ -194,13 +184,11 @@ export type ComposerAttachmentResolveResultV1 = Readonly<
  * Best-effort post-durable-admission notification. sessionId plus localId is its only Message identity;
  * it has no result and cannot alter admission.
  */
-export const ComposerAttachmentMessageAcceptedV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentMessageAcceptedV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   localId: PendingLocalIdSchema,
-  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema)
-    .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-    .superRefine(rejectDuplicateAttachmentInstanceIds),
-}).strict());
+  attachments: z.array(ComposerAttachmentResolvedInstanceV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1), z.superRefine(rejectDuplicateAttachmentInstanceIds)),
+}));
 type ComposerAttachmentMessageAcceptedWireV1 = z.infer<typeof ComposerAttachmentMessageAcceptedV1Schema>;
 export type ComposerAttachmentMessageAcceptedV1<
   TPrepared extends JsonValue = JsonValue,

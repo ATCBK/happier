@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-    IdentityConnectionTestDiagnosticsV1Schema,
-    type IdentityConnectionTestDiagnosticsV1,
-} from "@happier-dev/protocol";
+import { IdentityConnectionTestDiagnosticsV1Schema, type IdentityConnectionTestDiagnosticsV1 } from '@happier-dev/protocol/identity/testDiagnostics';
 
 import type { Tx } from "@/storage/inTx";
 import { db } from "@/storage/db";

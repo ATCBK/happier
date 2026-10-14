@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Canonical system-task step ids (progress/prompt namespaces).

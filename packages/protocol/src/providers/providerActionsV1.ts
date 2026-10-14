@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import {
   DaemonProviderConnectionMutationRequestV1Schema, DaemonProviderConnectionMutationResponseV1Schema,
@@ -18,11 +18,11 @@ export { PROVIDER_ACTION_IDS_V1, isProviderActionIdV1, type ProviderActionIdV1 }
 
 type ConnectionAction = z.output<typeof DaemonProviderConnectionMutationRequestV1Schema>['action'];
 type ConnectionOption<A extends ConnectionAction> = Extract<
-  (typeof DaemonProviderConnectionMutationRequestV1Schema)['options'][number], { shape: { action: z.ZodLiteral<A> } }
-> & z.ZodType;
+  (typeof DaemonProviderConnectionMutationRequestV1Schema)['_zod']['def']['options'][number], { shape: { action: z.ZodMiniLiteral<A> } }
+> & z.ZodMiniType;
 function connectionInput<A extends ConnectionAction>(action: A): ConnectionOption<A> {
   return lazyZodSchema<ConnectionOption<A>>(() => {
-    const option = DaemonProviderConnectionMutationRequestV1Schema.options.find((value): value is ConnectionOption<A> => value.shape.action.value === action);
+    const option = DaemonProviderConnectionMutationRequestV1Schema._zod.def.options.find((value): value is ConnectionOption<A> => value.shape.action._zod.def.values[0] === action);
     if (!option) throw new Error(`Missing Provider connection operation: ${action}`);
     return option;
   });
@@ -34,30 +34,30 @@ type AccountCreationOperand<T extends { authoringReview: unknown }> = {
     (Omit<AccountOperand<T>, 'authoringReview'> & { authoringReview?: T['authoringReview'];
       deployment?: z.output<ConnectionOption<'update'>>['deployment'] })[K]
 };
-function accountInput<S extends z.ZodObject>(schema: S): z.ZodType<AccountOperand<z.output<S>>, AccountOperand<z.input<S>>> {
+function accountInput<S extends z.ZodMiniObject>(schema: S): z.ZodMiniType<AccountOperand<z.output<S>>, AccountOperand<z.input<S>>> {
   // Zod's public safeExtend retains refinements at runtime; its subtype-only typing
   // cannot express this deliberate Account-boundary widening. Keep the cast here.
-  const extend = schema.safeExtend.bind(schema) as unknown as (shape: { machineId: z.ZodOptional<typeof ProviderMachineIdSchema> }) =>
-    z.ZodType<AccountOperand<z.output<S>>, AccountOperand<z.input<S>>>;
-  return extend({ machineId: ProviderMachineIdSchema.optional() });
+  const extend = z.safeExtend.bind(null, schema) as unknown as (shape: { machineId: z.ZodMiniOptional<typeof ProviderMachineIdSchema> }) =>
+    z.ZodMiniType<AccountOperand<z.output<S>>, AccountOperand<z.input<S>>>;
+  return extend({ machineId: z.optional(ProviderMachineIdSchema) });
 }
 type ModelSettingsAction = z.output<typeof DaemonProviderModelSettingsMutationRequestV1Schema>['action'];
 type ModelSettingsOption<A extends ModelSettingsAction> = Extract<
-  (typeof DaemonProviderModelSettingsMutationRequestV1Schema)['options'][number], { shape: { action: z.ZodLiteral<A> } }
-> & z.ZodType;
+  (typeof DaemonProviderModelSettingsMutationRequestV1Schema)['_zod']['def']['options'][number], { shape: { action: z.ZodMiniLiteral<A> } }
+> & z.ZodMiniType;
 function modelSettingsInput<A extends ModelSettingsAction>(action: A): ModelSettingsOption<A> {
   return lazyZodSchema<ModelSettingsOption<A>>(() => {
-    const option = DaemonProviderModelSettingsMutationRequestV1Schema.options.find((value): value is ModelSettingsOption<A> => value.shape.action.value === action);
+    const option = DaemonProviderModelSettingsMutationRequestV1Schema._zod.def.options.find((value): value is ModelSettingsOption<A> => value.shape.action._zod.def.values[0] === action);
     if (!option) throw new Error(`Missing Provider model operation: ${action}`);
     return option;
   });
 }
 type ModelLoadOption<A extends 'load' | 'cancel'> = Extract<
-  (typeof DaemonProviderModelLoadRequestV1Schema)['options'][number], { shape: { action: z.ZodLiteral<A> } }
-> & z.ZodType;
+  (typeof DaemonProviderModelLoadRequestV1Schema)['_zod']['def']['options'][number], { shape: { action: z.ZodMiniLiteral<A> } }
+> & z.ZodMiniType;
 function modelLoadInput<A extends 'load' | 'cancel'>(action: A): ModelLoadOption<A> {
   return lazyZodSchema<ModelLoadOption<A>>(() => {
-    const option = DaemonProviderModelLoadRequestV1Schema.options.find((value): value is ModelLoadOption<A> => value.shape.action.value === action);
+    const option = DaemonProviderModelLoadRequestV1Schema._zod.def.options.find((value): value is ModelLoadOption<A> => value.shape.action._zod.def.values[0] === action);
     if (!option) throw new Error(`Missing Provider process operation: ${action}`);
     return option;
   });
@@ -80,10 +80,10 @@ export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
   'providers.connections.describe': lazyZodSchema(() => accountInput(DaemonProviderConnectionsDescribeRequestV1Schema)),
   'providers.connections.create_contribution': lazyZodSchema(() => {
     const input = connectionInput('createContribution');
-    const extend = input.safeExtend.bind(input) as unknown as (shape: { machineId: z.ZodOptional<typeof ProviderMachineIdSchema>;
-      authoringReview: z.ZodOptional<typeof input.shape.authoringReview>; deployment: ConnectionOption<'update'>['shape']['deployment'] }) =>
-        z.ZodType<AccountCreationOperand<z.output<typeof input>>, AccountCreationOperand<z.input<typeof input>>>;
-    return extend({ machineId: ProviderMachineIdSchema.optional(), authoringReview: input.shape.authoringReview.optional(),
+    const extend = z.safeExtend.bind(null, input) as unknown as (shape: { machineId: z.ZodMiniOptional<typeof ProviderMachineIdSchema>;
+      authoringReview: z.ZodMiniOptional<typeof input.shape.authoringReview>; deployment: ConnectionOption<'update'>['shape']['deployment'] }) =>
+        z.ZodMiniType<AccountCreationOperand<z.output<typeof input>>, AccountCreationOperand<z.input<typeof input>>>;
+    return extend({ machineId: z.optional(ProviderMachineIdSchema), authoringReview: z.optional(input.shape.authoringReview),
       deployment: connectionInput('update').shape.deployment });
   }),
   'providers.connections.create_custom': lazyZodSchema(() => accountInput(connectionInput('createCustom'))),
@@ -97,14 +97,14 @@ export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
   'providers.connections.secrets.bind': lazyZodSchema(() => accountInput(connectionInput('bindSecret'))),
   'providers.models.list': lazyZodSchema(() => accountInput(DaemonProviderModelsRequestV1Schema)),
   // Refresh contacts external Providers and cannot be smuggled into a safe read.
-  'providers.models.projection': lazyZodSchema(() => accountInput(DaemonProviderModelProjectionRequestV1Schema.safeExtend({ forceRefresh: z.never().optional() }))),
-  'providers.models.refresh': lazyZodSchema(() => DaemonProviderModelProjectionRequestV1Schema.safeExtend({ forceRefresh: z.literal(true) })),
+  'providers.models.projection': lazyZodSchema(() => accountInput(z.safeExtend(DaemonProviderModelProjectionRequestV1Schema, { forceRefresh: z.optional(z.never()) }))),
+  'providers.models.refresh': lazyZodSchema(() => z.safeExtend(DaemonProviderModelProjectionRequestV1Schema, { forceRefresh: z.literal(true) })),
   'providers.models.manual.add': lazyZodSchema(() => accountInput(modelSettingsInput('manualAdd'))),
   'providers.models.manual.remove': lazyZodSchema(() => accountInput(modelSettingsInput('manualRemove'))),
   'providers.models.visibility.set': lazyZodSchema(() => accountInput(modelSettingsInput('setVisibility'))),
-  'providers.models.source_visibility.set': lazyZodSchema(() => z.object({
-    action: z.literal('setConnectionVisibility'), connectionId: ProviderConnectionIdSchema, shown: z.boolean().nullable(),
-  }).strict()),
+  'providers.models.source_visibility.set': lazyZodSchema(() => z.strictObject({
+    action: z.literal('setConnectionVisibility'), connectionId: ProviderConnectionIdSchema, shown: z.nullable(z.boolean()),
+  })),
   'providers.models.visibility.reset': lazyZodSchema(() => accountInput(modelSettingsInput('resetVisibility'))),
   'providers.models.visibility.bulk': lazyZodSchema(() => accountInput(modelSettingsInput('bulkVisibility'))),
   'providers.models.experimental.confirm': lazyZodSchema(() => accountInput(modelSettingsInput('confirmExperimental'))),
@@ -114,7 +114,7 @@ export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
   'providers.binding.status': DaemonProviderBindingStatusRequestV1Schema,
   'providers.legacy.prepare': DaemonProviderProfileMigrationPrepareSourceRequestV1Schema,
   'providers.defaults.set': ProviderDefaultModelSelectionMutationV1Schema,
-} as const satisfies Record<ProviderActionIdV1, z.ZodType>;
+} as const satisfies Record<ProviderActionIdV1, z.ZodMiniType>;
 
 export const PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'providers.connections.describe': DaemonProviderConnectionsDescribeResponseV1Schema,
@@ -134,7 +134,7 @@ export const PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'providers.models.manual.add': DaemonProviderModelSettingsMutationResponseV1Schema,
   'providers.models.manual.remove': DaemonProviderModelSettingsMutationResponseV1Schema,
   'providers.models.visibility.set': DaemonProviderModelSettingsMutationResponseV1Schema,
-  'providers.models.source_visibility.set': lazyZodSchema(() => z.object({ status: z.literal('updated') }).strict()),
+  'providers.models.source_visibility.set': lazyZodSchema(() => z.strictObject({ status: z.literal('updated') })),
   'providers.models.visibility.reset': DaemonProviderModelSettingsMutationResponseV1Schema,
   'providers.models.visibility.bulk': DaemonProviderModelSettingsMutationResponseV1Schema,
   'providers.models.experimental.confirm': DaemonProviderModelSettingsMutationResponseV1Schema,
@@ -143,8 +143,8 @@ export const PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'providers.probe': DaemonProviderProbeResponseV1Schema,
   'providers.binding.status': DaemonProviderBindingStatusResponseV1Schema,
   'providers.legacy.prepare': DaemonProviderProfileMigrationPrepareSourceResponseV1Schema,
-  'providers.defaults.set': lazyZodSchema(() => z.object({ status: z.literal('updated') }).strict()),
-} as const satisfies Record<ProviderActionIdV1, z.ZodType>;
+  'providers.defaults.set': lazyZodSchema(() => z.strictObject({ status: z.literal('updated') })),
+} as const satisfies Record<ProviderActionIdV1, z.ZodMiniType>;
 
 export type ProviderActionInputByIdV1 = { readonly [Id in ProviderActionIdV1]: z.output<(typeof PROVIDER_ACTION_INPUT_SCHEMAS_V1)[Id]> };
 export type ProviderActionRequestV1 = { [Id in ProviderActionIdV1]: Readonly<{ actionId: Id; input: ProviderActionInputByIdV1[Id] }> }[ProviderActionIdV1];

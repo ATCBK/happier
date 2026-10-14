@@ -53,7 +53,7 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
     showServerPickerChip: boolean;
     targetServerId: string | null;
     targetServerName: string;
-    mcpChip?: AgentInputExtraActionChip | null;
+    capabilitiesChip?: AgentInputExtraActionChip | null;
     externalSessionsFeatureEnabled: boolean;
     supportsDirectTranscriptStorage: boolean;
     transcriptStorage: NewSessionTranscriptStorage;
@@ -142,8 +142,8 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
         if (serverPickerActionChip) {
             chips.push(serverPickerActionChip);
         }
-        if (params.mcpChip) {
-            chips.push(params.mcpChip);
+        if (params.capabilitiesChip) {
+            chips.push(params.capabilitiesChip);
         }
         if (storageActionChip) {
             chips.push(storageActionChip);
@@ -167,7 +167,7 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
         params.agentOptionState,
         params.checkoutActionChip,
         params.connectedServicesAuthChip,
-        params.mcpChip,
+        params.capabilitiesChip,
         params.organizationPlacementActionChips,
         params.seededPlacementActionChip,
         params.onActionShortcutPress,

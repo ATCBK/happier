@@ -9,7 +9,7 @@ import {
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonicalDigest.js';
 import type { JsonValue as StrictJsonValue } from '../../json/strictJsonValue.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { isPluginError } from '../errors.js';
 import {
   type PluginContributionIdentityV1,
@@ -454,49 +454,49 @@ export function readPluginActionFailureAuthorPayload(
   });
 }
 
-const PluginActionPresentUserAuthorizationScopeSchema = lazyZodSchema(() => z.object({
-  accountId: z.string().optional(),
-  projectId: z.string().optional(),
-  workspaceId: z.string().optional(),
-  machineId: z.string().optional(),
-  actorId: z.string().optional(),
-}).strict());
+const PluginActionPresentUserAuthorizationScopeSchema = lazyZodSchema(() => z.strictObject({
+  accountId: z.optional(z.string()),
+  projectId: z.optional(z.string()),
+  workspaceId: z.optional(z.string()),
+  machineId: z.optional(z.string()),
+  actorId: z.optional(z.string()),
+}));
 
-const PluginActionPresentUserAuthorizationRequirementSchema = lazyZodSchema(() => z.object({
+const PluginActionPresentUserAuthorizationRequirementSchema = lazyZodSchema(() => z.strictObject({
   id: z.string(),
   required: z.boolean(),
   status: z.enum(['available', 'denied', 'unavailable', 'notApplicable']),
-  code: z.string().optional(),
-}).strict());
+  code: z.optional(z.string()),
+}));
 
 /**
  * The one wire-safe form of the canonical final-policy facts used by Action
  * admission. It deliberately excludes availability and confirmation because
  * those remain Action-present-user gate inputs rather than authorization facts.
  */
-export const PluginActionPresentUserAuthorizationFactsSchema = lazyZodSchema(() => z.object({
-  generation: z.object({
+export const PluginActionPresentUserAuthorizationFactsSchema = lazyZodSchema(() => z.strictObject({
+  generation: z.strictObject({
     targetGeneration: z.string(),
-    desiredGeneration: z.string().nullable(),
-    appliedGeneration: z.string().nullable(),
-    targetGenerationMode: z.enum(['current', 'retained']).optional(),
-  }).strict(),
-  resourceSelections: z.array(z.object({
+    desiredGeneration: z.nullable(z.string()),
+    appliedGeneration: z.nullable(z.string()),
+    targetGenerationMode: z.optional(z.enum(['current', 'retained'])),
+  }),
+  resourceSelections: z.array(z.strictObject({
     id: z.string(),
     required: z.boolean(),
-    requestedResourceId: z.string().optional(),
-    selectedResourceId: z.string().optional(),
-  }).strict()),
-  scopedGrants: z.array(z.object({
+    requestedResourceId: z.optional(z.string()),
+    selectedResourceId: z.optional(z.string()),
+  })),
+  scopedGrants: z.array(z.strictObject({
     id: z.string(),
     required: z.boolean(),
     status: z.enum(['active', 'missing', 'revoked']),
     requiredScope: PluginActionPresentUserAuthorizationScopeSchema,
-    grantedScope: PluginActionPresentUserAuthorizationScopeSchema.optional(),
-  }).strict()),
+    grantedScope: z.optional(PluginActionPresentUserAuthorizationScopeSchema),
+  })),
   serviceAvailability: z.array(PluginActionPresentUserAuthorizationRequirementSchema),
   operatingSystemAuthorization: z.array(PluginActionPresentUserAuthorizationRequirementSchema),
-}).strict());
+}));
 
 export type PluginActionPresentUserAuthorizationFacts = Readonly<
   Omit<PluginActionPolicyInput, 'availability' | 'confirmation'>

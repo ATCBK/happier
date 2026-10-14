@@ -1,4 +1,5 @@
-import type { HomeRetentionDryRunResultV1, ServerConfigEnv } from '@happier-dev/protocol';
+import type { HomeRetentionDryRunResultV1 } from '@happier-dev/protocol/home/governance';
+import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { readRetentionPolicyFromEnv } from '@/app/retention/config/readRetentionPolicyFromEnv';
 

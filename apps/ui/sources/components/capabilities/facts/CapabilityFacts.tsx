@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import type { PageHeaderMetaFact } from '@/components/ui/layout/PageHeader';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 export type CapabilitySource =
@@ -27,8 +28,8 @@ export type CapabilityFactsProps = Readonly<{
   source?: CapabilitySource;
   trust?: CapabilityTrust;
   cost?: CapabilityCost;
-  /** Extra plain facts after cost ("Remote", "via skills.sh"). */
-  extra?: readonly string[];
+  /** Extra facts after cost ("Remote", "via skills.sh"); a path or id is drawn in mono. */
+  extra?: readonly (string | Readonly<{ text: string; mono: true }>)[];
   /** 'row': one quiet line, truncates at the end. */
   presentation: 'row';
 }>;
@@ -127,7 +128,11 @@ function buildFacts(
       }),
     });
   for (const [index, extra] of (input.extra ?? []).entries())
-    facts.push({ key: `extra:${index}`, text: extra });
+    facts.push(
+      typeof extra === 'string'
+        ? { key: `extra:${index}`, text: extra }
+        : { key: `extra:${index}`, text: extra.text, mono: true },
+    );
   return facts;
 }
 
@@ -159,7 +164,10 @@ export function CapabilityFacts(
               ))}
             <Text
               variant="meta"
-              style={fact.strong === true ? styles.strong : null}
+              style={[
+                fact.strong === true ? styles.strong : null,
+                fact.mono === true ? styles.mono : null,
+              ]}
             >
               {fact.text}
             </Text>
@@ -192,4 +200,5 @@ const styles = StyleSheet.create((theme) => ({
   dot: { color: theme.colors.text.tertiary },
   glyph: { color: theme.colors.text.tertiary },
   strong: { color: theme.colors.text.secondary },
+  mono: { ...Typography.mono() },
 }));

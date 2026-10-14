@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ViewerReadStateV1 } from './readState.js';
 import { isSessionActionConfirmationRequest } from '../metadata/sessionActionConfirmationsV1.js';
@@ -41,15 +41,13 @@ export type SessionPersonalAttentionReasonV1 = z.infer<
   typeof SessionPersonalAttentionReasonV1Schema
 >;
 
-export const SessionPersonalAttentionProjectionV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionPersonalAttentionProjectionV1Schema = lazyZodSchema(() => z.strictObject({
     needsAttention: z.boolean(),
-    reasons: z.array(SessionPersonalAttentionReasonV1Schema).readonly(),
-    primary: SessionPersonalAttentionReasonV1Schema.nullable(),
+    reasons: z.readonly(z.array(SessionPersonalAttentionReasonV1Schema)),
+    primary: z.nullable(SessionPersonalAttentionReasonV1Schema),
     /** `status_only` when the viewer cannot open the content (locked E2EE). */
     presentation: z.enum(['full', 'status_only']),
-  })
-  .strict());
+  }));
 export type SessionPersonalAttentionProjectionV1 = Readonly<{
   needsAttention: boolean;
   reasons: readonly SessionPersonalAttentionReasonV1[];

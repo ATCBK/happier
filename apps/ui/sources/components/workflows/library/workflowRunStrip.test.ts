@@ -15,7 +15,19 @@ vi.mock('@/text', async () => {
     });
 });
 
-import { projectWorkflowRunStrip, WORKFLOW_RUN_STRIP_LENGTH } from './workflowRunStrip';
+import { hasWorkingWorkflowLibraryRun, projectWorkflowRunStrip, WORKFLOW_RUN_STRIP_LENGTH } from './workflowRunStrip';
+
+describe('working workflow summaries', () => {
+    it.each(['interrupted', 'paused', 'succeeded', 'cancelled'] as const)('does not call a %s Run working', (state) => {
+        expect(hasWorkingWorkflowLibraryRun({ recent: [{ runId: 'run', state }] })).toBe(false);
+    });
+
+    it('keeps actual work discoverable behind a newer completed Run and leaves unknown summaries quiet', () => {
+        expect(hasWorkingWorkflowLibraryRun({ recent: [{ runId: 'newer', state: 'succeeded' }, { runId: 'working', state: 'running' }] })).toBe(true);
+        expect(hasWorkingWorkflowLibraryRun(undefined)).toBe(false);
+        expect(hasWorkingWorkflowLibraryRun({ recent: [] })).toBe(false);
+    });
+});
 
 describe('projectWorkflowRunStrip', () => {
     it('draws the most recent runs oldest to newest, holding its width with empty cells', () => {

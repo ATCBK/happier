@@ -1,6 +1,6 @@
 import { BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS } from '@happier-dev/protocol/browser/automation/notImplemented';
 import { BrowserActiveTargetV1Schema } from '@happier-dev/protocol/browser/events/activeTarget';
-import type { BrowserActiveTargetV1, BrowserCommandDispatchResultV1, BrowserEventV1, BrowserAutomationActionKindV1, BrowserAutomationActionRequestV1, BrowserAutomationActionResultV1, BrowserAutomationControllerKindV1, BrowserAutomationControllerStateV1, BrowserAutomationErrorCodeV1, BrowserAutomationRequesterKindV1, BrowserAutomationRequesterRefV1, BrowserAutomationTimelineEntryV1, BrowserAutomationTimelineV1 } from '@happier-dev/protocol';
+import type { BrowserActiveTargetV1, BrowserCommandV1, BrowserCommandDispatchResultV1, BrowserEventV1, BrowserAutomationActionKindV1, BrowserAutomationActionRequestV1, BrowserAutomationActionResultV1, BrowserAutomationControllerKindV1, BrowserAutomationControllerStateV1, BrowserAutomationErrorCodeV1, BrowserAutomationRequesterKindV1, BrowserAutomationRequesterRefV1, BrowserAutomationTimelineEntryV1, BrowserAutomationTimelineV1 } from '@happier-dev/protocol';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserAutomationActionRequestV1Schema, BrowserAutomationActionResultV1Schema, BrowserAutomationTimelineEntryV1Schema, BrowserAutomationTimelineV1Schema, isBrowserAutomationMutatingActionKind } from '@happier-dev/protocol/browser/automation/v1';
 
@@ -75,8 +75,8 @@ export type BrowserAutomationDaemonService = Readonly<{
     input: BrowserAutomationViewRef & BrowserControllerAuthority,
   ): Promise<BrowserAutomationCancelResult>;
   recordHumanInput(input: BrowserAutomationViewRef & BrowserControllerAuthority): Promise<BrowserAutomationCancelResult>;
-  /** Page-changing control commands retain their host authority through the same admission and drain. */
-  executeControlCommand(view: BrowserAutomationViewRef, authority: 'present_user' | 'account_automation', dispatch: () => Promise<BrowserCommandDispatchResultV1>): Promise<SurfaceInputExecutionResult<BrowserCommandDispatchResultV1>>;
+  /** Control commands share the drain; only page-changing commands take input ownership. */
+  executeControlCommand(view: BrowserAutomationViewRef & BrowserCommandV1, authority: 'present_user' | 'account_automation', dispatch: () => Promise<BrowserCommandDispatchResultV1>): Promise<SurfaceInputExecutionResult<BrowserCommandDispatchResultV1>>;
   handBack(input: BrowserAutomationViewRef & BrowserControllerAuthority): Readonly<{ ok: boolean }>;
   getStatus(view: BrowserAutomationViewRef): BrowserAutomationControllerStateV1;
   getTimeline(view: BrowserAutomationViewRef): BrowserAutomationTimelineV1;
@@ -461,6 +461,10 @@ export function createBrowserAutomationDaemonService(input: Readonly<{
     execute,
     async executeControlCommand(view, authority, dispatch) {
       const runtime = runtimeFor(view);
+      if (view.kind === 'focusView') {
+        const value = await runtime.inputControl.drainWhile(dispatch);
+        return { ok: true, value, interrupted: false, completion: classifyBrowserCommandCompletion(value) };
+      }
       if (authority === 'present_user') await recordHumanInput({ ...view, authority });
       const navigationGeneration = input.adapter.getNavigationGeneration?.(view) ?? 0;
       if (runtime.navigationGeneration !== navigationGeneration) runtime.inputControl.invalidateObservation();

@@ -131,3 +131,23 @@ describe('a widget that follows its group', () => {
         expect(titled.getTextContent()).not.toContain('Following group');
     });
 });
+
+describe('a card that owns its row', () => {
+    const presentedSize = async (props: Readonly<{ size: 'small' | 'medium'; ownsRow?: boolean; sizes?: readonly ('small' | 'medium' | 'wide' | 'full')[] }>) => {
+        const declared = props.sizes ? { sizeDeclaration: { sizes: [...props.sizes], defaultSize: props.sizes[0]! } } : {};
+        const screen = await renderScreen(<HubWidgetSection widget={{ ...widget, ...declared }} instance={instance} frameStyle="card" menu={null}
+            size={props.size} ownsRow={props.ownsRow === true} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })} testID="home-lone" />);
+        const frame = screen.root.findAll(node => node.props.testID === 'home-lone.frame' && node.props.widgetPresentation)[0]!;
+        const size = frame.props.widgetPresentation.size;
+        standardCleanup();
+        return size;
+    };
+
+    it('presents at its full-row size of the same height instead of a stretched half-row card, keeping the saved size otherwise', async () => {
+        expect(await presentedSize({ size: 'small', ownsRow: true })).toBe('wide');
+        expect(await presentedSize({ size: 'medium', ownsRow: true })).toBe('full');
+        expect(await presentedSize({ size: 'small' })).toBe('small');
+        // A widget that declares no full-row size keeps the size it was saved at.
+        expect(await presentedSize({ size: 'small', ownsRow: true, sizes: ['small', 'medium'] })).toBe('small');
+    });
+});

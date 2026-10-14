@@ -1,77 +1,16 @@
 import type { Prisma } from "@prisma/client";
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
-import {
-    type ManagedResourceDependencyV1,
-    PluginAccountPluginIntentV1Schema,
-    PluginAccountPluginPackageAssetLinkV1Schema,
-    PluginAccountPluginUiArtifactLinkV1Schema,
-    PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
-    PluginAvailabilityIntentReadActionInputV1Schema,
-    PluginAvailabilityIntentReadActionOutputV1Schema,
-    PluginAvailabilityIntentsListActionInputV1Schema,
-    PluginAvailabilityIntentsListActionOutputV1Schema,
-    PluginAvailabilityIntentSetActionInputV1Schema,
-    PluginAvailabilityCollectionWritersClaimActionInputV1Schema,
-    PluginAvailabilityMaterializationsReadActionInputV1Schema,
-    PluginAvailabilityMaterializationsReportActionInputV1Schema,
-    PluginAvailabilityReleaseReadActionInputV1Schema,
-    PluginAvailabilityReleaseReadActionOutputV1Schema,
-    PluginAvailabilityReleasePublishActionInputV1Schema,
-    PluginAvailabilityPackageAssetPublishActionInputV1Schema,
-    PluginAvailabilityPackageAssetReadActionInputV1Schema,
-    PluginAvailabilityPackageAssetRemoveActionInputV1Schema,
-    PluginAvailabilityUiArtifactPublishActionInputV1Schema,
-    PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema,
-    PluginAvailabilityUiArtifactBrowserFrameIssueActionOutputV1Schema,
-    PluginAvailabilityUiArtifactReadActionInputV1Schema,
-    PluginAvailabilityUiArtifactRemoveActionInputV1Schema,
-    isExactPluginMachineMaterializationReleaseCorrespondenceV1,
-    isPluginUiReleaseSlotCompatibleWithArtifactLinkV1,
-    PluginMachineMaterializationSnapshotV1Schema,
-    PluginMachineMaterializationV1Schema,
-    PluginUiArtifactHostingCapabilityV1Schema,
-    PluginUiReleaseSlotV1Schema,
-    buildPluginDomainAccountChangeEntityId,
-    createCanonicalJsonSigningInput,
-    decodePlainArtifactStoredContent,
-    normalizePluginMachineMaterializationSnapshotV1,
-    projectPluginMachineMaterializationReportFactsV1,
-    normalizePluginReleaseFactsV1,
-    pluginReleaseFactsEqualV1,
-    supportsMachineOperationProtocolCapabilityV1,
-    type PluginAccountPluginUiArtifactLinkV1,
-    type PluginAccountPluginPackageAssetLinkV1,
-    type PluginAvailabilityArtifactReadEnvelopeV1,
-    type PluginAvailabilityIntentReadActionOutputV1,
-    type PluginAvailabilityIntentsListActionOutputV1,
-    type PluginAvailabilityIntentSetActionOutputV1,
-    type PluginAvailabilityCollectionWritersClaimActionOutputV1,
-    type PluginCollectionContractRefV1,
-    type PluginAvailabilityMaterializationsReadActionOutputV1,
-    type PluginAvailabilityMaterializationsReportActionOutputV1,
-    type PluginAvailabilityReleaseReadActionOutputV1,
-    type PluginAvailabilityReleasePublishActionOutputV1,
-    type PluginAvailabilityPackageAssetPublishActionOutputV1,
-    type PluginAvailabilityPackageAssetReadActionOutputV1,
-    type PluginAvailabilityPackageAssetRemoveActionOutputV1,
-    type PluginAvailabilityUiArtifactPublishActionOutputV1,
-    type PluginAvailabilityUiArtifactBrowserFrameIssueActionOutputV1,
-    type PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1,
-    type PluginAvailabilityUiArtifactReadActionOutputV1,
-    type PluginAvailabilityUiArtifactRemoveActionOutputV1,
-    type PluginMachineMaterializationV1,
-    type PluginMachineMaterializationSnapshotV1,
-    type PluginCollectionQuotaDimensionV1,
-    type PluginReleaseFactsV1,
-    type PluginUiArtifactHostingCapabilityV1,
-    type PluginUiReleaseSlotV1,
-    type MachineOperationProtocolCapabilityNameV1,
-    type ArtifactAccountEncryptionMigrationOwnershipV1,
-} from "@happier-dev/protocol";
-import {
-    decodePackageAssetArchiveBodyV1,
-    openPackageAssetArchiveV1,
-} from "@happier-dev/protocol/plugins/availability";
+import { type ManagedResourceDependencyV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { PluginAccountPluginIntentV1Schema, PluginAccountPluginPackageAssetLinkV1Schema, PluginAccountPluginUiArtifactLinkV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE, isExactPluginMachineMaterializationReleaseCorrespondenceV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, PluginMachineMaterializationSnapshotV1Schema, PluginMachineMaterializationV1Schema, PluginUiArtifactHostingCapabilityV1Schema, PluginUiReleaseSlotV1Schema, normalizePluginMachineMaterializationSnapshotV1, projectPluginMachineMaterializationReportFactsV1, normalizePluginReleaseFactsV1, pluginReleaseFactsEqualV1, type PluginAccountPluginUiArtifactLinkV1, type PluginAccountPluginPackageAssetLinkV1, type PluginMachineMaterializationV1, type PluginMachineMaterializationSnapshotV1, type PluginReleaseFactsV1, type PluginUiArtifactHostingCapabilityV1, type PluginUiReleaseSlotV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginAvailabilityIntentReadActionInputV1Schema, PluginAvailabilityIntentReadActionOutputV1Schema, PluginAvailabilityIntentsListActionInputV1Schema, PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityIntentSetActionInputV1Schema, PluginAvailabilityCollectionWritersClaimActionInputV1Schema, PluginAvailabilityMaterializationsReadActionInputV1Schema, PluginAvailabilityMaterializationsReportActionInputV1Schema, PluginAvailabilityReleaseReadActionInputV1Schema, PluginAvailabilityReleaseReadActionOutputV1Schema, PluginAvailabilityReleasePublishActionInputV1Schema, PluginAvailabilityPackageAssetPublishActionInputV1Schema, PluginAvailabilityPackageAssetReadActionInputV1Schema, PluginAvailabilityPackageAssetRemoveActionInputV1Schema, PluginAvailabilityUiArtifactPublishActionInputV1Schema, PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema, PluginAvailabilityUiArtifactBrowserFrameIssueActionOutputV1Schema, PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactRemoveActionInputV1Schema, type PluginAvailabilityArtifactReadEnvelopeV1, type PluginAvailabilityIntentReadActionOutputV1, type PluginAvailabilityIntentsListActionOutputV1, type PluginAvailabilityIntentSetActionOutputV1, type PluginAvailabilityCollectionWritersClaimActionOutputV1, type PluginAvailabilityMaterializationsReadActionOutputV1, type PluginAvailabilityMaterializationsReportActionOutputV1, type PluginAvailabilityReleaseReadActionOutputV1, type PluginAvailabilityReleasePublishActionOutputV1, type PluginAvailabilityPackageAssetPublishActionOutputV1, type PluginAvailabilityPackageAssetReadActionOutputV1, type PluginAvailabilityPackageAssetRemoveActionOutputV1, type PluginAvailabilityUiArtifactPublishActionOutputV1, type PluginAvailabilityUiArtifactBrowserFrameIssueActionOutputV1, type PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1, type PluginAvailabilityUiArtifactReadActionOutputV1, type PluginAvailabilityUiArtifactRemoveActionOutputV1 } from '@happier-dev/protocol/plugins/availability/actions';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { isPluginCollectionSchemaWideningV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { supportsMachineOperationProtocolCapabilityV1, type MachineOperationProtocolCapabilityNameV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import { type ArtifactAccountEncryptionMigrationOwnershipV1 } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
+import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
 import * as privacyKit from "privacy-kit";
 import semver from "semver";
 
@@ -88,15 +27,9 @@ import {
     isPlainArtifactDataKeyBytes,
     openArtifactStoredContentPair,
 } from "@/app/artifacts/artifactStoredContent";
-import {
-    decodePluginUiArtifactArchiveBodyV1,
-    deriveGeneratedHostedWebAssetPolicyV1,
-    openPluginUiArtifactArchiveV1,
-    resolveHostedWebAssetPolicy,
-    type GeneratedHostedWebAssetPolicyV1,
-    type PluginUiArtifactArchiveOpenedV1,
-    type PluginUiArtifactDigestV1,
-} from "@happier-dev/protocol/plugins/ui";
+import { decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1, type PluginUiArtifactArchiveOpenedV1 } from '@happier-dev/protocol/plugins/ui';
+import { deriveGeneratedHostedWebAssetPolicyV1, resolveHostedWebAssetPolicy, type GeneratedHostedWebAssetPolicyV1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
+import { type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import {
     PluginCollectionContractMaterializationError,
     PluginCollectionWriterReadinessError,
@@ -104,6 +37,7 @@ import {
     materializePluginCollectionContractsTx,
     preparePluginCollectionWritableContractsTx,
     readMaterializedPluginCollectionDeclaration,
+    readMaterializedPluginCollectionContract,
 } from "@/app/plugins/data/collections/contracts";
 import { promotePluginCollectionCandidatePreparationInTx } from "@/app/plugins/data/collections/candidatePreparation";
 import { retirePluginCollectionCandidatePreparationStagesTx } from "@/app/plugins/data/collections/candidatePreparationLifecycle";
@@ -2384,11 +2318,22 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                         incumbent.schemaVersion === ref.schemaVersion
                         && incumbent.contractDigest !== ref.contractDigest
                     ) {
-                        // The author changed a contract without bumping its
-                        // schemaVersion; rows would silently mix schemas.
-                        throw new PluginAvailabilityOperationError(
-                            "plugin_collection_contract_conflict",
-                        );
+                        const contracts = await tx.pluginCollectionContract.findMany({
+                            where: { pluginId, collectionId: ref.collectionId,
+                                contractDigest: { in: [incumbent.contractDigest, ref.contractDigest] } },
+                        });
+                        const source = contracts.find(contract => contract.contractDigest === incumbent.contractDigest);
+                        const target = contracts.find(contract => contract.contractDigest === ref.contractDigest);
+                        if (!source || !target || !isPluginCollectionSchemaWideningV1({
+                            source: readMaterializedPluginCollectionContract(source),
+                            target: readMaterializedPluginCollectionContract(target),
+                        })) {
+                            // A compatible schema change needs no version ceremony.
+                            // A narrowing (including a lagging declaration) never
+                            // replaces the exact current writer or its declaration.
+                            throw new PluginAvailabilityOperationError("plugin_collection_contract_conflict");
+                        }
+                        writers.set(ref.collectionId, ref);
                     }
                 }
                 const writableCollections = [...writers.values()];

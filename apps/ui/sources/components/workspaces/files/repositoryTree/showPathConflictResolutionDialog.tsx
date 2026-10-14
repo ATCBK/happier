@@ -9,6 +9,7 @@ import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type PathConflictResolutionStrategy = 'keep_both' | 'replace' | 'skip' | 'cancel';
 
@@ -16,10 +17,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     options: {
         flex: 1,
         minHeight: 0,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingTop: 14,
         paddingBottom: 14,
-        gap: 10,
+        gap: theme.space.s10,
     },
     optionButton: {
         borderRadius: 12,
@@ -27,30 +28,27 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
         paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 2,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s2,
     },
     optionTitle: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     optionSubtitle: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     optionPrimaryBorder: {
         borderColor: theme.colors.text.link,
     },
     cancelRow: {
-        paddingVertical: 10,
+        paddingVertical: theme.space.s10,
         alignItems: 'center',
     },
     cancelText: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
 }));
 
@@ -184,7 +182,7 @@ export async function showPathConflictResolutionDialog(params: Readonly<{
             subtitle: params.body,
             testID: `${params.testIdPrefix ?? 'path-conflicts'}-modal`,
             bodyScroll: 'auto',
-            dimensions: { width: 420, maxHeightRatio: 0.85, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.85, size: 'md' },
         },
         closeOnBackdrop: true,
     });

@@ -138,8 +138,8 @@ export type HappierPressableProps = Readonly<{
   /** Total size for a list-like composite role, projected to native/RNW ARIA. */
   accessibilitySetSize?: number;
   hasPopup?: 'dialog' | 'menu';
-  /** Checked state for checkbox, radio, switch, and checked menu-item semantics. */
-  checked?: boolean;
+  /** Checked state; `mixed` announces a partially checked checkbox or checkbox menu item. */
+  checked?: boolean | 'mixed';
   accessibilityRole?: HappierPressableRole;
   /**
    * ARIA-only composite role (a menu's checked items, a tree's items); native assistive tech uses

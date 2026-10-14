@@ -74,7 +74,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     noticeText: {
         // The row title's size and rhythm, in the body's regular weight: the message is read, not scanned.
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.default('regular'),
         color: theme.colors.text.primary,
         flexShrink: 1,
@@ -98,7 +98,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressed,
     },
     undoLabel: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

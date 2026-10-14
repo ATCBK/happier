@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The one transcript cutoff vocabulary: `latest`, or an exact
@@ -18,12 +18,10 @@ import { z } from 'zod';
  * Do NOT introduce a second cutoff field (for example `throughSeqInclusive`).
  */
 export const SessionForkPointSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('latest') }).strict(),
-  z
-    .object({
+  z.strictObject({ type: z.literal('latest') }),
+  z.strictObject({
       type: z.literal('seq'),
-      upToSeqInclusive: z.number().int().nonnegative(),
-    })
-    .strict(),
+      upToSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+    }),
 ]));
 export type SessionForkPoint = z.infer<typeof SessionForkPointSchema>;

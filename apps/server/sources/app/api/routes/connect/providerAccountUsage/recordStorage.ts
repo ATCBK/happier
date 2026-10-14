@@ -2,13 +2,10 @@ import type { Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";
 import { prismaRuntime, type TransactionClient } from "@/storage/prisma";
-import {
-    createStoredReadSchema,
-    ProviderAccountUsageRecordKeyV1Schema,
-    parseBuiltInLegacyProviderAccountUsageSnapshotV1,
-    SealedProviderAccountUsageSnapshotV1Schema,
-    type SealedProviderAccountUsageSnapshotV1,
-} from "@happier-dev/protocol";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ProviderAccountUsageRecordKeyV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
+import { SealedProviderAccountUsageSnapshotV1Schema, type SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import {
     ProviderAccountUsageRecordMetadataSchema,
     UpsertProviderAccountUsageRecordSchema,
@@ -88,9 +85,13 @@ export async function readProviderAccountUsageHistoryWitness(params: Readonly<{ 
 export async function retainProviderAccountUsageHistory(raw: UpsertProviderAccountUsageRecordParams, client: ProviderAccountUsageRecordClient) {
     const parsed = parseProviderAccountUsageRecordWrite(raw);
     if (parsed.fetchedAt === undefined || (!parsed.snapshot && !parsed.sealedPayload)) return;
+    // The read materialization belongs only to the current record. Embedding it
+    // into every accepted observation would recursively duplicate its history.
+    const { pageProjection: _derived, ...metadata } = parsed.metadata ?? {};
+    const retained = { ...parsed, ...(parsed.metadata ? { metadata } : {}) };
     await client.providerAccountUsageRecord.update({
         where: { accountId_recordId: { accountId: parsed.accountId, recordId: parsed.recordId } },
-        data: { history: { create: { observedAt: new Date(parsed.fetchedAt), payload: parsed as Prisma.InputJsonValue } } },
+        data: { history: { create: { observedAt: new Date(parsed.fetchedAt), payload: retained as Prisma.InputJsonValue } } },
     });
 }
 

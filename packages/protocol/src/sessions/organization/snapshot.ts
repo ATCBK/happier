@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION,
@@ -16,50 +16,44 @@ import { SessionOrganizationPinSchema } from './pins.js';
 import { SessionAttentionStandingSchema } from './standings.js';
 import { SessionOrganizationTagSchema, SessionTagAssignmentSchema } from './tags.js';
 
-const SessionOrganizationScopedIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(10_000));
+const SessionOrganizationScopedIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000)));
 
-const SessionOrganizationOrderScopeRequestSchema = lazyZodSchema(() => SessionOrganizationOrderEntrySchema.pick({
+const SessionOrganizationOrderScopeRequestSchema = lazyZodSchema(() => z.pick(SessionOrganizationOrderEntrySchema, {
   scopeKind: true,
   scopeKey: true,
 }));
 
-export const SessionOrganizationSnapshotRequestSchema = lazyZodSchema(() => z
-  .object({
-    projectionVersion: z.literal(SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION).optional(),
-    includeFolders: z.boolean().default(true),
-    includeTags: z.boolean().default(true),
-    includeLabels: z.boolean().default(true),
-    includeAllFolderAssignments: z.boolean().default(false),
-    includeAllTagAssignments: z.boolean().default(false),
-    assignmentSessionIds: z.array(SessionOrganizationScopedIdSchema).max(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS).default([]),
-    folderIds: z.array(SessionOrganizationScopedIdSchema).max(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS).default([]),
-    tagIds: z.array(SessionOrganizationScopedIdSchema).max(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS).default([]),
-    orderScopes: z.array(SessionOrganizationOrderScopeRequestSchema).max(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS).default([]),
-    includeAttentionStandings: z.boolean().default(false),
-    includeAttentionReminderTimes: z.boolean().default(false),
-  })
-  .strict());
+export const SessionOrganizationSnapshotRequestSchema = lazyZodSchema(() => z.strictObject({
+    projectionVersion: z.optional(z.literal(SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION)),
+    includeFolders: z._default(z.boolean(), true),
+    includeTags: z._default(z.boolean(), true),
+    includeLabels: z._default(z.boolean(), true),
+    includeAllFolderAssignments: z._default(z.boolean(), false),
+    includeAllTagAssignments: z._default(z.boolean(), false),
+    assignmentSessionIds: z._default(z.array(SessionOrganizationScopedIdSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS)), []),
+    folderIds: z._default(z.array(SessionOrganizationScopedIdSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS)), []),
+    tagIds: z._default(z.array(SessionOrganizationScopedIdSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS)), []),
+    orderScopes: z._default(z.array(SessionOrganizationOrderScopeRequestSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS)), []),
+    includeAttentionStandings: z._default(z.boolean(), false),
+    includeAttentionReminderTimes: z._default(z.boolean(), false),
+  }));
 export type SessionOrganizationSnapshotRequest = z.infer<typeof SessionOrganizationSnapshotRequestSchema>;
 
-export const SessionOrganizationSnapshotSchema = lazyZodSchema(() => z
-  .object({
+export const SessionOrganizationSnapshotSchema = lazyZodSchema(() => z.strictObject({
     schemaVersion: z.literal(SESSION_ORGANIZATION_SNAPSHOT_VERSION),
-    version: z.number().int().nonnegative(),
-    pins: z.array(SessionOrganizationPinSchema).max(SESSION_ORGANIZATION_MAX_PINNED_SESSIONS),
-    folders: z.array(SessionOrganizationFolderSchema).max(SESSION_ORGANIZATION_MAX_FOLDERS),
+    version: z.number().check(z.int(), z.nonnegative()),
+    pins: z.array(SessionOrganizationPinSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_PINNED_SESSIONS)),
+    folders: z.array(SessionOrganizationFolderSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_FOLDERS)),
     folderAssignments: z.array(SessionFolderAssignmentSchema),
-    tags: z.array(SessionOrganizationTagSchema).max(SESSION_ORGANIZATION_MAX_TAGS),
+    tags: z.array(SessionOrganizationTagSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_TAGS)),
     tagAssignments: z.array(SessionTagAssignmentSchema),
     orderEntries: z.array(SessionOrganizationOrderEntrySchema),
-    labels: z.array(SessionOrganizationLabelSchema).max(SESSION_ORGANIZATION_MAX_LABELS),
-    attentionStandings: z.array(SessionAttentionStandingSchema).optional(),
-  })
-  .strict());
+    labels: z.array(SessionOrganizationLabelSchema).check(z.maxLength(SESSION_ORGANIZATION_MAX_LABELS)),
+    attentionStandings: z.optional(z.array(SessionAttentionStandingSchema)),
+  }));
 export type SessionOrganizationSnapshot = z.infer<typeof SessionOrganizationSnapshotSchema>;
 
-export const SessionOrganizationSnapshotResponseSchema = lazyZodSchema(() => z
-  .object({
+export const SessionOrganizationSnapshotResponseSchema = lazyZodSchema(() => z.strictObject({
     snapshot: SessionOrganizationSnapshotSchema,
-  })
-  .strict());
+  }));
 export type SessionOrganizationSnapshotResponse = z.infer<typeof SessionOrganizationSnapshotResponseSchema>;

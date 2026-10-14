@@ -1,19 +1,13 @@
-import {
-    isSessionAgentTransitionDividerLocalId,
-    VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-    type SessionMessageAttentionImpact,
-    isStoredContentKindAllowedForSessionByStoragePolicy,
-    deriveSessionMessageAuthorAccountIdV1,
-    isMessageStructuredPresentationV1Candidate,
-    readMessageStructuredPresentationV1,
-    SessionMessageRoleSchema,
-    type SessionEncryptionMode,
-    type SessionInputAdmissionReceiptV1,
-    type SessionInputRequestEqualityEvidenceV1,
-    type SessionMessageDeliveryResolutionV1,
-    type SessionMessageRole,
-    type SessionTranscriptObservationProvenanceV1,
-} from "@happier-dev/protocol";
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
+import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
+import { type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { isMessageStructuredPresentationV1Candidate, readMessageStructuredPresentationV1 } from '@happier-dev/protocol/sessions/messages/messageStructuredPresentationV1';
+import { SessionMessageRoleSchema, type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { type SessionInputAdmissionReceiptV1, type SessionInputRequestEqualityEvidenceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { type SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { advanceCaughtUpViewerReadCursorsInTx, stampViewerUnreadEntryInTx } from "./personal/readState";
 import { resolveMessageAttentionImpact } from "./messageAttentionImpact";
 import { isDeepStrictEqual } from "node:util";

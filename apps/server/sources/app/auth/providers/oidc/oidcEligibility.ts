@@ -1,4 +1,4 @@
-import { normalizeVerifiedEmail } from "@happier-dev/protocol";
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import type { OidcAuthProviderInstanceConfig } from "./oidcProviderConfig";
 import type { NormalizedOidcIdentityClaims } from "./normalizeOidcIdentityClaims";
 

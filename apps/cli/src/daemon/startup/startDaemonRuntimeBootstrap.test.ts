@@ -18,6 +18,13 @@ import { buildConnectedServiceAuthGroupCommittedGenerationFact } from '../connec
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { createManagedActivityInventory } from '../lifecycle/managedActivity';
+import { reserveEphemeralPort } from '@/testkit/http/portUtils';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { registerMachinePreparedTransferRpcHandlers } from '@/api/machine/rpcHandlers.preparedTransfers';
+import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
+import { PreparedTransferRpcResponseV1Schema } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
+import { TransferChunkEnvelopeSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const sessionsHttp = vi.hoisted(() => ({
   fetchSessionByIdCompat: vi.fn(),
@@ -108,8 +115,11 @@ describe('startDaemonRuntimeBootstrap', () => {
     vi.useRealTimers();
   });
 
-  it('proves transfer absence through the bootstrap owner when direct transfer is explicitly disabled', async () => {
-    vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'false');
+  it.each(['HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'HAPPIER_FEATURE_MACHINES_TRANSFER_DIRECT_PEER__ENABLED'])(
+    'retains the prepared Home transfer owner when %s disables the direct fast path', async flag => {
+    vi.stubEnv(flag, 'false');
+    vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_BIND_PORT', String(await reserveEphemeralPort()));
+    vi.stubEnv('HAPPIER_MACHINE_TRANSFER_TAILSCALE_SERVE_ENABLED', 'true');
     vi.stubEnv('HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED', 'false');
     const encodeClaim = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
     const capturedToken = `${encodeClaim({ alg: 'none' })}.${encodeClaim({ sub: 'alice' })}.signature`;
@@ -139,15 +149,42 @@ describe('startDaemonRuntimeBootstrap', () => {
     expect(published).toMatchObject({ machineId: 'machine-1', runtimeId: 'runtime-1', accountId: 'alice' });
     expect(JSON.stringify(published)).not.toContain(capturedToken);
     const source = result.transferLiveWorkProducer;
-    expect(result.directPeerServerLifecycle).toBeNull();
+    expect(result.initialDaemonState.transfer?.supported).toEqual({ import: true, export: true });
+    expect(result.initialDaemonState.transfer?.listenerClasses).toMatchObject({
+      loopback_http: { enabled: false, active: false }, tailscale_serve_https: { enabled: false, active: false },
+    });
+    const lifecycle = result.directPeerServerLifecycle;
+    expect(lifecycle).not.toBeNull();
+    if (!lifecycle) throw new Error('Prepared Home transfer owner is unavailable');
     expect(source).toBeDefined();
     if (!source) throw new Error('Bootstrap transfer activity is unavailable');
     const inventory = createManagedActivityInventory({ producers: [source], now: () => 100 });
     try {
       expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
+      const payload = Buffer.from([0, 255, 128, 10]);
+      const published = await lifecycle.publishTransferWhenReady({ transferId: 'home-only', payload });
+      expect(published.endpointCandidates.every(endpoint => endpoint.kind === 'http')).toBe(true);
+      const manager = new RpcHandlerManager({ scopePrefix: 'machine-1', encryptionMode: 'plain', logger() {} });
+      registerMachinePreparedTransferRpcHandlers({ rpcHandlerManager: manager, request: lifecycle.requestPreparedTransfer });
+      const recipient = createTransferRecipientKeyPair();
+      const request = { t: 'prepared_machine_transfer_v1', authorizationToken: published.transferToken,
+        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 };
+      const basePath = new URL(published.endpointCandidates[0]!.url).pathname;
+      const open = PreparedTransferRpcResponseV1Schema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT,
+        { ...request, path: `${basePath}/open`, httpMethod: 'POST' }));
+      expect(open.status).toBe(200);
+      const response = PreparedTransferRpcResponseV1Schema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+        { ...request, path: `${basePath}/chunks/0`, httpMethod: 'GET' }));
+      expect(response.status).toBe(200);
+      const chunk = TransferChunkEnvelopeSchema.parse(JSON.parse(response.body));
+      if (chunk.kind !== 'chunk' || !chunk.encryptedDataKeyEnvelopeBase64) throw new Error('Encrypted prepared chunk unavailable');
+      expect(decryptEncryptedTransferChunkEnvelope({ transferId: published.transferId, sequence: chunk.sequence,
+        payloadBase64: chunk.payloadBase64, encryptedDataKeyEnvelopeBase64: chunk.encryptedDataKeyEnvelopeBase64,
+        recipientSecretKeySeed: recipient.recipientSecretKeySeed })).toEqual(payload);
+      lifecycle.clearPublishedTransfer(published.transferId);
       await result.stopDirectPeerServer();
       expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
-    } finally { inventory.dispose(); }
+    } finally { await result.stopDirectPeerServer(); await result.stopTailscaleTransferServeLifecycle(); inventory.dispose(); }
   });
 
   it('keeps quota automation disabled when authoritative current-source hydration fails', async () => {

@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
-import { PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1 } from "@happier-dev/protocol";
-import { z } from "zod";
+import { PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { z } from "zod/mini";
 
 import type { Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime, getDbProviderFromEnv } from "@/storage/prisma";
@@ -13,16 +13,15 @@ export type PluginCollectionRawOrdinalIndexEntry = Readonly<{
 
 type RawOrdinalIndexReadClient = Pick<Tx, "$queryRaw">;
 
-const PluginCollectionRawOrdinalIndexEntrySchema = z.object({
-    encodedSortKey: z.instanceof(Uint8Array)
-        .refine((value) => value.byteLength > 0 && value.byteLength <= PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1),
+const PluginCollectionRawOrdinalIndexEntrySchema = z.strictObject({
+    encodedSortKey: z.instanceof(Uint8Array).check(z.refine((value) => value.byteLength > 0 && value.byteLength <= PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1)),
     rowId: z.string(),
-    rowRevision: z.number().int(),
-}).strict();
+    rowRevision: z.number().check(z.int()),
+});
 
-const PluginCollectionRawOrdinalIndexCountSchema = z.object({
+const PluginCollectionRawOrdinalIndexCountSchema = z.strictObject({
     rowCount: z.union([z.bigint(), z.number(), z.string()]),
-}).strict();
+});
 
 function rawOrdinalIndexSql() {
     const prisma = getActivePrismaRuntime();
@@ -113,7 +112,7 @@ export async function countPluginCollectionIndexEntriesByRawOrdinalKey(input: Re
         FROM ${sql.table}
         WHERE ${sql.prisma.join(conditions, " AND ")}
     `);
-    const parsed = z.array(PluginCollectionRawOrdinalIndexCountSchema).length(1).safeParse(rows);
+    const parsed = z.array(PluginCollectionRawOrdinalIndexCountSchema).check(z.length(1)).safeParse(rows);
     if (!parsed.success) return null;
     const value = parsed.data[0].rowCount;
     if (typeof value === "bigint") return value >= BigInt(0) ? value : null;

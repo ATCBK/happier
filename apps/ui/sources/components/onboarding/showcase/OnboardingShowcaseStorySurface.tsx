@@ -15,13 +15,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 44,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     skipText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
     },
 }));
 

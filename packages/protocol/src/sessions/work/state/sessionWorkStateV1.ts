@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SessionWorkStateStatusV1Schema = lazyZodSchema(() => z.enum([
   'pending',
@@ -30,62 +30,54 @@ export type SessionWorkStateItemOriginV1 = z.infer<typeof SessionWorkStateItemOr
 // (Codex from app-server goal mode; Claude from observed `goal_status` + native `/goal` support) so
 // generic UI gating stays capability-driven instead of branching on provider id. All members
 // optional + passthrough so the projection is additive and forward-compatible.
-export const SessionWorkStateGoalCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
-    canEdit: z.boolean().optional(),
-    canStop: z.boolean().optional(),
-    canClear: z.boolean().optional(),
-  })
-  .passthrough());
+export const SessionWorkStateGoalCapabilitiesV1Schema = lazyZodSchema(() => z.looseObject({
+    canEdit: z.optional(z.boolean()),
+    canStop: z.optional(z.boolean()),
+    canClear: z.optional(z.boolean()),
+  }));
 export type SessionWorkStateGoalCapabilitiesV1 = z.infer<typeof SessionWorkStateGoalCapabilitiesV1Schema>;
 
-export const SessionWorkStateItemV1Schema = lazyZodSchema(() => z
-  .object({
-    id: z.string().min(1),
+export const SessionWorkStateItemV1Schema = lazyZodSchema(() => z.looseObject({
+    id: z.string().check(z.minLength(1)),
     kind: SessionWorkStateItemKindV1Schema,
     origin: SessionWorkStateItemOriginV1Schema,
     status: SessionWorkStateStatusV1Schema,
-    title: z.string().trim().min(1).max(4000),
-    summary: z.string().trim().max(8000).optional(),
-    backendId: z.string().min(1).optional(),
-    agentId: z.string().min(1).optional(),
-    vendorRef: z.string().min(1).optional(),
-    order: z.number().int().nonnegative().optional(),
-    parentId: z.string().min(1).optional(),
-    priority: z.string().optional(),
-    progress: z.number().finite().min(0).max(1).optional(),
-    statusReason: SessionWorkStateStatusReasonV1Schema.optional(),
-    goalCapabilities: SessionWorkStateGoalCapabilitiesV1Schema.optional(),
-    tokenBudget: z.number().finite().positive().nullable().optional(),
-    tokensUsed: z.number().int().nonnegative().optional(),
-    timeUsedSeconds: z.number().finite().nonnegative().optional(),
-    createdAt: z.number().int().nonnegative().optional(),
-    startedAt: z.number().int().nonnegative().optional(),
-    completedAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .passthrough());
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(4000)),
+    summary: z.optional(z.string().check(z.trim(), z.maxLength(8000))),
+    backendId: z.optional(z.string().check(z.minLength(1))),
+    agentId: z.optional(z.string().check(z.minLength(1))),
+    vendorRef: z.optional(z.string().check(z.minLength(1))),
+    order: z.optional(z.number().check(z.int(), z.nonnegative())),
+    parentId: z.optional(z.string().check(z.minLength(1))),
+    priority: z.optional(z.string()),
+    progress: z.optional(z.number().check(z.minimum(0), z.maximum(1))),
+    statusReason: z.optional(SessionWorkStateStatusReasonV1Schema),
+    goalCapabilities: z.optional(SessionWorkStateGoalCapabilitiesV1Schema),
+    tokenBudget: z.optional(z.nullable(z.number().check(z.positive()))),
+    tokensUsed: z.optional(z.number().check(z.int(), z.nonnegative())),
+    timeUsedSeconds: z.optional(z.number().check(z.nonnegative())),
+    createdAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    startedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    completedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionWorkStateItemV1 = z.infer<typeof SessionWorkStateItemV1Schema>;
 
-export const SessionWorkStateTruncationV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionWorkStateTruncationV1Schema = lazyZodSchema(() => z.looseObject({
     reason: z.enum(['item_limit', 'provider_limit']),
-    omittedCount: z.number().int().nonnegative().optional(),
-  })
-  .passthrough());
+    omittedCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type SessionWorkStateTruncationV1 = z.infer<typeof SessionWorkStateTruncationV1Schema>;
 
-export const SessionWorkStateV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionWorkStateV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    backendId: z.string().min(1),
-    agentId: z.string().min(1).optional(),
-    updatedAt: z.number().int().nonnegative(),
+    backendId: z.string().check(z.minLength(1)),
+    agentId: z.optional(z.string().check(z.minLength(1))),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
     items: z.array(SessionWorkStateItemV1Schema),
-    primaryItemId: z.string().min(1).nullable().optional(),
-    truncated: SessionWorkStateTruncationV1Schema.optional(),
-  })
-  .passthrough());
+    primaryItemId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+    truncated: z.optional(SessionWorkStateTruncationV1Schema),
+  }));
 export type SessionWorkStateV1 = z.infer<typeof SessionWorkStateV1Schema>;
 
 export type SessionWorkStateUnknownItemV1 = Readonly<Record<string, unknown>>;

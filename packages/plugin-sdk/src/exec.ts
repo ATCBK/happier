@@ -41,6 +41,8 @@ export type SystemToolDiagnostic = Readonly<{
 }>;
 
 export type ResolvedSystemTool = Readonly<{
+    /** The observed root process exit is the provider exit only for a direct launch. */
+    providerExitOwnership?: 'direct';
     executable: ManagedExecutableRef;
     executablePath: string;
     diagnostics?: readonly SystemToolDiagnostic[];

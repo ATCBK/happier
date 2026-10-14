@@ -152,7 +152,7 @@ export function readPluginUiHostTypography(): HappierUiTypography {
  * and no fallback palette.
  */
 export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
-    const code = Typography.keyHint();
+    const code = ({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() });
     return Object.freeze({
         version: 1,
         ...(spinner ? { spinner } : {}),

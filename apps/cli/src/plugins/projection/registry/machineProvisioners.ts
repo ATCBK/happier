@@ -17,7 +17,7 @@ export const machineProvisionersProjectionFamily = definePluginProjectionFamilyV
                 id: key, pluginId: entry.pluginId, pluginVersion: entry.pluginVersion,
                 definition: entry.definition,
                 ...(purposes ? { connectedAccountPurposes: purposes.map(({ purpose, serviceRefs }) => ({ purpose: purpose.purpose, serviceRefs })) } : {}),
-                ...(origin ? { serverIdentityId: origin.serverIdentityId, materializationRef: origin.materializationRef } : {}),
+                ...(origin ? { executionOrigin: origin } : {}),
             })]];
         }))),
     }),

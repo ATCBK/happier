@@ -1,20 +1,10 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PluginAccountCollectionContributionV1Schema,
-    PluginCollectionContractRefV1Schema,
-    PluginCollectionMigrationDeclarationV1Schema,
-    PluginCollectionQuotaRequestV1Schema,
-    PluginCollectionUiQueryDescriptorV1Schema,
-    PluginIdSchema,
-    PluginManifestV2Schema,
-    normalizePluginAccountCollectionContractV1,
-    normalizePluginAccountCollectionContractsV1,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginAccountCollectionContributionV1,
-    type PluginCollectionContractRefV1,
-    type PluginCollectionQuotaDimensionV1,
-} from "@happier-dev/protocol";
-import { z } from "zod";
+import { PluginAccountCollectionContributionV1Schema, PluginCollectionMigrationDeclarationV1Schema, PluginCollectionQuotaRequestV1Schema, PluginCollectionUiQueryDescriptorV1Schema, type PluginAccountCollectionContributionV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { PluginCollectionContractRefV1Schema, type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
+import { normalizePluginAccountCollectionContractV1, normalizePluginAccountCollectionContractsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { z } from "zod/mini";
 
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isPrismaErrorCode } from "@/storage/db";
@@ -29,21 +19,21 @@ import {
     type PluginCollectionPrefixQuotaUsage,
 } from "./quota";
 
-const PersistedPrivacyProjectionV1Schema = z.object({
+const PersistedPrivacyProjectionV1Schema = z.strictObject({
     v: z.literal(1),
     rowIdField: z.string(),
     serverReadable: z.array(z.string()),
     uiQueries: z.array(PluginCollectionUiQueryDescriptorV1Schema),
-    quota: PluginCollectionQuotaRequestV1Schema.optional(),
-    readableSchemaVersions: z.array(z.number().int().min(1)),
+    quota: z.optional(PluginCollectionQuotaRequestV1Schema),
+    readableSchemaVersions: z.array(z.number().check(z.int(), z.minimum(1))),
     // Absent on contracts materialized before finite migration identities were
     // added. The normalized empty chain deliberately retains the legacy digest.
-    migrations: z.array(PluginCollectionMigrationDeclarationV1Schema).default([]),
+    migrations: z._default(z.array(PluginCollectionMigrationDeclarationV1Schema), []),
     // Absent on contracts materialized before mode-derived identity was
     // declarable. An empty set is semantically "no mode-derived identity" and
     // likewise retains the legacy digest.
-    identityFields: z.array(z.string()).default([]),
-}).strict();
+    identityFields: z._default(z.array(z.string()), []),
+});
 
 type StoredPluginCollectionContractRow = Readonly<{
     pluginId: string;
@@ -134,7 +124,7 @@ function canonicalizeWritableContractRefs(input: Readonly<{
 }>): readonly PluginCollectionContractRefV1[] {
     try {
         const pluginId = PluginIdSchema.parse(input.pluginId);
-        const contracts = z.array(PluginCollectionContractRefV1Schema).max(32).parse(input.contracts);
+        const contracts = z.array(PluginCollectionContractRefV1Schema).check(z.maxLength(32)).parse(input.contracts);
         const collectionIds = new Set<string>();
         for (const contract of contracts) {
             if (contract.pluginId !== pluginId || collectionIds.has(contract.collectionId)) {

@@ -1,6 +1,11 @@
 import * as React from 'react';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 
@@ -17,6 +22,11 @@ type ScmDiffSummaryModelPickerProps = Readonly<{
     defaultBackendTarget?: BackendTargetRefV2 | null;
     modelChoices?: ReturnType<typeof useScmDiffSummaryModelChoices>;
     testID?: string;
+    /**
+     * `row` is the settings row. `inline` is one quiet line ("Summary model  Haiku 4.5") for a choice that sits with
+     * the action it affects; the choices and menu are the same.
+     */
+    presentation?: 'row' | 'inline';
 }>;
 
 /** The picker consumes its result binding's observation, or observes directly in Settings. */
@@ -32,13 +42,31 @@ function ObservedModelPicker(props: ScmDiffSummaryModelPickerProps) {
 function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ modelChoices: ReturnType<typeof useScmDiffSummaryModelChoices> }>) {
     const choices = props.modelChoices;
     const viewportClass = useViewportClass();
+    const { theme } = useUnistyles();
     React.useEffect(() => { props.onAvailabilityChange?.(choices.selectionAvailable); }, [props.onAvailabilityChange, choices.selectionAvailable]);
-    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')}
-        variant="selectable" matchTriggerWidth connectToTrigger closeOnSelect={false}
-        itemTrigger={{ title: t('walkthroughSettings.model'), subtitle: t('walkthroughSettings.modelDescription'),
-            detailFormatter: () => choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel')),
-            itemProps: { testID: props.testID ?? 'walkthrough.summaryModel', subtitleLines: 0,
-                accessoryLayout: viewportClass === 'compact' ? 'stacked' : 'adaptive' } }}
+    const detail = props.value === '' && choices.defaultProfile && choices.selections.has('')
+        ? `${choices.defaultProfile.title} · ${t('walkthroughSettings.defaultModel')}`
+        : choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel'));
+    const inline = props.presentation === 'inline';
+    const rowTrigger = { itemTrigger: { title: t('walkthroughSettings.model'), subtitle: t('walkthroughSettings.modelDescription'),
+        // A chosen model that cannot be used explains itself in the row once; otherwise the row keeps what the model is for.
+        showSelectedSubtitle: choices.selectedItem?.disabled === true,
+        detailFormatter: () => detail,
+        itemProps: { testID: props.testID ?? 'walkthrough.summaryModel', subtitleLines: 0,
+            accessoryLayout: viewportClass === 'compact' ? 'stacked' as const : 'adaptive' as const } } };
+    const inlineTrigger = { matchTriggerWidth: false, connectToTrigger: false,
+        trigger: ({ toggle, open }: Readonly<{ toggle: () => void; open: boolean }>) => (
+            <HappierPressable testID={props.testID ?? 'walkthrough.summaryModel'} accessibilityRole="button"
+                accessibilityLabel={`${t('walkthroughSettings.model')}: ${detail}`} expanded={open} onPress={toggle}
+                style={({ pressed, hovered }) => [styles.inlineTrigger, viewportClass === 'compact' ? styles.inlineTriggerTouch : null, hovered || pressed || open ? styles.inlineTriggerActive : null]}>
+                <Text style={styles.inlineLabel}>{t('walkthroughSettings.model')}</Text>
+                <Text style={styles.inlineValue} numberOfLines={1}>{detail}</Text>
+                <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.tertiary} />
+            </HappierPressable>
+        ) };
+    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={choices.selectedItem?.id ?? props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')}
+        variant="selectable" closeOnSelect={false} showCategoryTitles categoryDecorations={choices.sections}
+        {...(inline ? inlineTrigger : { matchTriggerWidth: true, connectToTrigger: true, ...rowTrigger })}
         onSelect={(id) => {
             const discoveryTarget = choices.discoveryTargets.get(id);
             if (discoveryTarget) {
@@ -49,6 +77,23 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
             }
             const selection = choices.selections.get(id);
             if (!selection) return;
-            props.onChange(id); props.onSelection?.(selection); choices.setDiscoveryTargetKey(null); choices.setOpen(false);
+            // Choosing the default row returns to following the default rather than writing its id.
+            props.onChange(id === choices.defaultProfile?.catalogId ? '' : id); props.onSelection?.(selection); choices.setDiscoveryTargetKey(null); choices.setOpen(false);
         }} />;
 }
+
+const styles = StyleSheet.create((theme) => ({
+    inlineTrigger: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        gap: theme.space.s6,
+        minHeight: 32,
+        paddingHorizontal: theme.space.s10,
+        borderRadius: 8,
+    },
+    inlineTriggerTouch: { minHeight: 44 },
+    inlineTriggerActive: { backgroundColor: theme.colors.surface.selected },
+    inlineLabel: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
+    inlineValue: { ...Typography.variant('meta', 'medium'), color: theme.colors.text.secondary, flexShrink: 1 },
+}));

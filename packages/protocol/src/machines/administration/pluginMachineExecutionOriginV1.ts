@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import {
@@ -12,26 +12,26 @@ import { PluginIdSchema } from '../../plugins/pluginId.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { PluginSourceCustodyV1Schema, PluginSourceCustodyV1ProtocolSchema, pluginSourceCustodyV1Equal } from '../../plugins/runtime/sourceCustody.js';
 
-const PluginMachineSourceRefV1Schema = lazyZodSchema(() => z.object({
+const PluginMachineSourceRefV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: PluginMachineMaterializationRefV1Schema.shape.machineId,
   pluginId: asProtocolZod(PluginIdSchema),
   sourceCustody: PluginSourceCustodyV1Schema,
-}).strict());
+}));
 
 /**
  * Administration's Account-portable choice of one exact machine
  * materialization. Artifact owns the nested reference and validation facts;
  * Administration alone composes it with canonical server identity.
  */
-export const PluginMachineMaterializationExecutionOriginV1Schema = lazyZodSchema(() => z.object({
-  serverIdentityId: z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN),
+export const PluginMachineMaterializationExecutionOriginV1Schema = lazyZodSchema(() => z.strictObject({
+  serverIdentityId: z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)),
   materializationRef: PluginMachineMaterializationRefV1Schema,
-}).strict());
+}));
 export type PluginMachineMaterializationExecutionOriginV1 = z.infer<typeof PluginMachineMaterializationExecutionOriginV1Schema>;
-export const PluginMachineExecutionOriginV1Schema = lazyZodSchema(() => z.union([PluginMachineMaterializationExecutionOriginV1Schema, z.object({
-  serverIdentityId: z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN),
+export const PluginMachineExecutionOriginV1Schema = lazyZodSchema(() => z.union([PluginMachineMaterializationExecutionOriginV1Schema, z.strictObject({
+  serverIdentityId: z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)),
   sourceRef: PluginMachineSourceRefV1Schema,
-}).strict()]));
+})]));
 
 export type PluginMachineExecutionOriginV1 = z.infer<typeof PluginMachineExecutionOriginV1Schema>;
 

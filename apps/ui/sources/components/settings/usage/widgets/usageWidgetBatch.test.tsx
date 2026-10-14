@@ -12,6 +12,7 @@ import {
   UsageWidgetBatchProvider,
   useUsageWidgetBatchSlices,
   useUsageWidgetModel,
+  useUsageWidgetPageHasCoverageDetail,
   buildUsageWidgetQueryPlan,
 } from './usageWidgetBatch';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
@@ -82,6 +83,15 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('owns coverage from the first frame, before the inventory has answered', async () => {
+    const seen: boolean[] = [];
+    function CoverageProbe() { seen.push(useUsageWidgetPageHasCoverageDetail()); return null; }
+    const screen = await renderScreen(<UsageWidgetBatchProvider clauses={clauses}><CoverageProbe /></UsageWidgetBatchProvider>);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    await screen.update(<CoverageProbe />);
+    expect(seen.at(-1)).toBe(false);
+  });
   it.each(['usage_daily', 'usage_outcomes', 'usage_footprint'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
     home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-demand.test', accountId: 'account-a' }],
       route: request => {

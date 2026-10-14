@@ -99,6 +99,19 @@ const notificationNetwork = vi.hoisted(() => {
 });
 vi.mock('socket.io-client', () => ({ io: notificationNetwork.io }));
 
+describe('Session spawn errors', () => {
+  it('surfaces the typed launch cause instead of the result discriminator', () => {
+    const error = new HappierSessionSpawnError({
+      type: 'error',
+      code: 'spawn_failed',
+      retryable: true,
+      launchError: { kind: 'launch_error', code: 'EACCES', message: 'Launch permission refused' },
+    });
+    expect(error.message).toBe('Session creation failed (spawn_failed/EACCES): Launch permission refused');
+    expect(error.result).toMatchObject({ code: 'spawn_failed', launchError: { code: 'EACCES' } });
+  });
+});
+
 import {
   HappierActionError,
   HappierAgentUnavailableError,

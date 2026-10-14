@@ -1,4 +1,5 @@
-import type { HomeAuthenticationPolicyReadV1, HomeSignInServicePolicyV1 } from "@happier-dev/protocol";
+import type { HomeAuthenticationPolicyReadV1 } from '@happier-dev/protocol/home/governance';
+import type { HomeSignInServicePolicyV1 } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import { resolveAuthPolicyFromEnv } from "@/app/auth/authPolicy";
 import {

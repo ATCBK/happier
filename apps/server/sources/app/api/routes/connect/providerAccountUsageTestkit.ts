@@ -1,12 +1,8 @@
 import Fastify from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
-import {
-    buildProviderAccountUsageRecordId,
-    ConnectedServiceQuotaSnapshotV1Schema,
-    ProviderAccountUsageSnapshotV1Schema,
-    type ProviderAccountUsageRecordKeyV1,
-} from "@happier-dev/protocol";
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema, type ProviderAccountUsageRecordKeyV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { ConnectedServiceQuotaSnapshotV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { createAppCloseTracker } from "../../testkit/appLifecycle";
 import { enableSchemaValidation } from "../../utils/enableSchemaValidation";

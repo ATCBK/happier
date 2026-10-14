@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const HookIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
+export const HookIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type HookIdV1 = z.infer<typeof HookIdV1Schema>;

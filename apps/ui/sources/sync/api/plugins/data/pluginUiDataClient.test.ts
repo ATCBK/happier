@@ -132,7 +132,7 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-function createAvailabilityReader() {
+function createAvailabilityReader(currentRef = ref) {
     const snapshot = {
         availabilityCursor: 7,
         materializations: [],
@@ -152,14 +152,14 @@ function createAvailabilityReader() {
                     desiredVersion: '1.0.0',
                     enabled: true,
                     offlineUiHosting: 'enabled',
-                    writableCollections: [ref],
+                    writableCollections: [currentRef],
                     revision: 'intent-7',
                 },
                 release: {
                     ref: { pluginId, version: '1.0.0' },
                     archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
                     normalizedManifest,
-                    collectionContracts: [ref],
+                    collectionContracts: [currentRef],
                     uiSlots: [],
                     packageAssetArchive: {
                         archiveDigestSha256: `sha256:${'d'.repeat(64)}`,
@@ -182,6 +182,8 @@ async function loadClient(options: Readonly<{
     accountKvWrite?: (body: unknown, init?: RequestInit) => Response | Promise<Response>;
     availabilityReader?: ReturnType<typeof createAvailabilityReader>;
     readAvailability?: () => ReturnType<typeof createAvailabilityReader>;
+    collectionContractRead?: () => Response;
+    collectionRead?: () => Response;
 }> = {}) {
     vi.resetModules();
     let current = true;
@@ -203,18 +205,14 @@ async function loadClient(options: Readonly<{
             })), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (path === '/v1/plugins/data/contract') {
+            if (options.collectionContractRead) return options.collectionContractRead();
             return new Response(JSON.stringify({ access: 'writable', contract }), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' },
             });
         }
         if (path === '/v1/plugins/data/get') {
-            return new Response(JSON.stringify({ row: null, absenceEpoch: 0 }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        if (path === '/v1/plugins/data/get') {
+            if (options.collectionRead) return options.collectionRead();
             return new Response(JSON.stringify({ row: null, absenceEpoch: 0 }), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' },
@@ -854,8 +852,13 @@ describe('Plugin UI Data client', () => {
             .rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
     });
 
-    it('rejects a same-id local definition that differs from the admitted contract before transport', async () => {
-        const { client, transport } = await loadClient();
+    it('preserves server refusal of an incompatible exact local contract without mutation', async () => {
+        const { client, transport } = await loadClient({
+            collectionContractRead: () => new Response(JSON.stringify({ error: 'collection_unavailable' }), {
+                status: 404,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+        });
         const collection = client.collection(forgedCollectionDefinition);
 
         await expect(collection.put({
@@ -865,7 +868,32 @@ describe('Plugin UI Data client', () => {
         }, { expectedRevision: 'absent' })).rejects.toMatchObject({
             code: 'plugin_collection_undeclared',
         });
-        expect(transport).not.toHaveBeenCalled();
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/contract')).toBe(true);
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
+    });
+
+    it('reads an exact retained same-version contract admitted read-only by the server and cannot mutate it', async () => {
+        const { client, transport } = await loadClient({
+            availabilityReader: createAvailabilityReader({ ...ref, contractDigest: `${'B'.repeat(42)}A` }),
+            collectionContractRead: () => new Response(JSON.stringify({ access: 'readOnly', contract }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+            collectionRead: () => new Response(JSON.stringify({ row: { rowId: 'task-1', revision: 3,
+                content: { t: 'plain', v: { addedPrivateField: 'new writer' } },
+                projection: { title: 'Retained row', status: 'open' } }, absenceEpoch: 0 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+        });
+        const collection = client.collection(collectionDefinition);
+        await expect(collection.get('task-1')).resolves.toEqual({ rowId: 'task-1', revision: 3,
+            value: { id: 'task-1', title: 'Retained row', status: 'open' } });
+        const contractCall = transport.mock.calls.find(([path]) => path === '/v1/plugins/data/contract');
+        expect(JSON.parse(String(contractCall?.[1]?.body))).toMatchObject({ ref });
+        await expect(collection.put({ id: 'task-1', title: 'Retained', status: 'open' }, { expectedRevision: 'absent' }))
+            .rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
     });
 
     it('uses the exact admitted release contract before a direct offline CAS', async () => {
@@ -1023,12 +1051,17 @@ describe('Plugin UI Data client', () => {
     });
 
     it('refuses to size a batch for a same-id local definition the release does not admit', async () => {
-        const { client, transport } = await loadClient();
+        const { client, transport } = await loadClient({
+            collectionContractRead: () => new Response(JSON.stringify({ error: 'collection_unavailable' }), {
+                status: 404,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+        });
 
         await expect(client.collection(forgedCollectionDefinition).limits()).rejects.toMatchObject({
             code: 'plugin_collection_undeclared',
         });
-        expect(transport).not.toHaveBeenCalled();
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
     });
     it('hands a plugin UI the same typed quota incompatibility a daemon plugin receives', async () => {
         const { client } = await loadClient({

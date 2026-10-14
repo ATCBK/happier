@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -261,10 +262,10 @@ WorkflowActivityView.displayName = 'WorkflowActivityView';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
-        gap: 8,
+        gap: theme.space.s8,
     },
     body: {
         gap: 0,
@@ -277,12 +278,11 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
+        gap: theme.space.s8,
     },
     shellTitle: {
         flex: 1,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     shellStatus: {
@@ -294,8 +294,7 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     showMoreText: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.link,
     },
     footer: {

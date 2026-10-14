@@ -27,6 +27,9 @@ export function readUsageScopeOptions(slices: readonly UsageQueryResultSlice[], 
     if (field === 'sources') for (const source of slice.accounting?.coverage?.sources ?? []) {
       if (!labels.has(source.source)) labels.set(source.source, source.source);
     }
+    if (field === 'machines') for (const source of slice.accounting?.coverage?.sources ?? []) {
+      if (source.machineId && !labels.has(source.machineId)) labels.set(source.machineId, source.machineId);
+    }
   }
   for (const value of selected) if (!labels.has(value)) labels.set(value, value);
   return labels;

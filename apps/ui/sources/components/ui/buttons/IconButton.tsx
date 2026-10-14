@@ -165,7 +165,7 @@ export function IconButton(props: Readonly<{
     /** Opt into a concrete toggle semantic such as checkbox or switch. */
     accessibilityRole?: HappierPressableRole;
     /** Checked state paired with an explicit checkbox/radio/switch role. */
-    checked?: boolean;
+    checked?: HappierPressableProps['checked'];
     /** Whether the menu or panel this button opens is showing (a popover trigger). */
     expanded?: boolean;
     /** The kind of surface this button opens, announced to assistive technology. */

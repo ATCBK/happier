@@ -1,10 +1,4 @@
-import {
-    EXTERNAL_SESSION_STATUS_DEMAND_EVENT_V1,
-    ExternalSessionStatusDemandReplaceV1Schema,
-    isExternalSessionStatusDemandRevisionNewerV1,
-    type ExternalSessionStatusDemandDaemonMessageV1,
-    type ExternalSessionStatusDemandReplaceV1,
-} from '@happier-dev/protocol';
+import { EXTERNAL_SESSION_STATUS_DEMAND_EVENT_V1, ExternalSessionStatusDemandReplaceV1Schema, isExternalSessionStatusDemandRevisionNewerV1, type ExternalSessionStatusDemandDaemonMessageV1, type ExternalSessionStatusDemandReplaceV1 } from '@happier-dev/protocol/sessions/external/statusDemandV1';
 
 import { getSocketRooms } from '../socketRooms';
 

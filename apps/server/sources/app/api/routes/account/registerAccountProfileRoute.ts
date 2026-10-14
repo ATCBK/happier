@@ -8,7 +8,7 @@ import { afterTx, inTx } from "@/storage/inTx";
 import { buildLinkedIdentityManagementProjectionInTx } from "@/app/auth/providers/accountLinkedIdentityManagement";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { AccountNameUpdateRequestV1Schema, AccountNameUpdateResponseV1Schema } from "@happier-dev/protocol/account/profile";
-import { projectAccountNameToLegacyFieldsV1 } from "@happier-dev/protocol";
+import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";

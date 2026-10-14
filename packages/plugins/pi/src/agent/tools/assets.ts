@@ -16,6 +16,7 @@ export type PreparedPiHappierToolsExtension = Readonly<{
 export async function preparePiHappierToolsExtension(params: Readonly<{
   agentDir: string;
   mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
+  mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
   mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
 }> & (Readonly<{ config: AgentSessionNativeToolBridgeConfig; directory?: never }>
   | Readonly<{ config?: never; directory: string }>)): Promise<PreparedPiHappierToolsExtension> {
@@ -35,6 +36,7 @@ export async function preparePiHappierToolsExtension(params: Readonly<{
     prefix: 'happier-pi-tools',
     suffix: '.json',
     contents: `${JSON.stringify({ ...config, mcpServers: params.mcpServers ?? {},
+      ...(params.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: params.mcpServersStrictMode } : {}),
       ...(params.mcpToolPolicy ? { mcpToolPolicy: params.mcpToolPolicy } : {}) })}\n`,
   });
   return Object.freeze({

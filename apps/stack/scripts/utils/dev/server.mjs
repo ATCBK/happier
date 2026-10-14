@@ -7,9 +7,10 @@ import { resolveWorkspaceBuildInputWatchPaths } from '../fs/workspaceBuildInputs
 import { killProcessTree, markSpawnedProcessPlannedExit, spawnProc } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from '../server/apply_server_light_env_defaults.mjs';
-import { applyRuntimeServerDatabaseEnv, applySharedDatabaseSourceEnv } from '../server/apply_runtime_server_database_env.mjs';
-import { applyEffectiveDbProviderEnv, resolveEffectiveDbProvider } from '../server/effective_db_provider.mjs';
+import { applyRuntimeServerDatabaseEnv, applyServerHostDatabaseProviderEnv, applySharedDatabaseSourceEnv } from '../server/apply_runtime_server_database_env.mjs';
+import { resolveEffectiveDbProvider } from '../server/effective_db_provider.mjs';
 import { resolveServerDevScript } from '../server/flavor_scripts.mjs';
+import { coerceHappyMonorepoRootFromPath } from '../paths/paths.mjs';
 import { resolveServerShutdownGraceMs } from '../server/shutdown_grace.mjs';
 import {
   createListenerOwnershipObservationScope,
@@ -41,6 +42,8 @@ import { waitForPgliteDirLockRelease } from '../pglite_lock.mjs';
 import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
 import { buildServerRuntimeEnv } from '../server/server_env.mjs';
 import { ensureSourceServerWorkspacePackagesBuilt } from '../server/source_server_workspace_deps.mjs';
+import { resolveServerRuntimeLaunchSpec } from '../../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
+import { runServerRuntimeMigration } from '../../runtime/launch/runServerRuntimeMigration.mjs';
 import {
   readDevReloadWatchChangeSignature as readDevServerWatchChangeSignature,
   readDevReloadWatchChangeSignatureAsync as readDevServerWatchChangeSignatureAsync,
@@ -639,8 +642,22 @@ export async function stopStackOwnedServerForRestart(
   return { stopped: Boolean(stopPid), pid: recordedPid };
 }
 
+async function prepareCapturedDevServer({ sourceRuntimeOptions, serverComponentName, serverEnv, reuseSelected = false }) {
+  const { buildSourceRuntimeBundle } = await import('../../build/build_source_runtime.mjs');
+  const dbProvider = applyServerHostDatabaseProviderEnv({ serverComponentName, env: serverEnv });
+  const logger = sourceRuntimeOptions.logger ?? console;
+  logger.log(`[local] server: preparing ${reuseSelected ? 'retained' : 'current'} source generation (${serverComponentName}/${dbProvider})`);
+  const built = await buildSourceRuntimeBundle({ ...sourceRuntimeOptions, component: 'server',
+    serverComponent: serverComponentName, dbProvider,
+    env: serverEnv, devStartup: true, reuseSelected,
+    waitForSourceChanges: reuseSelected === 'if-available' });
+  logger.log(`[local] server: ${built.lastGreen ? 'retained' : 'captured'} source generation ${built.identity} ready`);
+  return { ...resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch: built,
+    migrationsEnabled: resolveServerMigrationsEnabled(serverEnv) }), source: 'runtime' };
+}
+
 export async function preflightDevServerRestart(
-  { serverDir, serverEnv = {}, consoleImpl = console },
+  { serverDir, serverComponentName, serverEnv = {}, consoleImpl = console, sourceRuntimeOptions },
   {
     ensureSourceServerWorkspacePackagesBuiltImpl = ensureSourceServerWorkspacePackagesBuilt,
     pmExecBinImpl = pmExecBin,
@@ -650,6 +667,11 @@ export async function preflightDevServerRestart(
     serverEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE ?? '',
   ).trim() === '1';
   delete serverEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE;
+  if (sourceRuntimeOptions) {
+    return { ran: true, reason: 'captured-source', sourceRuntimeLaunchSpec: await prepareCapturedDevServer({
+      sourceRuntimeOptions, serverComponentName, serverEnv,
+    }) };
+  }
   const enabled = String(serverEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT ?? '').trim() !== '0';
   if (!enabled) return { ran: false, reason: 'disabled' };
   if (parentPreflightAlreadyDone) {
@@ -734,6 +756,7 @@ export async function startDevServer({
   restart,
   admitPriorBuildsImmediately = false,
   priorRuntimeServerLaunchSpec = null,
+  sourceRuntimeOptions = null,
   children,
   spawnOptions = {},
   quiet = false,
@@ -752,14 +775,17 @@ export async function startDevServer({
   applyHappyServerMigrationsImpl = applyHappyServerMigrations,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
   killSpawnedChildImpl = killProcessTree,
-  spawnPriorRuntimeServerImpl = ({ launchSpec, env, options }) => spawnProc(
-    'server',
-    launchSpec.command,
-    Array.isArray(launchSpec.args) ? launchSpec.args : [],
-    env,
-    { ...options, cwd: launchSpec.serverDir },
-  ),
+  spawnPriorRuntimeServerImpl = async ({ launchSpec, env, options }) => {
+    await runServerRuntimeMigration({ serverLaunchSpec: launchSpec, env, children,
+      isCancellationRequested: () => sourceRuntimeOptions?.signal?.aborted === true });
+    return spawnProc('server', launchSpec.command, Array.isArray(launchSpec.args) ? launchSpec.args : [],
+      env, { ...options, cwd: launchSpec.serverDir });
+  },
 } = {}) {
+  if (!sourceRuntimeOptions) {
+    const repoDir = coerceHappyMonorepoRootFromPath(serverDir);
+    if (repoDir && autostart?.baseDir) sourceRuntimeOptions = { repoDir, stackBaseDir: autostart.baseDir };
+  }
   const bindPort = Number(serverBindPort || serverPort);
   const backendInternalServerUrl = `http://127.0.0.1:${bindPort}`;
   const serverEnv = buildServerRuntimeEnv({
@@ -769,8 +795,7 @@ export async function startDevServer({
     publicServerUrl,
   });
   delete baseEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE;
-  applySharedDatabaseSourceEnv({ env: serverEnv });
-  const dbProvider = applyEffectiveDbProviderEnv({ serverComponentName, env: serverEnv });
+  const dbProvider = applyServerHostDatabaseProviderEnv({ serverComponentName, env: serverEnv });
   const explicitDatabaseUrl = serverEnv.DATABASE_URL;
   if (dbProvider === 'mysql' && !String(explicitDatabaseUrl ?? '').trim()) {
     throw new Error('[local] mysql requires an explicit DATABASE_URL before managed infra startup');
@@ -784,6 +809,7 @@ export async function startDevServer({
     priorRuntimeServerLaunchSpec?.source === 'runtime'
     && String(priorRuntimeServerLaunchSpec?.command ?? '').trim(),
   );
+  let sourceRuntimeLaunchSpec = null;
 
   // Dependency preparation owns the tools used by infrastructure and migrations.
   // Keep it after provider/topology admission so invalid configurations remain side-effect free.
@@ -796,7 +822,7 @@ export async function startDevServer({
         : {}),
     });
   };
-  if (!usePriorRuntime) {
+  if (!usePriorRuntime && !sourceRuntimeOptions) {
     await prepareDependencies({ admitPrior: admitPriorBuildsImmediately });
   }
 
@@ -817,7 +843,7 @@ export async function startDevServer({
     }
 
     const autoMigrate = resolveServerMigrationsEnabled(serverEnv);
-    if (autoMigrate && !usePriorRuntime) {
+    if (autoMigrate && !usePriorRuntime && !sourceRuntimeOptions) {
       await applyHappyServerMigrationsImpl({ serverDir, env: serverEnv, dbProvider });
     }
   }
@@ -826,6 +852,11 @@ export async function startDevServer({
   const serverScript = resolveServerDevScript({ serverComponentName, serverDir, prismaPush });
 
   const ensureWorkspacePackagesBuiltBeforeSpawn = async () => {
+    if (sourceRuntimeOptions) {
+      sourceRuntimeLaunchSpec = await prepareCapturedDevServer({ sourceRuntimeOptions, serverComponentName, serverEnv,
+        reuseSelected: admitPriorBuildsImmediately ? 'if-available' : false });
+      return;
+    }
     try {
       await ensureSourceServerWorkspacePackagesBuiltImpl({
         runtimeBackedStart: false,
@@ -854,8 +885,8 @@ export async function startDevServer({
   // or a stale listener that is still bound to this stack.
   if (restart && stackMode && runtimeStatePath) {
     if (!usePriorRuntime) {
-      if (admitPriorBuildsImmediately) {
-        // Admit an intact retained closure at the canonical workspace owner.
+      if (admitPriorBuildsImmediately || sourceRuntimeOptions) {
+        // Prepare the captured server graph, or admit a retained legacy closure.
         // The existing reload coordinator refreshes it after startup and owns
         // the restart; it must not compete with another background publisher.
         await ensureWorkspacePackagesBuiltBeforeSpawn();
@@ -888,7 +919,8 @@ export async function startDevServer({
   }
 
   const provisionServer = async () => {
-    const launchEnv = usePriorRuntime ? { ...serverEnv } : serverEnv;
+    const launchEnv = usePriorRuntime || sourceRuntimeLaunchSpec
+      ? { ...serverEnv, ...(!usePriorRuntime ? sourceRuntimeLaunchSpec.env : {}) } : serverEnv;
     if (usePriorRuntime) {
       applyRuntimeServerDatabaseEnv({
         env: launchEnv,
@@ -898,6 +930,12 @@ export async function startDevServer({
       // that may already have advanced. The current source refresh remains the migration owner.
       launchEnv.HAPPIER_SQLITE_AUTO_MIGRATE = '0';
       launchEnv.RUN_MIGRATIONS = 'false';
+    } else if (sourceRuntimeLaunchSpec) {
+      applyRuntimeServerDatabaseEnv({ env: launchEnv, serverDir: sourceRuntimeLaunchSpec.serverDir });
+      if (sourceRuntimeLaunchSpec.migration.mode === 'disabled') {
+        launchEnv.HAPPIER_SQLITE_AUTO_MIGRATE = '0';
+        launchEnv.RUN_MIGRATIONS = 'false';
+      }
     }
     const readinessTimeoutMs = resolveServerReadyTimeoutMs({ serverComponentName, env: launchEnv });
     const startupDeadline = createServerReadinessDeadline({
@@ -912,9 +950,9 @@ export async function startDevServer({
         existingOnLine?.(lineEvent);
       },
     };
-    const server = usePriorRuntime
+    const server = usePriorRuntime || sourceRuntimeLaunchSpec
       ? await spawnPriorRuntimeServerImpl({
-          launchSpec: priorRuntimeServerLaunchSpec,
+          launchSpec: usePriorRuntime ? priorRuntimeServerLaunchSpec : sourceRuntimeLaunchSpec,
           env: launchEnv,
           options,
         })
@@ -992,7 +1030,7 @@ export async function startDevServer({
         console.warn(`[local] prior runtime server could not start (${failureMessage}); preparing current source outputs.`);
       }
       usePriorRuntime = false;
-      await prepareDependencies({ admitPrior: true });
+      if (!sourceRuntimeOptions) await prepareDependencies({ admitPrior: true });
       await ensureWorkspacePackagesBuiltBeforeSpawn();
       try {
         provisioned = await provisionServer();
@@ -1009,8 +1047,12 @@ export async function startDevServer({
       console.warn(`[local] prior server generation could not start (${failureMessage}); refreshing once before retrying.`);
     }
     if (!provisioned) {
-      await prepareDependencies({ admitPrior: false });
-      await ensureWorkspacePackagesBuiltBeforeSpawn();
+      if (!sourceRuntimeOptions) await prepareDependencies({ admitPrior: false });
+      if (sourceRuntimeOptions) {
+        sourceRuntimeLaunchSpec = await prepareCapturedDevServer({ sourceRuntimeOptions, serverComponentName, serverEnv });
+      } else {
+        await ensureWorkspacePackagesBuiltBeforeSpawn();
+      }
       usePriorRuntime = false;
       provisioned = await provisionServer();
     }
@@ -1040,7 +1082,8 @@ export async function startDevServer({
     serverEnv,
     serverScript,
     serverProc: server,
-    bootstrapSource: usePriorRuntime ? 'runtime' : 'source',
+    bootstrapSource: usePriorRuntime ? 'runtime' : sourceRuntimeLaunchSpec ? 'source-bundle' : 'source',
+    ...(sourceRuntimeLaunchSpec ? { sourceRuntimeLaunchSpec } : {}),
   };
 }
 
@@ -1083,6 +1126,8 @@ export function createDevServerReloadExecutor({
   isShuttingDown,
   proxyController = null,
   priorRuntimeServerLaunchSpec = null,
+  sourceRuntimeOptions = null,
+  sourceRuntimeLaunchSpec = null,
 }, {
   preflightDevServerRestartImpl = preflightDevServerRestart,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
@@ -1091,13 +1136,11 @@ export function createDevServerReloadExecutor({
   waitForPgliteDirLockReleaseImpl = waitForPgliteDirLockRelease,
   pickNextFreeTcpPortImpl = pickNextFreeTcpPort,
   pmSpawnScriptImpl = pmSpawnScript,
-  spawnPriorRuntimeServerImpl = ({ launchSpec, env, options }) => spawnProc(
-    'server',
-    launchSpec.command,
-    Array.isArray(launchSpec.args) ? launchSpec.args : [],
-    env,
-    { ...options, cwd: launchSpec.serverDir },
-  ),
+  spawnPriorRuntimeServerImpl = async ({ launchSpec, env, options }) => {
+    await runServerRuntimeMigration({ serverLaunchSpec: launchSpec, env, children, isCancellationRequested: isShuttingDown });
+    return spawnProc('server', launchSpec.command, Array.isArray(launchSpec.args) ? launchSpec.args : [],
+      env, { ...options, cwd: launchSpec.serverDir });
+  },
   waitForServerReadyImpl = waitForServerReady,
   listListenPidsImpl = listListenPids,
   listListenPidsWithStatusImpl = listListenPidsWithStatus,
@@ -1112,6 +1155,8 @@ export function createDevServerReloadExecutor({
   sleepImpl = sleepMs,
 } = {}) {
   let activeBackendPort = Number(serverBindPort || serverPort);
+  let preparedSourceRuntimeLaunchSpec = sourceRuntimeLaunchSpec;
+  if (sourceRuntimeLaunchSpec) priorRuntimeServerLaunchSpec = sourceRuntimeLaunchSpec;
   let activeReloadGeneration = null;
   let availabilityRecoveryPromise = null;
   let unresolvedProvisional = null;
@@ -1276,12 +1321,16 @@ export function createDevServerReloadExecutor({
     const nextEnv = { ...serverEnv, ...envOverrides, PORT: String(port) };
     applySharedDatabaseSourceEnv({ env: nextEnv });
     const usePriorRuntime = launchSource === 'prior-runtime';
+    const capturedLaunch = usePriorRuntime ? priorRuntimeServerLaunchSpec : preparedSourceRuntimeLaunchSpec;
+    if (capturedLaunch) Object.assign(nextEnv, capturedLaunch.env);
     if (usePriorRuntime) {
       applyRuntimeServerDatabaseEnv({
         env: nextEnv,
         serverDir: priorRuntimeServerLaunchSpec.serverDir,
       });
       nextEnv.HAPPIER_SQLITE_AUTO_MIGRATE = '0';
+    } else if (capturedLaunch) {
+      applyRuntimeServerDatabaseEnv({ env: nextEnv, serverDir: capturedLaunch.serverDir });
     }
     let next = null;
     const transition = {
@@ -1311,9 +1360,10 @@ export function createDevServerReloadExecutor({
       }
     };
     try {
-      next = usePriorRuntime
+      next = capturedLaunch
         ? await spawnPriorRuntimeServerImpl({
-            launchSpec: priorRuntimeServerLaunchSpec,
+            launchSpec: { ...capturedLaunch, ...(usePriorRuntime || reloadPlan?.migrationMode === 'skip'
+              ? { migration: { mode: 'disabled' } } : {}) },
             env: nextEnv,
             options: { onLine },
           })
@@ -2223,14 +2273,16 @@ export function createDevServerReloadExecutor({
       };
       emitTransitionEvent('preflight_started', transition);
       try {
-        await preflightDevServerRestartImpl({
+        const prepared = await preflightDevServerRestartImpl({
           serverDir,
           serverComponentName,
           serverEnv,
+          ...(sourceRuntimeOptions ? { sourceRuntimeOptions } : {}),
           reloadMigrationMode: reloadPlan.migrationMode,
           consoleImpl: logger,
           logger,
         });
+        if (prepared?.sourceRuntimeLaunchSpec) preparedSourceRuntimeLaunchSpec = prepared.sourceRuntimeLaunchSpec;
         emitTransitionEvent('preflight_completed', { ...transition, disposition: 'succeeded' });
         const activeServer = serverProcRef?.current;
         return {
@@ -2261,7 +2313,10 @@ export function createDevServerReloadExecutor({
       try {
         await publishLifecycle({ phase: 'replacing', plan: reloadPlan });
         const restarted = await restartOnce(reloadPlan, context);
-        if (restarted) restartFailureTracker.reset();
+        if (restarted) {
+          restartFailureTracker.reset();
+          if (preparedSourceRuntimeLaunchSpec) priorRuntimeServerLaunchSpec = preparedSourceRuntimeLaunchSpec;
+        }
         return { restarted };
       } catch (error) {
         requestTransientListenerDiscoveryRetry(error);

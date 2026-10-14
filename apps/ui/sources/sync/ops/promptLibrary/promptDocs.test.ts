@@ -3,7 +3,6 @@ import { createPlainArtifactHomeFixture, createArtifactStoreBoundary } from '@/d
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { createPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { resolvePromptDocCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
@@ -11,8 +10,6 @@ import {
   createPromptDoc,
   updatePromptDoc,
   duplicatePromptDoc,
-  findPromptExternalLink,
-  upsertPromptExternalLink,
 } from './promptDocs';
 
 // Prepare the real Account/Sync graph during collection, before the Home fixture's
@@ -274,43 +271,4 @@ describe('promptDocs qualified operations', () => {
     expect(f.requests.some(request => request.path === `/v1/artifacts/${id}` && request.method === 'POST')).toBe(false);
   });
 
-  it('replaces an external link by semantic export identity even when its id changed', () => {
-    const target = MachineAdministrationTargetV1Schema.parse({ serverIdentityId: 'srv_library', machineId: 'machine-1' });
-    const context = { target, libraryServerIdentityId: target.serverIdentityId };
-    const old = {
-      id: 'old-link',
-      artifactId: 'doc-1',
-      assetTypeId: 'agents.skill',
-      machineId: 'machine-1',
-      scope: 'project' as const,
-      workspacePath: '/Users/test',
-      externalRef: { skillName: 'old-skill' },
-      lastLibraryDigest: 'sha256:old',
-      lastExternalDigest: 'sha256:stale',
-    };
-    const next = {
-      ...old,
-      id: 'new-link',
-      serverIdentityId: target.serverIdentityId,
-      externalRef: { skillName: 'new-skill' },
-      lastLibraryDigest: 'sha256:new',
-      lastExternalDigest: 'sha256:fresh',
-    };
-    expect(upsertPromptExternalLink({ v: 1, links: [old] }, next, context)).toEqual({
-      v: 1,
-      links: [next],
-    });
-    expect(
-      findPromptExternalLink(
-        { v: 1, links: [old, next] },
-        {
-          artifactId: 'doc-1',
-          assetTypeId: 'agents.skill',
-          ...context,
-          scope: 'project',
-          workspacePath: '/Users/test',
-        },
-      ),
-    ).toEqual(next);
-  });
 });

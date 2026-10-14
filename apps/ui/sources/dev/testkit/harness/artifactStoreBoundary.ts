@@ -1,5 +1,5 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { Buffer } from 'buffer';
 
@@ -7,7 +7,7 @@ import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 /**
- * One Account's Artifact rows as its Home persists them, answered over HTTP.
+ * A Home's Artifact rows and explicitly seeded Account grants, answered over HTTP.
  *
  * This is the persistence boundary only: the Home's `/v1/artifacts` routes
  * with their real versioned compare-and-set (`artifactsRoutes.ts` and
@@ -26,6 +26,10 @@ export type ArtifactStoreBoundary = Readonly<{
     handle(path: string, init?: RequestInit): Promise<Response> | null;
     /** The stored row, exactly as the Home would serve it. */
     read(artifactId: string): Artifact | null;
+    /** A committed Home row observed outside this client's writes, including its current CAS ledger. */
+    replaceStoredRow(artifact: Artifact): void;
+    /** A committed Account grant, seeded outside this client's HTTP mutations. */
+    seedAccountGrant(artifactId: string, accountId: string, accessLevel: ArtifactAccessLevelV1): void;
     /** Every stored row, in creation order. */
     list(): Artifact[];
     /**
@@ -70,12 +74,24 @@ export function createArtifactStoreBoundary(params: Readonly<{
     encryptionMode: 'plain' | 'e2ee';
 }>): ArtifactStoreBoundary {
     const rows = new Map<string, Artifact>();
+    const accountGrants = new Map<string, Map<string, ArtifactAccessGrantRowV1>>();
     let pendingBeforeUpdate: (() => Promise<void>) | null = null;
     let pendingAfterCreate: (() => Promise<void>) | null = null;
 
-    const create = (input: Record<string, unknown> | null): Response => {
-        const ownerAccountId = params.ownerAccountId();
-        if (!ownerAccountId) return json({ error: 'Not authenticated' }, 401);
+    const accessFor = (row: Artifact, accountId: string): Artifact['access'] | null =>
+        row.ownerAccountId === accountId ? 'owner' : accountGrants.get(row.id)?.get(accountId)?.accessLevel ?? null;
+    const readableRow = (row: Artifact, accountId: string): Artifact | null => {
+        const access = accessFor(row, accountId);
+        // Grant seeding publishes no recipient key envelope. As on the Home,
+        // semantic E2EE access alone never substitutes the owner's key bytes.
+        return access && (access === 'owner' || row.encryptionMode === 'plain') ? { ...row, access } : null;
+    };
+    const writableRow = (row: Artifact | undefined, accountId: string): boolean => {
+        const readable = row ? readableRow(row, accountId) : null;
+        return readable !== null && readable.access !== 'view';
+    };
+
+    const create = (ownerAccountId: string, input: Record<string, unknown> | null): Response => {
         const { id, header, body, dataEncryptionKey, provenance, provenanceDataEncryptionKey } = input ?? {};
         if (typeof id !== 'string' || typeof header !== 'string' || typeof body !== 'string'
             || typeof dataEncryptionKey !== 'string') {
@@ -84,7 +100,8 @@ export function createArtifactStoreBoundary(params: Readonly<{
         // Re-creating an id the Account already holds returns the stored row
         // unchanged, as the Home's idempotent create does.
         const existing = rows.get(id);
-        if (existing) return json(existing);
+        if (existing) return existing.ownerAccountId === ownerAccountId ? json(existing)
+            : json({ error: 'Artifact with this ID already exists for another account' }, 409);
         const now = Date.now();
         const row: Artifact = {
             ownerAccountId, access: 'owner', encryptionMode: params.encryptionMode, publicAudience: 'none',
@@ -96,7 +113,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
         return json(row);
     };
 
-    const update = async (artifactId: string, input: Record<string, unknown> | null): Promise<Response> => {
+    const update = async (callerAccountId: string, artifactId: string, input: Record<string, unknown> | null): Promise<Response> => {
         const { header, expectedHeaderVersion, body, expectedBodyVersion, provenance, provenanceDataEncryptionKey } = input ?? {};
         const headerChange = typeof header === 'string' && isVersion(expectedHeaderVersion)
             ? { bytes: header, expected: expectedHeaderVersion } : null;
@@ -106,11 +123,12 @@ export function createArtifactStoreBoundary(params: Readonly<{
             || (!headerChange && !bodyChange)) {
             return json({ error: 'Invalid parameters' }, 400);
         }
+        if (!writableRow(rows.get(artifactId), callerAccountId)) return json({ error: 'Artifact not found' }, 404);
         const hook = pendingBeforeUpdate;
         pendingBeforeUpdate = null;
         await hook?.();
         const current = rows.get(artifactId);
-        if (!current) return json({ error: 'Artifact not found' }, 404);
+        if (!current || !writableRow(current, callerAccountId)) return json({ error: 'Artifact not found' }, 404);
         if ((headerChange && headerChange.expected !== current.headerVersion)
             || (bodyChange && bodyChange.expected !== current.bodyVersion)) {
             return json({
@@ -141,8 +159,12 @@ export function createArtifactStoreBoundary(params: Readonly<{
         handle(path: string, init?: RequestInit): Promise<Response> | null {
             const method = (init?.method ?? 'GET').toUpperCase();
             const url = new URL(path, 'https://artifact-boundary.example');
+            if (url.pathname !== ARTIFACTS_PATH && !url.pathname.startsWith(`${ARTIFACTS_PATH}/`)) return null;
+            // Mirror the Home preHandler: capture this request's authenticated
+            // Account once, before any row access or acknowledgement hook.
+            const callerAccountId = params.ownerAccountId();
+            if (!callerAccountId) return Promise.resolve(json({ error: 'Missing authorization header' }, 401));
             if (url.pathname === ARTIFACTS_PATH && method === 'GET') {
-                if (!params.ownerAccountId()) return Promise.resolve(json({ error: 'Not authenticated' }, 401));
                 const limit = Number(url.searchParams.get('limit') ?? 500);
                 if (!Number.isInteger(limit) || limit < 1 || limit > 500) return Promise.resolve(json({ error: 'Failed to get artifacts' }, 400));
                 let cursor: { updatedAt: number; id: string } | null = null;
@@ -157,8 +179,10 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     } catch { /* Malformed cursors are rejected just as by the Home route. */ }
                     if (!cursor) return Promise.resolve(json({ error: 'Failed to get artifacts' }, 400));
                 }
-                const inventory = [...rows.values()].filter(row => row.ownerAccountId === params.ownerAccountId()
-                    && (!cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id)))
+                const inventory = [...rows.values()].flatMap(row => {
+                    const readable = readableRow(row, callerAccountId);
+                    return readable ? [readable] : [];
+                }).filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
                     .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
                 return Promise.resolve(json(inventory.slice(0, limit).map(row => {
                     if (url.searchParams.get('includeBody') === 'true') return row;
@@ -168,7 +192,8 @@ export function createArtifactStoreBoundary(params: Readonly<{
             }
             if (path === ARTIFACTS_PATH) {
                 if (method !== 'POST') return null;
-                const response = create(parseBody(init));
+                const response = create(callerAccountId, parseBody(init));
+                if (!response.ok) return Promise.resolve(response);
                 const hook = pendingAfterCreate;
                 pendingAfterCreate = null;
                 return Promise.resolve(hook?.()).then(() => response);
@@ -176,14 +201,13 @@ export function createArtifactStoreBoundary(params: Readonly<{
             if (!path.startsWith(`${ARTIFACTS_PATH}/`)) return null;
             const recipientTarget = /^\/v1\/artifacts\/([^/]+)\/access\/recipients$/.exec(url.pathname);
             if (recipientTarget && method === 'GET') {
-                const callerAccountId = params.ownerAccountId();
-                if (!callerAccountId) return Promise.resolve(json({ error: 'Not authenticated' }, 401));
                 const row = rows.get(decodeURIComponent(recipientTarget[1]!));
-                // This owner-only store has no grant writer or other authorized audience.
-                if (!row || row.ownerAccountId !== callerAccountId) return Promise.resolve(json({ error: 'artifact_not_found' }, 404));
+                const access = row ? accessFor(row, callerAccountId) : null;
+                if (!row || !access) return Promise.resolve(json({ error: 'artifact_not_found' }, 404));
                 const plain = row.encryptionMode === 'plain';
+                if (!plain && access !== 'owner') return Promise.resolve(json({ error: 'artifact_content_unavailable' }, 409));
                 return Promise.resolve(json(ArtifactAccessRecipientCensusResponseV1Schema.parse({
-                    artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access,
+                    artifactId: row.id, ownerAccountId: row.ownerAccountId, access,
                     encryptionMode: row.encryptionMode,
                     dataEncryptionKey: plain ? null : row.dataEncryptionKey,
                     callerDataEncryptionKey: plain ? null : row.dataEncryptionKey,
@@ -191,18 +215,19 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     callerProvenanceDataEncryptionKey: plain ? null : row.provenanceDataEncryptionKey ?? null,
                     // No Account content-key binding is published in this boundary.
                     // Local key possession is not server recipient readiness.
-                    recipients: [{ recipientAccountId: row.ownerAccountId,
+                    recipients: [row.ownerAccountId, ...(accountGrants.get(row.id)?.keys() ?? [])].sort().map(recipientAccountId => ({ recipientAccountId,
                         contentKey: { status: 'unavailable', reason: plain ? 'plain_account' : 'encryption_setup_required' },
                         contentPublicKeyFingerprint: null, encryptedDataKey: null,
-                        encryptedProvenanceDataKey: null, recipientContentPublicKeyFingerprint: null }],
+                        encryptedProvenanceDataKey: null, recipientContentPublicKeyFingerprint: null })),
                 })));
             }
             const grantsTarget = /^\/v1\/artifacts\/([^/]+)\/access\/grants$/.exec(url.pathname);
             if (grantsTarget && method === 'GET') {
                 const row = rows.get(decodeURIComponent(grantsTarget[1]!));
-                return Promise.resolve(row ? json(ArtifactAccessGrantsListResponseV1Schema.parse({
-                    artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access, grants: [],
-                })) : json({ error: 'Artifact not found' }, 404));
+                const access = row ? accessFor(row, callerAccountId) : null;
+                return Promise.resolve(row && access ? json(ArtifactAccessGrantsListResponseV1Schema.parse({
+                    artifactId: row.id, ownerAccountId: row.ownerAccountId, access, grants: [...(accountGrants.get(row.id)?.values() ?? [])],
+                })) : json({ error: 'artifact_not_found' }, 404));
             }
             if (method === 'DELETE') {
                 const target = /^\/v1\/artifacts\/([^/]+)(?:\/revision\/(\d+)\/(\d+))?$/.exec(url.pathname);
@@ -211,25 +236,40 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 const artifactId = decodeURIComponent(encodedArtifactId);
                 if (!artifactId || artifactId.includes('/')) return null;
                 const row = rows.get(artifactId);
-                if (!row) return Promise.resolve(json({ error: 'Artifact not found' }, 404));
+                if (!row || row.ownerAccountId !== callerAccountId) return Promise.resolve(json({ error: 'Artifact not found' }, 404));
                 if (target[2] !== undefined && (row.headerVersion !== Number(target[2]) || row.bodyVersion !== Number(target[3]))) {
                     return Promise.resolve(json({ error: 'version-mismatch' }, 409));
                 }
                 rows.delete(artifactId);
+                accountGrants.delete(artifactId);
                 return Promise.resolve(json({ success: true }));
             }
             const artifactId = decodeURIComponent(url.pathname.slice(ARTIFACTS_PATH.length + 1));
             if (!artifactId || artifactId.includes('/')) return null;
             if (method === 'GET') {
                 const row = rows.get(artifactId);
-                return Promise.resolve(row ? json(row) : json({ error: 'Artifact not found' }, 404));
+                if (!row || !accessFor(row, callerAccountId)) return Promise.resolve(json({ error: 'Artifact not found' }, 404));
+                const readable = readableRow(row, callerAccountId);
+                return Promise.resolve(readable ? json(readable) : json({ error: 'artifact_content_unavailable' }, 409));
             }
-            if (method === 'POST') return update(artifactId, parseBody(init));
+            if (method === 'POST') return update(callerAccountId, artifactId, parseBody(init));
             return null;
         },
         read(artifactId: string): Artifact | null {
             const row = rows.get(artifactId);
             return row ? { ...row } : null;
+        },
+        replaceStoredRow(artifact: Artifact): void {
+            rows.set(artifact.id, { ...artifact });
+        },
+        seedAccountGrant(artifactId: string, accountId: string, accessLevel: ArtifactAccessLevelV1): void {
+            const row = rows.get(artifactId);
+            if (!row || row.ownerAccountId === accountId) throw new Error('An Account grant needs an existing Artifact and a non-owner recipient');
+            const grants = accountGrants.get(artifactId) ?? new Map<string, ArtifactAccessGrantRowV1>();
+            grants.set(accountId, { principal: { kind: 'account', accountId }, accessLevel,
+                createdByAccountId: row.ownerAccountId, createdAt: grants.get(accountId)?.createdAt ?? Date.now(),
+                display: { name: null, username: null } });
+            accountGrants.set(artifactId, grants);
         },
         list(): Artifact[] {
             return [...rows.values()].map((row) => ({ ...row }));
@@ -250,6 +290,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
         },
         clear(): void {
             rows.clear();
+            accountGrants.clear();
             pendingBeforeUpdate = null;
             pendingAfterCreate = null;
         },

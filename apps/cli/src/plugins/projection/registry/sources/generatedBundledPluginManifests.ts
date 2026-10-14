@@ -84,7 +84,6 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-scm-gitlab",
   "@happier-dev/plugins-scm-sapling",
   "@happier-dev/plugins-sentry",
-  "@happier-dev/plugins-triage",
   "@happier-dev/plugins-xai",
   "@happier-dev/plugins-zai",
 ]);
@@ -504,13 +503,6 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "packageVersion": "0.0.0",
     "pluginId": "happier.sentry",
     "pluginPackageId": "sentry"
-  },
-  {
-    "manifestPath": "bundled:happier.triage",
-    "packageName": "@happier-dev/plugins-triage",
-    "packageVersion": "0.0.0",
-    "pluginId": "happier.triage",
-    "pluginPackageId": "triage"
   },
   {
     "manifestPath": "bundled:happier.voice.xai",
@@ -1252,19 +1244,6 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     sourceSpec: Object.freeze({
       kind: 'bundled',
       locator: "@happier-dev/plugins-sentry",
-      trustPolicy: 'local_trusted',
-      installPolicy: 'link',
-      resolvedVersion: "0.0.0",
-    }),
-  }),
-  Object.freeze({
-    pluginId: "happier.triage",
-    manifestRelativePath: "assets/bundled-plugin-manifests/triage.json",
-    manifestPath: "bundled:happier.triage",
-    daemonEntryPath: "@happier-dev/plugins-triage",
-    sourceSpec: Object.freeze({
-      kind: 'bundled',
-      locator: "@happier-dev/plugins-triage",
       trustPolicy: 'local_trusted',
       installPolicy: 'link',
       resolvedVersion: "0.0.0",

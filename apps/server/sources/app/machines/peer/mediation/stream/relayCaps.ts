@@ -1,8 +1,4 @@
-import {
-    MachineLiveStreamRelayCapsV1Schema,
-    type MachineLiveStreamRelayCaps,
-    type MachineLiveStreamCapsV1,
-} from '@happier-dev/protocol';
+import { MachineLiveStreamRelayCapsV1Schema, type MachineLiveStreamRelayCaps, type MachineLiveStreamCapsV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 
 export function normalizeMachineLiveStreamRelayCaps(raw: unknown): MachineLiveStreamRelayCaps | null {
     const parsed = MachineLiveStreamRelayCapsV1Schema.safeParse(raw);

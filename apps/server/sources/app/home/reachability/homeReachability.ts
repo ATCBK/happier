@@ -1,11 +1,6 @@
-import {
-    SERVER_CONFIG,
-    readServerConfig,
-    type HomeHostAccessMethodV1,
-    type HomeIrohModeV1,
-    type HomeReachabilityV1,
-    type ServerConfigEnv,
-} from "@happier-dev/protocol";
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { readServerConfig, type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { type HomeHostAccessMethodV1, type HomeIrohModeV1, type HomeReachabilityV1 } from '@happier-dev/protocol/home/governance';
 import type { RelayAccessConfiguredPublicAccess } from "@happier-dev/cli-common/relayAccess";
 
 import { readHomeConnectionDescriptor } from "@/app/features/homeConnectionDescriptorPublication";

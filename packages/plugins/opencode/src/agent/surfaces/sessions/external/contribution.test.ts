@@ -87,7 +87,7 @@ describe('OpenCode public External Sessions contribution', () => {
     expect(metadataOnly).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'complete' } });
   });
 
-  it('yields content work without losing a candidate and rejects a changed content query', async () => {
+  it('yields at the cooperative scan deadline while retaining the hard deadline and query-bound continuation', async () => {
     const clock = Date.now;
     let now = clock();
     let yieldRead = true;
@@ -98,12 +98,14 @@ describe('OpenCode public External Sessions contribution', () => {
       return new Response(JSON.stringify([{ info: { id: 'answer', role: 'assistant', time: { created: 2 } }, parts: [{ type: 'text', text: 'body-only phrase' }] }]));
     });
     const contribution = createOpenCodeExternalSessionsContribution({ env });
-    const bounds = { ...invocation(), deadlineAtMs: now + 100 };
+    const bounds = { ...invocation(), scanDeadlineAtMs: now + 100 };
     Date.now = () => now;
     try {
       const result = await contribution.listCandidates({ ...bounds, source, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' });
       expect(result).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) } });
       if (!result.ok || !result.value.nextCursor) throw new Error('Expected content continuation');
+      await expect(contribution.listCandidates({ ...bounds, deadlineAtMs: now, scanDeadlineAtMs: now + 100, source, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+      await expect(contribution.listCandidates({ ...bounds, deadlineAtMs: now + 100, scanDeadlineAtMs: now + 100, source, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
       Date.now = clock;
       yieldRead = false;
       const changed = await contribution.listCandidates({ ...invocation(), source, maxItems: 10, searchTarget: 'content', searchTerm: 'other', cursor: result.value.nextCursor });
@@ -126,7 +128,7 @@ describe('OpenCode public External Sessions contribution', () => {
       return new Response(JSON.stringify({ data: [{ id: 'answer', type: 'user', text: 'body-only phrase', time: { created: 2 } }], cursor: {} }));
     });
     const contribution = createOpenCodeExternalSessionsContribution({ env });
-    const bounds = { ...invocation(), deadlineAtMs: now + 100 };
+    const bounds = { ...invocation(), scanDeadlineAtMs: now + 100 };
     Date.now = () => now;
     try {
       const first = await contribution.listCandidates({ ...bounds, source, maxItems: 2, searchTarget: 'content', searchTerm: 'body-only phrase' });

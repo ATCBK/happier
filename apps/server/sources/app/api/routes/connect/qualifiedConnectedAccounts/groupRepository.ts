@@ -1,23 +1,8 @@
-import {
-    CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-    ConnectedServiceAuthGroupMemberStateV1Schema,
-    ConnectedServiceAuthGroupPolicyV1Schema,
-    ConnectedServiceAuthGroupStateV1Schema,
-    QualifiedConnectedAccountGroupCreateV4Schema,
-    QualifiedConnectedAccountGroupMemberDeleteV4Schema,
-    QualifiedConnectedAccountGroupMemberMutationV4Schema,
-    QualifiedConnectedAccountGroupPatchV4Schema,
-    QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema,
-    QualifiedConnectedAccountGroupActiveAccountV4Schema,
-    QualifiedConnectedAccountGroupRefSchema,
-    QualifiedConnectedAccountGroupV4Schema,
-    QualifiedConnectedAccountServiceRefSchema,
-    clearConnectedServiceAuthGroupMemberRuntimeBlockers,
-    readConnectedServiceManualActiveProfileRuntimeBlocker,
-    type ConnectedServiceAuthGroupStateV1,
-    type QualifiedConnectedAccountGroupV4,
-    type QualifiedConnectedAccountServiceRef,
-} from "@happier-dev/protocol";
+import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
+import { ConnectedServiceAuthGroupMemberStateV1Schema, ConnectedServiceAuthGroupPolicyV1Schema, ConnectedServiceAuthGroupStateV1Schema, type ConnectedServiceAuthGroupStateV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { QualifiedConnectedAccountGroupCreateV4Schema, QualifiedConnectedAccountGroupMemberDeleteV4Schema, QualifiedConnectedAccountGroupMemberMutationV4Schema, QualifiedConnectedAccountGroupPatchV4Schema, QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema, QualifiedConnectedAccountGroupActiveAccountV4Schema, QualifiedConnectedAccountGroupRefSchema, QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountServiceRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { clearConnectedServiceAuthGroupMemberRuntimeBlockers, readConnectedServiceManualActiveProfileRuntimeBlocker } from '@happier-dev/protocol/connect/connectedServiceAuthGroupMemberRuntimeStatePolicy';
+import { type QualifiedConnectedAccountGroupV4, type QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import type { Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";

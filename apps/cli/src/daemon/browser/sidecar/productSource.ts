@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { totalmem } from 'node:os';
 
 import type {
     BrowserCommandV1,
@@ -8,6 +7,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import type { MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
 import { browserCommandDispatchFailure } from '../control/types';
 import { createBrowserProfileStore, type BrowserProfileStore } from '../profiles/store';
@@ -259,6 +259,7 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
                 })(factoryInput);
                 if (result.ok) {
                     session.result = result;
+                    invalidateProcessLaunchDiscovery();
                     result.contextCapture?.subscribeCdpEvents?.((notification) => emit(eventListeners, {
                         ...notification,
                         ...(notification.sessionId ? { sessionId: JSON.stringify([sessionId, notification.sessionId]) } : {}),
@@ -324,7 +325,10 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
                             // shared pages; this is a sizing proxy, not a memory ceiling.
                             // R47 Auto admits 1 below 8 GiB, 2 at 8, 3 at 12, 4 at 16+;
                             // smaller hosts retain one usable engine. Users may override.
-                            const ram = totalmem();
+                            // The vitals owner reports effective memory, including Linux
+                            // cgroup limits; physical host RAM would over-admit containers.
+                            const memory = factoryInput.readMachineMemory?.();
+                            const ram = memory?.reported ? memory.totalBytes : 0;
                             const automatic = Math.min(4, Math.max(1, Number.isFinite(ram) ? Math.floor(ram / (4 * 1024 ** 3)) : 1));
                             const limit = policy?.status === 'ready' ? policy.policy.processes.browserMaxConcurrent ?? automatic : automatic;
                             if (sessions.size >= limit) {

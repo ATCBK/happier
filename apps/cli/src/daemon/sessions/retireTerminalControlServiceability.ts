@@ -3,18 +3,59 @@ import { updateSessionMetadataWithRetry, verifySessionMetadataMutationCurrentnes
     type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
+import { configuration } from '@/configuration';
+import { isPidPresent } from '@happier-dev/cli-common/process';
+import { readTerminalHostAttachmentState } from '@/terminal/attachment/terminalAttachmentInfo';
+import { logger } from '@/ui/logger';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
+import { readSessionMarkerForPid, type DaemonSessionMarker } from '../sessionRegistry';
+import type { TrackedSession } from '../types';
 
 import { clearTerminalControlServiceabilityProjection } from '../startup/terminalControlServiceabilityProjection';
 
 export type ExactTerminalControlServiceabilityRetirement = 'retired' | 'superseded';
+export type RetainedPlainRunnerRetirement = ExactTerminalControlServiceabilityRetirement | 'deferred';
+export type TerminalControlServiceabilityRetirementTarget = Readonly<{ attachmentId: string; terminalMode: TerminalMode; expectedRunner?: never }>
+    | Readonly<{ attachmentId?: never; terminalMode: 'plain'; expectedRunner: Readonly<{ pid: number; startTimeMs?: number }> }>;
+
+/** The existing marker is the recovery obligation; a live or unrecorded runner cannot defer publication. */
+export async function readRetainedPlainRunnerExitMarker(tracked: TrackedSession): Promise<DaemonSessionMarker | null> {
+    const pid = tracked.sessionRunnerPid ?? tracked.pid;
+    const startTimeMs = tracked.runnerProcessIdentity?.processStartTimeMs ?? tracked.processStartTimeMs;
+    if (tracked.startedBy !== 'daemon' || !tracked.happySessionId || startTimeMs === undefined
+        || isPidPresent(pid) || (pid !== tracked.pid && isPidPresent(tracked.pid))) return null;
+    const marker = await readSessionMarkerForPid(pid);
+    if (!marker || marker.startedBy !== 'daemon' || marker.happySessionId !== tracked.happySessionId
+        || marker.processStartTimeMs !== startTimeMs) return null;
+    const attachment = await readTerminalHostAttachmentState({ happyHomeDir: configuration.happyHomeDir, sessionId: marker.happySessionId });
+    return attachment.status === 'absent' ? marker : null;
+}
+
+export async function retireStoppedPlainRunnerControlServiceability(params: Readonly<{
+    sessionId: string;
+    trackedSession: TrackedSession;
+    publishRetirement: () => Promise<ExactTerminalControlServiceabilityRetirement>;
+}>): Promise<RetainedPlainRunnerRetirement> {
+    try {
+        return await params.publishRetirement();
+    } catch (error) {
+        if (params.trackedSession.happySessionId !== params.sessionId
+            || !await readRetainedPlainRunnerExitMarker(params.trackedSession)) throw error;
+        logger.warn('[DAEMON STOP] Home retirement deferred to retained Session marker', {
+            sessionId: params.sessionId, error: serializeAxiosErrorForLog(error),
+        });
+        return 'deferred';
+    }
+}
 
 export async function retireExactTerminalControlServiceability(params: Readonly<{
     credentials: StoredCredentials;
     sessionId: string;
-    attachmentId: string;
-    terminalMode: TerminalMode;
     currentness?: SessionMetadataMutationCurrentness;
-}>): Promise<ExactTerminalControlServiceabilityRetirement> {
+}> & TerminalControlServiceabilityRetirementTarget): Promise<ExactTerminalControlServiceabilityRetirement> {
+    const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
+        !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
+            && (params.expectedRunner.startTimeMs === undefined || metadata.hostProcessStartTimeMs === params.expectedRunner.startTimeMs));
     await verifySessionMetadataMutationCurrentness(params.currentness);
     const rawSession = await fetchSessionByIdCompat({
         token: params.credentials.token,
@@ -29,13 +70,17 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
         sessionId: params.sessionId,
         rawSession,
         currentness: params.currentness,
-        updater: (metadata) => clearTerminalControlServiceabilityProjection({
-            metadata,
-            retiredAttachmentId: params.attachmentId,
-            retiredAt: Date.now(),
-            terminalMode: params.terminalMode,
-        }),
+        updater: (metadata) => {
+            if (!matchesExpectedRunner(metadata)) return metadata;
+            return clearTerminalControlServiceabilityProjection({
+                metadata,
+                retiredAttachmentId: params.attachmentId,
+                retiredAt: Date.now(),
+                terminalMode: params.terminalMode,
+            });
+        },
     });
+    if (!matchesExpectedRunner(updated.metadata)) return 'superseded';
     const terminal = updated.metadata.terminal;
     if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return 'superseded';
     const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   IrohPeerInitiatorV2Schema,
@@ -40,34 +40,33 @@ function equalInitiator(left: IrohPeerInitiatorV2, right: IrohPeerInitiatorV2): 
     && (left.kind !== 'machine' || (right.kind === 'machine' && left.machineId === right.machineId));
 }
 
-const IrohMachineHandshakeCommonV1Schema = lazyZodSchema(() => z.object({
+const IrohMachineHandshakeCommonV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(IROH_MACHINE_HANDSHAKE_VERSION_V1),
-    accountId: z.string().min(1),
+    accountId: z.string().check(z.minLength(1)),
     initiator: IrohPeerInitiatorV2Schema,
     target: IrohPeerTargetV2Schema,
     grant: SignedDirectRouteGrantV2Schema,
     proof: PeerRouteEphemeralProofV2Schema,
-  }).strict());
+  }));
 
 export const IrohMachineHandshakeV1Schema = lazyZodSchema(() => z
   .discriminatedUnion('flow', [
-    IrohMachineHandshakeCommonV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(IrohMachineHandshakeCommonV1Schema, {
       flow: z.literal('finite_transfer'),
-    }).strict(),
-    IrohMachineHandshakeCommonV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(IrohMachineHandshakeCommonV1Schema, {
       flow: z.literal('tcp_tunnel'),
-    }).strict(),
-    IrohMachineHandshakeCommonV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(IrohMachineHandshakeCommonV1Schema, {
       flow: z.literal('workspace_sync'),
-      operationId: z.string().min(1),
-    }).strict(),
-  ])
-  .superRefine((handshake, ctx) => {
+      operationId: z.string().check(z.minLength(1)),
+    })),
+  ]).check(z.superRefine((handshake, ctx) => {
     const payload = handshake.grant.payload;
     const binding = payload.iroh;
     if (payload.routeKind !== 'iroh_peer' || !binding) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['grant', 'payload', 'iroh'],
         message: 'Machine/1 handshakes require an iroh_peer grant binding',
       });
@@ -81,7 +80,7 @@ export const IrohMachineHandshakeV1Schema = lazyZodSchema(() => z
       && handshake.flow === binding.operationKind;
     if (!equalBindings) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['grant', 'payload', 'iroh'],
         message: 'Machine/1 handshake fields must equal the signed absolute Iroh binding',
       });
@@ -94,12 +93,12 @@ export const IrohMachineHandshakeV1Schema = lazyZodSchema(() => z
       : payload.scope.kind === 'machine_rpc' ? payload.scope.rpcScopeId : undefined;
     if (!scopeOperationId || scopeOperationId !== handshake.operationId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['operationId'],
         message: 'Machine/1 operationId must equal the signed single-operation grant scope id',
       });
     }
-  }));
+  })));
 
 export type IrohMachineCarrierFlowV1 = z.infer<typeof IrohMachineCarrierFlowV1Schema>;
 export type IrohMachineHandshakeV1 = z.infer<typeof IrohMachineHandshakeV1Schema>;

@@ -1,9 +1,66 @@
 import { expect, vi } from 'vitest';
-import type { DaemonVoiceClientAccountOperationRequestV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
+import type { DaemonVoiceClientAccountOperationRequestV1 } from '@happier-dev/protocol/daemon/voiceCredentials';
 import type { installVoiceWebRtcBrowserBoundary } from './voiceWebRtcHarness';
 import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
+import type { AccountProfile } from '@happier-dev/protocol/account/profile';
+import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import type { Settings } from '@/sync/domains/settings/settings';
+import type { BundledConversationRuntimeEntry } from '@/voice/registry/bundledConversationRuntimeEntries';
+import type { VoiceAdapterController } from '@/voice/session/types';
+import type { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
+import type { restoreServerAccountForTest } from './serverAccountConnectionHarness';
+import type { createSessionMetadataHttpBoundary } from './sessionMetadataHttpBoundary';
+import type { createConnectedPurposeCatalogHttpBoundary } from './connectedAccountCatalogBoundary';
 
-export type OpenAiMintTransport = (request: ReturnType<typeof DaemonVoiceClientAccountOperationRequestV1Schema.parse>) => Promise<Readonly<{
+type OpenAiRuntimeOptions = Readonly<{
+  respondToDaemonAccountOperation?: OpenAiMintTransport;
+  readPlaybackCursorMs?(): number | null;
+  initialConversationSessionId?: string;
+  currentUiContext?: VoiceCurrentUiToolPort;
+}>;
+
+type OpenAiVoiceRuntime = Readonly<{
+  controlSessionId: string;
+  historySessionId: string;
+  adapter: VoiceAdapterController;
+  controller: ReturnType<ReturnType<typeof createBundledConversationRuntimeHostLease>['host']['createConversationController']> | null;
+  hostLease: ReturnType<typeof createBundledConversationRuntimeHostLease>;
+  requestAccountOperation: ReturnType<typeof vi.fn>;
+  requestReconnect(): Promise<boolean>;
+  runtime: Readonly<{ adapter: VoiceAdapterController; dispose(): Promise<void> }>;
+}>;
+
+export type OpenAiVoiceRuntimeEnvironment = {
+  entry: BundledConversationRuntimeEntry;
+  historySessionId: string;
+  credentialMachineId: string;
+  providerFetch: ReturnType<typeof vi.fn<typeof fetch>>;
+  transcriptMessageUrl(sessionId: string): string;
+  createClientAuthProviderResponse(value: string, expiresAt: number): Readonly<{
+    value: string;
+    expires_at: number;
+    session: Readonly<{ type: string; object: string; id: string; model: string }>;
+  }>;
+  accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+  sessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
+  purposes: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary>;
+  transcriptRequest: ReturnType<typeof vi.fn>;
+  homeRequest(input: URL | RequestInfo, init?: RequestInit): Promise<Response | null>;
+  allowedTranscriptMessageUrls: Set<string>;
+  accountProfile: AccountProfile;
+  mintTransport: OpenAiMintTransport;
+  persistedAccountSettings: Settings;
+  historySessionPost(init: RequestInit): Promise<Response>;
+  publishAccountSettings(settings: Settings): Promise<void>;
+  configureVoice(input: unknown): Promise<void>;
+  selectConnectedAccount(accountId: string | null): Promise<void>;
+  installSavedSecretSettings(): Promise<ConnectedPurposeCatalogV1>;
+  installConnectedAccountSettings(): Promise<void>;
+  createRuntime(browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>, options?: OpenAiRuntimeOptions): Promise<OpenAiVoiceRuntime>;
+  dispose(): Promise<void>;
+};
+
+export type OpenAiMintTransport = (request: DaemonVoiceClientAccountOperationRequestV1) => Promise<Readonly<{
   status: number;
   finalUrl: string;
   headers: Readonly<Record<string, string>>;
@@ -14,7 +71,7 @@ export type OpenAiMintTransport = (request: ReturnType<typeof DaemonVoiceClientA
 export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
   credentialSource?: 'savedSecret' | 'connectedAccount';
   voice?: unknown;
-}> = {}) {
+}> = {}): Promise<OpenAiVoiceRuntimeEnvironment> {
   await import('@/sync/syncEngine');
   const { createRecipientContractDigestV1, createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol');
   const { DaemonVoiceClientAccountOperationRequestV1Schema, DaemonVoiceClientAccountOperationResponseV1Schema } = await import('@happier-dev/protocol/daemon/voiceCredentials');
@@ -37,6 +94,8 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
   const { storage } = await import('@/sync/domains/state/storage');
   const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
   const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+  const { normalizeVoiceSettingsServerDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+  const { normalizeAccountSettingsForServerStorage } = await import('@/sync/domains/settings/accountSettingsNormalization');
   const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
   const { sync } = await import('@/sync/sync');
   const { apiSocket } = await import('@/sync/api/session/apiSocket');
@@ -239,13 +298,8 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
 
   async function createSourceComposedOpenAiRuntime(
     browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>,
-    options?: Readonly<{
-      respondToDaemonAccountOperation?: OpenAiMintTransport;
-      readPlaybackCursorMs?(): number | null;
-      initialConversationSessionId?: string;
-      currentUiContext?: VoiceCurrentUiToolPort;
-    }>,
-  ) {
+    options?: OpenAiRuntimeOptions,
+  ): Promise<OpenAiVoiceRuntime> {
     const hostLease = createBundledConversationRuntimeHostLease({ currentUiContext: options?.currentUiContext });
     if (options?.respondToDaemonAccountOperation) daemonAccountOperationTransport = options.respondToDaemonAccountOperation;
     const controlSessionId = hostLease.host.globalVoiceSessionId;
@@ -450,7 +504,9 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
     homeRequest = async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
       if (new URL(url).pathname === '/v1/account/profile') return Response.json(accountProfile);
-      if (new URL(url).pathname === '/v2/account/settings') return Response.json({ version: accountSettingsVersion, content: { t: 'plain', v: persistedAccountSettings } });
+      if (new URL(url).pathname === '/v2/account/settings') return Response.json({ version: accountSettingsVersion, content: { t: 'plain',
+        v: normalizeAccountSettingsForServerStorage({ raw: persistedAccountSettings, mode: 'plain',
+          settingsSecretsKey: null, normalizeServerRaw: normalizeVoiceSettingsServerDelta }).value } });
       if (new URL(url).pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' })]);
       if (new URL(url).pathname === `/v1/machines/${OPENAI_CREDENTIAL_MACHINE_ID}`) return Response.json({ machine: createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' }) });
       if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') return Response.json({ messages: [], hasMore: false });

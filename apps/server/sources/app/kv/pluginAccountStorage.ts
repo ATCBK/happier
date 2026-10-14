@@ -1,11 +1,5 @@
-import {
-    assertPluginAccountStorageEnvelopeForModeV1,
-    PluginAccountStorageEnvelopeV1Schema,
-    type PluginAccountStorageEnvelopeV1,
-} from "@happier-dev/protocol";
-import {
-    buildPluginDomainAccountChangeEntityId,
-} from "@happier-dev/protocol/changes";
+import { assertPluginAccountStorageEnvelopeForModeV1, PluginAccountStorageEnvelopeV1Schema, type PluginAccountStorageEnvelopeV1 } from '@happier-dev/protocol/plugins/data/accountKvV1';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { inTx, type Tx } from "@/storage/inTx";

@@ -1061,7 +1061,7 @@ export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAn
         .object({
           role: zod.literal('agent'),
           content: RawAgentRecordSchema,
-          meta: metaSchema.optional(),
+          meta: zod.optional(metaSchema),
         })
         .passthrough(),
       zod
@@ -1073,7 +1073,7 @@ export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAn
               text: zod.string(),
             })
             .passthrough(),
-          meta: metaSchema.optional(),
+          meta: zod.optional(metaSchema),
         })
         .passthrough(),
     ]),

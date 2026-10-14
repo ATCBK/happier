@@ -226,6 +226,26 @@ describe('VoiceAudioSessionCoordinator', () => {
     await preferred.release();
   });
 
+  it.each(['capture-first', 'playback-first'] as const)('composes input-only native recognition with host playback (%s)', async order => {
+    const { platform } = createPlatform();
+    const coordinator = createVoiceAudioSessionCoordinator({ platform });
+    const recognitionRequest = request({ ownerId: 'recognizer', mode: 'conversation',
+      capture: 'provider_managed_exclusive' });
+    const playbackRequest = request({ ownerId: 'device-speech', mode: 'playback', input: false, output: true });
+    const first = await coordinator.acquire(order === 'capture-first' ? recognitionRequest : playbackRequest);
+    const second = await coordinator.acquire(order === 'capture-first' ? playbackRequest : recognitionRequest);
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 2,
+      configuration: { mode: 'conversation', input: true, output: true, capture: 'provider_managed_exclusive' } });
+    await expect(coordinator.acquire(request({ ownerId: 'another-capture' })))
+      .rejects.toMatchObject({ code: 'exclusive_capture_conflict' });
+    await first.release();
+    expect(coordinator.getSnapshot().leaseCount).toBe(1);
+    expect(platform.restore).not.toHaveBeenCalled();
+    await second.release();
+    expect(coordinator.getSnapshot().leaseCount).toBe(0);
+    expect(platform.restore).toHaveBeenCalledOnce();
+  });
+
   it('rejects provider-managed exclusive capture while any other lease exists', async () => {
     const { platform } = createPlatform();
     const coordinator = createVoiceAudioSessionCoordinator({ platform });

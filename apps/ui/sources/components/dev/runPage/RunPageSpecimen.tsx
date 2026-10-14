@@ -22,21 +22,21 @@ import { t } from '@/text';
  */
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    content: { padding: 24, gap: 24, alignItems: 'flex-start' },
+    content: { padding: theme.space.s24, gap: theme.space.s24, alignItems: 'flex-start' },
     contentPhone: { padding: 0 },
     column: {
         height: 900,
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        gap: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
+        gap: theme.space.s12,
         backgroundColor: theme.colors.surface.base,
         borderRadius: 12,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
     },
     columnPhone: { borderRadius: 0, borderWidth: 0, height: 844 },
-    caption: { ...Typography.default('semiBold'), fontSize: 13, color: theme.colors.text.secondary },
-    states: { flexDirection: 'row', flexWrap: 'wrap', gap: 24 },
+    caption: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
+    states: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s24 },
     stateFrame: {
         width: 560,
         height: 460,

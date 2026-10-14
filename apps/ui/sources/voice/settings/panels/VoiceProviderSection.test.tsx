@@ -1,4 +1,5 @@
 import React from 'react';
+import type { z } from 'zod';
 import { act, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import 'fake-indexeddb/auto';
 import { PluginContributesV2Schema, PluginProjectionV2Schema, buildQualifiedPluginContributionKey, createPluginContributionIdentity, createRecipientContractDigestV1, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
@@ -120,13 +121,14 @@ const pendingDetections: Array<Readonly<{ resolve(value: unknown): void; reject(
 function primeCapabilities() {
     return prefetchMachineCapabilities({ machineId: 'machine-1', serverId: accountFixture.scope.serverId,
         cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt({ id: 'machine-1' }, accountFixture.scope.serverId),
-        staleMs: -1, request: { requests: [{ id: 'cli.codex' }], bypassCache: true } });
+        request: { requests: [{ id: 'cli.codex' }], bypassCache: true } });
 }
 const passiveSetupBoundary = {
     get profile() { return storage.getState().profile; },
-    set profile(value: Partial<Profile> | null) {
-        profileReply = value;
-        storage.setState({ profile: { ...profileDefaults, id: accountFixture.scope.accountId, ...value } });
+    set profile(value: Partial<z.input<typeof AccountProfileSchema>> | null) {
+        const profile = AccountProfileSchema.parse({ ...profileDefaults, id: accountFixture.scope.accountId, ...value });
+        profileReply = profile;
+        storage.setState({ profile });
     },
     get machineTarget() { return machineTarget; },
     set machineTarget(value: typeof machineTarget) {
@@ -336,12 +338,13 @@ function findProviderChoiceRow(tree: ReactTestRenderer | ReactTestInstance, quer
     if (query.title) return hosts.find(node => node.props.accessibilityLabel === query.title
         || node.props.accessibilityLabel?.startsWith(`${query.title}, `)) ?? null;
     if (!query.testID) return null;
+    const testID = query.testID;
     const exact = hosts.find(node => node.props.testID === query.testID);
     const cut = query.testID.lastIndexOf('.');
     const prefix = query.testID.slice(0, cut + 1);
     const service = exact ?? hosts.find(node => node.props.testID?.startsWith(prefix));
     const billing = service?.props.accessibilityState?.checked === true
-        ? hosts.find(node => node.props.testID === `settings.voice.provider.payWith:${decodeURIComponent(query.testID.slice(cut + 1))}`)
+        ? hosts.find(node => node.props.testID === `settings.voice.provider.payWith:${decodeURIComponent(testID.slice(cut + 1))}`)
         : null;
     return billing ?? service ?? null;
 }
@@ -383,7 +386,7 @@ describe('VoiceProviderSection', () => {
     it('carries the declared service description through the registry and gallery independently of billing', async () => {
         const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-elevenlabs/manifest');
         const { VoiceProviderContributionSchema } = await import('@happier-dev/plugin-sdk/voice');
-        const declaration = VoiceProviderContributionSchema.parse(PLUGIN_MANIFEST.contributes.voiceProviders[0]);
+        const declaration = VoiceProviderContributionSchema.parse(PLUGIN_MANIFEST.contributes.voiceProviders?.[0]);
         expect(declaration).toHaveProperty('description');
         if (declaration.kind !== 'conversation' || !declaration.description) throw new Error('Expected service description');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
@@ -699,7 +702,7 @@ describe('VoiceProviderSection', () => {
             modelExecution: string | null; modelCredential: string | null }>> = [];
         function TransitionMetadata(props: React.ComponentProps<typeof VoiceProviderSection>) {
             const model = useVoiceConversationsReadinessModel(props);
-            const target = useMachineCliDetectionTarget(props.executionMachineId);
+            const target = useMachineCliDetectionTarget(props.executionMachineId ?? null);
             const { binding } = useServerCredentialAccountScopeBinding(accountFixture.scope.serverId);
             const machine = storage.getState().machineListByServerId[accountFixture.scope.serverId]
                 ?.find(row => row.id === props.executionMachineId);
@@ -888,11 +891,11 @@ describe('VoiceProviderSection', () => {
             await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
+        expect(checkedReadinessRow(screen.tree)).toBeNull();
         await act(async () => {
             settleFreshCheck({ ok: true, result: { v: 1, status: 'unavailable' } });
         });
-        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
+        expect(checkedReadinessRow(screen.tree)).toBeNull();
     }, 120_000);
 
     it('does not commit a stale passive result after the active Account lifetime restarts', async () => {
@@ -957,7 +960,7 @@ describe('VoiceProviderSection', () => {
             await Promise.resolve();
         });
 
-        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
+        expect(checkedReadinessRow(screen.tree)).toBeNull();
     }, 120_000);
 
     it('does not commit a delayed passive result after the selected daemon restarts', async () => {
@@ -2793,7 +2796,7 @@ describe('VoiceProviderSection', () => {
         const { resolveAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
         const sttRef = resolveAccountVoiceCredential(current,
             { pluginId: 'happier.voice.google', localId: 'gemini-stt' }, 'api_key', 'machine-online')?.secretId;
-        const resourceIndex = accountFixture.resources.findIndex(resource => resource.entry.ref === sttRef);
+        const resourceIndex = accountFixture.resources.findIndex(resource => 'ref' in resource.entry && resource.entry.ref === sttRef);
         expect(resourceIndex).toBeGreaterThanOrEqual(0);
         accountFixture.resources.splice(resourceIndex, 1);
         const removed = settingsParse({ ...current,

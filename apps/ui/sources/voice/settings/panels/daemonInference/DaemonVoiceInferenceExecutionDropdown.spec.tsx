@@ -25,9 +25,10 @@ describe('DaemonVoiceInferenceExecutionDropdown', () => {
         const dropdown = tree.root.findByType(DropdownMenu);
         expect(dropdown.props.selectedId).toBe('daemon');
         expect(dropdown.props.items.map((item: { id: string }) => item.id)).toEqual(['auto', 'daemon']);
-        expect(dropdown.props.itemTrigger.detailFormatter()).toBe(
-            dropdown.props.items.find((item: { id: string }) => item.id === 'daemon')?.title,
-        );
+        const selectedItem = dropdown.props.items.find((item: { id: string }) => item.id === 'daemon');
+        const detailFormatter = dropdown.props.itemTrigger?.detailFormatter;
+        if (!selectedItem || !detailFormatter) throw new Error('Execution selection detail missing');
+        expect(detailFormatter(selectedItem)).toBe(selectedItem.title);
 
         await act(async () => { dropdown.props.onSelect('device'); });
 

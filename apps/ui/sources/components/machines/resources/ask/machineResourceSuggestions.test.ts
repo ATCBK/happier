@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { WEEKLY_STORAGE_REVIEW_PROMPT } from '@/components/automations/storage/weeklyStorageReviewTemplate';
+import { t } from '@/text';
 import { deriveMachineResourceSuggestions, type MachineResourceSuggestionFacts } from './machineResourceSuggestions';
 
 const machine = { serverId: 'home-1', machineId: 'machine-1', name: 'Studio', directory: '/Users/studio' };
@@ -41,6 +42,8 @@ describe('machine resource suggestions', () => {
         expect(suggestions.map((suggestion) => suggestion.kind)).toEqual(['lastReport', 'lastStorageReport', 'notifyWhenBack']);
         expect(suggestions.every((suggestion) => suggestion.fill.placement === null && !suggestion.intent)).toBe(true);
         expect(suggestions.every((suggestion) => suggestion.fill.text.includes(machine.name))).toBe(true);
+        expect(suggestions.find(suggestion => suggestion.kind === 'notifyWhenBack')!.fill.text)
+            .toContain(t('machineResources.askSuggestions.prompts.notifyWhenBackConsent', { machine: machine.name }));
         // The block says once that the machine is offline; its tiles do not repeat that cause three times.
         expect(suggestions.map((suggestion) => suggestion.reason)).toEqual(['', '', '']);
     });

@@ -18,7 +18,6 @@ describe('createCliActionDeps prompt library bindings', () => {
 
     expect(deps.promptDocUpdate).toEqual(expect.any(Function));
     expect(deps.promptBundleUpdate).toEqual(expect.any(Function));
-    expect(deps.promptAssetExport).toEqual(expect.any(Function));
     expect(deps.promptRegistryInstall).toEqual(expect.any(Function));
   });
 

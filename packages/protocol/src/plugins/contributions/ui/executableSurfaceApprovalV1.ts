@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { computeCanonicalDomainSeparatedDigest } from '../../../crypto/canonicalDigest.js';
 import { buildQualifiedPluginContributionKey } from '../../contributionIdentity.js';
@@ -42,21 +42,19 @@ const MAX_UI_SURFACE_APPROVAL_IDENTIFIER_LENGTH_V1 = 256;
  * approval scoping, never renderer, frame or authority identity, so this owner
  * validates only that it is a bounded non-empty string.
  */
-export const UiSurfaceExecutableApprovalSubjectV1Schema = z.string()
-  .min(1)
-  .max(MAX_UI_SURFACE_APPROVAL_SUBJECT_LENGTH_V1);
+export const UiSurfaceExecutableApprovalSubjectV1Schema = z.string().check(z.minLength(1), z.maxLength(MAX_UI_SURFACE_APPROVAL_SUBJECT_LENGTH_V1));
 export type UiSurfaceExecutableApprovalSubjectV1 =
   z.infer<typeof UiSurfaceExecutableApprovalSubjectV1Schema>;
 
-const ApprovalIdentifierV1Schema = z.string().min(1).max(MAX_UI_SURFACE_APPROVAL_IDENTIFIER_LENGTH_V1);
+const ApprovalIdentifierV1Schema = z.string().check(z.minLength(1), z.maxLength(MAX_UI_SURFACE_APPROVAL_IDENTIFIER_LENGTH_V1));
 
-export const UiSurfaceExecutableApprovalKeyV1Schema = z.object({
+export const UiSurfaceExecutableApprovalKeyV1Schema = z.strictObject({
   serverIdentityId: ApprovalIdentifierV1Schema,
   accountId: ApprovalIdentifierV1Schema,
   approvalSubject: UiSurfaceExecutableApprovalSubjectV1Schema,
   executableSecurityFingerprint: ApprovalIdentifierV1Schema,
   requestedCapabilitiesDigest: ApprovalIdentifierV1Schema,
-}).strict();
+});
 export type UiSurfaceExecutableApprovalKeyV1 =
   z.infer<typeof UiSurfaceExecutableApprovalKeyV1Schema>;
 

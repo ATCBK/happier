@@ -197,7 +197,7 @@ export function ServicesSpecimen(props: Readonly<{ phone: boolean }>): React.Rea
 }
 
 const styles = StyleSheet.create((theme) => ({
-    root: { flex: 1, backgroundColor: theme.colors.surface.inset, padding: 16, alignItems: 'flex-start' },
+    root: { flex: 1, backgroundColor: theme.colors.surface.inset, padding: theme.space.s16, alignItems: 'flex-start' },
     // The right sidebar's width in the lab (services O): a 460 px column.
     pane: {
         width: 460,

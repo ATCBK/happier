@@ -92,6 +92,25 @@ describe('apiSocket transports and roles', () => {
         expect(ioSpy.mock.calls[0]?.[1]).not.toHaveProperty('transports');
     });
 
+    it('delivers Account changes after the same Home and bearer are reapplied while retiring old ingress', async () => {
+        const initial = await boot();
+        const next = createSocketIoBoundaryStub();
+        ioSpy.mockReturnValue(next.socket);
+        const received = vi.fn();
+        const detach = initial.apiSocket.onMessage('update', received);
+        const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
+        initial.apiSocket.initialize({ endpoint: 'https://server.example.test/', token, serverId: 'socket-test-home',
+            generation: 1 }, null);
+        const settled = { id: 'settled', seq: 2, createdAt: 2, body: { t: 'account-change' } };
+        await vi.waitFor(() => expect(initial.socket.connected || next.socket.connected).toBe(true));
+        (initial.socket.connected ? initial : next).trigger('update', settled);
+        expect(received).toHaveBeenCalledWith(settled, { serverId: 'socket-test-home' });
+        received.mockClear();
+        initial.trigger('update', { ...settled, id: 'retired-socket' });
+        expect(received).not.toHaveBeenCalled();
+        detach();
+    });
+
     it('preserves caller-configured websocket-only transport', async () => {
         process.env.EXPO_PUBLIC_HAPPIER_SOCKET_FORCE_WEBSOCKET = '1';
         // Expo configuration is a boot-time environment boundary, unlike the

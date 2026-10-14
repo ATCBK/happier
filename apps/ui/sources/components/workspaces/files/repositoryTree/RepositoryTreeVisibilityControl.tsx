@@ -9,7 +9,7 @@ export function RepositoryTreeVisibilityControl(props: Readonly<{
     mode: 'project' | 'all'; available?: boolean; onChange: (mode: 'project' | 'all') => void;
 }>) {
     const { theme } = useUnistyles();
-    return <View style={{ paddingHorizontal: 12, paddingBottom: 8, gap: 6 }}>
+    return <View style={{ paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s8, gap: theme.space.s6 }}>
         <SegmentedTabBar tabs={[
             { id: 'project', label: t('files.toolbar.projectFiles'), disabled: props.available === false },
             { id: 'all', label: t('files.toolbar.allFiles') },

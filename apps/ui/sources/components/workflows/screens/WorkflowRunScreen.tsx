@@ -3,6 +3,7 @@ import { useManagedMachineInventory } from '@/components/settings/machines/manag
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { useDestinationFocus, useDestinationInstanceKey, useDestinationParams, useDestinationRouter, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { DefaultBackButton } from '@/components/navigation/Header';
@@ -148,8 +149,8 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
     },
 }));
 
@@ -261,6 +262,20 @@ function resolveAnnouncementTerminal(
     }
 }
 
+/**
+ * The page a Run's own states (loading, not found, failed) sit on. Its header is what publishes Back
+ * to the navigation chrome (or draws it on wide layouts), so a Run that no longer exists is never a
+ * dead end. A pane that hosts the Run (`embedded`) owns Back itself and draws no header.
+ */
+function RunStateFrame(props: Readonly<{ embedded: boolean; testID?: string; children: React.ReactNode }>): React.ReactElement {
+    return (
+        <View testID={props.testID} style={props.embedded ? styles.embeddedRoot : styles.root}>
+            {props.embedded ? null : <PageHeader testID="workflow-run-state-header" title={t('workflows.run.title')} alwaysShowTitle />}
+            <View style={styles.centered}>{props.children}</View>
+        </View>
+    );
+}
+
 export function WorkflowRunScreen(props: Readonly<{
     /**
      * Hosted inside another page's pane (the Inbox's detail): the run draws on the pane's own
@@ -301,10 +316,10 @@ export function WorkflowRunScreen(props: Readonly<{
 function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedded?: boolean }>): React.ReactElement {
     const { theme } = useUnistyles();
     const contentStyle = React.useMemo(() => ({
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.lg,
-        gap: theme.margins.lg,
-    }), [theme.margins.lg]);
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
+        gap: theme.space.s16,
+    }), [theme.space.s16]);
     const mountedRef = useMountedRef();
     const router = useDestinationRouter();
     const openProject = useOpenProject();
@@ -1801,14 +1816,14 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
 
     if (runId === null) {
         return (
-            <View style={[props.embedded ? styles.embeddedRoot : styles.root, styles.centered]}>
+            <RunStateFrame embedded={props.embedded === true}>
                 <SurfaceStateCard
                     testID="workflow-run-unavailable"
                     kind="unavailable"
                     title={t('workflows.destination.history.loadFailedTitle')}
                     reason={t('workflows.destination.history.loadFailedBody')}
                 />
-            </View>
+            </RunStateFrame>
         );
     }
 
@@ -1816,7 +1831,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     // map with no step states ("Not started" on held work) and then move everything as the states land.
     if (summary === null || (loadState === 'loading' && invocationWindow?.loaded !== true)) {
         return (
-            <View testID="workflow-run-screen" style={[props.embedded ? styles.embeddedRoot : styles.root, styles.centered]}>
+            <RunStateFrame embedded={props.embedded === true} testID="workflow-run-screen">
                 {loadState === 'failed' ? (
                     <SurfaceStateCard
                         testID="workflow-run-load-failed"
@@ -1830,7 +1845,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 ) : (
                     <SurfaceStateCard testID="workflow-run-loading" kind="loading" title={t('common.loading')} />
                 )}
-            </View>
+            </RunStateFrame>
         );
     }
 

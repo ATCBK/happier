@@ -23,9 +23,8 @@ import type {
 import { isNonSteerablePromptPayload } from '@/cli/parsers/specialCommands';
 import { readAdmittedSessionMediaInputForDispatchV1 } from '@/session/services/admitSessionStructuredInputV1';
 
-import { normalizePermissionModeToIntent, resolvePermissionModeUpdatedAtFromMessage } from './modeCanonical';
+import { normalizePermissionModeToIntent } from './modeCanonical';
 import { resolvePermissionModeForQueueingUserMessage } from './modeFromUserMessage';
-import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import type {
   PermissionModeQueuedPrompt,
   PermissionModeQueuedPromptMode,
@@ -65,6 +64,8 @@ export type InFlightInterruptOutcome = Readonly<
 >;
 
 export type InFlightSteerController = Readonly<{
+  /** Current turn mode, which may differ from the Session's owner baseline. */
+  readActivePermissionMode?: () => PermissionMode;
   /** Exact running-session selection; null means the owner is not yet provable. */
   readActiveModelSelection?: () => ProviderBoundModelRef | null;
   /**
@@ -224,9 +225,6 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const resolvedMode = resolvePermissionModeForQueueingUserMessage({
       currentPermissionMode: opts.getCurrentPermissionMode(),
       messagePermissionModeRaw: message.meta?.permissionMode,
-      updateMetadata: (updater) =>
-        updateMetadataBestEffort(session, updater, '[permissionMode]', 'permission_mode_from_user_message'),
-      nowMs: () => resolvePermissionModeUpdatedAtFromMessage(message),
     });
 
     opts.setCurrentPermissionMode(resolvedMode.currentPermissionMode);
@@ -280,7 +278,10 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     }
     // Alias-normalized change signal (ported S-6): a raw compare against the previous mode reads
     // an alias respelling ('acceptEdits' vs 'safe-yolo') as a change and wrongly blocks steering.
-    const didChangePermissionMode = resolvedMode.didChange;
+    const didChangePermissionMode = (): boolean => {
+      const activeMode = normalizePermissionModeToIntent(opts.inFlightSteer?.readActivePermissionMode?.());
+      return activeMode ? activeMode !== resolvedMode.queuePermissionMode : resolvedMode.didChange;
+    };
     const modelOverride = resolveModelOverrideFromUserMessage(message, opts.agentTargetKey);
     const modelSelection = (() => {
       if (!modelOverride || modelOverride.kind === 'invalid_structured') return null;
@@ -473,14 +474,13 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       (steer.isProviderInputAdmitted?.() ?? true) &&
       !isNonSteerablePromptPayload(text) &&
       !modelOverride &&
-      (!didChangePermissionMode || typeof steer.applyConfigDeltaInFlight === 'function')
+      (!didChangePermissionMode() || typeof steer.applyConfigDeltaInFlight === 'function')
     );
     if (isExactClaimedSteer && !canSteerCurrentProviderTurn) {
       queueUnavailableSteer();
       return true;
     }
     if (steer && canSteerCurrentProviderTurn) {
-      const applyConfigDelta = didChangePermissionMode ? steer.applyConfigDeltaInFlight : undefined;
       steerSequence = steerSequence.then(async () => {
         const stopForLostBinding = (): boolean => {
           if (isCurrentBinding(session, messageBindingGeneration)) return false;
@@ -510,6 +510,14 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           return;
         }
         const dispatchSteer = async (): Promise<void> => {
+          // Previous steers can change the effective turn mode while this
+          // input waits in the serialized dispatcher. Re-read its owner here.
+          const needsConfigDelta = didChangePermissionMode();
+          const applyConfigDelta = needsConfigDelta ? steer.applyConfigDeltaInFlight : undefined;
+          if (needsConfigDelta && !applyConfigDelta) {
+            queueUnavailableSteer();
+            return;
+          }
           const constraints = message.callerInputConstraints;
           if (constraints && !isModelRefGrantedV1(constraints, steer.readActiveModelSelection?.() ?? 'automatic')) {
             rejectCallerInput('model_not_granted');

@@ -7,8 +7,73 @@ import { encrypt, decrypt, encodeBase64, decodeBase64 } from '@/api/encryption';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger as fileLogger } from '@/ui/logger';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { registerScmHandlers } from '@/rpc/handlers/scm';
 
 describe('RPC completion diagnostics', () => {
+    it('records only generation schema issue paths and codes at the real Machine SCM boundary', async () => {
+        const record = vi.spyOn(fileLogger, 'infoFile').mockImplementation(() => {});
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
+        const executor = createActionExecutor({
+            scmActionExecute: async () => { throw new Error('Invalid input must not cross SCM admission'); },
+        } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+        registerScmHandlers(rpc, '/repo', { machineId: 'machine', actionExecutor: executor });
+        try {
+            const result = await rpc.handleRequest({ method: 'machine:scm.diffSummary.generate', callerAuthority: 'present_user',
+                params: { cwd: '/repo', source: { kind: 'workingTree' }, outputLanguage: 'never-log-language-value',
+                    modelSelector: { modelId: 42 }, 'never-log-unknown-key': 'never-log-value' } });
+            expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+            expect(record).toHaveBeenCalledWith('[RPC] SCM input validation failed', {
+                actionId: 'scm.diffSummary.generate', issues: expect.arrayContaining([
+                    { path: ['modelSelector', 'modelId'], code: 'invalid_type' },
+                    { path: [], code: 'unrecognized_keys' },
+                ]),
+            });
+            expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
+        } finally { record.mockRestore(); }
+    });
+    it('retains the host request timeout reason through handler cancellation', async () => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        rpc.registerHandler('demo.wait', (_input, context) => new Promise((_resolve, reject) => {
+            if (!context) throw new Error('Expected actual handler cancellation context');
+            context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+        }));
+        expect(await rpc.handleRequest({ method: 'machine:demo.wait', params: {}, timeoutMs: 1 }))
+            .toEqual({ error: 'RPC request timed out' });
+        expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({ outcomeCode: 'RPC_REQUEST_TIMEOUT' })]]);
+    });
+
+    it.each(['EACCES', 'ENOENT', 'RIPGREP_ABORTED'])(
+        'retains native exception code %s without changing the transported error or logging prose', async (code) => {
+            const logger = vi.fn();
+            const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+            rpc.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST, () => {
+                throw Object.assign(new Error('never-log-sensitive-path'), { code });
+            });
+            expect(await rpc.handleRequest({ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`, params: {} }))
+                .toEqual({ error: 'never-log-sensitive-path' });
+            expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({ outcomeCode: code })]]);
+            expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+        },
+    );
+
+    it('classifies cancellation and the workspace search failure union through actual dispatch', async () => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        rpc.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST, () => {
+            throw new DOMException('never-log-cancelled-search', 'AbortError');
+        });
+        rpc.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH, () => ({ ok: false, code: 'ripgrep_failed' }));
+        rpc.registerHandler('demo.execution', () => ({ ok: true, code: 0 }));
+        await rpc.handleRequest({ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`, params: {} });
+        await rpc.handleRequest({ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`, params: {} });
+        await rpc.handleRequest({ method: 'machine:demo.execution', params: {} });
+        expect(logger.mock.calls).toEqual(['request_cancelled', 'ripgrep_failed', 'ok'].map(outcomeCode =>
+            ['[RPC] Request completed', expect.objectContaining({ outcomeCode })]));
+        expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+    });
+
     it.each(['permission_request_not_found', 'permission_actor_unattributable', 'permission_response_invalid', 'future_native_refusal_v2'])(
         'retains the typed handler refusal %s for a relay-attributed Session request', async (errorCode) => {
             const logger = vi.fn();
@@ -41,8 +106,12 @@ describe('RPC completion diagnostics', () => {
             const logger = vi.fn();
             const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger });
             rpc.registerHandler('demo', () => ({ ok: false, errorCode }));
+            rpc.registerHandler('demo.native', () => { throw Object.assign(new Error('never-log-native-detail'), { code: errorCode }); });
             await rpc.handleRequest({ method: 'session:demo', params: {} });
-            expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({ outcomeCode: 'unclassified_error' })]]);
+            await rpc.handleRequest({ method: 'session:demo.native', params: {} });
+            expect(logger.mock.calls).toEqual([0, 1].map(() =>
+                ['[RPC] Request completed', expect.objectContaining({ outcomeCode: 'unclassified_error' })]));
+            expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
         },
     );
 

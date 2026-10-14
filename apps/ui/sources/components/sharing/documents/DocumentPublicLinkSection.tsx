@@ -13,7 +13,7 @@ import type { DocumentShareKind } from './documentShareAdapter';
 import { describePublicLinkNetworkConsequence } from '@/components/sharing/PublicLinkNetworkConfirmation';
 
 const styles = StyleSheet.create(theme => ({
-    audit: { marginHorizontal: 12, marginBottom: 12, gap: 8 },
+    audit: { marginHorizontal: theme.space.s12, marginBottom: theme.space.s12, gap: theme.space.s8 },
     visit: { ...Typography.mono(), ...ITEM_SUBTITLE_TEXT_METRICS.compact, color: theme.colors.text.secondary },
 }));
 

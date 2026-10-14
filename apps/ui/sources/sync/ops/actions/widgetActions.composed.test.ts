@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createHomeGovernanceHarness, installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -9,7 +9,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { standardCleanup, createSessionFixture } from '@/dev/testkit';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
-import { HomeHubLayoutV1Schema, buildHomeHubArtifactIdV1 } from '@happier-dev/protocol/home';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { HomeHubLayoutV1Schema, buildHomeHubArtifactIdV1, createHomeHubArtifactPortV1 } from '@happier-dev/protocol/home';
 import { WorkBoardV1Schema, WorkBoardWidgetPlacementV1Schema } from '@happier-dev/protocol/boards/workBoardV1';
 import {
     WidgetDefinitionV1Schema, WidgetInstanceV1Schema, WidgetInstanceActionOutputSchemasV1,
@@ -17,8 +18,9 @@ import {
     WidgetLayoutFragmentActionOutputSchemasV1, captureWidgetLayoutFragmentGroupV1,
     buildWidgetSurfaceArtifactIdV1, USAGE_WIDGET_PRESET_IDS, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
-import { resolveWidgetLayoutEntityDrop } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 // HTTP, device credentials and Socket.IO are the external boundaries. No
 // executor, policy, domain port, reducer, Artifact codec or store is replaced.
@@ -32,11 +34,13 @@ const { captureLazyActionAccountContext } = await import('./actionAccountContext
 const { putSessionUnderLead } = await import('@/components/sessions/work/putSessionUnderLead');
 const { storage } = await import('@/sync/domains/state/storage');
 const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+const { Modal } = await import('@/modal');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId: string;
 const accountId = 'widget-seam-account';
 
 beforeEach(async () => {
+    vi.mocked(Modal.confirm).mockReset().mockResolvedValue(false);
     await homes.reset();
     serverId = await homes.addHome({ name: 'Widget Home', serverUrl: 'https://widget-seams.test', accountId });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-seams.test', accountId, request: homes.request });
@@ -81,18 +85,73 @@ function scope(owner: WidgetSurfaceRefV1['owner']): WidgetSurfaceRefV1 {
     return { serverId, accountId, owner };
 }
 function context() { return { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountId }; }
-function waiveUiAction(actionId: 'session.reports_to.set' | 'widgets.item.remove') {
+function setActionPolicy(raw: unknown) {
     const state = storage.getState();
     const accountScope = state.settingsScope;
     if (!accountScope) throw new Error('Current Account settings scope missing');
     const settings = { ...state.settings,
-        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } }) };
+        actionsSettingsV1: ActionsSettingsV1Schema.parse(raw) };
     const version = (loadAccountSettings(accountScope).version ?? 0) + 1;
     state.applySettingsForScope(accountScope, settings, version);
     homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
 }
+function waiveUiAction(actionId: 'session.reports_to.set' | 'widgets.item.remove') {
+    setActionPolicy({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+}
 
 describe('widget semantic Actions through production UI composition', () => {
+    it('resizes a private Home widget through its real writer without a pre-admission confirmation', async () => {
+        const executor = createDefaultActionExecutor();
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            await createHomeHubArtifactPortV1(account.homeHubArtifactTransport, { accountId }).apply({ kind: 'widget_add', instance: instance('one') });
+            setActionPolicy({ v: 1 });
+            const layout = await executeHomeHubLayoutIntent({ intent: { kind: 'widget_size', instanceId: 'one', size: 'full' },
+                scope: { serverId, accountId }, transport: account.homeHubArtifactTransport, execute: executor.execute,
+                onApprovalPending: () => { throw new Error('Private resize incorrectly entered approval custody'); } });
+            expect(flattenWidgetLayoutWidgetsV1(layout.items).find(item => item.instance.id === 'one')?.size).toBe('full');
+            expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(layout);
+            expect(Modal.confirm).not.toHaveBeenCalled();
+        } finally { account.dispose(); }
+    });
+
+    it.each(['private', 'shared-approved', 'shared-canceled', 'shared-aborted', 'shared-policy-changed', 'required', 'waived'] as const)(
+        'uses admitted widget sharing and the canonical UI approval decision (%s)', async mode => {
+            const surface = scope({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: USAGE_WIDGET_PRESET_IDS[0] });
+            const executor = createDefaultActionExecutor();
+            const added = await executor.execute('widgets.item.add', { surface, instance: instance('one') }, context());
+            expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+            const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+            if (mode !== 'private') homes.artifacts(serverId).seedAccountGrant(artifactId, 'recipient', 'view');
+            setActionPolicy(mode === 'required' ? { v: 1, actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } } }
+                : mode === 'waived' ? { v: 1, approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'] } } : { v: 1 });
+            const before = storedBody(artifactId);
+            const controller = new AbortController();
+            vi.mocked(Modal.confirm).mockImplementation(async () => {
+                expect(storedBody(artifactId)).toEqual(before);
+                if (mode === 'shared-aborted') controller.abort();
+                if (mode === 'shared-policy-changed') setActionPolicy({ v: 1,
+                    actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } },
+                });
+                return mode !== 'shared-canceled';
+            });
+            const result = await executor.execute('widgets.item.rename', { ref: { surface, instanceId: 'one' }, displayName: 'Updated' },
+                { ...context(), signal: controller.signal });
+            if (mode === 'required') {
+                expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'widgets.item.rename' } });
+                expect(storedBody(artifactId)).toEqual(before);
+            } else if (mode === 'shared-canceled' || mode === 'shared-aborted' || mode === 'shared-policy-changed') {
+                expect(result).toMatchObject({ ok: false, errorCode: mode === 'shared-aborted' ? 'cancelled'
+                    : mode === 'shared-policy-changed' ? 'approval_stale' : 'approval_canceled' });
+                expect(storedBody(artifactId)).toEqual(before);
+            } else {
+                expect(result).toMatchObject({ ok: true, result: { instance: { id: 'one', displayName: 'Updated' } } });
+                expect(flattenWidgetLayoutWidgetsV1(WidgetAreaLayoutV1Schema.parse(storedBody(artifactId)).items)[0]?.instance.displayName).toBe('Updated');
+            }
+            expect(Modal.confirm).toHaveBeenCalledTimes(mode.startsWith('shared-') ? 1 : 0);
+        },
+    );
+
     it('uses current Home relation evidence for Put under after an unopened list relation becomes stale', async () => {
         waiveUiAction('session.reports_to.set');
         storage.setState({ sessions: {
@@ -192,7 +251,7 @@ describe('widget semantic Actions through production UI composition', () => {
         expect(HomeHubLayoutV1Schema.safeParse({ ...layout, authority: 'forged' }).success).toBe(false);
         expect(WidgetInstanceV1Schema.safeParse({ ...group.children[0]!.instance, machineId: 'forged' }).success).toBe(false);
 
-        const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Saved group', inputs: { fields: [] },
+        const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Capacity and PRs', inputs: { fields: [] },
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             group: captureWidgetLayoutFragmentGroupV1(group) });
         const saved = await executor.execute('widgets.fragment.create', { account: { serverId, accountId }, artifactId: 'saved-group', fragment: draft }, context());
@@ -201,6 +260,17 @@ describe('widget semantic Actions through production UI composition', () => {
         const output = WidgetLayoutFragmentActionOutputSchemasV1['widgets.fragment.create'].parse(saved.result);
         const stored = WidgetLayoutFragmentV1Schema.parse(storedBody('saved-group'));
         expect(stored).toEqual(output.fragment);
+        const proposed = await executor.execute('widgets.fragment.delete', { account: { serverId, accountId }, artifactId: 'saved-group' }, {
+            surface: 'cli', authority: 'account_automation', serverId, expectedAccountId: accountId,
+            actionCaller: { kind: 'host' }, actionRequestId: 'delete-saved-group',
+        });
+        expect(proposed, JSON.stringify(proposed)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        if (!proposed.ok || !proposed.result || typeof proposed.result !== 'object'
+            || typeof Reflect.get(proposed.result, 'artifactId') !== 'string') throw new Error('Expected persisted approval');
+        const request = ApprovalRequestV2Schema.parse(storedBody(String(Reflect.get(proposed.result, 'artifactId'))));
+        expect(request.summary).toContain(output.fragment.name);
+        expect(request.preview).toMatchObject({ widgetLibraryName: output.fragment.name, summary: expect.stringContaining(output.fragment.name) });
+        expect(WidgetLayoutFragmentV1Schema.parse(storedBody('saved-group'))).toEqual(output.fragment);
         expect(stored.group.children.every(child => !('id' in child.instance))).toBe(true);
         expect(WidgetLayoutFragmentV1Schema.safeParse({ ...stored, group: { ...stored.group, accountId: 'forged' } }).success).toBe(false);
         const listed = await createDefaultActionExecutor().execute('widgets.item.list', { surface }, context());
@@ -237,6 +307,7 @@ describe('widget semantic Actions through production UI composition', () => {
     });
 
     it('routes a real drag admission into the Home semantic writer and refuses a mismatched source realm', async () => {
+        const { resolveWidgetLayoutEntityDrop } = await import('@/components/ui/treeDragDrop/widgetLayoutEntityDrop');
         const surface = scope({ kind: 'home' });
         const executor = createDefaultActionExecutor();
         for (const id of ['moving', 'anchor']) {

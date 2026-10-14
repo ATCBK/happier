@@ -1,13 +1,7 @@
-import {
-    readServerConfigRaw,
-    HOME_AUTH_METHOD_ENABLE_KEYS,
-    HOME_ANONYMOUS_SIGNUP_KEY,
-    HOME_STORAGE_POLICY_KEY,
-    HOME_KEYLESS_ACCOUNTS_KEY,
-    type HomeAuthenticationPolicyReadV1,
-    type ServerConfigEnv,
-    type ServerConfigValue,
-} from "@happier-dev/protocol";
+import { readServerConfigRaw, type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { HOME_AUTH_METHOD_ENABLE_KEYS, HOME_ANONYMOUS_SIGNUP_KEY, HOME_STORAGE_POLICY_KEY, HOME_KEYLESS_ACCOUNTS_KEY } from '@happier-dev/protocol/serverConfig/homeSettingsOwnership';
+import { type HomeAuthenticationPolicyReadV1 } from '@happier-dev/protocol/home/governance';
+import { type ServerConfigValue } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import { composeHomeConfigEnv, readHomeConfigEnvOrigin } from "@/app/home/settings/homeConfigOverlay";
 import { readHomeDeploymentEnv } from "@/app/home/settings/startupHomeEnv";

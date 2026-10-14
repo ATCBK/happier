@@ -4,12 +4,9 @@ import type { Fastify } from "../../../types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";
-import {
-    ConnectedServiceIdSchema,
-    parseBuiltInLegacyConnectedServiceQuotaSnapshotV1,
-    StoredJsonContentEnvelopeSchema,
-    type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { parseBuiltInLegacyConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { NotFoundSchema } from "../../../schemas/notFoundSchema";
 import { ConnectedServiceProfileIdSchema } from "../connectedServicesV2/profileIdSchema";
 import {

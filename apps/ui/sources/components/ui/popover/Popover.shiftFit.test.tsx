@@ -38,7 +38,10 @@ afterEach(() => {
  * A designed panel (the widget Add surface, 600 tall) opened from a trigger in the middle of an
  * 800-high window: neither side holds it.
  */
-async function renderPanel(fit: 'shrink' | 'shift' | undefined) {
+async function renderPanel(
+  fit: 'shrink' | 'shift' | undefined,
+  over: Readonly<{ placement?: 'top' | 'bottom'; anchorTop?: number; flip?: boolean; contentHeight?: number }> = {},
+) {
   const { Popover } = await import('./Popover');
   const { OverlayPortalProvider, OverlayPortalHost } =
     await import('./OverlayPortal');
@@ -61,10 +64,11 @@ async function renderPanel(fit: 'shrink' | 'shift' | undefined) {
           backdrop={false}
           anchor={{
             kind: 'rect',
-            rect: { left: 700, top: 400, width: 100, height: 32 },
+            rect: { left: 700, top: over.anchorTop ?? 400, width: 100, height: 32 },
           }}
           portal={{ native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
-          placement="bottom"
+          placement={over.placement ?? 'bottom'}
+          {...(over.flip === undefined ? {} : { flip: over.flip })}
           gap={8}
           maxHeightCap={600}
           maxWidthCap={900}
@@ -87,7 +91,7 @@ async function renderPanel(fit: 'shrink' | 'shift' | undefined) {
   expect(contentView).toBeTruthy();
   await act(async () => {
     contentView?.props?.onLayout?.({
-      nativeEvent: { layout: { x: 0, y: 0, width: 900, height: seen.at(-1) ?? 600 } },
+      nativeEvent: { layout: { x: 0, y: 0, width: 900, height: over.contentHeight ?? seen.at(-1) ?? 600 } },
     });
     await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
   });
@@ -104,6 +108,13 @@ describe('Popover: a designed panel keeps its size when neither side of its trig
     // Below the trigger would end at 1040; the panel moves up until its bottom meets the window (800 - 600).
     expect(Number(style.top) + Number(style.paddingTop ?? 0)).toBe(200);
     expect(style.bottom).toBeUndefined();
+  });
+
+  it('never lets a panel hung above its trigger start above the window while its size is out of date', async () => {
+    // The trigger has scrolled up to 100 while the panel still stands 500 tall (measured when there was room):
+    // pinned to the trigger it would start 400 above the window, so its bottom edge is held down instead.
+    const { style } = await renderPanel(undefined, { placement: 'top', flip: false, anchorTop: 100, contentHeight: 500 });
+    expect(800 - Number(style.bottom) - 500).toBeGreaterThanOrEqual(0);
   });
 
   it('keeps shrinking menus to the larger side by default', async () => {

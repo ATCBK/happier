@@ -1,19 +1,5 @@
-import {
-    CLIENT_UPGRADE_REQUIRED_ERROR_CODE,
-    CLIENT_UPGRADE_REQUIRED_HTTP_STATUS,
-    ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION,
-    ACCOUNT_STORED_CONTENT_SESSION_ACCESS_WITNESS_PROTOCOL_VERSION,
-    ACCOUNT_STORED_CONTENT_MACHINE_POOL_CHANGE_PROTOCOL_VERSION,
-    ACCOUNT_STORED_CONTENT_SAVED_SECRET_RESOURCE_CHANGE_PROTOCOL_VERSION,
-    ACCOUNT_STORED_CONTENT_PROFILE_PRESERVING_SETTINGS_WRITER_PROTOCOL_VERSION,
-    ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V2,
-    parseAccountStoredContentCompatibilityHttpHeadersV1,
-    parseAccountStoredContentCompatibilitySocketAuthV1,
-    type AccountStoredContentCompatibilityDeclarationParseResult,
-    type AccountStoredContentCompatibilityDeclarationV1,
-    type AccountStoredContentCompatibilityServerRequirementsV1,
-    type AccountStoredContentUpgradeRequiredV1,
-} from '@happier-dev/protocol';
+import { CLIENT_UPGRADE_REQUIRED_ERROR_CODE, CLIENT_UPGRADE_REQUIRED_HTTP_STATUS, type AccountStoredContentUpgradeRequiredV1 } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
+import { ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION, ACCOUNT_STORED_CONTENT_SESSION_ACCESS_WITNESS_PROTOCOL_VERSION, ACCOUNT_STORED_CONTENT_MACHINE_POOL_CHANGE_PROTOCOL_VERSION, ACCOUNT_STORED_CONTENT_SAVED_SECRET_RESOURCE_CHANGE_PROTOCOL_VERSION, ACCOUNT_STORED_CONTENT_PROFILE_PRESERVING_SETTINGS_WRITER_PROTOCOL_VERSION, ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V2, parseAccountStoredContentCompatibilityHttpHeadersV1, parseAccountStoredContentCompatibilitySocketAuthV1, type AccountStoredContentCompatibilityDeclarationParseResult, type AccountStoredContentCompatibilityDeclarationV1, type AccountStoredContentCompatibilityServerRequirementsV1 } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Socket } from 'socket.io';
 

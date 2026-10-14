@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RPC_ERROR_CODES } from '../rpc/index.js';
 import { RpcError } from '../rpc/errors.js';
@@ -740,8 +740,8 @@ describe('session.spawn_new canonical execution', () => {
     // choice to inline or reuse that shape.
     const discovery = z.object({ result: z.object({ actionSpec: z.object({ inputSchema: z.object({
       properties: z.object({ directory: z.record(z.string(), z.unknown()) }),
-      $defs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-      definitions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+      $defs: z.optional(z.record(z.string(), z.record(z.string(), z.unknown()))),
+      definitions: z.optional(z.record(z.string(), z.record(z.string(), z.unknown()))),
     }) }) }) }).parse(getResult);
     const advertisedSchema = discovery.result.actionSpec.inputSchema;
     const reference = advertisedSchema.properties.directory.$ref;
@@ -780,9 +780,8 @@ describe('session.spawn_new canonical execution', () => {
     const { actionSpec: definition } = z.object({ actionSpec: ActionDefinitionV1Schema }).parse(getResult.result);
     const projectedInput = z.object({
       properties: z.record(z.string(), z.unknown()),
-      $defs: z.record(z.string(), z.unknown()).optional(),
+      $defs: z.optional(z.record(z.string(), z.unknown())),
     }).parse(definition.inputSchema);
-    const directorySchema = z.record(z.string(), z.unknown()).parse(projectedInput.properties.directory);
     const ajv = new Ajv2020({ strict: false });
     addFormats(ajv);
     // Validate this field's advertised semantics whether Zod emits it inline or by reference.

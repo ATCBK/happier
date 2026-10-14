@@ -222,7 +222,8 @@ esac
       HAPPIER_STACK_PRISMA_MIGRATE: '0', HAPPIER_STACK_DOCKER_AUTOSTART: '0', HAPPIER_STACK_SERVE_UI: '0',
     },
   });
-  assert.notEqual(devResult.code, 0, 'the fake UI launcher should terminate the public dev fixture');
+  assert.equal(devResult.code, 0, `stdout:\n${devResult.stdout}\nstderr:\n${devResult.stderr}`);
+  assert.match(devResult.stderr, /expo startup failed; keeping other components running/);
   const afterDevRuntime = JSON.parse(await readFile(runtimeStatePath, 'utf8'));
   assert.equal(afterDevRuntime.processes.proxyPid, server.child.pid);
   assert.notEqual(afterDevRuntime.processes.serverPid, server.child.pid);

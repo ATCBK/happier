@@ -32,6 +32,7 @@ import type {
 export type RpcLocalActionContext = Readonly<Partial<Pick<
     ActionExecutorContext,
     'surface' | 'authority' | 'callerPermissionMode' | 'causalPermissionAuthority' | 'actionRequestId'
+    | 'externalActionExecutionAuthorization'
     | 'agentStartContext' | 'agentStartWorkDepth' | 'agentStartWorkspaceWrites' | 'sessionAgentSpawnPolicyV1'
 >> & {
     /** Exact Workflow invocation store, admitted only by an in-process host. */
@@ -51,6 +52,10 @@ export type RpcLocalActionContext = Readonly<Partial<Pick<
 
 export type RpcHandlerContext = Readonly<{
     signal: AbortSignal;
+    /** Host receipt time, so a domain budget includes request admission/decryption. */
+    requestStartedAtMs?: number;
+    /** Full receipt-anchored work deadline; operation owners govern terminal reply waiting. */
+    deadlineAtMs?: number;
     /** Content-free host diagnostics only; this does not grant or change admission. */
     reportAdmissionDenial?: (predicate: RpcAdmissionPredicate) => void;
     /** Host-admitted private ordinary Session bootstrap, never a public Action field. */

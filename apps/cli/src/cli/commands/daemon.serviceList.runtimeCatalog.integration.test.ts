@@ -9,7 +9,11 @@ vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
   return {
     ...actual,
-    spawnSync: vi.fn(),
+    spawnSync: vi.fn((command: string, args: readonly string[] = []) => ({
+      status: 0,
+      stdout: command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : '',
+      stderr: '',
+    })),
   };
 });
 
@@ -623,6 +627,9 @@ describe('happier service list --json', () => {
         const spawnSyncMock = vi.mocked(childProcess.spawnSync);
         spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
           const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (cmd === 'powershell.exe' && argv.some((arg) => arg.includes('.GetFolder("\\Happier")'))) {
+            return { pid: 0, output: [], stdout: '[]', stderr: '', status: 0, signal: null } satisfies SpawnSyncReturns<string>;
+          }
           if (
             cmd === 'schtasks'
             && argv[0] === '/Query'

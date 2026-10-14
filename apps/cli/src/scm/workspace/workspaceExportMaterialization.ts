@@ -678,6 +678,14 @@ export async function materializeWorkspaceExportArtifactsWithScmWorkspace(params
         if (!staged.verification.isVerified) {
             throw new Error(`Workspace transfer integrity check failed for ${targetPath}`);
         }
+        for (const entry of staged.stagedSymlinks) {
+            assertWorkspaceMaterializationSymlinkTarget({
+                workspaceRoot: stagingRoot.workspaceDirectory,
+                linkPath: entry.filePath,
+                target: entry.target,
+                installed: true,
+            });
+        }
 
         await params.assertCanContinue?.();
 

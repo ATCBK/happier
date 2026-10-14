@@ -18,6 +18,7 @@ import {
 } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import {
     getUsableSavedSecrets,
+    getMaterializedSavedSecrets,
     getSavedSecretCatalogSnapshot,
     resolveSavedSecretReference,
     subscribeSavedSecretCatalogSnapshots,
@@ -105,6 +106,8 @@ export function useSavedSecretCatalog(options?: Readonly<{
     );
     const sharedEnabled = Boolean(scope) && options?.sharedEnabled !== false;
     const catalogEnabled = Boolean(scope);
+    const serverId = scope?.serverId;
+    const accountId = scope?.accountId;
     const snapshot = React.useSyncExternalStore(
         catalogEnabled ? subscribeSavedSecretCatalogSnapshots : subscribeNoop,
         () => catalogEnabled ? getSavedSecretCatalogSnapshot(scope) : null,
@@ -112,9 +115,11 @@ export function useSavedSecretCatalog(options?: Readonly<{
     );
 
     React.useEffect(() => {
-        if (!scope || !catalogEnabled) return;
-        return observeSavedSecretCatalog(scope);
-    }, [scope, catalogEnabled]);
+        if (!serverId || !accountId || !catalogEnabled) return;
+        // The loader owns credential/currentness transitions. Equivalent
+        // Settings scope objects must not retire its admitted material read.
+        return observeSavedSecretCatalog({ serverId, accountId });
+    }, [serverId, accountId, catalogEnabled]);
 
     const sharedEntries = snapshot?.data ?? EMPTY_SHARED_ENTRIES;
     const corruptEntries = snapshot?.corruptEntries ?? EMPTY_CORRUPT_ENTRIES;
@@ -294,9 +299,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
         picker,
         corruptEntries,
         deleteCorruptResource,
-        materializedSecrets: snapshot && !snapshot.stale && snapshot.status === 'ready'
-            ? snapshot.materializedSecrets
-            : EMPTY_MATERIALIZED_SECRETS,
+        materializedSecrets: getMaterializedSavedSecrets(scope),
         usableSecrets,
         resolveReference,
         status: catalogEnabled ? (snapshot?.status ?? 'loading') : 'ready',

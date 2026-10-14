@@ -39,7 +39,9 @@ describe('headless settings conditional writes', () => {
         { actionId: 'settings.get', input: { anchor: 'delegation.workDepthLimit', includeVersion: true } },
         { actionId: 'settings.set', input: { anchor: 'delegation.workDepthLimit', value: 2, expectedSettingsVersion: 4 } },
         { actionId: 'settings.set', input: { anchor: 'delegation.workDepthLimit', value: 2, reversal: { kind: 'capture' } } },
-    ] as const)('requires Account credentials for versioned reads, CAS and exact reversal', async request => {
+        { actionId: 'settings.get', input: { anchor: 'notifications.machineOffline', key: 'machine' } },
+        { actionId: 'settings.set', input: { anchor: 'notifications.machineOffline', key: 'machine', value: true } },
+    ] as const)('requires Account credentials before the headless conditional owner can read or mutate', async request => {
         const action = createCliSettingsDeclarationAction({});
         expect(await action({ ...request, context: { surface: 'agent' } }))
             .toMatchObject({ ok: false, errorCode: 'not_authenticated' });
@@ -48,12 +50,13 @@ describe('headless settings conditional writes', () => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'post');
         const action = createCliSettingsDeclarationAction({ credentials: { token: 'daemon', encryption: null } });
-        expect(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true },
-            context: { surface: 'agent', externalActionCredential: { accountId: 'account', principalId: 'principal',
-                credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } }))
-            .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
-        expect(read).not.toHaveBeenCalled();
-        expect(write).not.toHaveBeenCalled();
+        for (const input of [{ anchor: 'usage.coachPreferences', includeVersion: true },
+            { anchor: 'notifications.machineOffline', key: 'machine' }]) {
+            expect(await action({ actionId: 'settings.get', input,
+                context: { surface: 'agent', externalActionCredential: { accountId: 'account', principalId: 'principal',
+                    credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } }))
+                .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
+        }
     });
     it('uses the current Account material for a same-Account Session Action authorization', async () => {
         const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -65,14 +68,16 @@ describe('headless settings conditional writes', () => {
             machineId: 'machine', actionId: 'settings.get', requestId: 'request',
             requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
         } });
-        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+        const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
             content: { t: 'plain', v: {} }, version: 1,
         } });
         const action = createCliSettingsDeclarationAction({ credentials: { token, encryption: null } });
+        const controller = new AbortController();
 
         expect(await action({ actionId: 'settings.get', input: { anchor: 'appearance.atmospherePlanetDigits' },
-            context: { surface: 'agent', externalActionExecutionAuthorization: authorization } }))
+            context: { surface: 'agent', signal: controller.signal, externalActionExecutionAuthorization: authorization } }))
             .toEqual({ anchor: 'appearance.atmospherePlanetDigits', value: true });
+        expect(get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: controller.signal }));
 
         const foreignToken = `${encode({ alg: 'none' })}.${encode({ sub: 'custodian', tokenEpoch: 1,
             provenance: { v: 1, kind: 'account', authority: 'present_user' } })}.signature`;

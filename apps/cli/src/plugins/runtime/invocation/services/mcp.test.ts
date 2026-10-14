@@ -496,10 +496,7 @@ describe('stable plugin MCP host', () => {
         expect(publicListener).not.toHaveBeenCalled();
         expect(throwingDispose).toHaveBeenCalledOnce();
         expect(remainingDispose).toHaveBeenCalledOnce();
-        expect(emitWarning).toHaveBeenCalledWith(
-            'MCP resource subscription listener failed',
-            { code: 'HAPPIER_MCP_RESOURCE_LISTENER_FAILED' },
-        );
+        expect(emitWarning).not.toHaveBeenCalled();
         await expect(host.dispose()).rejects.toBeInstanceOf(AggregateError);
         emitWarning.mockRestore();
     });

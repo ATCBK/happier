@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { parseAgentPermissionIntentV1Alias } from '../../runtime/permissionIntentV1.js';
 import { actionCliDerivedDefault, type ActionCliBindContext, type ActionCliProjection } from '../actionCliProjection.js';
@@ -28,29 +28,27 @@ const SESSION_SEND_MAX_TIMEOUT_SECONDS = 3600;
  * its canonical name, and the canonical schema still validates what the binder
  * below emits.
  */
-export const SessionSendCliInputSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
+export const SessionSendCliInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
   /**
    * Authored content. It is deliberately not trimmed: the caller's exact argv
    * bytes — leading whitespace, newlines, quotes, Unicode — reach the Action.
    * Only blankness is rejected, the same way the incumbent command rejects it.
    */
-  message: z.string().refine((value) => value.trim().length > 0, {
+  message: z.string().check(z.refine((value) => value.trim().length > 0, {
     message: 'message must not be blank',
-  }),
+  })),
   /** The Session-owned interactive Execution Run this input targets. */
-  run: z.string().trim().min(1).optional(),
-  permissionMode: z.string().trim().min(1)
-    .refine((value) => parseAgentPermissionIntentV1Alias(value) !== null, {
+  run: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  permissionMode: z.optional(z.string().check(z.trim(), z.minLength(1), z.refine((value) => parseAgentPermissionIntentV1Alias(value) !== null, {
       message: 'Invalid permission mode',
-    })
-    .optional(),
-  model: z.string().trim().min(1).optional(),
-  providerConnection: z.string().trim().min(1).optional(),
-  localId: z.string().trim().min(1).optional(),
-  wait: z.boolean().optional(),
-  timeoutSeconds: z.number().int().min(1).optional(),
-}).strict().superRefine((value, ctx) => {
+    }))),
+  model: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  providerConnection: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  localId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  wait: z.optional(z.boolean()),
+  timeoutSeconds: z.optional(z.number().check(z.int(), z.minimum(1))),
+}).check(z.superRefine((value, ctx) => {
   // The canonical schema owns the same rule, but it can only name the canonical
   // field. Naming the caller's flags keeps the established diagnostic.
   if (value.providerConnection === undefined) return;
@@ -60,11 +58,11 @@ export const SessionSendCliInputSchema = lazyZodSchema(() => z.object({
       && value.model === SESSION_SEND_DEFAULT_MODEL_TOKEN)
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: '--provider-connection requires --model <model-id>',
     });
   }
-}));
+})));
 
 export type SessionSendCliInput = z.infer<typeof SessionSendCliInputSchema>;
 

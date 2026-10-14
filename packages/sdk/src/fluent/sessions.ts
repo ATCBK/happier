@@ -76,10 +76,26 @@ export class HappierSessionSpawnError extends Error {
   readonly result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>;
 
   constructor(result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>) {
-    super(`Session creation did not settle successfully: ${result.type}`);
+    super(formatSessionSpawnFailure(result));
     this.name = 'HappierSessionSpawnError';
     this.result = result;
   }
+}
+
+function formatSessionSpawnFailure(
+  result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>,
+): string {
+  if (result.type === 'pending') {
+    return `Session creation is pending (${result.outcome}); retry with the same creation key.`;
+  }
+  const detail = 'launchError' in result && result.launchError
+    ? `/${result.launchError.code}): ${result.launchError.message}`
+    : 'providerError' in result && result.providerError
+      ? `/${result.providerError.code})`
+      : 'terminalHostError' in result && result.terminalHostError
+        ? `/${result.terminalHostError.host}:${result.terminalHostError.reason})`
+        : ')';
+  return `Session creation failed (${result.code}${detail}`;
 }
 
 export type HappierSession<TOptions extends ActionExecutionOptions = ActionExecutionOptions> = Readonly<{

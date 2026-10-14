@@ -22,7 +22,7 @@ export type LocalServicesInventoryActionResultById = {
         v: 1;
         machineId: string;
         generatedAt: number;
-        refreshState: 'error' | 'idle' | 'refreshing';
+        refreshState: 'idle' | 'refreshing' | 'error';
         entries: {
             id: string;
             machineId: string;
@@ -108,7 +108,7 @@ export type LocalServicesInventoryActionResultById = {
         v: 1;
         machineId: string;
         generatedAt: number;
-        refreshState: 'error' | 'idle' | 'refreshing';
+        refreshState: 'idle' | 'refreshing' | 'error';
         entries: {
             id: string;
             machineId: string;

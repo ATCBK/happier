@@ -132,6 +132,11 @@ describe('ArtifactBinaryBody', () => {
         const previous = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
         const source = binarySource('image/png');
+        const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
+        const filesystem = createExpoFileSystemFileMock();
+        // Loading the real shared image viewer reaches native filesystem imports;
+        // keep that dependency at the Expo SDK boundary in this web host test.
+        vi.doMock('expo-file-system', () => filesystem.module);
         const urls: Blob[] = [];
         vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => {
             if (!(blob instanceof Blob)) throw new Error('Expected binary preview Blob');
@@ -155,7 +160,10 @@ describe('ArtifactBinaryBody', () => {
             expect(Modal.show).toHaveBeenCalledOnce();
             expect(revoke).toHaveBeenCalledWith('blob:private-image');
             expect(Modal.hide).toHaveBeenCalledWith('modal-id');
-        } finally { Object.defineProperty(Platform, 'OS', { configurable: true, value: previous }); }
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });
+            vi.doUnmock('expo-file-system');
+        }
     });
 
     it('does not fetch or render HTML until explicit Download, and downloads verified bytes', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
@@ -30,7 +30,7 @@ describe('ReviewCommentV1Schema', () => {
     const invalid = ReviewCommentAnchorV1Schema.safeParse({ kind: 'range', filePath: 'a.ts', startLine: 2, endLine: 1 });
     expect(invalid.success).toBe(false);
     if (!invalid.success) {
-      expect(invalid.error).toBeInstanceOf(z.ZodError);
+      expect(invalid.error).toBeInstanceOf(z.core.$ZodError);
       expect(invalid.error.issues).toContainEqual(expect.objectContaining({ code: 'custom', path: ['endLine'] }));
     }
   });

@@ -50,6 +50,7 @@
  */
 
 import { spawn, SpawnOptions, type ChildProcess } from 'child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import {
   constants,
   copyFileSync,
@@ -1297,5 +1298,7 @@ export function spawnHappyCLI(
       ...(launchSpec.env ?? {}),
     }),
   };
-  return spawn(launchSpec.filePath, launchSpec.args, { ...spawnOptions, windowsHide: spawnOptions.windowsHide !== false });
+  const child = spawn(launchSpec.filePath, launchSpec.args, { ...spawnOptions, windowsHide: spawnOptions.windowsHide !== false });
+  observeProcessLaunch(child);
+  return child;
 }

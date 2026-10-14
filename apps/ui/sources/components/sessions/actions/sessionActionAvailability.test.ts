@@ -348,7 +348,6 @@ describe('session action availability', () => {
     });
 
     it.each([
-        ['missing', null],
         ['unknown', { v: 1, state: 'unknown', observedAt: 123 }],
         ['servable', { v: 1, state: 'servable', observedAt: 123 }],
     ])('fails Delete closed for %s terminal lifecycle evidence', (_label, lifecycle) => {
@@ -411,6 +410,29 @@ describe('session action availability', () => {
             currentUserId: 'current_user',
             isConnected: false,
         }).canDelete).toBe(true);
+    });
+
+    it('offers the server-owned Delete Action for an archived pre-launch Session without terminal retirement metadata', () => {
+        const session = createOwnedRawSession({
+            active: false,
+            archivedAt: 5,
+            ownerMetadataView: { path: '/managed', host: 'offline-machine' },
+        });
+        const target = createSessionActionTarget({
+            session,
+            serverId: 'home',
+            currentUserId: 'current_user',
+            isConnected: false,
+        });
+        expect(target.canDelete).toBe(true);
+        expect(listVisibleSessionActionIds({ target, surface: 'sessionInfo' }))
+            .toContain(SESSION_ACTION_DELETE_ID);
+        expect(createSessionActionTarget({
+            session: { ...session, archivedAt: null },
+            serverId: 'home',
+            currentUserId: 'current_user',
+            isConnected: false,
+        }).canDelete).toBe(false);
     });
 
     it('uses layout-v1 owner terminal lifecycle evidence and never falls back to shared metadata', () => {

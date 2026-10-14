@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { claimReviewCommentPublication } from "@/testkit/reviewCommentPublicationTestkit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
 
@@ -117,10 +118,14 @@ function pauseNextDatabaseTransaction() {
     const transaction = db.$transaction;
     // Prisma is the persistent-system boundary. Forward its overloaded API
     // unchanged after the latch, preserving the real store and currentness fence.
-    const spy = vi.fn(transaction).mockImplementationOnce(async (...args) => {
-        entered.resolve();
-        await resume.promise;
-        return Reflect.apply(transaction, db, args);
+    let pause = true;
+    const spy = new Proxy(transaction, {
+        apply(target, thisArg, args) {
+            if (!pause) return Reflect.apply(target, thisArg, args);
+            pause = false;
+            entered.resolve();
+            return resume.promise.then(() => Reflect.apply(target, thisArg, args));
+        },
     });
     // db forwards property assignment to its initialized Prisma client; it
     // intentionally does not expose descriptors for vi.spyOn.
@@ -1475,7 +1480,7 @@ describe("review comment durable storage", () => {
         const latch = pauseNextDatabaseTransaction();
         const create = getRouteHandler(registerDefaultRoutes(), "POST", "/v1/reviews/comments");
         const reply = createReplyStub();
-        const pendingCreate = create({
+        const pendingCreate = Promise.resolve(create({
             userId: account.id,
             body: {
                 projectId: "project-1",
@@ -1484,7 +1489,7 @@ describe("review comment durable storage", () => {
                 body: "This stale plain write must not survive the transition.",
                 clientMutationId: "mutation-transition-race",
             },
-        }, reply);
+        }, reply));
         try {
             await Promise.race([latch.entered, pendingCreate.then(() => { throw new Error("Writer never reached persistence"); })]);
             await inTx(async (tx) => {
@@ -1522,7 +1527,7 @@ describe("review comment durable storage", () => {
             select: { id: true },
         });
         await initEncrypt();
-        await withAuthenticatedTestApp(registerReviewCommentRoutes, async (app) => {
+        await withAuthenticatedTestApp(registerReviewCommentRoutes, async (app: FastifyInstance) => {
             const input = {
                 projectId: "project-1",
                 anchor: { kind: "file", filePath: "src/example.ts" },

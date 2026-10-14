@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
@@ -34,9 +34,7 @@ export type SessionFollowSourcesErrorCodeV1 = typeof SESSION_FOLLOW_SOURCES_ERRO
 
 export const SessionFollowSourcesErrorCodeV1Schema = lazyZodSchema(() => z.enum(SESSION_FOLLOW_SOURCES_ERROR_CODES_V1));
 
-export const SessionFollowSourcesErrorResponseSchema = lazyZodSchema(() => z
-  .object({ error: SessionFollowSourcesErrorCodeV1Schema })
-  .strict());
+export const SessionFollowSourcesErrorResponseSchema = lazyZodSchema(() => z.strictObject({ error: SessionFollowSourcesErrorCodeV1Schema }));
 export type SessionFollowSourcesErrorResponse = z.infer<typeof SessionFollowSourcesErrorResponseSchema>;
 
 /**
@@ -58,21 +56,17 @@ export const SessionFollowSourceDeliveryStateV1Schema = lazyZodSchema(() => z.en
  * names live in end-to-end encrypted Session metadata that the Home cannot
  * read, so presentation resolves them from the client's own Session projection.
  */
-export const SessionFollowSourceV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionFollowSourceV1Schema = lazyZodSchema(() => z.strictObject({
     sourceSessionId: FollowSessionIdSchema,
     destinationSessionId: FollowSessionIdSchema,
-    mode: SessionFollowSourceModeV1Schema.default('next_turn'),
+    mode: z._default(SessionFollowSourceModeV1Schema, 'next_turn'),
     deliveryState: SessionFollowSourceDeliveryStateV1Schema,
     hasPendingUpdates: z.boolean(),
-  })
-  .strict());
+  }));
 export type SessionFollowSourceV1 = z.infer<typeof SessionFollowSourceV1Schema>;
 
 /** `GET /v2/sessions/:destinationSessionId/follows/sessions` takes no input. */
-export const ListSessionFollowSourcesResponseSchema = lazyZodSchema(() => z
-  .object({ sources: z.array(SessionFollowSourceV1Schema) })
-  .strict());
+export const ListSessionFollowSourcesResponseSchema = lazyZodSchema(() => z.strictObject({ sources: z.array(SessionFollowSourceV1Schema) }));
 export type ListSessionFollowSourcesResponse = z.infer<typeof ListSessionFollowSourcesResponseSchema>;
 
 /**
@@ -83,17 +77,13 @@ export type ListSessionFollowSourcesResponse = z.infer<typeof ListSessionFollowS
  * Follow never emits historical context and the caller never supplies a
  * frontier or an execution Account.
  */
-export const SetSessionFollowSourceRequestSchema = lazyZodSchema(() => z
-  .object({ mode: SessionFollowSourceModeV1Schema.optional() })
-  .strict());
+export const SetSessionFollowSourceRequestSchema = lazyZodSchema(() => z.strictObject({ mode: z.optional(SessionFollowSourceModeV1Schema) }));
 export type SetSessionFollowSourceRequest = z.infer<typeof SetSessionFollowSourceRequestSchema>;
 
-export const SetSessionFollowSourceResponseSchema = lazyZodSchema(() => z
-  .object({
+export const SetSessionFollowSourceResponseSchema = lazyZodSchema(() => z.strictObject({
     changed: z.boolean(),
     source: SessionFollowSourceV1Schema,
-  })
-  .strict());
+  }));
 export type SetSessionFollowSourceResponse = z.infer<typeof SetSessionFollowSourceResponseSchema>;
 
 /**
@@ -101,9 +91,7 @@ export type SetSessionFollowSourceResponse = z.infer<typeof SetSessionFollowSour
  * is idempotent: removing an absent edge reports `changed: false` rather than a
  * not-found failure, and removal never grants source read.
  */
-export const RemoveSessionFollowSourceResponseSchema = lazyZodSchema(() => z
-  .object({ changed: z.boolean() })
-  .strict());
+export const RemoveSessionFollowSourceResponseSchema = lazyZodSchema(() => z.strictObject({ changed: z.boolean() }));
 export type RemoveSessionFollowSourceResponse = z.infer<typeof RemoveSessionFollowSourceResponseSchema>;
 
 export const SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 = Object.freeze({

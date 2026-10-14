@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SkillTrustV1Schema = lazyZodSchema(() => z.enum(['text_only', 'has_files', 'runs_scripts']));
 export type SkillTrustV1 = z.infer<typeof SkillTrustV1Schema>;

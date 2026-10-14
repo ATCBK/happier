@@ -1,12 +1,8 @@
-import {
-    ManagedListInputV1Schema, ManagedGetInputV1Schema, ManagedCancelInputV1Schema,
-    type ManagedMachineActionInputV1,
-    ManagedResourceDependencyV1Schema,
-    SharedSavedSecretRefV1Schema,
-    SHARED_SAVED_SECRET_REF_V1_PREFIX,
-    sameQualifiedConnectedAccountRef,
-    type ManagedResourceDependencyV1, type ManagedResourceDispositionV1, type QualifiedConnectedAccountRef,
-} from "@happier-dev/protocol";
+import { ManagedListInputV1Schema, ManagedGetInputV1Schema, ManagedCancelInputV1Schema, type ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedResourceDependencyV1Schema, type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { SharedSavedSecretRefV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { SHARED_SAVED_SECRET_REF_V1_PREFIX } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { sameQualifiedConnectedAccountRef, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { inTx, type Tx } from "@/storage/inTx";
 import { listSavedSecretReferenceCarrierPathsV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";

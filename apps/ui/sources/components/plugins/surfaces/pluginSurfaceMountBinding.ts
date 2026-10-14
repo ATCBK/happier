@@ -14,6 +14,7 @@ import type {
     DaemonPluginUiTargetedSurfaceMountV1,
 } from '@happier-dev/protocol';
 import { readDaemonPluginUiTargetedSurfaceMountV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 /**
  * The minimum producer facts the host needs to verify a destination mount.
@@ -189,7 +190,7 @@ export function readPluginSurfaceEphemeralMountBinding(
     const selected = surface.selectedRenderer;
     if (
         surface.contribution.pluginId !== selected.identity.pluginId
-        || surface.executionOrigin.materializationRef.pluginId !== surface.contribution.pluginId
+        || getPluginMachineExecutionOriginRef(surface.executionOrigin).pluginId !== surface.contribution.pluginId
         || surface.contributorTargetedContributions.target.pluginId !== surface.contribution.pluginId
         || surface.contributorTargetedContributions.target.occurrenceId !== surface.occurrenceId
         || surface.rendererChain.some((identity) => identity.pluginId !== surface.contribution.pluginId)

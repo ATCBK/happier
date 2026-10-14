@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const KeepForeverRetentionPolicySchema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('keep_forever'),
@@ -7,12 +7,12 @@ const KeepForeverRetentionPolicySchema = lazyZodSchema(() => z.strictObject({
 
 const DeleteOlderThanRetentionPolicySchema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('delete_older_than'),
-  days: z.number().int().min(1),
+  days: z.number().check(z.int(), z.minimum(1)),
 }));
 
 const DeleteInactiveSessionsRetentionPolicySchema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('delete_inactive'),
-  inactivityDays: z.number().int().min(1),
+  inactivityDays: z.number().check(z.int(), z.minimum(1)),
   requires: z.tuple([z.literal('updatedAt'), z.literal('lastActiveAt')]),
 }));
 
@@ -30,9 +30,9 @@ export const ServerRetentionCapabilitiesSchema = lazyZodSchema(() => z.strictObj
   policyVersion: z.literal(1),
   enabled: z.boolean(),
   sessions: SessionRetentionPolicySchema,
-  sessionMessages: AgeBasedRetentionPolicySchema.optional(),
+  sessionMessages: z.optional(AgeBasedRetentionPolicySchema),
   accountChanges: AgeBasedRetentionPolicySchema,
-  usageEvents: AgeBasedRetentionPolicySchema.optional(),
+  usageEvents: z.optional(AgeBasedRetentionPolicySchema),
   voiceSessionLeases: AgeBasedRetentionPolicySchema,
   userFeedItems: AgeBasedRetentionPolicySchema,
   sessionShareAccessLogs: AgeBasedRetentionPolicySchema,

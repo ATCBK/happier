@@ -179,7 +179,7 @@ export async function acquireCanonicalExternalSessionFollowLease(params: Readonl
                 remoteSessionId: currentAfterAdmission.remoteSessionId,
                 direction: 'older',
                 maxBytes: params.maxBytes,
-                maxItems: 1,
+                maxItems: params.maxItems,
                 ...(params.deadlineAtMs === undefined
                     ? {}
                     : { deadlineAtMs: params.deadlineAtMs }),
@@ -209,7 +209,7 @@ export async function acquireCanonicalExternalSessionFollowLease(params: Readonl
             remoteSessionId: current.remoteSessionId,
             direction: 'older',
             maxBytes: params.maxBytes,
-            maxItems: 1,
+            maxItems: params.maxItems,
         });
         if (await loadCurrentLink()) {
             cursor = page.tailCursor;

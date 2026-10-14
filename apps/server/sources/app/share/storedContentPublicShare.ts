@@ -15,7 +15,9 @@ import { tryParseEncryptedDataKeyV0 } from "@/app/api/routes/share/encryptedData
 import { resolvePublicShareUseLimit } from "@/app/api/routes/share/publicShareMessageAccessGrant";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT, } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { isSessionMetadataPrivacyUpgradeRequiredError, projectSessionMetadataForRecipient, readSessionMetadataOwnerAccountMode, } from "@/app/session/metadata/sessionMetadataRecipientProjection";
-import { decodePlainArtifactStoredContent, getArtifactKindPolicyV1, SESSION_METADATA_LAYOUT_VERSION_V1 } from "@happier-dev/protocol";
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import * as privacyKit from "privacy-kit";
 import { enforceSessionPublicLinkExternalSharingPolicyInTx } from "@/app/session/access/sessionAccessExternalSharingPolicy";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";

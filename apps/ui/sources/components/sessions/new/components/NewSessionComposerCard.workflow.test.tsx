@@ -70,6 +70,50 @@ function panelProps(): NewSessionSimplePanelProps {
 }
 
 describe('New workflow entry', () => {
+    it('names the exact Provider model on the real composer chip using picker presentation', async () => {
+        const { DaemonProviderModelProjectionGroupV1Schema } = await import('@happier-dev/protocol/rpc');
+        const { AgentIcon } = await import('@/agents/registry/AgentIcon');
+        const ref = { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'pc_deepseek', modelId: 'deepseek-v4-flash' };
+        const group = DaemonProviderModelProjectionGroupV1Schema.parse({
+            connectionId: ref.providerConnectionId, providerName: 'DeepSeek', connectionName: 'DeepSeek',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom', connectionRevision: 1,
+            authorization: { authorized: true }, manualModelPolicy: 'allowed', supportsFreeformModelIds: false,
+            suppressedConnectedServiceIds: [], modelLoadAction: 'descriptor_absent', modelLoadPreflightPolicy: null,
+            rows: [{ ref, descriptor: { id: ref.modelId, name: 'DeepSeek V4 Flash' },
+                sources: { manual: false, static: true, probe: false }, confidence: 'verified_static',
+                compatibility: { result: { status: 'experimental', selectedProtocol: 'anthropic-messages',
+                    reasons: ['compatibility_evidence_missing'], confirmationScope: { kind: 'model', modelId: ref.modelId } },
+                    compatibilityFingerprint: 'compatibility:v1:deepseek', confirmed: true },
+                endpointHealth: 'available', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }],
+        });
+        const props = {
+            ...panelProps(), agentType: 'claude', modelMode: ref.modelId,
+            agentPickerOptions: [{ id: ref.agentTargetKey, label: 'Claude', icon: <AgentIcon agentId="claude" size={20} /> }],
+            modelPickerPresentation: { agentTargetKey: ref.agentTargetKey, selected: group.rows[0]!.ref, nativeModels: [],
+                providerGroups: [group], hiddenNativeModelKeys: new Set<string>(), providerProjectionAuthoritative: true,
+                fallbackLabel: 'Loading model', fieldLabel: 'Model' },
+        };
+        const screen = await renderScreen(<NewSessionComposerCard panelProps={props} layout="screen" attachments={false} />);
+        expect(screen.getTextContent()).toContain('DeepSeek V4 Flash');
+        expect(screen.getTextContent()).not.toContain(ref.modelId);
+        expect(screen.findByTestId('agent-input-agent-chip-logo')).not.toBeNull();
+        await screen.update(<NewSessionComposerCard panelProps={{ ...props, modelPickerPresentation: {
+            ...props.modelPickerPresentation, providerGroups: [{ ...group, rows: [{ ...group.rows[0]!, descriptor: {
+                id: ref.modelId, name: 'DeepSeek Flash renamed',
+            } }] }],
+        } }} layout="screen" attachments={false} />);
+        expect(screen.getTextContent()).toContain('DeepSeek Flash renamed');
+        await screen.update(<NewSessionComposerCard panelProps={{ ...props, modelPickerPresentation: {
+            ...props.modelPickerPresentation, providerGroups: [], providerProjectionAuthoritative: false,
+        } }} layout="screen" attachments={false} />);
+        expect(screen.getTextContent()).toContain('Loading model');
+        expect(screen.getTextContent()).not.toContain(ref.modelId);
+        await screen.update(<NewSessionComposerCard panelProps={{ ...props, modelPickerPresentation: {
+            ...props.modelPickerPresentation, providerGroups: [], providerProjectionAuthoritative: true,
+        } }} layout="screen" attachments={false} />);
+        expect(screen.getTextContent()).toContain('Loading model');
+        expect(screen.getTextContent()).not.toContain(ref.modelId);
+    });
     it('allows an ordinary session to submit without an optional composer document', async () => {
         const props = panelProps();
         const screen = await renderScreen(<NewSessionComposerCard panelProps={props} layout="screen" attachments={false} />);

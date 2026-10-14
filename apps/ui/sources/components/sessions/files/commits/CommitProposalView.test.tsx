@@ -228,4 +228,16 @@ describe('CommitProposalView (lab WT4-C1/C3/C4)', () => {
         );
         expect(screen.findByTestId('commit-proposal-discarded')).toBeTruthy();
     });
+
+    it('shows the notification offer only while the proposal is being written', async () => {
+        const offer = <React.Fragment key="offer">notify</React.Fragment>;
+        const writing = await renderScreen(
+            <CommitProposalView proposal={null} phase="writing" isGenerating branch="main" modelLabel={null} layout="wide" actions={{}} notify={offer} />,
+        );
+        expect(writing.findByTestId('commit-proposal-notify')).toBeTruthy();
+        const idle = await renderScreen(
+            <CommitProposalView proposal={null} phase="none" branch="main" modelLabel={null} layout="wide" actions={{}} notify={offer} />,
+        );
+        expect(idle.findByTestId('commit-proposal-notify')).toBeNull();
+    });
 });

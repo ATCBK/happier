@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PLUGIN_UI_ICON_TOKENS_V1 = [
   'action',
@@ -68,12 +68,12 @@ export const PluginUiToneV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type PluginUiToneV1 = z.infer<typeof PluginUiToneV1Schema>;
 
-export const PluginUiDisplayV1Schema = lazyZodSchema(() => z.object({
-  titleKey: z.string().trim().min(1),
-  descriptionKey: z.string().trim().min(1).optional(),
-  labelKey: z.string().trim().min(1).optional(),
-  iconToken: PluginUiIconTokenV1Schema.optional(),
-  tone: PluginUiToneV1Schema.optional(),
-  developerFallback: z.string().trim().min(1).optional(),
-}).strict());
+export const PluginUiDisplayV1Schema = lazyZodSchema(() => z.strictObject({
+  titleKey: z.string().check(z.trim(), z.minLength(1)),
+  descriptionKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  labelKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  iconToken: z.optional(PluginUiIconTokenV1Schema),
+  tone: z.optional(PluginUiToneV1Schema),
+  developerFallback: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type PluginUiDisplayV1 = z.infer<typeof PluginUiDisplayV1Schema>;

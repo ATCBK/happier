@@ -14,7 +14,7 @@ export function parsePreflightModelListFromProbeModelsResult(raw: unknown): Pref
         availableModels: modelsRaw
             .filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === 'object' && typeof m.id === 'string' && typeof m.name === 'string')
             .flatMap((m) => {
-                const descriptor = ProviderModelDescriptorV1Schema.safeParse({ id: m.id, name: m.name, capabilities: m.capabilities });
+                const descriptor = ProviderModelDescriptorV1Schema.safeParse({ id: m.id, name: m.name, capabilities: m.capabilities, costTier: m.costTier });
                 if (!descriptor.success) return [];
                 return [{
                 id: String(m.id),
@@ -27,6 +27,7 @@ export function parsePreflightModelListFromProbeModelsResult(raw: unknown): Pref
                     ? { modelOptions: m.modelOptions as readonly AcpConfigOption[] }
                     : {}),
                 ...(descriptor.data.capabilities ? { capabilities: descriptor.data.capabilities } : {}),
+                ...(descriptor.data.costTier ? { costTier: descriptor.data.costTier } : {}),
                 }];
             }),
         supportsFreeform: Boolean(supportsFreeformRaw),

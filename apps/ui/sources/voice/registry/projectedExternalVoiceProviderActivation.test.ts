@@ -439,7 +439,7 @@ describe('projected external Voice provider activation', () => {
       .map((registration) => registration.descriptor)
       .find((entry) => entry?.kind === 'voice.speech-engine.v1') ?? null;
     // A projected engine is named by its own title; its raw plugin id is never shown as its description.
-    expect(installedEntry?.presentation?.createSettingsSpec()).toMatchObject({
+    expect(installedEntry?.presentation?.createSettingsSpec?.()).toMatchObject({
       titleKey: 'Never-before-seen Speech',
       subtitleKey: '',
       detailKey: 'Never-before-seen Speech',

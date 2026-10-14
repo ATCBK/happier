@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import type { AccountSettingsHistoryLegacyRoleArtifactTransferV1 } from '../../account/settings/accountSettingsApiV2.js';
 import { LEGACY_ROLE_GUIDANCE_SETTINGS_ROOTS_V1 } from '../../account/settings/rolesV1Migration.js';
@@ -297,10 +297,10 @@ export function removeTransferredPromptLibrarySourcesV1(source: Readonly<Record<
 
 // This read-only predecessor projection has no collection-wide catch: malformed
 // retained entries must keep destination activation incomplete.
-const retainedStacks = createStoredReadSchema(z.object({ v: z.literal(1), surfaces: z.object({
-  coding: z.array(PromptStackEntryV1StoredSchema).default([]), voice: z.array(PromptStackEntryV1StoredSchema).default([]),
-  profilesById: z.record(z.string(), z.array(PromptStackEntryV1StoredSchema)).default({}),
-}).strict() }).strict());
+const retainedStacks = createStoredReadSchema(z.strictObject({ v: z.literal(1), surfaces: z.strictObject({
+  coding: z._default(z.array(PromptStackEntryV1StoredSchema), []), voice: z._default(z.array(PromptStackEntryV1StoredSchema), []),
+  profilesById: z._default(z.record(z.string(), z.array(PromptStackEntryV1StoredSchema)), {}),
+}) }));
 
 export function emptyPromptLibraryRecordV1(key: PromptLibraryCatalogKeyV1, nowMs = Date.now()): PromptLibraryRecordV1 {
   switch (key) {

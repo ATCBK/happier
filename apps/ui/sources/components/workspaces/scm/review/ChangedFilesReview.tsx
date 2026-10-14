@@ -197,7 +197,8 @@ function areChangedFilesReviewThemesEqual(
     return (
         a.colors.surface.inset === b.colors.surface.inset &&
         a.colors.border.default === b.colors.border.default &&
-        a.colors.text.secondary === b.colors.text.secondary
+        a.colors.text.secondary === b.colors.text.secondary &&
+        Object.entries(a.space).every(([key, value]) => Object.is(value, b.space[key as keyof Theme['space']]))
     );
 }
 
@@ -1119,13 +1120,13 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     <View
                         style={{
                             backgroundColor: theme.colors.surface.inset,
-                            paddingHorizontal: 16,
-                            paddingVertical: 12,
+                            paddingHorizontal: theme.space.s16,
+                            paddingVertical: theme.space.s12,
                             borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                             borderBottomColor: theme.colors.border.default,
                         }}
                     >
-                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                             {checkpointAttributionDescription(turnCheckpointMetadata)}
                         </Text>
                     </View>
@@ -1213,7 +1214,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                             onOpenFile(event);
                         }}
                         tabIndex={0}
-                        style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+                        style={{ paddingHorizontal: theme.space.s8, paddingVertical: theme.space.s6 }}
                     >
                         <Icon name="arrow-square-out" size={14} color={theme.colors.text.secondary} />
                     </ViewWithClick>
@@ -1222,7 +1223,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     <Pressable
                         testID={openFileTestId}
                         onPress={onOpenFile as any}
-                        style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+                        style={{ paddingHorizontal: theme.space.s8, paddingVertical: theme.space.s6 }}
                         accessibilityRole="button"
                         accessibilityLabel={t('common.open')}
                     >
@@ -1231,7 +1232,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 );
 
         const rightElement = (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}>
                 <ChangedFilesReviewFindCount model={reviewFind} path={file.fullPath} />
                 {renderFileActions ? renderFileActions(file) : null}
                 {renderFileTrailingActions ? renderFileTrailingActions(file) : null}
@@ -1256,13 +1257,13 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     accessibilityQualification={qualification}
                     highlighted={highlightedPath === file.fullPath}
                     leadingElement={(
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                             <Icon name={params.expanded ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
                             <FileIcon fileName={file.fileName} size={16} />
                         </View>
                     )}
                     trailingElement={(
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}>
                             <ChangedFilesReviewFindCount model={reviewFind} path={file.fullPath} />
                             {qualification ? (
                                 <Tooltip label={qualification} testID={`scm-review-attribution-${safePath}`}>
@@ -1290,7 +1291,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 layout="inline"
                 showChangeMark={false}
                 leadingElement={(
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                         <Icon name={params.expanded ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
                         <FileIcon fileName={file.fileName} size={16} appearance="line" />
                     </View>
@@ -1453,7 +1454,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             leading={<Icon name="file-text" size={20} color={theme.colors.text.secondary} />}
             meta={reviewMeta}
             actions={(
-                <View testID="scm-review-toolbar" style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <View testID="scm-review-toolbar" style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}>
                     {props.toolbarLeading}
                     {reviewDisplayActions}
                 </View>
@@ -1466,7 +1467,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     return (
         <View ref={findSurfaceRef} collapsable={false} style={{ flex: 1, minHeight: 0 }}>
             {detailsHeaderElement ?? (
-            <HorizontalScrollableRow testID="scm-review-toolbar" fadeColor={theme.colors.surface.base ?? theme.colors.surface.inset} indicatorColor={theme.colors.text.secondary} containerStyle={{ flexGrow: 0, flexShrink: 0 }} contentStyle={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 4 }}>
+            <HorizontalScrollableRow testID="scm-review-toolbar" fadeColor={theme.colors.surface.base ?? theme.colors.surface.inset} indicatorColor={theme.colors.text.secondary} containerStyle={{ flexGrow: 0, flexShrink: 0 }} contentStyle={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s4 }}>
                 {props.toolbarLeading}
                 <ChangedFilesReviewFindButton surfaceId={findSurfaceId} />
                 {props.evidenceOnly ? null : <ChangedFilesReviewDiffAreaSelector

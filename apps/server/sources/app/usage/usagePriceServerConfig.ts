@@ -1,4 +1,4 @@
-import { defineServerConfigRegistry } from '@happier-dev/protocol';
+import { defineServerConfigRegistry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 export const USAGE_PRICE_SERVER_CONFIG = defineServerConfigRegistry({
     HAPPIER_USAGE_MODEL_PRICE_FETCH_ENABLED: {

@@ -663,10 +663,11 @@ function resolveInputSchemaLeaf(
 function draftMatchesDeclaredNonSecretFields(params: Readonly<{
     draft: Readonly<Record<string, unknown>>;
     action: PluginProjectionAction;
-    inputSchema: PluginJsonSchemaV2;
+    inputSchema: PluginJsonSchemaV2 | undefined;
 }>): boolean {
     const schema = params.inputSchema;
     const fields = params.action.inputHints?.fields ?? [];
+    if (schema === undefined) return fields.length === 0;
     if (fields.length === 0) {
         try {
             return isValidPluginJsonSchemaValue(compilePluginJsonSchema(schema), params.draft);
@@ -1452,10 +1453,10 @@ export function createPluginContributedActionController(params: Readonly<{
                 && parsedInput.data
                 && !Array.isArray(parsedInput.data)
                 && typeof parsedInput.data === 'object'
-                && isValidPluginJsonSchemaValue(
+                && (inputSchema === undefined || isValidPluginJsonSchemaValue(
                     compilePluginJsonSchema(inputSchema),
                     parsedInput.data,
-                );
+                ));
             return validatesDraft
                 ? {
                     kind: 'direct',
@@ -1513,7 +1514,7 @@ export function createPluginContributedActionController(params: Readonly<{
                 }
                 // `resolveCurrent` pins the same Action occurrence the schema
                 // was read for.
-                if (!isValidPluginJsonSchemaValue(
+                if (inputSchema !== undefined && !isValidPluginJsonSchemaValue(
                     compilePluginJsonSchema(inputSchema),
                     candidate,
                 )) return { kind: 'unavailable', reason: 'invalid_input' };

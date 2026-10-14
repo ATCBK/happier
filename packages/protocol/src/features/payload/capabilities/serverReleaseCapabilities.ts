@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The running server binary: its release version and flavour (plan `2026-09-26-home-owner-console`
@@ -10,9 +10,9 @@ import { z } from 'zod';
  * commit 98ea8fb767) and every earlier 0.3 build parses `capabilities.server` strictly and would
  * refuse the whole features payload, while the capabilities root drops a family it does not know.
  */
-export const ServerReleaseCapabilitiesSchema = lazyZodSchema(() => z.object({
-  version: z.string().trim().min(1).optional(),
-  flavor: z.enum(['full', 'light']).optional(),
-}).strict());
+export const ServerReleaseCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+  version: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  flavor: z.optional(z.enum(['full', 'light'])),
+}));
 
 export type ServerReleaseCapabilities = z.infer<typeof ServerReleaseCapabilitiesSchema>;

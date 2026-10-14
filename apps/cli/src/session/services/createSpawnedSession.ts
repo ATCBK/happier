@@ -41,8 +41,7 @@ import {
   lookupSessionsByTags,
 } from '@/session/transport/http/sessionsHttp';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
-import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
-import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { callExactMachineRpc, readMachineRpcRequestDisposition } from '@/session/transport/rpc/machineRpc';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { summarizeSessionRecord, type SessionSummary } from '@/cli/output/session/sessionSummary';
 import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
@@ -1276,15 +1275,23 @@ export async function createSpawnedSession(
           SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
         );
       }
-      if (params.signal?.aborted) {
+      const requestDisposition = readMachineRpcRequestDisposition(error);
+      if (params.signal?.aborted && requestDisposition !== 'notSent') {
         throw createCodedError(
           'Session-spawn submission may have been accepted before caller cancellation',
           SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
           { spawnNonce },
         );
       }
-      if (readRpcRequestDisposition(error) === 'outcomeUnknown' && error && typeof error === 'object') {
-        (error as { details?: unknown }).details = { spawnNonce };
+      if (error && typeof error === 'object' && (
+        requestDisposition === 'outcomeUnknown'
+        || requestDisposition === null && (error as { code?: unknown }).code === 'MACHINE_RPC_TIMEOUT'
+      )) {
+        const details = (error as { details?: unknown }).details;
+        (error as { details?: unknown }).details = {
+          ...(details && typeof details === 'object' && !Array.isArray(details) ? details : {}),
+          spawnNonce,
+        };
       }
       throw error;
     }

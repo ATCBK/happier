@@ -1,9 +1,15 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { useHappierNativeMinimumInteractiveTargetSize } from '@happier-dev/plugin-ui/environment';
+import { HappierFieldTextBox, resolveHappierFieldTextInputMetrics } from '@happier-dev/plugin-ui/presentation';
+
 import { Typography } from '@/constants/Typography';
-import { Text, TextInput } from '@/components/ui/text/Text';
+import { TextInput } from '@/components/ui/text/Text';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import {
     formatKeybindingCaptureEvent,
     type KeybindingCaptureEvent,
@@ -12,7 +18,6 @@ import type { KeyboardPlatform } from '@/keyboard/types';
 import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { t } from '@/text';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 export type KeyboardShortcutCapturePromptModalProps = CustomModalInjectedProps & Readonly<{
     title: string;
@@ -63,6 +68,10 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
         setValue(nextValue);
     }, [props.platform]);
 
+    // The capture field is the shared field box; only its key handling is this dialog's own.
+    const fieldColors = resolveFieldBoxColors(theme);
+    const nativeMinimumTargetSize = useHappierNativeMinimumInteractiveTargetSize();
+
     const webCaptureProps = React.useMemo<Pick<ShortcutCaptureTextInputProps, 'onKeyDown'>>(() => (
         Platform.OS === 'web' ? { onKeyDown: captureShortcut } : {}
     ), [captureShortcut]);
@@ -73,48 +82,32 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
             title={props.title}
             subtitle={props.message}
             onClose={() => resolveAndClose(null)}
-            dimensions={{ width: 440, size: 'dialog' }}
+            dimensions={{ width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, size: 'dialog' }}
             footer={(
                 <View style={styles.footer}>
-                    <Pressable
+                    <RoundButton
                         testID="keyboard-shortcut-capture-cancel"
-                        accessibilityRole="button"
+                        display="inverted"
+                        title={t('common.cancel')}
                         onPress={() => resolveAndClose(null)}
-                        style={({ pressed }) => [
-                            styles.button,
-                            { backgroundColor: theme.colors.button.secondary.background },
-                            pressed ? { opacity: motionTokens.press.opacitySubtle } : null,
-                        ]}
-                    >
-                        <Text style={{ color: theme.colors.button.secondary.tint }}>
-                            {t('common.cancel')}
-                        </Text>
-                    </Pressable>
-                    <Pressable
+                    />
+                    <RoundButton
                         testID="keyboard-shortcut-capture-confirm"
-                        accessibilityRole="button"
+                        title={t('common.ok')}
                         onPress={() => resolveAndClose(value.trim())}
-                        style={({ pressed }) => [
-                            styles.button,
-                            { backgroundColor: theme.colors.button.primary.background },
-                            pressed ? { opacity: motionTokens.press.opacitySubtle } : null,
-                        ]}
-                    >
-                        <Text style={{ color: theme.colors.button.primary.tint }}>
-                            {t('common.ok')}
-                        </Text>
-                    </Pressable>
+                    />
                 </View>
             )}
         >
             <View style={styles.body}>
+                <HappierFieldTextBox colors={fieldColors}>
                 <TextInput
                     ref={inputRef}
                     testID="keyboard-shortcut-capture-input"
                     autoFocus={true}
                     value={value}
                     placeholder={props.placeholder}
-                    placeholderTextColor={theme.colors.text.tertiary}
+                    placeholderTextColor={fieldColors.placeholderColor}
                     onChangeText={setValue}
                     onKeyPress={captureShortcut}
                     selectTextOnFocus={true}
@@ -122,48 +115,26 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
                     autoCorrect={false}
                     style={[
                         Typography.mono(),
-                        styles.input,
-                        {
-                            backgroundColor: theme.colors.surface.inset,
-                            borderColor: theme.colors.border.default,
-                            color: theme.colors.text.primary,
-                        },
+                        resolveHappierFieldTextInputMetrics({ nativeMinimumTargetSize }),
+                        { color: fieldColors.valueColor },
                     ]}
                     {...webCaptureProps}
                 />
-                <Text style={[styles.hint, { color: theme.colors.text.secondary }]}>
-                    {t('settingsKeyboard.setShortcutPromptMessage')}
-                </Text>
+                </HappierFieldTextBox>
             </View>
         </ModalCardFrame>
     );
 }
 
-const styles = StyleSheet.create(() => ({
+const styles = StyleSheet.create((theme) => ({
+    // The card's edge inset, shared with its title band and footer: the field lines up under the title.
     body: {
-        gap: 10,
-    },
-    input: {
-        borderRadius: 10,
-        borderWidth: 1,
-        minHeight: 44,
-        paddingHorizontal: 18,
-        paddingVertical: 14,
-    },
-    hint: {
-        lineHeight: 20,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
     },
     footer: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
-    },
-    button: {
-        borderRadius: 10,
-        minHeight: 36,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        justifyContent: 'center',
-        alignItems: 'center',
+        gap: theme.space.s8,
     },
 }));

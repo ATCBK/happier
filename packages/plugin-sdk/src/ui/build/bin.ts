@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import '../configureZodLocale.js';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

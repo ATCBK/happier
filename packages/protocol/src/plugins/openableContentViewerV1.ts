@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "./actions/internalProtocolZodAdapter.js";
 
 import {
@@ -50,18 +50,17 @@ function uniqueNormalizedEntries(
 export const OpenableContentClassV1Schema = lazyZodSchema(() => z.enum(['text', 'image', 'binary']));
 export type OpenableContentClassV1 = z.infer<typeof OpenableContentClassV1Schema>;
 
-export const OpenableContentViewerSelectorV1Schema = lazyZodSchema(() => z.object({
-  contentClasses: z.array(OpenableContentClassV1Schema).min(1).max(8),
-  mimeTypes: z.array(z.string().min(1).max(256)).max(64).optional(),
-  extensions: z.array(z.string().min(1).max(256)).max(64).optional(),
-}).strict().transform((value, context) => {
+export const OpenableContentViewerSelectorV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
+  contentClasses: z.array(OpenableContentClassV1Schema).check(z.minLength(1), z.maxLength(8)),
+  mimeTypes: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(64))),
+  extensions: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(64))),
+}), z.transform((value, context) => {
   const contentClasses = [...new Set(value.contentClasses)];
   if (contentClasses.length !== value.contentClasses.length) {
-    context.addIssue({
+    context.issues.push({
       code: 'custom',
       path: ['contentClasses'],
-      message: 'Openable content classes must not contain duplicates.',
-    });
+      message: 'Openable content classes must not contain duplicates.', input: context.value });
   }
   try {
     return {
@@ -74,37 +73,35 @@ export const OpenableContentViewerSelectorV1Schema = lazyZodSchema(() => z.objec
       }),
     };
   } catch (error) {
-    context.addIssue({
+    context.issues.push({
       code: 'custom',
-      message: error instanceof Error ? error.message : 'Invalid openable content selector.',
-    });
+      message: error instanceof Error ? error.message : 'Invalid openable content selector.', input: context.value });
     return z.NEVER;
   }
-}));
+})));
 export type OpenableContentViewerSelectorV1 = z.output<typeof OpenableContentViewerSelectorV1Schema>;
 
-export const PluginOpenableContentViewerContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginOpenableContentViewerContributionV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   /** Same-plugin direct V2 UI view which owns the viewer presentation. */
   destination: asProtocolZod(PluginContributionLocalIdSchema),
-  contentClasses: z.array(OpenableContentClassV1Schema).min(1).max(8),
-  mimeTypes: z.array(z.string().min(1).max(256)).max(64).optional(),
-  extensions: z.array(z.string().min(1).max(256)).max(64).optional(),
-}).strict().transform((value, context) => {
+  contentClasses: z.array(OpenableContentClassV1Schema).check(z.minLength(1), z.maxLength(8)),
+  mimeTypes: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(64))),
+  extensions: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(64))),
+}), z.transform((value, context) => {
   const normalized = OpenableContentViewerSelectorV1Schema.safeParse({
     contentClasses: value.contentClasses,
     ...(value.mimeTypes === undefined ? {} : { mimeTypes: value.mimeTypes }),
     ...(value.extensions === undefined ? {} : { extensions: value.extensions }),
   });
   if (!normalized.success) {
-    normalized.error.issues.forEach((issue) => context.addIssue({
+    normalized.error.issues.forEach((issue) => void context.issues.push({
       ...issue,
-      path: issue.path === undefined ? [] : [...issue.path],
-    }));
+      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) }));
     return z.NEVER;
   }
   return { id: value.id, destination: value.destination, ...normalized.data };
-}));
+})));
 export type PluginOpenableContentViewerContributionV1 = z.output<
   typeof PluginOpenableContentViewerContributionV1Schema
 >;
@@ -121,9 +118,9 @@ export function normalizeOpenableContentViewerSelectorV1(
 }
 
 const OpenableContentPreferenceSelectorInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('mime'), value: z.string().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal('extension'), value: z.string().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal('class'), value: OpenableContentClassV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('mime'), value: z.string().check(z.minLength(1), z.maxLength(256)) }),
+  z.strictObject({ kind: z.literal('extension'), value: z.string().check(z.minLength(1), z.maxLength(256)) }),
+  z.strictObject({ kind: z.literal('class'), value: OpenableContentClassV1Schema }),
 ]));
 
 /**
@@ -131,13 +128,12 @@ const OpenableContentPreferenceSelectorInputV1Schema = lazyZodSchema(() => z.dis
  * a viewer declaration's arrays: Account preference data chooses one matching
  * key, while declarations may advertise many keys.
  */
-export const OpenableContentPreferenceSelectorV1Schema = lazyZodSchema(() => z.unknown().transform((value, context) => {
+export const OpenableContentPreferenceSelectorV1Schema = lazyZodSchema(() => z.pipe(z.unknown(), z.transform((value, context) => {
   const parsed = OpenableContentPreferenceSelectorInputV1Schema.safeParse(value);
   if (!parsed.success) {
-    parsed.error.issues.forEach((issue) => context.addIssue({
+    parsed.error.issues.forEach((issue) => void context.issues.push({
       ...issue,
-      path: issue.path === undefined ? [] : [...issue.path],
-    }));
+      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) }));
     return z.NEVER;
   }
   try {
@@ -150,13 +146,12 @@ export const OpenableContentPreferenceSelectorV1Schema = lazyZodSchema(() => z.u
         return parsed.data;
     }
   } catch (error) {
-    context.addIssue({
+    context.issues.push({
       code: 'custom',
-      message: error instanceof Error ? error.message : 'Invalid openable content preference selector.',
-    });
+      message: error instanceof Error ? error.message : 'Invalid openable content preference selector.', input: context.value });
     return z.NEVER;
   }
-}));
+})));
 export type OpenableContentPreferenceSelectorV1 = z.output<
   typeof OpenableContentPreferenceSelectorV1Schema
 >;

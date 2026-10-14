@@ -73,6 +73,25 @@ function evidence(
 }
 
 describe('Work display grouping of the canonical allocation', () => {
+  it('selects a whole-call final for the complete Session without assigning it to an earlier PR turn', () => {
+    const earlier: UsageWorkContribution = { ...contribution('earlier', 's1', 't1'), observedAtMs: 10,
+      cost: { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate', reportedTotalId: 'final' } };
+    const final: UsageWorkContribution = { ...contribution('final', 's1', null), observedAtMs: 20,
+      modelId: null, tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: { reportedUsd: 0.12, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported',
+        reportedTotalContributionIds: ['earlier'] } };
+    const work = allocateUsageOutcomes({ contributions: [earlier, final], evidence: [evidence('s1', 't1', 7)] });
+    const basis = { metric: 'cost', costBasis: 'auto' } as const;
+    const summary = summarizeUsageWork(work, basis);
+    expect(summary.total).toBeCloseTo(0.12, 10);
+    expect(summary.sessions[0]?.amount).toBeCloseTo(0.12, 10);
+    expect(summary.projects[0]?.amount).toBeCloseTo(0.12, 10);
+    expect(summary.outcomes[0]?.amount).toBeNull();
+    const autopsy = summarizeUsageWorkSession(work, basis, 's1');
+    expect(autopsy.amount).toBeCloseTo(0.12, 10);
+    expect(autopsy.costTimeline.map(row => row.amount)).toEqual([null, 0.12]);
+    expect(autopsy.turns.map(row => row.amount)).toEqual([null, null]);
+  });
   it('plots only monetary partitions with witnessed outcome coordinates, including open outcomes at zero merged', () => {
     const unlinkedEuro = { ...contribution('unlinked', 'unlinked', 'u'),
       cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'EUR' } };

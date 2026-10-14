@@ -1,5 +1,5 @@
 import type { McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint } from '@happier-dev/plugin-sdk/mcp';
-import type { DaemonMcpServersDetectWarningV1 } from '@happier-dev/protocol';
+import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
 
 export type HostedMcpRuntimeEndpoint =
     | Readonly<{ kind: 'registryOnly' }>
@@ -18,6 +18,7 @@ export type McpSessionResolutionInput = Readonly<({ sessionId: string; execution
 }>;
 export type ResolvedMcpEndpointDiscoveryResult = Readonly<{
     endpoints: readonly PluginMcpDiscoveredEndpoint[];
+    detectedServers?: readonly DetectedMcpServerV1[];
     warnings?: readonly DaemonMcpServersDetectWarningV1[];
 }>;
 export type ResolvedSessionMcpScope = Readonly<{
@@ -43,6 +44,7 @@ export type ResolvedSessionMcpServer = Readonly<{
 }>;
 
 export type PluginMcpSessionResolver = Readonly<{
+    resolveToolNaming?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'];
     resolveForSession(
         input: McpSessionResolutionInput,
     ): Promise<readonly ResolvedSessionMcpServer[]>;

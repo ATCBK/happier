@@ -8,7 +8,7 @@ import { createSecretSettingsTestHarness } from '@/components/settings/secrets/s
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { beginSavedSecretCatalogLoad, invalidateSavedSecretCatalog, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { resetTeamActionClientForTests } from '@/sync/ops/teams/teamActionClient';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -35,6 +35,52 @@ afterEach(async () => {
 });
 
 describe('useSavedSecretCatalog resource authority', () => {
+    it('preserves the admitted material read when an equivalent Account scope object is replaced', async () => {
+        home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [] }) });
+        const { entry } = await home.addOwnerResource();
+        const firstReadStarted = createDeferred<void>();
+        const firstRead = createDeferred<void>();
+        const replacementRead = createDeferred<void>();
+        const request = home.request.getMockImplementation();
+        if (!request) throw new Error('Account HTTP boundary is missing');
+        let materialReads = 0;
+        home.request.mockImplementation(async (input, init) => {
+            if (new URL(String(input)).pathname === '/v1/account/saved-secrets/resources/materials') {
+                materialReads += 1;
+                if (materialReads === 1) {
+                    firstReadStarted.resolve();
+                    await firstRead.promise;
+                } else {
+                    await replacementRead.promise;
+                }
+            }
+            return request(input, init);
+        });
+        const { useSavedSecretCatalog } = await import('./useSavedSecretCatalog');
+        const scope = home.scope;
+        const hook = await renderHook(({ scope }) => useSavedSecretCatalog({ scope }), { initialProps: { scope } });
+        try {
+            await firstReadStarted.promise;
+            await hook.rerender({ scope: { ...scope } });
+            await act(async () => { firstRead.resolve(); });
+            await vi.waitFor(() => expect(hook.getCurrent().usableSecrets.map(secret => secret.id)).toEqual([entry.ref]));
+            const material = hook.getCurrent().materializedSecrets;
+            expect(material).toHaveLength(1);
+            await act(async () => { beginSavedSecretCatalogLoad(scope); });
+            expect(hook.getCurrent().status).toBe('refreshing');
+            expect(hook.getCurrent().materializedSecrets).toBe(material);
+            expect(hook.getCurrent().resolveReference(entry.ref)).toMatchObject({ status: 'ready', secret: material[0] });
+            await act(async () => { invalidateSavedSecretCatalog(scope); });
+            expect(hook.getCurrent().materializedSecrets).toEqual([]);
+            expect(hook.getCurrent().usableSecrets).toEqual([]);
+            expect(hook.getCurrent().resolveReference(entry.ref).secret).toBeNull();
+        } finally {
+            firstRead.resolve();
+            replacementRead.resolve();
+            await hook.unmount();
+        }
+    });
+
     it.each([
         ['private', { accounts: [], teams: [], groups: [] }, true, true],
         ['shared', { accounts: [], teams: [{ kind: 'team', teamId: 'team-a', name: 'Research' }], groups: [] }, false, true],

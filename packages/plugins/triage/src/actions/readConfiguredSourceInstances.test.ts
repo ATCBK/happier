@@ -162,19 +162,37 @@ function createContext(input: Readonly<{
 const INPUT = TriageReadConfiguredSourceInstancesInputV1Schema.parse({ v: 1 });
 
 describe('the caller-scoped configured-instance read', () => {
-    it('lets a host agent discover admitted configured sources without granting a plugin the same scope', async () => {
+    it.each(['ui', 'voice', 'background', 'plugin'] as const)('does not treat an absent-caller %s surface as host Action authority', async (surface) => {
+        const { collections } = createTestkitCorpusCollections();
+        expect(await createTriageReadConfiguredSourceInstancesActionHandler()(
+            INPUT, createContext({ collections, surface }),
+        )).toEqual({ kind: 'invalidCaller' });
+    });
+
+    it('does not treat host webhook ingress as an account Action caller on the API surface', async () => {
+        const { collections } = createTestkitCorpusCollections();
+        const caller: PluginInvocationCaller = {
+            kind: 'host', domain: 'ingress', originSurface: 'webhook',
+            contribution: { id: 'webhook', qualifiedId: 'happier.example.forge/webhook' },
+        };
+        expect(await createTriageReadConfiguredSourceInstancesActionHandler()(
+            INPUT, createContext({ collections, surface: 'api', caller }),
+        )).toEqual({ kind: 'invalidCaller' });
+    });
+
+    it.each(['agent', 'mcp', 'cli', 'api'] as const)('lets a host %s caller discover admitted configured sources without granting a plugin the same scope', async (surface) => {
         const { collections, control } = createTestkitCorpusCollections();
         control.sourceInstances.seed(toCorpusStoredValue(instanceRow({ source: FORGE, seed: 1 })));
         control.sourceInstances.seed(toCorpusStoredValue(instanceRow({ source: TRACKER, seed: 2 })));
         const handler = createTriageReadConfiguredSourceInstancesActionHandler();
-        const result = await handler(INPUT, createContext({ collections, surface: 'agent' }));
+        const result = await handler(INPUT, createContext({ collections, surface }));
         expect(result.kind).toBe('read');
         if (result.kind !== 'read') return;
         expect(result.instances.map((record) => record.configured.instance.source)).toEqual([FORGE, TRACKER]);
         const selected = TriageReadConfiguredSourceInstancesInputV1Schema.parse({ v: 1, source: TRACKER });
-        expect(await handler(selected, createContext({ collections, surface: 'agent', caller: pluginCaller(FORGE.pluginId) })))
+        expect(await handler(selected, createContext({ collections, surface, caller: pluginCaller(FORGE.pluginId) })))
             .toEqual({ kind: 'invalidCaller' });
-        const filtered = await handler(selected, createContext({ collections, surface: 'agent' }));
+        const filtered = await handler(selected, createContext({ collections, surface }));
         expect(filtered.kind === 'read' ? filtered.instances.map((record) => record.configured.instance.source) : filtered)
             .toEqual([TRACKER]);
     });

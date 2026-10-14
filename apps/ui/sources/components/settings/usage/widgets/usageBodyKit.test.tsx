@@ -3,8 +3,10 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { resolveUsageShownCalendarRange, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { Heatmap, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
@@ -14,7 +16,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsageCoverageGaps, UsageCoverageLine, usageCoverageLineMode, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle } from './usageBodyKit';
+import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -89,6 +91,42 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageCoverageLineMode([], false)).toBe('hidden');
     });
 
+    it('a body\'s own line says an incomplete read in one quiet clause; the full wording stays for the Sources chooser', () => {
+        const slice = (status: 'partial' | 'pending' | 'error') => ({ sources: [
+            { source: 'claude-assistant-usage', status }, { source: 'claude-sdk-result', status }, { source: 'quota', status },
+        ] }) as unknown as UsageQueryResultSlice;
+        const partial = slice('partial');
+        expect(usageCoverageSummary(partial, ['quota', 'claude-assistant-usage', 'claude-sdk-result'])).toBe('Partial history');
+        expect(usageCoverageDescription(partial, ['quota', 'claude-assistant-usage', 'claude-sdk-result'])).toContain(usageSourceTitle('quota'));
+        // A read still going, or failed, keeps naming what it is waiting on or what failed.
+        expect(usageCoverageSummary(slice('pending'), ['quota'])).toBe(t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
+        expect(usageCoverageSummary(slice('error'), ['quota'])).toContain(usageSourceTitle('quota'));
+        expect(usageCoverageSummary({ sources: [] } as unknown as UsageQueryResultSlice, ['quota'])).toBe('');
+    });
+
+    it('keeps settled incomplete allowance coverage visible through refresh and removes it only when history completes', async () => {
+        const recordKey = { providerId: 'codex', accountSubjectId: 'work', subjectKind: 'account', quotaScope: 'account' } as const;
+        const current = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey),
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'work' }, observedAtMs: 100, fetchedAtMs: 100,
+            staleAfterMs: 1000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_empty', meters: [] });
+        const source = QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } });
+        const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 200 } });
+        const sliceFor = (complete: boolean) => resolveUsagePageAggregation({ queries: [query],
+            quota: { status: 'available', asOfMs: 100, value: [projectProviderAccountUsageQuotaReadV1({ input: { source },
+                current, nowMs: 200, history: { entries: [], nextCursor: complete ? null : { id: 'next', observedAtMs: 50 } } })] },
+        }).results[0]!;
+        const settled = sliceFor(false);
+        const screen = await renderScreen(<UsageCoverageLine slice={settled} sources={['quota']} testID="settled-coverage" />);
+        expect.soft(usageCoverageSummary(settled, ['quota'])).toBe('Partial history');
+        expect.soft(screen.findHostByTestId('settled-coverage') !== null).toBe(true);
+        const before = screen.getTextContent();
+        await screen.update(<UsageCoverageLine slice={{ ...settled, pending: true }} sources={['quota']} testID="settled-coverage" />);
+        expect(screen.getTextContent()).toBe(before);
+        await screen.update(<UsageCoverageLine slice={sliceFor(true)} sources={['quota']} testID="settled-coverage" />);
+        expect(screen.findHostByTestId('settled-coverage') === null).toBe(true);
+    });
+
     it('names every source still being read once for the page header', () => {
         const slice = (sources: readonly Readonly<{ source: string; status: 'pending' | 'not_loaded' | 'available' | 'partial' }>[]) =>
             ({ sources }) as unknown as Parameters<typeof describeUsagePagePendingSources>[0][number];
@@ -108,6 +146,46 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(describeUsagePagePendingSources([{ sources }])).toBe(
             t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
         expect(describeUsagePagePendingSources([{ sources: sources.map(source => ({ ...source, status: 'available' })) }])).toBeNull();
+    });
+    it('does not call undemanded work and activity reads pending after accounting-only slices settle', () => {
+        const query = normalizeUsageQuery({ period: { startMs: 100 }, includeWorkEvidence: false, includeSessionEvidence: false });
+        const settled = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available',
+            value: usageQaAccountingFixture() }], quota: { status: 'unsupported' } }).results;
+        expect(settled[0]?.pending).toBe(false);
+        expect(describeUsagePagePendingSources(settled)).toBeNull();
+        const demanded = normalizeUsageQuery({ ...query, includeWorkEvidence: true, includeSessionEvidence: true });
+        const reading = resolveUsagePageAggregation({ queries: [demanded], work: [{ query: demanded, status: 'pending' }],
+            accounting: [{ query: demanded, status: 'available', value: usageQaAccountingFixture() }], quota: { status: 'unsupported' },
+            sources: [{ source: 'how_you_work', status: 'pending' }] }).results;
+        expect(describeUsagePagePendingSources(reading)).toBe(t('usage.board.page.coveragePending', {
+            sources: [usageSourceTitle('work'), usageSourceTitle('how_you_work')].join(', '),
+        }));
+    });
+    it('dates the page by its latest observed source without rewriting older source freshness', () => {
+        const sources: UsageQueryResultSlice['sources'] = [
+            { source: 'accounting', status: 'available', asOfMs: 100 },
+            { source: 'historic-source', status: 'partial', asOfMs: 50 },
+            { source: 'quota', status: 'available', asOfMs: 200 },
+        ];
+        expect(readUsagePageAsOfMs([{ sources }])).toBe(200);
+        expect(sources[1]?.asOfMs).toBe(50);
+        expect(readUsagePageAsOfMs([{ sources: [{ source: 'accounting', status: 'pending' }] }])).toBeNull();
+    });
+    it('includes retained allowance observations while a refresh has only its conservative aggregate source date', () => {
+        const readAt = (accountId: string, atMs: number, state: 'loaded_empty' | 'not_loaded' = 'loaded_empty') => {
+            const recordKey = { providerId: 'codex', accountSubjectId: accountId, subjectKind: 'account' as const, quotaScope: 'account' as const };
+            const current = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey),
+                providerId: 'codex', accountSubject: { kind: 'providerSubject', id: accountId }, observedAtMs: atMs, fetchedAtMs: atMs,
+                staleAfterMs: 100, source: 'providerHttp', confidence: 'confirmed', state, meters: [] });
+            return projectProviderAccountUsageQuotaReadV1({ input: { source: { bindingKind: 'account',
+                ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId } } }, current, nowMs: 200 });
+        };
+        const query = normalizeUsageQuery({ period: { startMs: 100 } });
+        const slices = resolveUsagePageAggregation({ queries: [query], quota: { status: 'partial', asOfMs: 100,
+            value: [readAt('older', 100), readAt('newer', 200)] } }).results;
+        expect(readUsagePageAsOfMs(slices)).toBe(200);
+        expect(slices[0]?.sources.find(source => source.source === 'quota')?.asOfMs).toBe(100);
+        expect(readUsagePageAsOfMs([{ sources: [], quota: [readAt('never', 0, 'not_loaded')] }])).toBeNull();
     });
     it('humanizes unknown qualified producer identities without replacing a supplied display title', () => {
         const producer = 'third.party/research:remote';
@@ -299,9 +377,13 @@ describe('shared Usage identity and dependent coverage', () => {
         const screen = await renderScreen(<UsageCoverageLine slice={slice} sources={['accounting']} testID="coverage" />);
         expect(screen.getTextContent()).not.toContain('native:claude');
         expect(screen.getTextContent()).not.toContain('native:gemini');
-        expect(screen.getTextContent()).toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
-        expect(screen.getTextContent()).toContain(t('usage.board.page.coverageReason_incomplete_history'));
-        expect(screen.getTextContent()).toContain(t('usage.board.sources.unsupported'));
+        // A host without the Usage page's Sources detail keeps one quiet clause; the full wording lives in Sources.
+        expect(screen.getTextContent()).toContain('Partial history');
+        expect(screen.getTextContent()).not.toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
+        const detail = usageCoverageDescription(slice, ['accounting']);
+        expect(detail).toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
+        expect(detail).toContain(t('usage.board.page.coverageReason_incomplete_history'));
+        expect(detail).toContain(t('usage.board.sources.unsupported'));
     });
     it('does not treat an available transport without coverage metadata as complete history', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
@@ -309,5 +391,24 @@ describe('shared Usage identity and dependent coverage', () => {
             v: 1, totals: { tokens: { total: 5, input: 5, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' }, eventCount: 1 },
         } }] }).results[0]!;
         expect(readUsageCoverageGaps(slice, ['accounting'])).toEqual([{ source: 'accounting', status: 'unknown' }]);
+    });
+});
+
+describe('the allowance list holds its first-read room once', () => {
+    const query = normalizeUsageQuery({});
+    const pendingSlice = () => resolveUsagePageAggregation({ queries: [query], sources: [0, 1, 2].map(index => ({
+        source: `quota:${JSON.stringify(QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: `acct-${index}` } }))}`,
+        status: 'pending' as const })) }).results[0]!;
+    it('reserves through the first reads, lets go when every account has answered, and never reserves for a re-read', async () => {
+        const slice = pendingSlice();
+        const hook = await renderHook(({ answered }: { answered: boolean }) => useUsageMeterListFirstReadReserve(slice, 3, answered, false),
+            { initialProps: { answered: false } });
+        expect(hook.getCurrent()?.minHeight).toBeGreaterThan(0);
+        await hook.rerender({ answered: true });
+        expect(hook.getCurrent()).toBeUndefined();
+        // A later re-read puts accounts back to pending: the retained rows keep their height, no blank room is added.
+        await hook.rerender({ answered: false });
+        expect(hook.getCurrent()).toBeUndefined();
     });
 });

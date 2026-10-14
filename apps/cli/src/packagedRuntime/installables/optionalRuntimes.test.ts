@@ -53,12 +53,24 @@ vi.mock('node:fs', async (importOriginal) => {
       String(path).replaceAll('\\', '/').includes('/tools/unpacked/difft') ? false : actual.existsSync(path),
   };
 });
+// Source dependency resolution is an OS/module-installation boundary. Keep the
+// runtime-authority resolver real, with an isolated installed dependency tree.
+vi.mock('node:module', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:module')>();
+  return {
+    ...actual,
+    createRequire: (filename: Parameters<typeof actual.createRequire>[0]) =>
+      String(filename).replaceAll('\\', '/').endsWith('/apps/cli/package.json')
+        ? actual.createRequire(join(boundary.home, 'source', 'package.json'))
+        : actual.createRequire(filename),
+  };
+});
 
 import { createInstallableCapabilitiesFromContributions } from '@/capabilities/registry/installables';
 import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { ensureInstalledFirstPartyComponent } from '@happier-dev/cli-common/firstPartyRuntime';
 import { INSTALLABLE_KEYS } from '@happier-dev/protocol';
-import { resolveInstalledOptionalRuntime } from './optionalRuntimes';
+import { ensureOptionalRuntime, resolveInstalledOptionalRuntime } from './optionalRuntimes';
 import { createFeatureExtractionPipelineWithFallback } from '@/daemon/memory/deepIndex/embeddings/createLocalTransformersEmbeddingsProvider';
 import { registerDifftasticHandler } from '@/rpc/handlers/difftastic';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -150,6 +162,8 @@ beforeEach(async () => {
   boundary.offline = false;
   boundary.releaseWait = null;
   vi.stubEnv('HAPPIER_HOME_DIR', boundary.home);
+  await mkdir(join(boundary.home, 'source'), { recursive: true });
+  await writeFile(join(boundary.home, 'source', 'package.json'), '{}');
   await prepareSignedOptionalRelease();
   await writeFile(join(boundary.home, 'settings.json'), JSON.stringify({ schemaVersion: 1, machineId: 'fixture-machine' }));
 });
@@ -161,6 +175,25 @@ afterEach(async () => {
 });
 
 describe('optional runtime installation through capabilities', () => {
+  it('uses the source CLI native voice dependency for detection, explicit install and first use offline', async () => {
+    const dependencyRoot = join(boundary.home, 'source', 'node_modules', 'sherpa-onnx-node');
+    await mkdir(dependencyRoot, { recursive: true });
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({
+      name: 'sherpa-onnx-node', version: '1.12.38', main: 'sherpa-onnx.js',
+    }));
+    const entry = join(dependencyRoot, 'sherpa-onnx.js');
+    await writeFile(entry, 'module.exports = { OnlineRecognizer: class OnlineRecognizer {} };');
+    boundary.offline = true;
+    const capability = await voiceCapability();
+
+    expect(await capability.detect({ request: { id: 'dep.local-voice-runtime' }, context: { cliSnapshot: null } }))
+      .toMatchObject({ installed: true, binPath: entry, runtimeState: 'ready' });
+    expect(await ensureOptionalRuntime(INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME)).toBe(entry);
+    expect(await capability.invoke!({ method: 'install' })).toMatchObject({ ok: true });
+    expect(await resolveInstalledOptionalRuntime(INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME)).toBe(entry);
+    expect(boundary.requests).toEqual([]);
+  });
+
   it('rejects an invalid prepared runtime before publishing its version', async () => {
     await expect(ensureInstalledFirstPartyComponent({
       componentId: 'happier-memory-runtime',

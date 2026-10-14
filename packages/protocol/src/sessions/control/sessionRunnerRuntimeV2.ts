@@ -1,18 +1,18 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionRunnerRuntimeStateV1Schema } from './sessionRunnerRuntimeV1.js';
 
-export const SessionRunnerProcessIdentityV2Schema = lazyZodSchema(() => z.object({
-  pid: z.number().int().positive(),
-  processStartTimeMs: z.number().int().nonnegative(),
-}).strict());
+export const SessionRunnerProcessIdentityV2Schema = lazyZodSchema(() => z.strictObject({
+  pid: z.number().check(z.int(), z.positive()),
+  processStartTimeMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionRunnerProcessIdentityV2 = z.infer<typeof SessionRunnerProcessIdentityV2Schema>;
 
 /** Additive status read carrying only exact process-currentness evidence beside unchanged V1 state. */
-export const SessionRunnerRuntimeStatusV2Schema = lazyZodSchema(() => z.object({
+export const SessionRunnerRuntimeStatusV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   state: SessionRunnerRuntimeStateV1Schema,
-  runnerProcessIdentity: SessionRunnerProcessIdentityV2Schema.nullable(),
-}).strict());
+  runnerProcessIdentity: z.nullable(SessionRunnerProcessIdentityV2Schema),
+}));
 export type SessionRunnerRuntimeStatusV2 = z.infer<typeof SessionRunnerRuntimeStatusV2Schema>;

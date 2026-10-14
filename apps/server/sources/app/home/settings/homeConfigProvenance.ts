@@ -1,4 +1,4 @@
-import type { ServerConfigEnv } from '@happier-dev/protocol';
+import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 /**
  * Which source put a value into a configuration overlay (plan `2026-09-26-home-owner-console` §3.2,

@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { PluginUpdatePolicyV1Schema, type PluginUpdatePolicyV1 } from './pluginUpdatePolicyV1.js';
@@ -36,9 +37,8 @@ import {
  * the daemon staged.
  */
 
-const ReviewNonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1));
-const ReviewStringListSchema = lazyZodSchema(() => z.array(ReviewNonEmptyStringSchema)
-  .refine((values) => new Set(values).size === values.length));
+const ReviewNonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const ReviewStringListSchema = lazyZodSchema(() => z.array(ReviewNonEmptyStringSchema).check(z.refine((values) => new Set(values).size === values.length)));
 
 /**
  * A compatibility diagnostic carried inside the review.
@@ -48,29 +48,29 @@ const ReviewStringListSchema = lazyZodSchema(() => z.array(ReviewNonEmptyStringS
  * review only promises that every rejected version explains itself with a
  * stable `code`/`message` pair.
  */
-export const PluginInstallationReviewCompatibilityDiagnosticSchema = lazyZodSchema(() => z.object({
+export const PluginInstallationReviewCompatibilityDiagnosticSchema = lazyZodSchema(() => z.strictObject({
   code: ReviewNonEmptyStringSchema,
   message: PluginDiagnosticTextV1Schema,
-  contribution: asProtocolZod(PluginContributionIdentityV1Schema).optional(),
-  details: PluginJsonValueV2Schema.optional(),
-  stage: PluginDiagnosticStageV1Schema.optional(),
+  contribution: zMini.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
+  details: zMini.optional(PluginJsonValueV2Schema),
+  stage: zMini.optional(PluginDiagnosticStageV1Schema),
   /** Local-development realm only; see the host diagnostics source-location owner. */
-  source: z.object({
-    file: z.string().trim().min(1),
-    line: z.number().int().positive().optional(),
-    column: z.number().int().nonnegative().optional(),
-  }).strict().optional(),
+  source: z.optional(z.strictObject({
+    file: z.string().check(z.trim(), z.minLength(1)),
+    line: z.optional(z.number().check(z.int(), z.positive())),
+    column: z.optional(z.number().check(z.int(), z.nonnegative())),
+  })),
   /** Local-development realm only: root-rebased, credential- and path-redacted. */
-  stack: PluginDiagnosticTextV1Schema.optional(),
-}).strict());
+  stack: zMini.optional(PluginDiagnosticTextV1Schema),
+}));
 export type PluginInstallationReviewCompatibilityDiagnostic = z.infer<
   typeof PluginInstallationReviewCompatibilityDiagnosticSchema
 >;
 
-const ReviewBlockedNewerVersionSchema = lazyZodSchema(() => z.object({
+const ReviewBlockedNewerVersionSchema = lazyZodSchema(() => z.strictObject({
   version: ReviewNonEmptyStringSchema,
-  diagnostics: z.array(PluginInstallationReviewCompatibilityDiagnosticSchema).min(1),
-}).strict());
+  diagnostics: z.array(PluginInstallationReviewCompatibilityDiagnosticSchema).check(z.minLength(1)),
+}));
 
 const HostPluginContributionIdentityV1Schema = asProtocolZod(
   PluginContributionIdentityV1Schema,
@@ -105,30 +105,29 @@ export type PluginInstallationReviewRawCredentialAccess = Readonly<{
 }>;
 
 const ReviewRawCredentialSourceClassSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('savedSecret'),
-    secretKinds: z.array(z.enum(['apiKey', 'token', 'password', 'other'])).min(1).max(4)
-      .refine((values) => new Set(values).size === values.length),
-  }).strict(),
-  z.object({
+    secretKinds: z.array(z.enum(['apiKey', 'token', 'password', 'other'])).check(z.minLength(1), z.maxLength(4), z.refine((values) => new Set(values).size === values.length)),
+  }),
+  z.strictObject({
     kind: z.literal('connectedAccount'),
     service: HostPluginContributionIdentityV1Schema,
-  }).strict(),
+  }),
 ]));
 
-export const PluginInstallationReviewRawCredentialAccessSchema: z.ZodType<PluginInstallationReviewRawCredentialAccess> = lazyZodSchema(() => z.object({
+export const PluginInstallationReviewRawCredentialAccessSchema: z.ZodMiniType<PluginInstallationReviewRawCredentialAccess> = lazyZodSchema(() => z.strictObject({
   accessMode: z.literal('raw'),
   contribution: HostPluginContributionIdentityV1Schema,
-  credentialSlot: z.object({
+  credentialSlot: z.strictObject({
     id: VoiceCredentialSlotIdSchema,
     title: ReviewNonEmptyStringSchema,
     purpose: ConnectedAccountPurposeIdSchema,
-  }).strict(),
+  }),
   sourceClass: ReviewRawCredentialSourceClassSchema,
   realm: z.enum(['web', 'ios', 'android', 'daemon']),
   phase: VoiceCredentialAccessPhaseSchema,
   request: ConnectedAccountMaterializationRequestSchema,
-}).strict());
+}));
 
 type PluginInstallationReviewHttpMethod = NonNullable<
   PluginRequestInterceptorContributionV1['methods']
@@ -146,14 +145,14 @@ export type PluginInstallationReviewRequestInterceptor = Readonly<{
   priority: number;
 }>;
 
-export const PluginInstallationReviewRequestInterceptorSchema: z.ZodType<PluginInstallationReviewRequestInterceptor> = (
-  PluginRequestInterceptorContributionV1Schema.pick({
+export const PluginInstallationReviewRequestInterceptorSchema: z.ZodMiniType<PluginInstallationReviewRequestInterceptor> = (
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(zMini.pick(PluginRequestInterceptorContributionV1Schema, {
     id: true,
     origins: true,
     methods: true,
-  }).extend({
-    priority: z.number().int(),
-  }).strict()
+  }), {
+    priority: z.number().check(z.int()),
+  })))
 );
 
 export type PluginInstallationReview = Readonly<{
@@ -265,134 +264,133 @@ const ReviewHostAccessBaseShape = {
   normalizedScope: z.record(z.string(), PluginJsonValueV2Schema),
 } as const;
 
-export const PluginInstallationReviewSchema: z.ZodType<PluginInstallationReview> = lazyZodSchema(() => z.object({
+export const PluginInstallationReviewSchema: z.ZodMiniType<PluginInstallationReview> = lazyZodSchema(() => z.strictObject({
   pluginId: ReviewNonEmptyStringSchema,
   displayName: ReviewNonEmptyStringSchema,
   version: ReviewNonEmptyStringSchema,
-  packageIdentity: z.object({
-    name: ReviewNonEmptyStringSchema.nullable(),
+  packageIdentity: z.strictObject({
+    name: z.nullable(ReviewNonEmptyStringSchema),
     version: ReviewNonEmptyStringSchema,
-  }).strict(),
+  }),
   publisherIdentity: z.union([
-    z.object({ status: z.literal('unavailable') }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('unavailable') }),
+    z.strictObject({
       status: z.literal('unverified'),
       id: ReviewNonEmptyStringSchema,
       displayName: ReviewNonEmptyStringSchema,
-    }).strict(),
+    }),
   ]),
   source: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('path'),
       locator: ReviewNonEmptyStringSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('archive'),
       locator: ReviewNonEmptyStringSchema,
       integrity: ReviewNonEmptyStringSchema,
       integrityBasis: z.enum(['observed', 'expected']),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('npm'),
       locator: ReviewNonEmptyStringSchema,
       integrity: ReviewNonEmptyStringSchema,
       integrityBasis: z.literal('expected'),
-    }).strict(),
+    }),
   ]),
   updateChannel: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('path'),
       locator: ReviewNonEmptyStringSchema,
       development: z.boolean(),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('archive'),
       locator: ReviewNonEmptyStringSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('npm'),
       packageName: ReviewNonEmptyStringSchema,
       registryOrigin: ReviewNonEmptyStringSchema,
-      registryProfileId: ReviewNonEmptyStringSchema.optional(),
-      marketplaceSource: z.object({
+      registryProfileId: z.optional(ReviewNonEmptyStringSchema),
+      marketplaceSource: z.optional(z.strictObject({
         id: ReviewNonEmptyStringSchema,
         kind: MarketplaceIndexSourceKindV1Schema,
         sourceUrl: ReviewNonEmptyStringSchema,
-      }).strict().optional(),
-    }).strict(),
+      })),
+    }),
   ]),
   signature: z.union([
-    z.object({ status: z.literal('notProvided') }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('notProvided') }),
+    z.strictObject({
       status: z.enum(['verified', 'unsupported']),
       keyId: ReviewNonEmptyStringSchema,
-    }).strict(),
+    }),
   ]),
   provenance: z.union([
-    z.object({ status: z.literal('notProvided') }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('notProvided') }),
+    z.strictObject({
       status: z.literal('declaredUnverified'),
       predicateType: ReviewNonEmptyStringSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('retrievedUnverified'),
-      predicateTypes: ReviewStringListSchema.refine((values) => values.length > 0),
-    }).strict(),
-    z.object({
+      predicateTypes: ReviewStringListSchema.check(z.refine((values) => values.length > 0)),
+    }),
+    z.strictObject({
       status: z.literal('unavailable'),
       code: ReviewNonEmptyStringSchema,
-    }).strict(),
+    }),
   ]),
   curation: z.union([
-    z.object({ status: z.literal('notApplicable') }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('notApplicable') }),
+    z.strictObject({
       status: z.literal('approved'),
       sourceId: ReviewNonEmptyStringSchema,
       reviewedAt: ReviewNonEmptyStringSchema,
-      reason: ReviewNonEmptyStringSchema.nullable().optional(),
-    }).strict(),
-    z.object({
+      reason: z.optional(z.nullable(ReviewNonEmptyStringSchema)),
+    }),
+    z.strictObject({
       status: z.literal('unreviewed'),
       sourceId: ReviewNonEmptyStringSchema,
-    }).strict(),
+    }),
   ]),
-  executableRealms: z.array(z.enum(['daemon', 'reactNative', 'hostedWeb'])).max(3)
-    .refine((values) => new Set(values).size === values.length),
-  contributions: z.array(z.object({
+  executableRealms: z.array(z.enum(['daemon', 'reactNative', 'hostedWeb'])).check(z.maxLength(3), z.refine((values) => new Set(values).size === values.length)),
+  contributions: z.array(z.strictObject({
     family: ReviewNonEmptyStringSchema,
-    count: z.number().int().positive().safe(),
-  }).strict()).refine((values) => (
+    count: z.number().check(z.int(), z.positive(), z.int()),
+  })).check(z.refine((values) => (
     new Set(values.map((entry) => entry.family)).size === values.length
-  )),
+  ))),
   requestInterceptors: z.array(PluginInstallationReviewRequestInterceptorSchema),
-  uiArtifacts: z.object({
+  uiArtifacts: z.strictObject({
     status: z.enum(['verified', 'none', 'unavailable']),
     contributionIds: ReviewStringListSchema,
-  }).strict().refine((value) => (
+  }).check(z.refine((value) => (
     value.status === 'none'
       ? value.contributionIds.length === 0
       : value.contributionIds.length > 0
-  )),
-  requiredHostAccess: z.array(z.object({
+  ))),
+  requiredHostAccess: z.array(z.strictObject({
     ...ReviewHostAccessBaseShape,
     authorizationClass: z.enum([
       'cooperativeDisclosure',
       'hostResourceSelection',
       'presentIntentOrOs',
     ]),
-  }).strict()),
-  optionalHostAccess: z.array(z.object({
+  })),
+  optionalHostAccess: z.array(z.strictObject({
     ...ReviewHostAccessBaseShape,
     authorizationClass: z.literal('hostResourceSelection'),
-  }).strict()),
+  })),
   rawCredentialAccess: z.array(PluginInstallationReviewRawCredentialAccessSchema),
-  compatibility: z.object({
-    happier: ReviewNonEmptyStringSchema.optional(),
+  compatibility: z.strictObject({
+    happier: z.optional(ReviewNonEmptyStringSchema),
     runtimeApiVersion: z.literal(1),
-    blockedNewerVersions: z.array(ReviewBlockedNewerVersionSchema).optional(),
-  }).strict(),
+    blockedNewerVersions: z.optional(z.array(ReviewBlockedNewerVersionSchema)),
+  }),
   updatePolicy: PluginUpdatePolicyV1Schema,
-}).strict());
+}));
 
 /**
  * Authorization to evaluate executable code from a local development source
@@ -411,12 +409,12 @@ export type PluginDevelopmentProjectTrustReview = Readonly<{
   }>;
 }>;
 
-export const PluginDevelopmentProjectTrustReviewSchema: z.ZodType<PluginDevelopmentProjectTrustReview> = lazyZodSchema(() => z.object({
-  source: z.object({
+export const PluginDevelopmentProjectTrustReviewSchema: z.ZodMiniType<PluginDevelopmentProjectTrustReview> = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({
     kind: z.literal('path'),
     locator: ReviewNonEmptyStringSchema,
-  }).strict(),
-}).strict());
+  }),
+}));
 
 /**
  * A daemon-issued change that is waiting on a present user, in the exactly two
@@ -429,27 +427,27 @@ export const PluginDevelopmentProjectTrustReviewSchema: z.ZodType<PluginDevelopm
  * can never disagree with the stage the daemon is actually at.
  */
 export const PluginChangePendingReviewResultSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('reviewRequired'),
     reviewKind: z.literal('projectTrust'),
-    pendingChangeId: z.string().trim().min(1),
+    pendingChangeId: z.string().check(z.trim(), z.minLength(1)),
     review: PluginDevelopmentProjectTrustReviewSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('reviewRequired'),
     reviewKind: z.literal('installation'),
-    pendingChangeId: z.string().trim().min(1),
+    pendingChangeId: z.string().check(z.trim(), z.minLength(1)),
     reason: z.enum(['firstInstall', 'authorityExpansion']),
-    currentVersion: ReviewNonEmptyStringSchema.nullable(),
+    currentVersion: z.nullable(ReviewNonEmptyStringSchema),
     authorityExpansion: z.array(z.enum([
       'requiredHostAccess',
       'selectedOptionalHostAccess',
       'connectedAccountPurpose',
       'requestInterceptor',
       'rawCredentialAccess',
-    ])).max(5).refine((values) => new Set(values).size === values.length),
+    ])).check(z.maxLength(5), z.refine((values) => new Set(values).size === values.length)),
     review: PluginInstallationReviewSchema,
-  }).strict(),
+  }),
 ]));
 
 export type PluginChangePendingReviewResult = z.infer<typeof PluginChangePendingReviewResultSchema>;

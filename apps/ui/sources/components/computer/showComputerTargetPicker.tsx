@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -32,14 +33,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     machine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s4,
         borderRadius: 999,
         backgroundColor: theme.colors.surface.inset,
     },
     machineText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
 }));
@@ -65,7 +66,7 @@ export function computerTargetPickerChrome(params: Readonly<{ agentName: string;
         // For which Session (and where), then the promise (lab TP).
         subtitle: params.purpose ? `${params.purpose} ${promise}` : promise,
         actions: <MachineIdentity name={params.machineName} />,
-        dimensions: { width: 560, maxHeightRatio: 0.9, size: 'md' },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' },
         // A phone gets the lab's bottom sheet, in thumb reach.
         phonePresentation: 'sheet',
     };

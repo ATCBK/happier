@@ -6,6 +6,11 @@ import type {
 import { reachPlaceKeyV1 } from '@happier-dev/protocol/reach/reachPlaceV1';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Modal } from '@/modal';
+import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
+import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { McpBindingOverridesEditorModal } from '../McpBindingOverridesEditorModal';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
   ExpandableItem,
@@ -52,6 +57,10 @@ export const McpServerMachineDifferences = React.memo(
     props: Readonly<{
       server: McpServerCatalogEntryV1;
       machineName: (machineId: string) => string;
+      /** The Account's machines a difference can name. */
+      machines: readonly Readonly<{ machineId: string; name: string }>[];
+      secrets: SavedSecret[];
+      scope: AccountSettingsScope | null | undefined;
       onChangeServer: (
         updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1,
       ) => void;
@@ -61,7 +70,84 @@ export const McpServerMachineDifferences = React.memo(
     const { theme } = useUnistyles();
     const overrides = props.server.configOverrides ?? [];
     const [expanded, setExpanded] = React.useState(false);
-    if (overrides.length === 0) return null;
+    const [pickOpen, setPickOpen] = React.useState(false);
+    const { onChangeServer, onCommit } = props;
+
+    // One machine's values: the existing override editor, prefilled when the machine already differs.
+    const edit = (target: McpServerConfigOverrideV1['target'], current: McpServerConfigOverrideV1 | undefined) => {
+      const key = reachPlaceKeyV1(target);
+      const { target: _target, ...fields } = current ?? { target };
+      Modal.show({
+        component: McpBindingOverridesEditorModal,
+        props: {
+          overrides: current ? fields : undefined,
+          serverTransport: props.server.transport,
+          secrets: props.secrets,
+          ...(props.scope === undefined ? {} : { scope: props.scope }),
+          onSubmit: (next: Omit<McpServerConfigOverrideV1, 'target'> | undefined) => {
+            onChangeServer((server) => {
+              const rest = (server.configOverrides ?? []).filter((item) => reachPlaceKeyV1(item.target) !== key);
+              const configOverrides = next ? [...rest, { ...next, target }] : rest;
+              return { ...server, configOverrides, updatedAt: Date.now() };
+            });
+            onCommit();
+            setExpanded(true);
+          },
+        },
+        chrome: {
+          kind: 'card',
+          title: t('capabilities.mcp.config.differentOn', { machine: props.machineName(target.machineId) }),
+          dimensions: { size: 'lg' },
+        },
+        closeOnBackdrop: true,
+      });
+    };
+    const differing = new Set(overrides.filter((item) => item.target.t === 'machine').map((item) => item.target.machineId));
+    const choices = props.machines
+      .filter((machine) => !differing.has(machine.machineId))
+      .map((machine) => ({ id: machine.machineId, title: machine.name }));
+    const add = choices.length > 0 ? (
+      <DropdownMenu
+        testID="mcp.server.differences.add"
+        open={pickOpen}
+        onOpenChange={setPickOpen}
+        variant="selectable"
+        search={choices.length > 8}
+        searchPlaceholder={t('machinePicker.searchPlaceholder')}
+        showCategoryTitles={false}
+        connectToTrigger
+        items={choices}
+        onSelect={(machineId) => {
+          setPickOpen(false);
+          edit({ t: 'machine', machineId }, undefined);
+        }}
+        trigger={({ toggle }) => (
+          <RoundButton
+            testID="mcp.server.differences.add.trigger"
+            size="small"
+            display="inverted"
+            leading={<Icon name="plus" size={14} color={theme.colors.text.primary} />}
+            title={t('capabilities.mcp.config.addDifference')}
+            onPress={toggle}
+          />
+        )}
+      />
+    ) : null;
+
+    if (overrides.length === 0) {
+      return (
+        <ItemGroup header="none" testID="mcp.server.differences">
+          <Item
+            testID="mcp.server.differences.none"
+            title={t('capabilities.mcp.config.different')}
+            subtitle={t('capabilities.mcp.config.differentNone')}
+            accessoryLayout="adaptive"
+            showChevron={false}
+            rightElement={add ?? undefined}
+          />
+        </ItemGroup>
+      );
+    }
     const names = overrides.map((override) =>
       props.machineName(override.target.machineId),
     );
@@ -115,6 +201,7 @@ export const McpServerMachineDifferences = React.memo(
                 testID={`mcp.server.differences.row.${index}`}
                 title={title}
                 subtitle={describeOverride(override) || undefined}
+                onPress={override.target.t === 'machine' ? () => edit(override.target, override) : undefined}
                 icon={
                   <Icon
                     name="desktop"
@@ -135,6 +222,9 @@ export const McpServerMachineDifferences = React.memo(
               />
             );
           })}
+          {add ? (
+            <Item testID="mcp.server.differences.addRow" title={t('capabilities.mcp.config.addAnother')} showChevron={false} rightElement={add} />
+          ) : null}
         </ExpandableItem>
       </ItemGroup>
     );

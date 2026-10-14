@@ -259,6 +259,7 @@ describe('SessionModelPicker', () => {
                 experimentalConfirmation={{
                     confirm,
                     pending: true,
+                    pendingModelName: 'Experimental model',
                     pendingApproval: { artifactId: 'approval-artifact-1', href },
                     error: null,
                     retry: null,
@@ -269,6 +270,8 @@ describe('SessionModelPicker', () => {
         );
 
         expect(screen.findByTestId('model-picker-experimental-approval')).toBeTruthy();
+        // The line says WHICH choice is waiting, not only that something is.
+        expect(screen.findByTestId('model-picker-experimental-approval.subject')?.props.children).toBe('Experimental model');
         await screen.pressByTestIdAsync('model-picker-experimental-approval.open');
         expect(expoRouter.push).toHaveBeenCalledWith(href);
         await screen.pressByTestIdAsync(`model-picker-overlay-option:${JSON.stringify([

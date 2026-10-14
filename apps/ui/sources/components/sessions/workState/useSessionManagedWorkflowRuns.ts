@@ -9,10 +9,9 @@ import type {
 import type { WorkflowRunPrivateMetadataV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
-import { getStorage, useActiveServerAccountScope, useWorkflowRunRows } from '@/sync/domains/state/storage';
-import { listWorkflowRuns } from '@/sync/domains/workflows/workflowRunListActions';
+import { getStorage, useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useWorkflowRunRows } from '@/sync/domains/state/storage';
+import { listAllWorkflowRuns } from '@/sync/domains/workflows/workflowRunListActions';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
 import { selectWorkflowRunWindowInvocations, workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
@@ -126,6 +125,7 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
     const workflows = useWorkflowsAvailability();
     const enabled = (params.enabled ?? true) && workflows.available;
     const accountScope = useActiveServerAccountScope(params.serverId);
+    const lifetime = useActiveServerAccountScopeLifetime();
     const accountScopeKey = accountScope === null ? null : serverAccountScopeKeySuffix(accountScope);
     const [listWindow, setWindow] = React.useState<SessionManagedWorkflowRunsWindow>(EMPTY_WINDOW);
     const [invalidationToken, setInvalidationToken] = React.useState(0);
@@ -146,11 +146,11 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
         }
         // Decrypted Account content never survives a scope change: the lifetime
         // retires this read before another Account's rows could be applied.
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null
             || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         const requestScopeKey = accountScopeKey;
         const controller = new AbortController();
+        const retirement = lifetime.onRetire(() => controller.abort());
         let cancelled = false;
         // A re-read keeps last-known-good rows; only a first read is loading.
         setWindow((current) => (
@@ -162,16 +162,21 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
             try {
                 const filter = relation === 'destination' ? { targetSessionId: sessionId } : { originSessionId: sessionId };
                 const [all, attention] = await Promise.all([
-                    listWorkflowRuns({
+                    listAllWorkflowRuns({
                         filter,
                         signal: controller.signal,
                     }),
-                    listWorkflowRuns({
+                    listAllWorkflowRuns({
                         filter: { ...filter, attention: 'required' },
                         signal: controller.signal,
                     }),
                 ]);
                 if (cancelled || !lifetime.isCurrent()) return;
+                // A projection that did not read Automation scope cannot establish Work membership.
+                // Keep the last proven window and its existing failed-read state, rather than infer
+                // ownership from a mutable or not-yet-hydrated client Automation catalog.
+                if ([...all.runs, ...attention.runs].some(run => run.origin.kind === 'automation'
+                    && run.automationScopeSessionId === undefined)) throw new Error('workflow_run_scope_unavailable');
                 // Both pages' bodies land in the one Account-scoped row owner,
                 // so an off-page actionable Run is the same body the exact Run
                 // route resolves rather than a second, thinner copy.
@@ -219,12 +224,12 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
         return () => {
             cancelled = true;
             controller.abort();
+            retirement.dispose();
         };
-    }, [accountScopeKey, enabled, invalidationToken, relation, sessionId]);
+    }, [accountScopeKey, enabled, invalidationToken, lifetime, relation, sessionId]);
 
     React.useEffect(() => {
         if (!enabled || sessionId === null || accountScopeKey === null) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         return subscribeVisibleWorkflowRunListInvalidation({
             lifetime,
@@ -232,7 +237,7 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
                 && windowRef.current.sessionId === sessionId && windowRef.current.relation === relation,
             invalidate: () => setInvalidationToken((token) => token + 1),
         });
-    }, [accountScopeKey, enabled, relation, sessionId]);
+    }, [accountScopeKey, enabled, lifetime, relation, sessionId]);
 
     const runs = React.useMemo(
         () => (rows.length === 0 ? EMPTY_RUNS : rows.flatMap((row) => (row.summary ? [row.summary] : []))),
@@ -275,6 +280,7 @@ const EMPTY_INVOCATIONS: readonly WorkflowRunInvocationIndexV1[] = Object.freeze
  */
 export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string | null): SessionManagedWorkflowRunFlow | null {
     const accountScope = useActiveServerAccountScope(serverId);
+    const lifetime = useActiveServerAccountScopeLifetime();
     const accountScopeKey = accountScope === null ? null : serverAccountScopeKeySuffix(accountScope);
     const contentKey = accountScopeKey === null ? null : `${accountScopeKey}\u0000${runId}`;
     const [definition, setDefinition] = React.useState<Readonly<{ key: string; value: WorkflowDefinitionV1 }> | null>(null);
@@ -288,7 +294,6 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
             setDefinition(null);
             return;
         }
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         const controller = new AbortController();
         const retirement = lifetime.onRetire(() => controller.abort());
@@ -304,11 +309,10 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
             controller.abort();
             retirement.dispose();
         };
-    }, [contentKey, runId]);
+    }, [accountScopeKey, contentKey, lifetime, runId]);
 
     React.useEffect(() => {
         if (contentKey === null) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         const controller = new AbortController();
         const retirement = lifetime.onRetire(() => controller.abort());
@@ -332,11 +336,10 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
             controller.abort();
             retirement.dispose();
         };
-    }, [contentKey, invalidationToken, runId]);
+    }, [accountScopeKey, contentKey, invalidationToken, lifetime, runId]);
 
     React.useEffect(() => {
         if (contentKey === null) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         return subscribeVisibleWorkflowRunListInvalidation({
             lifetime,
@@ -344,7 +347,7 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
             isVisibleWindowLoaded: () => true,
             invalidate: () => setInvalidationToken((token) => token + 1),
         });
-    }, [contentKey, runId]);
+    }, [accountScopeKey, contentKey, lifetime, runId]);
 
     const definitionValue = definition !== null && definition.key === contentKey ? definition.value : null;
     const projection = React.useMemo(

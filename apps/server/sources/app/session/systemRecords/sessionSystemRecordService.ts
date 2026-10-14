@@ -1,57 +1,21 @@
 import type { Prisma } from "@prisma/client";
 import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
+import { z } from "zod/mini";
 
-import {
-    isStoredContentKindAllowedForSessionByStoragePolicy,
-    getSessionSystemRecordKindPolicy,
-    getSessionSystemRecordPayloadSchema,
-    SESSION_SYSTEM_RECORD_CATALOG,
-    SESSION_SYSTEM_RECORD_NAMESPACES,
-    PluginIdSchema,
-    SessionSystemRecordAddressSchema,
-    SessionSystemRecordDeleteRequestSchema,
-    SessionSystemRecordContentSchema,
-    SessionSystemRecordCreatorV1Schema,
-    type SessionSystemRecordCreatorV1,
-    SessionSystemRecordListQuerySchema,
-    SessionSystemRecordReadRequestSchema,
-    SessionSystemRecordRevisionSchema,
-    SESSION_SYSTEM_RECORD_VERSION_MAX,
-    LegacyHostSessionSystemRecordLatestQuerySchema,
-    LegacyHostSessionSystemRecordListQuerySchema,
-    LegacyHostSessionSystemRecordLookupQuerySchema,
-    LegacyHostSessionSystemRecordUpsertRequestSchema,
-    type SessionStoredContentKind,
-    type SessionStoredMessageContent,
-    type SessionSystemRecordKind,
-    type SessionSystemRecordNamespace,
-    type SessionSystemRecordAddress,
-    type SessionSystemRecordContent,
-    type SessionSystemRecordListQuery,
-    type SessionSystemRecordRevision,
-    type SessionSystemRecordKindPolicy,
-    type SessionSystemRecordCatalog,
-    type SessionSystemRecordStored,
-    SESSION_PERMISSION_SYSTEM_RECORD_KINDS,
-    SESSION_PERMISSION_SYSTEM_RECORD_NAMESPACE,
-    deriveSessionPermissionMediationRecordLocatorV1,
-    SessionPermissionMediationRecordIdentityV1Schema,
-    SessionPermissionMediationRecordKindSchema,
-    SessionPermissionMediationRecordListQuerySchema,
-    SessionPermissionMediationRecordPruneRequestSchema,
-    SessionPermissionMediationRecordWriteRequestSchema,
-    type SessionPermissionMediationRecordIdentityV1,
-    type SessionPermissionMediationRecordListQuery,
-    type SessionPermissionMediationRecordPruneRequest,
-    type SessionPermissionMediationRecordStored,
-    type SessionPermissionMediationRecordWriteRequest,
-} from "@happier-dev/protocol";
-import {
-    SessionBoardItemRecordContentV1Schema,
-    SessionBoardLayoutRecordContentV1Schema,
-} from "@happier-dev/protocol/sessions/board";
+import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStoredContentKind } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { getSessionSystemRecordKindPolicy, getSessionSystemRecordPayloadSchema, SESSION_SYSTEM_RECORD_CATALOG, type SessionSystemRecordKindPolicy, type SessionSystemRecordCatalog } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog';
+import { SESSION_SYSTEM_RECORD_NAMESPACES, type SessionSystemRecordNamespace } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordNamespace';
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { SessionSystemRecordAddressSchema, type SessionSystemRecordAddress } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
+import { SessionSystemRecordDeleteRequestSchema, SessionSystemRecordListQuerySchema, SessionSystemRecordReadRequestSchema, LegacyHostSessionSystemRecordLatestQuerySchema, LegacyHostSessionSystemRecordListQuerySchema, LegacyHostSessionSystemRecordLookupQuerySchema, LegacyHostSessionSystemRecordUpsertRequestSchema, type SessionSystemRecordListQuery, type SessionSystemRecordStored, SessionPermissionMediationRecordKindSchema, SessionPermissionMediationRecordListQuerySchema, SessionPermissionMediationRecordPruneRequestSchema, SessionPermissionMediationRecordWriteRequestSchema, type SessionPermissionMediationRecordListQuery, type SessionPermissionMediationRecordPruneRequest, type SessionPermissionMediationRecordStored, type SessionPermissionMediationRecordWriteRequest } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
+import { SessionSystemRecordContentSchema, type SessionSystemRecordContent } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordContent';
+import { SessionSystemRecordCreatorV1Schema, type SessionSystemRecordCreatorV1 } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecord';
+import { SessionSystemRecordRevisionSchema, SESSION_SYSTEM_RECORD_VERSION_MAX, type SessionSystemRecordRevision } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRevision';
+import { type SessionStoredMessageContent } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { type SessionSystemRecordKind } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordKind';
+import { SESSION_PERMISSION_SYSTEM_RECORD_KINDS, SESSION_PERMISSION_SYSTEM_RECORD_NAMESPACE, deriveSessionPermissionMediationRecordLocatorV1, SessionPermissionMediationRecordIdentityV1Schema, type SessionPermissionMediationRecordIdentityV1 } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
+import { SessionBoardItemRecordContentV1Schema, SessionBoardLayoutRecordContentV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
 import { getSessionSystemRecordStoredPayloadSchema } from "@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog";
 import { isSessionSurfaceItemIdentityCorrespondingV1, type SessionSurfaceItemV1 } from "@happier-dev/protocol/sessions/board/item";
@@ -708,11 +672,11 @@ function persistedV1Address(pluginId: string | undefined, address: SessionSystem
 
 // Only the typed visual writer persists this wrapper. Request content remains
 // the strict plain/encrypted envelope and can never supply creation metadata.
-const StoredSessionSurfaceRecordV1Schema = createStoredReadSchema(z.object({
+const StoredSessionSurfaceRecordV1Schema = createStoredReadSchema(z.strictObject({
     t: z.literal("session_surface_record_v1"),
     content: SessionSystemRecordContentSchema,
     creator: SessionSystemRecordCreatorV1Schema,
-}).strict());
+}));
 const StoredSessionSystemRecordContentSchema = createStoredReadSchema(SessionSystemRecordContentSchema);
 
 function isSurfaceItemAddress(address: Readonly<{ ownerKind: string; namespace: string }>, kind: string): boolean {

@@ -12,6 +12,30 @@ import { serveActionHomes } from './actionHomesHttpHarness';
 import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
 
 describe('served Account Settings HTTP boundary', () => {
+    it('retires verified Home credentials across fixture reuse and fences an Account switch', async () => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const serverUrl = 'https://served-home-retirement.test';
+        for (const accountId of ['retirement-a', 'retirement-b']) {
+            const fixture = await serveAccountHomes({ homes: [{ key: 'home', serverUrl,
+                serverIdentityId: 'srv_served_retirement', accountId }], route: () => undefined });
+            const account = await captureLazyActionAccountContext(fixture.homes.home!.id);
+            try {
+                expect(account.accountId).toBe(accountId);
+                expect(account.accountLifetime.isCurrent()).toBe(true);
+                await fixture.switchAccount('home', `${accountId}-replacement`);
+                expect(account.accountLifetime.isCurrent()).toBe(false);
+                const replacement = await captureLazyActionAccountContext(fixture.homes.home!.id);
+                try {
+                    expect(replacement.accountId).toBe(`${accountId}-replacement`);
+                    expect(replacement.accountLifetime.isCurrent()).toBe(true);
+                } finally { replacement.dispose(); }
+            } finally { account.dispose(); await fixture.dispose(); }
+            expect(await TokenStorage.getCredentialsForServerUrl(serverUrl,
+                { serverId: 'srv_served_retirement' })).toBeNull();
+        }
+    });
+
     it('durably retires a shipped legacy key and refuses a stale replacement', async () => {
         const legacy = { themePreference: 'dark', recentMachinePaths: [{ machineId: 'machine-a', path: '/work' }] };
         const committed = { t: 'plain' as const, v: { themePreference: 'dark' } };

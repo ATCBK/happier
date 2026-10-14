@@ -129,7 +129,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            title?: string | undefined;
             creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
@@ -169,9 +168,9 @@ export type ManagedMachinesActionInputById = {
             } | undefined;
             permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo' | 'plan' | undefined;
             agentModeId?: string | undefined;
+            configuration?: unknown;
             allowedTools?: string[] | undefined;
             unlistedTools?: 'ask' | 'deny' | undefined;
-            configuration?: unknown;
             connectedServices?: {
                 v: 1;
                 bindingsByServiceId: Record<string, {
@@ -268,6 +267,7 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            title?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -299,12 +299,12 @@ export type ManagedMachinesActionInputById = {
                 attachments?: {
                     attachmentLocalId: string;
                     value: {
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -633,13 +633,13 @@ export type ManagedMachinesActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            typeLabel: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            typeLabel: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -670,15 +670,6 @@ export type ManagedMachinesActionInputById = {
                         filePath: string;
                         source: 'file' | 'diff';
                         anchor: {
-                            kind: 'range';
-                            filePath: string;
-                            startLine: number;
-                            endLine: number;
-                            side?: 'before' | 'after' | undefined;
-                            startLineHash?: `lh1:${string}` | undefined;
-                            endLineHash?: `lh1:${string}` | undefined;
-                            selectedTextHash?: `lh1:${string}` | undefined;
-                        } | {
                             kind: 'fileLine';
                             startLine: number;
                             lineHash?: `lh1:${string}` | undefined;
@@ -695,6 +686,15 @@ export type ManagedMachinesActionInputById = {
                             line: number;
                             side?: 'before' | 'after' | undefined;
                             lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
                         };
                         snapshot: {
                             selectedLines: string[];
@@ -706,15 +706,6 @@ export type ManagedMachinesActionInputById = {
                         anchorResolution?: {
                             filePath: string;
                             originalAnchor: {
-                                kind: 'range';
-                                filePath: string;
-                                startLine: number;
-                                endLine: number;
-                                side?: 'before' | 'after' | undefined;
-                                startLineHash?: `lh1:${string}` | undefined;
-                                endLineHash?: `lh1:${string}` | undefined;
-                                selectedTextHash?: `lh1:${string}` | undefined;
-                            } | {
                                 kind: 'fileLine';
                                 startLine: number;
                                 lineHash?: `lh1:${string}` | undefined;
@@ -731,20 +722,20 @@ export type ManagedMachinesActionInputById = {
                                 line: number;
                                 side?: 'before' | 'after' | undefined;
                                 lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
                             };
                             status: 'exact' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'missing' | 'unsupported';
                             confidence: number;
                             id?: string | undefined;
                             resolvedAnchor?: {
-                                kind: 'range';
-                                filePath: string;
-                                startLine: number;
-                                endLine: number;
-                                side?: 'before' | 'after' | undefined;
-                                startLineHash?: `lh1:${string}` | undefined;
-                                endLineHash?: `lh1:${string}` | undefined;
-                                selectedTextHash?: `lh1:${string}` | undefined;
-                            } | {
                                 kind: 'fileLine';
                                 startLine: number;
                                 lineHash?: `lh1:${string}` | undefined;
@@ -761,6 +752,15 @@ export type ManagedMachinesActionInputById = {
                                 line: number;
                                 side?: 'before' | 'after' | undefined;
                                 lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
                             } | undefined;
                             reason?: string | undefined;
                             preview?: {
@@ -896,6 +896,18 @@ export type ManagedMachinesActionInputById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;
@@ -935,9 +947,7 @@ export type ManagedMachinesActionInputById = {
                             valueType: 'string' | 'number' | 'boolean' | 'json';
                             required: boolean;
                             enum?: string[] | undefined;
-                            default?: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null | undefined;
+                            default?: JsonValue | undefined;
                             description?: string | undefined;
                             optionsSourceId?: string | undefined;
                             inputType?: {
@@ -1232,7 +1242,7 @@ export type ManagedMachinesActionInputById = {
                     kind: 'detached_run';
                 } | undefined;
                 inputs?: Record<string, unknown> | undefined;
-                visibleTeamId?: string | null | undefined;
+                visibleTeamId?: unknown;
                 roleOverrides?: {
                     roleId: string;
                     engine?: {
@@ -1555,7 +1565,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            title?: string | undefined;
             creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
@@ -1595,9 +1604,9 @@ export type ManagedMachinesActionInputById = {
             } | undefined;
             permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo' | 'plan' | undefined;
             agentModeId?: string | undefined;
+            configuration?: unknown;
             allowedTools?: string[] | undefined;
             unlistedTools?: 'ask' | 'deny' | undefined;
-            configuration?: unknown;
             connectedServices?: {
                 v: 1;
                 bindingsByServiceId: Record<string, {
@@ -1694,6 +1703,7 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            title?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -1725,12 +1735,12 @@ export type ManagedMachinesActionInputById = {
                 attachments?: {
                     attachmentLocalId: string;
                     value: {
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -2059,13 +2069,13 @@ export type ManagedMachinesActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: string;
+                        key: unknown;
                         value: unknown;
                         presentation: {
-                            label: string;
-                            typeLabel: string;
-                            description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: unknown;
+                            typeLabel: unknown;
+                            description?: unknown;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -2096,15 +2106,6 @@ export type ManagedMachinesActionInputById = {
                         filePath: string;
                         source: 'file' | 'diff';
                         anchor: {
-                            kind: 'range';
-                            filePath: string;
-                            startLine: number;
-                            endLine: number;
-                            side?: 'before' | 'after' | undefined;
-                            startLineHash?: `lh1:${string}` | undefined;
-                            endLineHash?: `lh1:${string}` | undefined;
-                            selectedTextHash?: `lh1:${string}` | undefined;
-                        } | {
                             kind: 'fileLine';
                             startLine: number;
                             lineHash?: `lh1:${string}` | undefined;
@@ -2121,6 +2122,15 @@ export type ManagedMachinesActionInputById = {
                             line: number;
                             side?: 'before' | 'after' | undefined;
                             lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
                         };
                         snapshot: {
                             selectedLines: string[];
@@ -2132,15 +2142,6 @@ export type ManagedMachinesActionInputById = {
                         anchorResolution?: {
                             filePath: string;
                             originalAnchor: {
-                                kind: 'range';
-                                filePath: string;
-                                startLine: number;
-                                endLine: number;
-                                side?: 'before' | 'after' | undefined;
-                                startLineHash?: `lh1:${string}` | undefined;
-                                endLineHash?: `lh1:${string}` | undefined;
-                                selectedTextHash?: `lh1:${string}` | undefined;
-                            } | {
                                 kind: 'fileLine';
                                 startLine: number;
                                 lineHash?: `lh1:${string}` | undefined;
@@ -2157,20 +2158,20 @@ export type ManagedMachinesActionInputById = {
                                 line: number;
                                 side?: 'before' | 'after' | undefined;
                                 lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
                             };
                             status: 'exact' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'missing' | 'unsupported';
                             confidence: number;
                             id?: string | undefined;
                             resolvedAnchor?: {
-                                kind: 'range';
-                                filePath: string;
-                                startLine: number;
-                                endLine: number;
-                                side?: 'before' | 'after' | undefined;
-                                startLineHash?: `lh1:${string}` | undefined;
-                                endLineHash?: `lh1:${string}` | undefined;
-                                selectedTextHash?: `lh1:${string}` | undefined;
-                            } | {
                                 kind: 'fileLine';
                                 startLine: number;
                                 lineHash?: `lh1:${string}` | undefined;
@@ -2187,6 +2188,15 @@ export type ManagedMachinesActionInputById = {
                                 line: number;
                                 side?: 'before' | 'after' | undefined;
                                 lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
                             } | undefined;
                             reason?: string | undefined;
                             preview?: {
@@ -2322,6 +2332,18 @@ export type ManagedMachinesActionInputById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;
@@ -2361,9 +2383,7 @@ export type ManagedMachinesActionInputById = {
                             valueType: 'string' | 'number' | 'boolean' | 'json';
                             required: boolean;
                             enum?: string[] | undefined;
-                            default?: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null | undefined;
+                            default?: JsonValue | undefined;
                             description?: string | undefined;
                             optionsSourceId?: string | undefined;
                             inputType?: {
@@ -2658,7 +2678,7 @@ export type ManagedMachinesActionInputById = {
                     kind: 'detached_run';
                 } | undefined;
                 inputs?: Record<string, unknown> | undefined;
-                visibleTeamId?: string | null | undefined;
+                visibleTeamId?: unknown;
                 roleOverrides?: {
                     roleId: string;
                     engine?: {

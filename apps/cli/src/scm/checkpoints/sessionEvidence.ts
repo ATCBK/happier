@@ -219,13 +219,17 @@ export async function readRepositoryCheckpointCommitEvidence(input: Readonly<{
             if (!ref) return null;
             const parsed = parseRepositoryCheckpointRef({ scopeId, ref });
             if (parsed?.phase !== phase || parsed.checkpointId !== turn.turnId) return null;
-            const receipts = checkpoint.receipts.filter(receipt => receipt.ref === ref && receipt.commitSha && receipt.treeSha);
+            const receipts = checkpoint.receipts.filter(receipt => receipt.ref === ref && receipt.commitSha);
             const receipt = receipts[0];
-            if (!receipt?.commitSha || !receipt.treeSha || receipts.some(other => other.commitSha !== receipt.commitSha || other.treeSha !== receipt.treeSha)) return null;
-            if (!ScmCommitOidSchema.safeParse(receipt.commitSha).success || !ScmCommitOidSchema.safeParse(receipt.treeSha).success) return null;
+            if (!receipt?.commitSha || !ScmCommitOidSchema.safeParse(receipt.commitSha).success) return null;
             const endpoint = endpoints.get(ref);
-            return endpoint?.objectType === 'commit' && endpoint.commitSha === receipt.commitSha
-                && endpoint.treeSha === receipt.treeSha ? receipt : null;
+            if (endpoint?.objectType !== 'commit' || endpoint.commitSha !== receipt.commitSha
+                || !ScmCommitOidSchema.safeParse(endpoint.treeSha).success) return null;
+            // The native message-start → turn-start alias pins the immutable commit,
+            // not a separate tree receipt. Resolve its tree from that exact Git object.
+            if (receipts.some(other => other.commitSha !== receipt.commitSha
+                || (other.treeSha ? other.treeSha !== endpoint.treeSha : other.id !== 'checkpoint.aliased'))) return null;
+            return { ...receipt, treeSha: endpoint.treeSha };
         };
         const start = readEndpoint(checkpoint.startRef, 'turn-start');
         const final = readEndpoint(checkpoint.finalRef, 'turn-final');

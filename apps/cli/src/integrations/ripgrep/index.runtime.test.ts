@@ -171,4 +171,30 @@ describe('ripgrep runtime resolution', () => {
     expect(records).toEqual(['é first', 'second']);
     expect(terminateProcessTreeMock).toHaveBeenCalledWith(child, undefined);
   });
+
+  it('preserves bounded output when the supplied deadline expires but rejects explicit cancellation', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 4246,
+    });
+    spawnMock.mockReturnValue(child);
+    const { run } = await import('./index');
+    const pending = run(['--files', '--line-buffered'], {
+      deadlineAtMs: Date.now() + 100,
+      maxStdoutBytes: 100,
+      maxStderrBytes: 100,
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    child.stdout.emit('data', Buffer.from('hit.txt\nunfinished'));
+    await expect(pending).resolves.toMatchObject({
+      stdout: 'hit.txt\nunfinished', stdoutTruncated: true, stoppedEarly: true,
+    });
+    expect(terminateProcessTreeMock).toHaveBeenCalledWith(child, undefined);
+    child.emit('close', 143);
+
+    const controller = new AbortController();
+    const cancelled = run(['--files'], { signal: controller.signal, deadlineAtMs: Date.now() + 100 });
+    const rejection = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await rejection;
+  });
 });

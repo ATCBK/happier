@@ -1,7 +1,4 @@
-import {
-    projectAutomationAccountCurrentnessWitnessV1,
-    type AutomationAccountCurrentnessWitnessV1,
-} from "@happier-dev/protocol";
+import { projectAutomationAccountCurrentnessWitnessV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import type { Prisma } from "@prisma/client";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

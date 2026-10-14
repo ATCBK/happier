@@ -33,7 +33,7 @@ function createCaptureBoundary(stopRecording: () => Promise<string | null> = asy
     const sdk = { ...native.nativeModule,
         startFileRecording: vi.fn(async () => ({ recordingId: 'dictation-recording' })),
         setFileRecordingMuted: vi.fn(async () => {}),
-        stopFileRecording: vi.fn(async () => ({ uri: await stopRecording() })),
+        stopFileRecording: vi.fn(async () => ({ uri: await stopRecording() ?? '' })),
     };
     const real = createLocalVoiceCaptureOwner({ getSettings: () => DEVICE_STT_SETTINGS,
         onCaptureStarted: () => {}, onCaptureError: () => {} }, {

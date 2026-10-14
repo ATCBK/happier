@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SessionRollbackCodeModeSchema = lazyZodSchema(() => z.enum([
   'conversation_only',
@@ -31,25 +31,22 @@ export const CHECKPOINT_CODE_ROLLBACK_RECEIPT_IDS = {
   aborted: 'checkpoint.rollback_aborted',
 } as const satisfies Record<string, CheckpointCodeRollbackReceiptId>;
 
-export const CheckpointCodeRollbackRequestSchema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    sessionId: z.string().trim().min(1),
-    turnId: z.string().trim().min(1),
-    cwd: z.string().trim().min(1),
+export const CheckpointCodeRollbackRequestSchema = lazyZodSchema(() => z.strictObject({
+    v: z._default(z.literal(1), 1),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
+    turnId: z.string().check(z.trim(), z.minLength(1)),
+    cwd: z.string().check(z.trim(), z.minLength(1)),
     codeMode: SessionRollbackCodeModeSchema,
     backupMode: CheckpointCodeRollbackBackupModeSchema,
-    expectedStartRef: z.string().trim().min(1),
-    expectedFinalRef: z.string().trim().min(1),
-    codeOnlyTranscriptDivergenceConfirmed: z.boolean().optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+    expectedStartRef: z.string().check(z.trim(), z.minLength(1)),
+    expectedFinalRef: z.string().check(z.trim(), z.minLength(1)),
+    codeOnlyTranscriptDivergenceConfirmed: z.optional(z.boolean()),
+  }).check(z.superRefine((value, ctx) => {
     const stashMode = value.backupMode === 'happier_checkpoint_and_git_stash';
     const expectsStash = value.codeMode === 'conversation_and_code_with_stash' || value.codeMode === 'code_only_with_stash';
     if (stashMode !== expectsStash) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['backupMode'],
         message: 'backupMode must match the selected checkpoint rollback mode',
       });
@@ -58,34 +55,32 @@ export const CheckpointCodeRollbackRequestSchema = lazyZodSchema(() => z
     const codeOnly = value.codeMode === 'code_only_with_stash' || value.codeMode === 'code_only_without_stash';
     if (codeOnly && value.codeOnlyTranscriptDivergenceConfirmed !== true) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['codeOnlyTranscriptDivergenceConfirmed'],
         message: 'Code-only checkpoint rollback requires explicit transcript divergence confirmation',
       });
     }
-  }));
+  })));
 export type CheckpointCodeRollbackRequest = z.infer<typeof CheckpointCodeRollbackRequestSchema>;
 
-export const CheckpointCodeRollbackActionRequestSchema = lazyZodSchema(() => CheckpointCodeRollbackRequestSchema.superRefine((value, ctx) => {
+export const CheckpointCodeRollbackActionRequestSchema = lazyZodSchema(() => CheckpointCodeRollbackRequestSchema.check(z.superRefine((value, ctx) => {
   if (value.codeMode !== 'code_only_with_stash' && value.codeMode !== 'code_only_without_stash') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['codeMode'],
       message: 'Checkpoint code rollback RPC only owns code-only modes; compose conversation rollback separately',
     });
   }
-}));
+})));
 export type CheckpointCodeRollbackActionRequest = z.infer<typeof CheckpointCodeRollbackActionRequestSchema>;
 
-export const CheckpointCodeRollbackResultSchema = lazyZodSchema(() => z
-  .object({
+export const CheckpointCodeRollbackResultSchema = lazyZodSchema(() => z.strictObject({
     status: z.enum(['conversation_only', 'applied', 'conflict', 'unavailable', 'aborted']),
-    backupCheckpointRef: z.string().min(1).optional(),
-    gitStashRef: z.string().min(1).optional(),
-    changedPaths: z.array(z.string().min(1)).readonly(),
-    skippedPaths: z.array(z.string().min(1)).readonly(),
-    receipts: z.array(CheckpointCodeRollbackReceiptIdSchema).readonly(),
-    diagnostics: z.array(z.string().min(1)).readonly(),
-  })
-  .strict());
+    backupCheckpointRef: z.optional(z.string().check(z.minLength(1))),
+    gitStashRef: z.optional(z.string().check(z.minLength(1))),
+    changedPaths: z.readonly(z.array(z.string().check(z.minLength(1)))),
+    skippedPaths: z.readonly(z.array(z.string().check(z.minLength(1)))),
+    receipts: z.readonly(z.array(CheckpointCodeRollbackReceiptIdSchema)),
+    diagnostics: z.readonly(z.array(z.string().check(z.minLength(1)))),
+  }));
 export type CheckpointCodeRollbackResult = z.infer<typeof CheckpointCodeRollbackResultSchema>;

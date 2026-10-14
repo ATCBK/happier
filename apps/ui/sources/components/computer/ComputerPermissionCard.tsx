@@ -18,17 +18,17 @@ export type ComputerOpenSettingsState = 'idle' | 'opening' | 'opened' | 'failed'
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 16,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s16,
     },
     liveLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         maxWidth: 420,
     },
     liveText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flexShrink: 1,
         color: theme.colors.text.secondary,
         textAlign: 'center',

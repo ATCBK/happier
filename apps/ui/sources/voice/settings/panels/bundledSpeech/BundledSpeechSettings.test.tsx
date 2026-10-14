@@ -357,7 +357,7 @@ async function saveCredential(providerId: string, secretId = 'account-secret-a')
 
 async function selectCredentialSource(entry: NonNullable<ReturnType<ReturnType<typeof createVoiceProviderRegistry>['get']>>,
   selection: typeof connectedAccountSelection | Readonly<{ kind: 'none' | 'savedSecret' }>) {
-  if (!entry.declaration?.credentials) throw new Error('Missing credential declaration');
+  if (entry.kind === 'voice.turn-support.v1' || !entry.declaration?.credentials) throw new Error('Missing credential declaration');
   const result = applyAccountVoiceCredentialSourceSelection({ settings: account.settings,
     connectedPurposes: account.purposes.value, currentDeclaration: entry.declaration,
     mutation: { contribution: { pluginId: entry.pluginId, localId: entry.declaration.id },
@@ -1010,7 +1010,7 @@ describe('BundledSpeechSettings', () => {
         pluginId: OPENAI_COMPAT_MANIFEST.id, providerId: `${OPENAI_COMPAT_MANIFEST.id}/${declaration.id}`, declaration,
       })), bundledPresentations: OPENAI_COMPAT_PRESENTATIONS,
     }).get(OPENAI_COMPAT_TTS_ID);
-    if (!entry?.providerSettings) throw new Error('missing canonical speech entry');
+    if (!entry || entry.kind !== 'voice.speech-engine.v1' || !entry.declaration || !entry.providerSettings) throw new Error('missing canonical speech entry');
     const spec = createBundledLocalTtsProviderSpec(entry);
 
     const voiceSettings = voiceWithRootProviderConfig(OPENAI_COMPAT_TTS_ID, {
@@ -1127,6 +1127,7 @@ describe('BundledSpeechSettings', () => {
       }],
     }).get(providerId)!;
     registerExternalSettingsOwner('acme.external', 'catalog-tts', entry);
+    if (entry.kind !== 'voice.speech-engine.v1' || !entry.declaration) throw new Error('Expected declared catalog TTS fixture');
     const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalTtsProviderSpec(entry);
     const voice = voiceWithRootProviderConfig(providerId, {
@@ -1519,7 +1520,9 @@ describe('BundledSpeechSettings', () => {
 
     const credential = rendered.tree.root.findByType(CredentialComponent);
     currentRequest = credentialRequest;
-    act(() => credential.props.onChanged());
+    const onChanged = credential.props.onChanged;
+    if (!onChanged) throw new Error('Credential change callback missing');
+    act(() => onChanged());
     await act(async () => credentialRequest.resolve([
       { id: 'credential-model', name: 'Credential model', metadata: {} },
     ]));

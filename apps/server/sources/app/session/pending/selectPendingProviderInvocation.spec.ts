@@ -9,6 +9,13 @@ const row = (localId: string, kind: 'enqueue' | 'steer_if_active' | 'steer_now' 
 });
 
 describe('selectPendingProviderInvocation', () => {
+    it.each(['enqueue', 'send_now'] as const)('selects a retained annotated %s action through the stored owner', kind => {
+        expect(selectPendingProviderInvocation({
+            rows: [{ ...row('retained', kind, 1), requestedAction: { v: 1, kind, retired: true } }],
+            foregroundState: 'ready', deliveryTiming: 'after_foreground_ready', readRuntimeActivity: () => 'idle',
+        })).toEqual({ localId: 'retained', providerAction: 'send' });
+    });
+
     it('withholds a reset-bound FIFO item before claiming provider custody', () => {
         expect(selectPendingProviderInvocation({
             rows: [{ localId: 'held', position: 1, requestedAction: {

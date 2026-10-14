@@ -20,7 +20,6 @@ import {
   summarizeVitestShardOutcomes,
 } from '../../../scripts/testing/vitestShardOutcomes.mjs';
 import { resolveMaxOldSpaceSizeMb, upsertMaxOldSpaceSize } from './withNodeHeapLimit.mjs';
-import { resolveVitestPoolEnv, resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers.ts';
 
 export {
   classifyVitestShardTermination,
@@ -29,6 +28,7 @@ export {
 };
 
 const require = createRequire(import.meta.url);
+const { resolveVitestPoolEnv, resolveVitestWorkers } = require('../../../scripts/testing/vitestWorkers.ts');
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.dirname(scriptsDir);
 

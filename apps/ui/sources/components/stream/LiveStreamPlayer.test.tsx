@@ -14,34 +14,9 @@ vi.mock('@/components/ui/text/Text', async () => {
     return createUiTextModuleMock();
 });
 
-vi.mock('react-native-unistyles', () => {
-    // Keep this stream test isolated from unrelated theme module evaluation; the canonical
-    // Unistyles helper imports the active app theme.
-    const theme = {
-        colors: {
-            border: { default: '#d0d0d0' },
-            surface: { base: '#ffffff', inset: '#f4f4f4' },
-            text: { primary: '#111111', secondary: '#555555', disabled: '#999999' },
-            state: {
-                success: { foreground: '#34C759' },
-                warning: { foreground: '#FF9500' },
-                danger: { foreground: '#FF3B30' },
-                neutral: { foreground: '#8E8E93' },
-            },
-        },
-    };
-    return {
-        StyleSheet: {
-            create: (input: unknown) => (
-                typeof input === 'function'
-                    ? (input as (themeInput: typeof theme) => unknown)(theme)
-                    : input
-            ),
-            flatten: (value: unknown) => value,
-        },
-        useUnistyles: () => ({ theme }),
-        UnistylesRuntime: {},
-    };
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
 });
 
 const reconnectingState = {

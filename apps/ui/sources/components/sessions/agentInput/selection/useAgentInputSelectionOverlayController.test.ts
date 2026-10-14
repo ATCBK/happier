@@ -212,7 +212,7 @@ describe('useAgentInputSelectionOverlayController', () => {
     it('treats collapsed extra content popovers as supported overlays', async () => {
         const extraActionChips = [{
             key: 'mcp',
-            controlId: 'mcp',
+            controlId: 'capabilities',
             collapsedContentPopover: {
                 title: 'MCP',
                 renderContent: () => null,

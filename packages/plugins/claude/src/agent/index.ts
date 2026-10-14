@@ -7,7 +7,6 @@ export * from './runtime/terminal/index.js';
 export * from './sdk/index.js';
 export * from './mcp/configServers.js';
 export * from './preflight/index.js';
-export * from './promptAssets/index.js';
 export * from './providerBinding/adapter.js';
 export * from './transcripts/index.js';
 export * from './usage/index.js';

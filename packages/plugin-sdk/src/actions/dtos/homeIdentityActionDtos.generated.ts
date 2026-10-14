@@ -41,6 +41,7 @@ export type HomeIdentityActionInputById = {
     };
     readonly "home.identity.connections.settings.update": {
         v: 1;
+        connectionId: string;
         settings: {
             v: 1;
             kind: 'oidc';
@@ -56,7 +57,6 @@ export type HomeIdentityActionInputById = {
             kind: 'github_app_identity';
             organizationLogin: string;
         };
-        connectionId: string;
         expectedRevision: number;
     };
     readonly "home.identity.connections.enable": {

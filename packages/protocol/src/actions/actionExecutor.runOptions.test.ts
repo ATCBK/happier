@@ -199,6 +199,22 @@ it('round-trips the contributed Agent option into session creation and a direct 
 });
 
 it.each(['subagents.plan.start', 'subagents.delegate.start'] as const)(
+  'preserves Agent-default choice through %s to the strict Run start consumer', async (actionId) => {
+    const received: unknown[] = [];
+    const deps = createDeps({ executionRunStart: async (_sessionId, input) => {
+      const request = ExecutionRunStartRequestSchema.parse(input);
+      received.push(request.childSelection);
+      return { runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' };
+    } });
+    expect(await createActionExecutor(deps).execute(actionId, {
+      sessionId: 's1', backendTargetKeys: [START_TARGET_KEY], instructions: 'Do the work',
+      childSelection: 'agentDefault',
+    }, UI_CALLER)).toMatchObject({ ok: true });
+    expect(received).toEqual(['agentDefault']);
+  },
+);
+
+it.each(['subagents.plan.start', 'subagents.delegate.start'] as const)(
   'preserves both report chip values through %s fan-out', async (actionId) => {
     for (const notifyParentOnCompletion of [true, false]) {
       const deps = createDeps();

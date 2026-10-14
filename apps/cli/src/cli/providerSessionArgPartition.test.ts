@@ -21,34 +21,22 @@ function encodeNativeForkSourceTestVector(): string {
 }
 
 describe('partitionProviderSessionArgs', () => {
-  it('consumes --auto as the canonical automatic-edit permission intent', () => {
-    const result = partitionProviderSessionArgs({
-      args: ['opencode', '--auto', '--native-option'],
-      providerSubcommand: 'opencode',
-    });
-
-    expect(result.permissionMode).toBe('safe-yolo');
-    expect(resolveAcpToolPermissionPolicy(result.permissionMode)).toMatchObject({
-      '*': 'ask', read: 'allow', edit: 'allow', write: 'allow', bash: 'ask',
-    });
-    expect(result.providerArgs).toEqual(['--native-option']);
-    expect(result.permissionMode).toBe(partitionProviderSessionArgs({
-      args: ['opencode', '--permission-mode', 'auto'],
-      providerSubcommand: 'opencode',
-    }).permissionMode);
-  });
-
   it.each([
-    { flags: ['--auto', '--permission-mode', 'read_only'], expected: 'read-only' },
-    { flags: ['--permission-mode', 'read_only', '--auto'], expected: 'safe-yolo' },
-  ])('keeps permission flag ordering for $flags', ({ flags, expected }) => {
-    const result = partitionProviderSessionArgs({
-      args: ['opencode', ...flags],
-      providerSubcommand: 'opencode',
-    });
-
-    expect(result.permissionMode).toBe(expected);
-    expect(result.providerArgs).toEqual([]);
+    { flags: ['--auto', '--native-option'], permissionMode: 'safe-yolo', providerArgs: ['--native-option'] },
+    { flags: ['--auto', '--permission-mode', 'read_only'], permissionMode: 'read-only', providerArgs: [] },
+    { flags: ['--permission-mode', 'read_only', '--auto'], permissionMode: 'safe-yolo', providerArgs: [] },
+  ])('consumes automatic-edit intent and preserves ordering for $flags', ({ flags, permissionMode, providerArgs }) => {
+    const result = partitionProviderSessionArgs({ args: ['opencode', ...flags], providerSubcommand: 'opencode' });
+    expect(result.permissionMode).toBe(permissionMode);
+    expect(result.providerArgs).toEqual(providerArgs);
+    if (permissionMode === 'safe-yolo') {
+      expect(resolveAcpToolPermissionPolicy(result.permissionMode)).toMatchObject({
+        '*': 'ask', read: 'allow', edit: 'allow', write: 'allow', bash: 'ask',
+      });
+      expect(result.permissionMode).toBe(partitionProviderSessionArgs({
+        args: ['opencode', '--permission-mode', 'auto'], providerSubcommand: 'opencode',
+      }).permissionMode);
+    }
   });
 
   it('presents the cross-provider permission vocabulary when input is invalid', () => {

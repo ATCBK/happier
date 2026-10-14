@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import { isRecord } from '../../../common/records.js';
 import {
@@ -49,7 +49,7 @@ export type RejectUnsafeBrowserEgressKeysOptions = Readonly<{
  */
 export function rejectUnsafeBrowserEgressKeys(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   options: RejectUnsafeBrowserEgressKeysOptions = {},
 ): void {
   const path = options.path ?? [];

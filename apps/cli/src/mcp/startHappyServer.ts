@@ -31,7 +31,6 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { z } from 'zod';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
-import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { SessionClientServerBinding } from '@/api/session/client/transport/sessionClientTransport';
 import { DaemonPluginToolCatalogUnavailableError } from './pluginToolCatalogError';
 import { createSessionMcpToolInventory } from './server/sessionMcpToolInventory';
@@ -188,9 +187,9 @@ export function registerHappierSessionAgentToolRpc(
     const actionSettingsProvider = opts?.actionsSettingsProvider ?? createMcpActionSettingsProvider({
         accountSettings: opts?.accountSettings ?? null,
         getAccountSettings: opts?.getAccountSettings ?? null,
-        scopeKey: opts?.credentials
-            ? resolveAccountSettingsScopeKeyForToken(opts.credentials.token)
-            : null,
+        credentials: opts?.credentials,
+        sessionCredentials: opts?.sessionCredentials,
+        authorityScope: opts?.authorityScope,
     });
     const readToolInventory = createSessionMcpToolInventory({
         client, actionSettingsProvider,
@@ -257,9 +256,9 @@ export async function startHappyServer(
     const actionSettingsProvider = opts?.actionsSettingsProvider ?? createMcpActionSettingsProvider({
         accountSettings: opts?.accountSettings ?? null,
         getAccountSettings: opts?.getAccountSettings ?? null,
-        scopeKey: opts?.credentials
-            ? resolveAccountSettingsScopeKeyForToken(opts.credentials.token)
-            : null,
+        credentials: opts?.credentials,
+        sessionCredentials: opts?.sessionCredentials,
+        authorityScope: opts?.authorityScope,
     });
     const readToolInventory = createSessionMcpToolInventory({
         client, actionSettingsProvider,
@@ -411,6 +410,13 @@ export async function startHappyServer(
     return {
         url: baseUrl.toString(),
         toolNames: toolNamesSnapshot,
+        readToolNames: async (signal?: AbortSignal) => {
+            const operationSignal = readMcpToolExecutionSignal(client, signal);
+            operationSignal?.throwIfAborted();
+            const catalog = await readCurrentPluginToolCatalog(client, readToolInventory, operationSignal);
+            operationSignal?.throwIfAborted();
+            return readToolInventory(catalog).tools.map(tool => tool.name);
+        },
         supportedSessionReadActions,
         stop: () => {
             logger.debug('[happierMCP] Stopping server');

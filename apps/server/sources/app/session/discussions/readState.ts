@@ -1,4 +1,5 @@
-import { SESSION_DISCUSSION_NOT_TRACKED_CODE_V1, type SessionDiscussionReadCursorV1 } from "@happier-dev/protocol";
+import { SESSION_DISCUSSION_NOT_TRACKED_CODE_V1 } from '@happier-dev/protocol/sessions/discussions/api';
+import { type SessionDiscussionReadCursorV1 } from '@happier-dev/protocol/sessions/discussions/models';
 
 import { prismaRuntime as Prisma } from "@/storage/prisma";
 import { getDbProviderFromEnv } from "@/storage/prisma";

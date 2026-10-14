@@ -1,4 +1,4 @@
-import type { AuthProviderId } from "@happier-dev/protocol";
+import type { AuthProviderId } from '@happier-dev/protocol/auth/providers';
 import { computeCanonicalDomainSeparatedDigest } from "@happier-dev/protocol/crypto/canonicalDigest";
 
 import type { OAuthFlowProvider } from "@/app/oauth/providers/types";

@@ -355,23 +355,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     actionStack: {
-        gap: 12,
+        gap: theme.space.s12,
         width: '100%',
     },
     statusBlock: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
     },
     statusTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 22,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     statusText: {

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionListFilterFieldsV1Schema } from '../sessions/listFilter/sessionListFilterV1.js';
 
@@ -13,34 +13,34 @@ export type ScopeActionId = typeof SCOPE_ACTION_IDS[number];
 export const ScopeActionIdSchema = lazyZodSchema(() => z.enum(SCOPE_ACTION_IDS));
 
 export const SessionListActionViewSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('global') }).strict(),
-  z.object({ kind: z.literal('team'), serverId: z.string().trim().min(1), teamId: z.string().trim().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('global') }),
+  z.strictObject({ kind: z.literal('team'), serverId: z.string().check(z.trim(), z.minLength(1)), teamId: z.string().check(z.trim(), z.minLength(1)) }),
 ]));
-const SessionListViewTargetSchema = lazyZodSchema(() => z.object({
-  view: SessionListActionViewSchema.optional(),
-  storage: z.enum(['active', 'archived']).optional(),
-}).strict());
-export const SessionListActionFiltersSchema = lazyZodSchema(() => SessionListFilterFieldsV1Schema.extend({ searchQuery: z.string() }));
-const MutationResultSchema = lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict());
+const SessionListViewTargetSchema = lazyZodSchema(() => z.strictObject({
+  view: z.optional(SessionListActionViewSchema),
+  storage: z.optional(z.enum(['active', 'archived'])),
+}));
+export const SessionListActionFiltersSchema = lazyZodSchema(() => z.extend(SessionListFilterFieldsV1Schema, { searchQuery: z.string() }));
+const MutationResultSchema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true) }));
 export const WorkflowLibraryViewSchema = lazyZodSchema(() => z.enum(['all', 'triggered', 'running']));
 export type WorkflowLibraryView = z.infer<typeof WorkflowLibraryViewSchema>;
 
 export const ScopeActionInputSchemas = {
   'session.list.view.get': SessionListViewTargetSchema,
-  'session.list.view.set': SessionListViewTargetSchema.extend({
-    filters: SessionListActionFiltersSchema.partial().optional(),
-    includeInactive: z.boolean().optional(),
-  }).strict(),
+  'session.list.view.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionListViewTargetSchema, {
+    filters: lazyZodSchema(() => z.optional(z.partial(SessionListActionFiltersSchema))),
+    includeInactive: z.optional(z.boolean()),
+  }))),
   'session.list.view.reset': SessionListViewTargetSchema,
-  'workflow.library.view.get': z.object({}).strict(),
-  'workflow.library.view.set': z.object({ view: WorkflowLibraryViewSchema.optional(), searchQuery: z.string().optional() }).strict(),
-  'workflow.library.view.reset': z.object({}).strict(),
-  'shell.column.get': z.object({}).strict(),
-  'shell.column.set': z.object({ visible: z.boolean() }).strict(),
+  'workflow.library.view.get': z.strictObject({}),
+  'workflow.library.view.set': z.strictObject({ view: z.optional(WorkflowLibraryViewSchema), searchQuery: z.optional(z.string()) }),
+  'workflow.library.view.reset': z.strictObject({}),
+  'shell.column.get': z.strictObject({}),
+  'shell.column.set': z.strictObject({ visible: z.boolean() }),
 } as const;
 
 export const ScopeActionOutputSchemas = {
-  'session.list.view.get': z.object({
+  'session.list.view.get': z.strictObject({
     view: SessionListActionViewSchema,
     storage: z.enum(['active', 'archived']),
     filters: SessionListActionFiltersSchema,
@@ -48,17 +48,17 @@ export const ScopeActionOutputSchemas = {
     queryEnabled: z.boolean(),
     followingAvailable: z.boolean(),
     sourceAvailable: z.boolean(),
-    homes: z.array(z.object({ serverId: z.string(), label: z.string() }).strict()),
-  }).strict(),
+    homes: z.array(z.strictObject({ serverId: z.string(), label: z.string() })),
+  }),
   'session.list.view.set': MutationResultSchema,
   'session.list.view.reset': MutationResultSchema,
-  'workflow.library.view.get': z.object({
+  'workflow.library.view.get': z.strictObject({
     view: WorkflowLibraryViewSchema, searchQuery: z.string(),
     offeredViews: z.array(WorkflowLibraryViewSchema), visibleKeys: z.array(z.string()),
-  }).strict(),
+  }),
   'workflow.library.view.set': MutationResultSchema,
   'workflow.library.view.reset': MutationResultSchema,
-  'shell.column.get': z.object({ present: z.boolean(), visible: z.boolean(), available: z.boolean() }).strict(),
+  'shell.column.get': z.strictObject({ present: z.boolean(), visible: z.boolean(), available: z.boolean() }),
   'shell.column.set': MutationResultSchema,
 } as const;
 

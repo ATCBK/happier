@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** One person label across hosts. An Account identity is never a display name. */
 export function resolveAccountDisplayLabelV1(profile: Readonly<{ name?: string | null; username?: string | null }>): string | null {
@@ -28,17 +28,15 @@ export function projectAccountNameToLegacyFieldsV1(name: string | null): Readonl
  * The schema is strict because identity presentation is security-sensitive: an
  * unknown field is a disclosure bug, not an additive extension.
  */
-export const AccountDisplayProfileV1BaseSchema = lazyZodSchema(() => z.object({
-  name: z.string().nullable().optional(),
-  firstName: z.string().nullable(),
-  lastName: z.string().nullable(),
-  username: z.string().nullable(),
-  avatarUrl: z.string().nullable(),
-}).strict());
+export const AccountDisplayProfileV1BaseSchema = lazyZodSchema(() => z.strictObject({
+  name: z.optional(z.nullable(z.string())),
+  firstName: z.nullable(z.string()),
+  lastName: z.nullable(z.string()),
+  username: z.nullable(z.string()),
+  avatarUrl: z.nullable(z.string()),
+}));
 
-export const AccountDisplayProfileV1Schema = lazyZodSchema(() => AccountDisplayProfileV1BaseSchema.transform(
-  profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) }),
-));
+export const AccountDisplayProfileV1Schema = lazyZodSchema(() => z.pipe(AccountDisplayProfileV1BaseSchema, z.transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) }))));
 
 export type AccountDisplayProfileV1 = z.infer<typeof AccountDisplayProfileV1Schema>;
 

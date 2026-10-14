@@ -13,8 +13,8 @@ import type { RegistryItemPointerV1, RegistryItemV1, RegistryContentRefV1 } from
 import type { RegistrySourceDescriptorV1 } from '../../../registries/registrySourcesV1.js';
 import { RegistryUpstreamV1Schema, registryUpstreamEqualV1, type RegistryUpstreamV1 } from '../../../registries/registryUpstreamV1.js';
 import type { RegistryProvenanceV1 } from '../../../registries/registryItemsV1.js';
-import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, SKILL_NAME_PATTERN_V1,
-  type SkillListItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
+import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, writeSkillFrontmatterV1, SKILL_NAME_PATTERN_V1,
+  type SkillListItemV1, type SkillUnavailableItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
 import { deriveSkillTrustV1 } from './skillTrustV1.js';
 import { estimateSkillCostV1 } from './skillCostV1.js';
 import { deriveSkillAccountStatusesV1 } from './skillStatusV1.js';
@@ -45,6 +45,10 @@ class SkillAcknowledgedFailureV1 extends Error {
   constructor(readonly code: string, readonly details: SkillInstallAcknowledgedEffectsV1) { super(code); }
 }
 const fail = (code: string, current?: SkillListItemV1): never => { throw new SkillActionFailureV1(code, current); };
+function unavailableSkillReason(error: unknown): SkillUnavailableItemV1['reason'] | null {
+  const code = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+  return code === 'skill_content_unavailable' || code === 'not_found' || code === 'invalid_skill_lock' ? code : null;
+}
 /** Usage is an optional fact; unavailable content never becomes a fabricated timestamp. */
 export async function readSkillUsageCatalogV1(port: Pick<SkillRulesActionPortV1, 'readCatalog' | 'assertCurrent'>, signal?: AbortSignal):
   Promise<Readonly<{ row: SkillUsageRowV1; revision: number | 'absent' }> | null> {
@@ -77,12 +81,8 @@ function renameMarkdown(files: readonly SkillFileInputV1[], name?: string, descr
   if (name === undefined && description === undefined) return [...files];
   return files.map(file => {
     if (file.path !== 'SKILL.md') return file;
-    let markdown = text(file);
-    const frontmatter = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
-    const fields = (frontmatter?.[1] ?? '').split(/\r?\n/).filter(line => line && !(name !== undefined && /^name\s*:/.test(line)) && !(description !== undefined && /^description\s*:/.test(line)));
-    if (name !== undefined) fields.push(`name: ${name}`);
-    if (description !== undefined) fields.push(`description: ${description.replace(/[\r\n]/g, ' ')}`);
-    markdown = `---\n${fields.join('\n')}\n---\n${frontmatter ? markdown.slice(frontmatter[0].length) : markdown}`;
+    const markdown = writeSkillFrontmatterV1(text(file), { name, description });
+    if (markdown === null) return fail('invalid_skill_name');
     return { ...file, contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64') };
   });
 }
@@ -110,6 +110,44 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     if (!content) return fail('skill_content_unavailable');
     const lock = readSkillLockV1(artifact.header);
     return { artifact, skillId, revision: encodeSkillRevisionV1(artifact.revision), content, lock };
+  }
+  async function* skillHeaderPages(signal?: AbortSignal) {
+    if (!port.store.list) return fail('library_unavailable');
+    let cursor: string | undefined;
+    do {
+      signal?.throwIfAborted();
+      const page = await port.store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted();
+      if (page.coverage === 'unavailable' || page.coverage === 'partial' && !page.nextCursor) return fail('library_unavailable');
+      yield page.items.flatMap(item => item.header?.kind === 'prompt_bundle.v2'
+        && item.header.bundleSchemaId === 'skills.skill_md_v1' ? [{ ...item, header: item.header }] : []);
+      cursor = page.nextCursor;
+    } while (cursor);
+  }
+  /** Upstream checks need provenance, not the library's reach/usage/folder display projection. */
+  async function listRegistryTrackedSkills(signal?: AbortSignal): Promise<readonly Pick<SkillListItemV1,
+    'skillId' | 'name' | 'createdAt' | 'provenance' | 'upstream'>[]> {
+    signal?.throwIfAborted(); port.skillRules.assertCurrent();
+    const items: Pick<SkillListItemV1, 'skillId' | 'name' | 'createdAt' | 'provenance' | 'upstream'>[] = [];
+    for await (const headers of skillHeaderPages(signal)) {
+      const opened = await Promise.all(headers.map(async header => {
+        try {
+          const { provenance } = readSkillLockV1(header.header);
+          if (provenance.kind !== 'registry' && (provenance.kind !== 'link' || provenance.ref.kind !== 'gitTree')) return null;
+          // Preserve the library's unreadable-item exclusion; only tracked content needs opening.
+          const current = await read(header.id, signal);
+          return { skillId: current.skillId, name: current.content.frontmatter.name,
+            createdAt: current.content.body.createdAtMs, provenance: current.lock.provenance,
+            ...(current.lock.upstream ? { upstream: current.lock.upstream } : {}) };
+        } catch (error) {
+          if (unavailableSkillReason(error)) return null;
+          throw error;
+        }
+      }));
+      signal?.throwIfAborted(); port.skillRules.assertCurrent();
+      for (const item of opened) if (item) items.push(item);
+    }
+    return items;
   }
   async function project(opened: Awaited<ReturnType<typeof read>>, rules: readonly (ReachRuleV1 & { skillId: string })[], folderId: string | null = null): Promise<SkillListItemV1> {
     const itemRules = rules.filter(rule => rule.skillId === opened.skillId);
@@ -251,33 +289,49 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
         case 'skills.list': {
           const input = inputs[actionId].parse(raw);
           if (!port.store.list) return fail('library_unavailable');
-          const [rules, usage, folderCatalog] = await Promise.all([rulesRead(signal), readSkillUsageCatalogV1(port.skillRules, signal),
-            port.store.organization ? readArtifactFolderCatalogV1({ port: port.store.organization, signal }).catch(() => null) : null]);
-          const items: SkillListItemV1[] = []; let cursor: string | undefined;
-          do { const page = await port.store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
-            if (page.coverage === 'unavailable' || page.coverage === 'partial' && !page.nextCursor) return fail('library_unavailable');
-            const opened = await Promise.all(page.items.flatMap(item => item.header?.kind === 'prompt_bundle.v2'
-              && item.header.bundleSchemaId === 'skills.skill_md_v1' ? [{ ...item, header: item.header }] : []).map(async header => {
+          const inventory = skillHeaderPages(signal);
+          const firstPage = inventory.next();
+          const [[rules, usage, folderCatalog], first] = await Promise.all([
+            Promise.all([rulesRead(signal), readSkillUsageCatalogV1(port.skillRules, signal),
+              port.store.organization ? readArtifactFolderCatalogV1({ port: port.store.organization, signal }).catch(() => null) : null]),
+            firstPage,
+          ]);
+          const items: SkillListItemV1[] = []; const unavailableItems: SkillUnavailableItemV1[] = [];
+          let page = first;
+          while (!page.done) {
+            const headers = page.value;
+            const opened = await Promise.all(headers.map(async (header): Promise<SkillListItemV1 | SkillUnavailableItemV1> => {
               const folder = folderCatalog?.status === 'ready' ? resolveArtifactOrganizationHeaderV1({ header: header.header,
                 artifactHeadersById: folderCatalog.value.artifactHeadersById, artifactId: header.id, owned: header.owned === true }).folderId ?? null : null;
-              const item = await project(await read(header.id, signal), rules.rules, folder);
-              return usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
-                ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item;
+              try {
+                const item = await project(await read(header.id, signal), rules.rules, folder);
+                return usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
+                  ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item;
+              } catch (error) {
+                const reason = unavailableSkillReason(error);
+                if (reason) return {
+                  skillId: header.id, title: typeof header.header.title === 'string' && header.header.title.trim() ? header.header.title : null, reason,
+                };
+                throw error;
+              }
             }));
-            items.push(...opened);
-            cursor = page.nextCursor;
-          } while (cursor);
+            for (const item of opened) {
+              if ('reason' in item) unavailableItems.push(item);
+              else items.push(item);
+            }
+            page = await inventory.next();
+          }
           for (const skill of FIRST_PARTY_SKILLS_V1) {
             const item = await project(await read(skill.skillId, signal), rules.rules);
             items.push(usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
               ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item);
           }
           const usageObservedSince = skillUsageObservedSinceV1(usage?.row);
-          result = { usageObservedSince, items: items.filter(item => { const statuses = deriveSkillAccountStatusesV1(item, { nowMs: nowMs(), usageObservedSince });
+          result = { usageObservedSince, ...(unavailableItems.length ? { unavailableItems } : {}), items: items.filter(item => { const statuses = deriveSkillAccountStatusesV1(item, { nowMs: nowMs(), usageObservedSince });
             return (!input.query || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(input.query.toLowerCase()))
               && (!input.state || input.state === 'in_use' && !statuses.includes('off') || input.state === 'off' && statuses.includes('off')
                 || (input.state === 'updates' || input.state === 'needs_attention') && statuses.includes('update')); }),
-            revision: `${rules.revision}:${usage?.revision ?? 'unavailable'}:${items.map(item => item.revision).join(',')}` }; break;
+            revision: `${rules.revision}:${usage?.revision ?? 'unavailable'}:${items.map(item => item.revision).join(',')}:${JSON.stringify(unavailableItems)}` }; break;
         }
         case 'skills.create': { const input = inputs[actionId].parse(raw); result = await create(renameMarkdown(input.files, input.name, input.description), { kind: 'written' }, caller, input.where, signal); break; }
         case 'skills.found.read': { const input = inputs[actionId].parse(raw), bundle = await readFound(input.machineId, input.path, signal);
@@ -384,5 +438,5 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     signal?.throwIfAborted(); port.skillRules.assertCurrent();
     return (await current(skillId, signal)).item;
   }
-  return Object.assign(execute, { recordRegistryUpstream });
+  return Object.assign(execute, { recordRegistryUpstream, listRegistryTrackedSkills });
 }

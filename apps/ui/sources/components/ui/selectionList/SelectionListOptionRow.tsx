@@ -312,12 +312,16 @@ export function PlanOptionRow(
   // unexpanded row one cell wide next to a two-cell selected row — the
   // raggedness that made assistive technology invent a second column.
   const cellPlacement = props.cellPlacement ?? null;
+  // The cell also contains independent accessory controls. Only the main option is disabled;
+  // aria-disabled on their ancestor would override an enabled accessory's own state.
+  const cellDisabled = props.option.disabled === true
+    && !(props.option.rightAccessoryOutsidePressable === true && rightAccessory !== undefined);
   const wrapperCellAria = buildSelectionListGridCellWrapperA11yProps({
     pattern: a11yPattern,
     placement: cellPlacement,
     optionDomId: optionTestId,
     isSelected,
-    disabled: props.option.disabled === true,
+    disabled: cellDisabled,
   });
   const rowAria =
     wrapperCellAria !== null
@@ -334,7 +338,7 @@ export function PlanOptionRow(
           placement: SELECTION_LIST_SINGLE_COLUMN_CELL_PLACEMENT,
           optionDomId: optionTestId,
           isSelected,
-          disabled: props.option.disabled === true,
+          disabled: cellDisabled,
         });
   // True wherever the activatable control sits inside a cell — it is then a
   // widget, and the cell owns the role, the DOM id and the selected state.

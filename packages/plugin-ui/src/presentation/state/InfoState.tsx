@@ -51,8 +51,11 @@ export function HappierSurfaceStateFrame(props: Readonly<{
   );
 }
 
-/** The room a line's sentence asks for before its recovery moves under it. */
-const LINE_TEXT_BASIS_PX = 220;
+/**
+ * The room a line's sentence asks for before its recovery moves under it: enough for a short cause on
+ * one or two lines, so a Small widget card keeps "Couldn't read this machine · Retry" one block.
+ */
+const LINE_TEXT_BASIS_PX = 180;
 
 /** One compact sentence, glyph and inline recovery; diagnostic detail never enters a list line. */
 export function HappierStateLine(props: Readonly<{

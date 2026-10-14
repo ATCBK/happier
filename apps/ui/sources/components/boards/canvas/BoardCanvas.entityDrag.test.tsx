@@ -32,11 +32,13 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 // Portal placement/focus are browser boundaries; keep the actual menu and its carry callbacks.
-vi.mock('@/components/ui/popover', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Popover: (props: { open: boolean; children: React.ReactNode | ((bounds: { maxHeight: number; maxWidth: number }) => React.ReactNode) }) => props.open
-        ? React.createElement(React.Fragment, null, typeof props.children === 'function' ? props.children({ maxHeight: 640, maxWidth: 360 }) : props.children) : null,
-}));
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal,
+        { maxHeight: 640, maxWidth: 360, placement: 'bottom' }));
+// Keyboard focus also opens the grip tooltip, which imports the Popover leaf directly.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal,
+        { maxHeight: 640, maxWidth: 360, placement: 'bottom' }));
 vi.mock('@/components/ui/overlays/FloatingOverlay', async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
     FloatingOverlay: (props: React.PropsWithChildren) => React.createElement(React.Fragment, null, props.children),

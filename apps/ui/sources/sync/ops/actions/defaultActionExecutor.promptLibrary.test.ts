@@ -11,25 +11,23 @@ import {
     tryWriteServerEnabledBitInPlace,
     buildApprovalRequestArtifactHeaderV1,
     decodePlainArtifactStoredContent,
-    REDACTED_LOCAL_SERVICE_PUBLIC_PREVIEW_URL,
     SessionMetadataInactiveModelIntentPatchV1Schema,
     ProviderBoundModelRefSchema,
     V2SessionRecordSchema,
     type ActionId,
     type ActionExecutorContext,
     type ApprovalRequest,
-    PromptAssetWriteRequestSchema,
-    PromptAssetWriteBundleRequestSchema,
 } from '@happier-dev/protocol';
 import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema } from '@happier-dev/protocol/registries';
 import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { projectLegacySkillRegistryInstallActionResultV1 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { installPromptRegistryItemInLibrary, projectLegacySkillRegistryInstallActionResultV1 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { PromptRegistryInstallInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '@happier-dev/protocol/marketplace';
 import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
@@ -43,13 +41,16 @@ import {
     SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { MetadataSchema } from '@happier-dev/session-core/state';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
@@ -105,17 +106,12 @@ installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { createUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
-const { installPromptRegistryItem } = await import('@/sync/ops/promptLibrary/installPromptRegistryItem');
 const { captureLazyActionAccountContext } = await import('./actionAccountContext');
 const { createUiRegistryHostV1 } = await import('@/registries/registryHostDeps');
-const { readPromptLibraryCatalogProjectionInContext, writePromptLibraryRecordAndPublishInContext,
-    PromptLibraryRowOperationError } = await import('@/sync/api/account/apiPromptLibraryCatalog');
-const requireUpdatedPromptLibraryMutation: typeof import('@/sync/api/account/apiPromptLibraryCatalog').requireUpdatedPromptLibraryMutation =
-    (await import('@/sync/api/account/apiPromptLibraryCatalog')).requireUpdatedPromptLibraryMutation;
 const { sync } = await import('@/sync/sync');
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
-const { createEncryptedTransferChunkEnvelope, createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
+const { createEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
 const { createTransferManifestHasher } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 type Executor = ReturnType<typeof createDefaultActionExecutor>;
@@ -136,8 +132,10 @@ const binding = {
     displaySnapshot: { providerName: 'Provider', connectionName: 'Active', connectionRole: 'named', connectionDisplayNameMode: 'custom' },
 } as const;
 function seedSession(active: boolean, overrides: Partial<NonNullable<Session['metadata']>> = {}) {
+    const ownerMetadataView = MetadataSchema.parse({ path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1', flavor: 'claude', ...overrides });
     const session = createSessionFixture({ id: 'session_1', serverId, active,
-        metadataLayoutVersion: 0, metadata: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1', flavor: 'claude', ...overrides } });
+        metadataLayoutVersion: 1, ownerMetadataView,
+        metadata: MetadataSchema.parse(projectSessionSharedMetadataV1({ metadata: ownerMetadataView, agentState: null })) });
     storage.getState().applySessions([session]);
     serveSession(session);
     return session;
@@ -218,8 +216,10 @@ function serveSession(session: Session, beforeWrite?: (input: unknown) => void, 
             if (owner.t !== 'plain') throw new Error('Current fixture requires plain owner metadata');
             return MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(row.metadata), ownerMetadata: owner.v }));
         },
-        activate(metadata = session.metadata) {
-            row = { ...row, active: true, metadata: JSON.stringify(metadata), metadataVersion: row.metadataVersion + 1, seq: row.seq + 1, updatedAt: row.updatedAt + 1 };
+        activate(metadata = readSessionOwnerMetadataView(session)) {
+            if (!metadata) throw new Error('Activation requires Session owner metadata');
+            row = { ...row, active: true, ...(row.metadataLayoutVersion === 1 ? encodeCurrent(metadata) : { metadata: JSON.stringify(metadata) }),
+                metadataVersion: row.metadataVersion + 1, seq: row.seq + 1, updatedAt: row.updatedAt + 1 };
         },
         replaceMetadata(metadata: NonNullable<Session['metadata']>) {
             row = { ...row, ...(row.metadataLayoutVersion === 1 ? encodeCurrent(metadata) : { metadata: JSON.stringify(metadata) }),
@@ -235,54 +235,47 @@ async function seededApproval(request: ApprovalRequest) {
 type DaemonRequest = Readonly<{ machineId?: string; sessionId?: string; serverId: string; method: string; payload: unknown }>;
 const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
 const registryFixture = createPromptRegistrySkillFixture({ sourceId: 'catalog-source', itemId: 'review', title: 'Review skill',
-    files: [{ path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\n# Review' }] });
+    files: [{ path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\n# Review' },
+        { path: 'scripts/review.sh', content: '#!/bin/sh\nexit 0\n', unixMode: 0o755 }] });
 const registryItem = registryFixture.item;
 const registryPointer = { sourceId: registryItem.summary.sourceId, itemId: registryItem.summary.itemId };
-const externalResult = { ok: true as const, externalRef: { path: '.claude/commands/review.md' }, digest: 'digest-1' };
 
 /** Stateful row HTTP/CAS boundary; Action policy, catalog loading and transfer logic remain real. */
-function serveExternalLinksCatalog(outcome: 'updated' | 'conflict' | 'unavailable', options?: Readonly<{
-    publicSource?: boolean; refuseSkillRules?: boolean; afterSkillRulesWrite?: () => void | Promise<void>;
+function servePromptLibraryCatalog(outcome: 'updated' | 'unavailable', options?: Readonly<{
+    publicSource?: boolean; refuseSkillRules?: boolean;
 }>) {
-    let record: Extract<PromptLibraryRecordV1, { key: 'external-links' }> = {
+    const record: Extract<PromptLibraryRecordV1, { key: 'external-links' }> = {
         key: 'external-links', value: { v: 1, links: [{ id: 'neighbor-link', artifactId: 'neighbor-doc',
             assetTypeId: 'claude.command', scope: 'user', machineId: 'machine_1', externalRef: { path: 'neighbor.md' } }] },
     };
-    let revision = 4;
     const mutations: ReturnType<typeof PromptLibraryRowMutationV1Schema.parse>[] = [];
     const sources = PromptLibraryRecordV1Schema.parse({ key: 'registry-sources', value: { v: 2, disabledSourceIds: [],
         sources: [{ id: registryPointer.sourceId, title: 'Private skills', format: 'git', kinds: ['skill'],
             url: 'https://catalog.test/skills.git', enabled: true, addedAt: 1,
             ...(options?.publicSource ? {} : { token: { secretRef: 'registry-token' } }) }] } });
-    const otherRows = createPromptLibraryCatalogBoundary();
-    const otherKeys = PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key && key !== sources.key);
+    const catalog = createPromptLibraryCatalogBoundary({ records: [record, sources], revision: 4 });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 7 } });
     homes.answer(serverId, 'POST /v2/account/settings', { body: { success: true, version: 8 } });
     homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => outcome === 'unavailable'
         ? { status: 403, body: { error: 'forbidden' } }
-        : { body: { status: 'listed', rows: [{ key: record.key, revision, content: { t: 'plain', v: record } },
-            { key: sources.key, revision: 1, content: { t: 'plain', v: sources } },
-            ...otherKeys.map(key => ({ key, revision: otherRows.revision(key), content: { t: 'plain', v: otherRows.read(key) } }))] } } });
-    for (const key of otherKeys) homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { select: async input => {
+        : { body: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key,
+            revision: catalog.revision(key), content: { t: 'plain', v: catalog.read(key) } })) } } });
+    for (const key of PromptLibraryCatalogKeyV1Schema.options) homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { select: async input => {
+        if (key === 'external-links') mutations.push(PromptLibraryRowMutationV1Schema.parse(input));
         if (key === 'skill-rules' && options?.refuseSkillRules) return { body: { status: 'account-inconsistent' } };
-        const response = await otherRows.handle(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { method: 'POST', body: JSON.stringify(input) });
+        const response = await catalog.handle(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { method: 'POST', body: JSON.stringify(input) });
         if (!response) throw new Error('Canonical row boundary did not accept its owned path');
-        if (key === 'skill-rules') await options?.afterSkillRulesWrite?.();
         return { status: response.status, body: await response.json() };
-    } });
-    homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/external-links`, { select: input => {
-        const mutation = PromptLibraryRowMutationV1Schema.parse(input);
-        mutations.push(mutation);
-        if (outcome === 'conflict' || mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision: revision + 1 } };
-        if (mutation.content?.t !== 'plain' || mutation.content.v.key !== 'external-links') throw new Error('Unexpected external-link mutation');
-        record = mutation.content.v;
-        return { body: { status: 'updated', revision: ++revision, cursor: revision } };
     } });
     if (storage.getState().profileScope?.serverId === serverId) {
         storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, baseline.settings, 7);
     }
-    return { mutations, read: () => ({ record, revision }) };
+    return { mutations, read: () => {
+        const record = catalog.read('external-links');
+        if (record.key !== 'external-links') throw new Error('Wrong fixture row');
+        return { record, revision: catalog.revision('external-links') };
+    } };
 }
 /** Fake native daemon HTTP / Socket boundaries carry real encrypted finite-transfer bytes. */
 async function servePromptTransfers() {
@@ -318,11 +311,7 @@ async function servePromptTransfers() {
         const account = await captureLazyActionAccountContext(serverId, request.signal ?? undefined);
         try {
             const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
-            if (!store.organization || !account.serverIdentityId) throw new Error('Remote fixture Account is unavailable');
-            const projection = await readPromptLibraryCatalogProjectionInContext(account, request.signal ?? undefined);
-            const links = readPromptLibraryCatalogRecordV1({ ...projection, key: 'external-links' });
-            if (links.status !== 'ready' || links.record.key !== 'external-links') throw new PromptLibraryRowOperationError(
-                links.status === 'unavailable' ? links.reason : 'invalid-stored-content');
+            if (!store.organization) throw new Error('Remote fixture Account is unavailable');
             const registry = await createUiRegistryHostV1(account, store.organization, { surface: 'ui', signal: request.signal ?? undefined });
             const skills = createSkillActionExecuteV1({ store, skillRules: { ...store.organization,
                 listSkills: signal => readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, signal),
@@ -330,22 +319,12 @@ async function servePromptTransfers() {
                 readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
                 fetchRegistrySkillFiles: registry.filesForPointer,
                 includeInSession: async () => { throw new Error('UI default registry reach must not request Session inclusion'); } });
-            const result = await installPromptRegistryItem({ ...actionInput,
-                machineTarget: { serverIdentityId: account.serverIdentityId, machineId: actionInput.machineId },
-                libraryServerIdentityId: account.serverIdentityId, serverId, promptExternalLinks: links.record.value,
-                signal: request.signal ?? undefined }, store, account, { surface: 'ui', signal: request.signal ?? undefined },
-                pointer => skills('skills.install', { source: { kind: 'registry', ...pointer } }, { surface: 'ui' }, request.signal ?? undefined));
-            let receipt: unknown = result;
-            if (result.ok && result.nextPromptExternalLinks) {
-                try { requireUpdatedPromptLibraryMutation(await writePromptLibraryRecordAndPublishInContext(account, {
-                    record: { key: 'external-links', value: result.nextPromptExternalLinks }, expectedRevision: links.revision,
-                    ...(links.authority === 'inactive' ? { sourceSettingsVersion: projection.sourceSettingsVersion } : {}) }, request.signal ?? undefined)); }
-                catch (error) {
-                    if (!(error instanceof PromptLibraryRowOperationError)) throw error;
-                    receipt = { ...result, externalLinkPersistence: { ok: false, errorCode: error.code, error: error.code } };
-                }
-            }
-            const projected = projectLegacySkillRegistryInstallActionResultV1(receipt);
+            const result = await installPromptRegistryItemInLibrary({ request: actionInput,
+                signal: request.signal ?? undefined,
+                fetchItem: async () => registryItem,
+                installLibrary: pointer => skills('skills.install', { source: { kind: 'registry', ...pointer } }, { surface: 'ui' }, request.signal ?? undefined),
+            });
+            const projected = projectLegacySkillRegistryInstallActionResultV1(result);
             const failure = (await import('@happier-dev/protocol/actions/actionExecutionResult')).ActionExecuteFailureSchema.safeParse(projected);
             return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'prompt_registry.install', requestId: envelope.requestId,
                 execution: failure.success ? failure.data : { ok: true, result: projected } }) };
@@ -362,28 +341,14 @@ async function servePromptTransfers() {
             signature: { keyId: 'fixture-key', alg: 'Ed25519', valueBase64Url: Buffer.alloc(64, 2).toString('base64url') } });
         return { body: { ok: true, grant } };
     } });
-    const recipient = createTransferRecipientKeyPair();
-    let uploaded: unknown;
-    let finalized: unknown;
-    let sizeBytes = 0;
     const exportedBytes = new TextEncoder().encode(JSON.stringify(registryFixture.files));
     const hash = createTransferManifestHasher(); hash.update(exportedBytes);
     const manifestHash = hash.digestManifestHash();
     rpc.machine.mockImplementation(async (request: DaemonRequest) => {
-        if (request.method === 'daemon.directTransfer.import.prepare') {
-            const payload = request.payload as { sizeBytes: number };
-            sizeBytes = payload.sizeBytes;
-            return { success: true, uploadId: 'upload-1', destDisplayPath: 'review.md', expectedSizeBytes: sizeBytes,
-                chunkSizeBytes: sizeBytes, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
-                expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
-                endpointCandidates: [{ kind: 'http', expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
-                    url: 'http://127.0.0.1:48123/machine-transfers/direct/imports/upload-1' }] };
-        }
         if (request.method === 'daemon.directTransfer.export.prepare') return { success: true, transferId: 'export-1',
             name: 'skill.json', sizeBytes: exportedBytes.length, expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
             endpointCandidates: [{ kind: 'http', expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
                 url: 'http://127.0.0.1:48123/machine-transfers/direct/export-1' }] };
-        if (request.method === 'daemon.directTransfer.import.abort') return { success: true, aborted: true };
         if (request.method === 'daemon.directTransfer.export.release') return { success: true };
         if (request.method === 'daemon.registries.fetch') {
             const input = RegistryFetchRequestV1Schema.parse(request.payload);
@@ -398,18 +363,6 @@ async function servePromptTransfers() {
         // The native daemon and Home share this HTTP boundary, not a transport
         // owner. Keep real feature/grant/catalog requests addressed to the Home.
         if (url.origin !== 'http://127.0.0.1:48123') return await homes.request(input, init);
-        if (url.pathname.endsWith('/chunks/0') && init?.method === 'PUT') {
-            const envelope = JSON.parse(String(init.body)) as { payloadBase64: string; encryptedDataKeyEnvelopeBase64: string };
-            const bytes = await decryptEncryptedTransferChunkEnvelope({ ...envelope, transferId: 'upload-1', sequence: 0, recipientSecretKeySeed: recipient.recipientSecretKeySeed });
-            uploaded = PromptAssetWriteRequestSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
-            return Response.json({ success: true });
-        }
-        if (url.pathname.endsWith('/finalize')) {
-            const bundle = PromptAssetWriteBundleRequestSchema.safeParse(uploaded);
-            const result = bundle.success ? { ok: true, externalRef: { skillName: bundle.data.targetName }, digest: 'digest-1' } : externalResult;
-            finalized = result;
-            return Response.json({ success: true, finalized: { success: true, path: 'review.md', sizeBytes, result }, sha256: 'digest-1' });
-        }
         if (url.pathname.endsWith('/open')) return Response.json({ transferId: 'export-1', totalChunks: 1, sizeBytes: exportedBytes.length, manifestHash });
         if (url.pathname.endsWith('/chunks/0')) {
             const recipientPublicKeyBase64 = new Headers(init?.headers).get('x-happier-transfer-recipient-public-key');
@@ -425,6 +378,10 @@ async function servePromptTransfers() {
     expect(await getReadyServerFeatures({ serverId, force: true })).toMatchObject({ features: {
         machines: { transfer: { enabled: true, directPeer: { enabled: true } }, peerMediation: { enabled: true } },
     } });
+    // Connection hydration may have read the initial empty row before this
+    // fixture replaced its HTTP response. Reload through the real catalog owner.
+    const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+    await refreshPromptLibraryCatalog({ serverId, accountId: 'account-a' });
     // The real Machine producer opens the published plain row and installs its
     // mode/context before Socket RPC; no synthetic E2EE material is necessary.
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -457,12 +414,15 @@ async function servePromptTransfers() {
         browserHost: isBrowserIrohHost(), nativeLifecycleAvailable: await probeIrohMachineTransferLifecycleAvailability(),
         applicationCarrierEligibility: storage.getState().localSettings.homeApplicationCarrierEligibility,
     })).toMatchObject({ kind: 'iroh_peer', carrierKind: 'native_http' });
-    return { readUploaded: () => uploaded, readFinalized: () => finalized };
 }
 
 describe('createDefaultActionExecutor (prompt library routing)', () => {
     beforeEach(async () => {
         webLocks = installWebLockManagerMock();
+        const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+        const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+        resetPromptLibraryCatalogEngineForTests();
+        resetPromptLibraryCatalogSnapshotsForTests();
         await homes.reset();
         storage.setState(baseline, true);
         for (const boundary of Object.values(rpc)) boundary.mockReset();
@@ -471,12 +431,16 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-actions.test', accountId: 'account-a',
             credentials: { token: homes.findByServerUrl('https://prompt-actions.test')!.token! } });
         installHomeGovernanceBoundaries(homes);
-        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, storage.getState().settings, 1);
-        storage.getState().activateProfileScope({ serverId, accountId: 'account-a' });
-        vi.stubGlobal('fetch', async (url: RequestInfo | URL) => {
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const scopeServerId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
+        storage.getState().applySettingsForScope({ serverId: scopeServerId, accountId: 'account-a' }, storage.getState().settings, 1);
+        storage.getState().activateProfileScope({ serverId: scopeServerId, accountId: 'account-a' });
+        vi.stubGlobal('fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
             const path = new URL(String(url)).pathname;
-            if (path.startsWith('/v1/machines/')) return Response.json({ machine: { id: path.split('/').at(-1), kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
-            return Response.json({ error: 'not_found' }, { status: 404 });
+            if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
+                id: path.split('/').at(-1)!, accountId: 'account-a',
+            }) });
+            return homes.request(url, init);
         });
     });
     afterEach(async () => {
@@ -742,21 +706,22 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 status: 'intent_updated', sessionId: 'session_1', modelId, updatedAt: expect.any(Number) } });
             expect(remote.readMetadata().modelSelectionIntentV1).toMatchObject({ v: 1, updatedAt: expect.any(Number), selection: selection(modelId, providerConnectionId) });
         }
-        expect(remote.writes.map((input) => SessionMetadataInactiveModelIntentPatchV1Schema.parse(input).inactiveModelIntent.sessionExpectation))
+        expect(remote.writes.map((input) => SessionMetadataInactiveModelIntentOwnerPatchV1Schema.parse(input).sessionExpectation))
             .toEqual([{ kind: 'inactive_model_intent' }, { kind: 'inactive_model_intent' }]);
         expect(rpc.session).not.toHaveBeenCalled();
     });
 
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
-        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const { resolveServerProfileScopeIdForIdentifier, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
         const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };
+        expect(areServerProfileIdentifiersEquivalent(accountScope.serverId, serverId)).toBe(true);
         let settingsVersion = (loadAccountSettings(accountScope).version ?? 0) + 1;
-        const accountSettings = { ...storage.getState().settings, actionsSettingsV1: { v: 1 as const, approvalWaivedSurfaces: {
+        const accountSettings = settingsParse({ ...storage.getState().settings, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
             'usage.coach.apply': ['ui' as const],
             'usage.coach.undo': ['ui' as const],
-        } } };
+        } } });
         // An explicit Account policy waiver reaches the real owner; this journey
         // tests conditional mutation rather than the separate approval workflow.
         homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: accountSettings }, version: settingsVersion } });
@@ -764,13 +729,14 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const heavy = selection('heavy-model');
         const ownerMetadataView = MetadataSchema.parse({ path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1',
             flavor: 'claude', modelSelectionIntentV1: { v: 1, updatedAt: 250, selection: heavy } });
-        const session = createSessionFixture({ id: 'session_1', serverId, active: false, metadataLayoutVersion: 1,
+        const session = createSessionFixture({ id: 'session_1', serverId: accountScope.serverId, active: false, metadataLayoutVersion: 1,
             ownerMetadataView, metadata: MetadataSchema.parse(projectSessionSharedMetadataV1({ metadata: ownerMetadataView, agentState: null })) });
         storage.getState().applySessions([session]);
         let race = false;
-        let reads = 0;
         const remote = serveSession(session, undefined, async () => {
-            if (race && ++reads === 2) remote.replaceMetadata({ ...remote.readMetadata(),
+            if (!race) return;
+            race = false;
+            remote.replaceMetadata({ ...remote.readMetadata(),
                 modelSelectionIntentV1: { v: 1, updatedAt: 900, selection: selection('intervening-model') } });
         });
         const tokens = { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 };
@@ -811,9 +777,18 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: `${kind}-event`,
                     data: { type: 'prompt-composition', composition } } } } }];
         });
-        homes.answer(serverId, buildSessionMessagesPath({ sessionId: 'session_1', scope: 'all', roles: ['user', 'event'] }),
+        homes.answer(serverId, buildSessionMessagesPath({ sessionId: 'session_1', scope: 'all', roles: ['user', 'agent', 'event'] }),
             { body: { messages, hasMore: false } });
         const query = normalizeUsageQuery({ session: 'session_1', period: { startMs: 0, endMs: 1000 } });
+        const { getUsageQueryResourceStore } = await import('@/sync/api/account/usageQueryResource');
+        const account = await captureLazyActionAccountContext(serverId);
+        const resource = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query',
+            input: projectNativeJsonValueForTransport({ queries: [query] }) });
+        const release = resource.subscribe(() => {}, true);
+        try {
+        // The mounted query owner finishes optional evidence before this one-shot
+        // Action reads its current snapshot; Apply/Undo keep the real owner path.
+        await resource.refresh();
         const executor = createDefaultActionExecutor();
         const read = async () => {
             const queried = await executor.execute('usage.query', { queries: [query] }, { serverId, surface: 'ui' });
@@ -823,13 +798,16 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             const finding = batch.results[0]?.coach?.findings.find(finding => finding.detectorId === 'model_misfit');
             expect(finding, JSON.stringify({ coverage: batch.results[0]?.accounting?.coverage,
                 howYouWork: batch.results[0]?.howYouWork?.detailStatus, coach: batch.results[0]?.coach?.evaluations,
+                resourceFreshness: resource.getSnapshot().freshness, resourcePending: resource.getSnapshot().pending,
+                authorityScope: account.accountLifetime.scope, storedProfileScope: storage.getState().profileScope,
+                storedSessionServerId: storage.getState().sessions.session_1?.serverId,
                 requests: homes.requests.map(row => row.path) })).toBeDefined();
+            if (!finding) throw new Error('Expected witnessed model proposal');
             return finding;
         };
-        const finding = await read();
+        let finding = await read();
         expect(finding).toMatchObject({ coverage: 'partial', modelComparison: { costCoverage: 'partial', providerAttribution: 'unknown' },
             remedy: { kind: 'model', modelId: 'light-model', expected: { owner: 'inactive', updatedAt: 250 } } });
-        if (!finding) throw new Error('Expected witnessed model proposal');
         const apply = () => executor.execute('usage.coach.apply', { query, evidenceKey: finding.evidenceKey }, { serverId, surface: 'ui' });
         const applied = await apply();
         expect(applied, JSON.stringify(applied)).toMatchObject({ ok: true, result: { kind: 'applied' } });
@@ -842,25 +820,33 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const modelOff = { ...accountSettings, usageCoachPreferencesV1: { ...accountSettings.usageCoachPreferencesV1, modelSuggestion: 'off' as const } };
         homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: modelOff }, version: ++settingsVersion } });
         storage.getState().applySettingsForScope(accountScope, modelOff, settingsVersion);
-        expect(loadAccountSettings(accountScope).settings.usageCoachPreferencesV1).toMatchObject({ modelSuggestion: 'off' });
+        expect(settingsParse(loadAccountSettings(accountScope).settings).usageCoachPreferencesV1).toMatchObject({ modelSuggestion: 'off' });
         const beforeDisabledApply = remote.writes.length;
         expect(await apply()).toMatchObject({ ok: false, errorCode: 'coach_evidence_not_current' });
         expect(remote.writes).toHaveLength(beforeDisabledApply);
         homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: accountSettings }, version: ++settingsVersion } });
         storage.getState().applySettingsForScope(accountScope, accountSettings, settingsVersion);
+        await resource.refresh();
+        finding = await read();
         const second = await apply();
-        expect(second).toMatchObject({ ok: true });
+        expect(second, JSON.stringify(second)).toMatchObject({ ok: true });
         const secondReceipt = UsageCoachApplyResultSchema.parse(second.ok ? second.result : null);
         remote.replaceMetadata({ ...remote.readMetadata(), modelSelectionIntentV1: { v: 1, updatedAt: 800, selection: selection('intervening-model') } });
         expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: secondReceipt.reversal }, { serverId, surface: 'ui' }))
             .toMatchObject({ ok: false });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection?.modelId).toBe('intervening-model');
         remote.replaceMetadata({ ...remote.readMetadata(), modelSelectionIntentV1: { v: 1, updatedAt: 850, selection: heavy } });
+        await resource.refresh();
+        finding = await read();
         const beforeRace = remote.writes.length;
         race = true;
         expect(await apply()).toMatchObject({ ok: false });
         expect(remote.writes).toHaveLength(beforeRace);
         expect(remote.readMetadata().modelSelectionIntentV1?.selection?.modelId).toBe('intervening-model');
+        } finally {
+            release();
+            account.dispose();
+        }
     });
 
     it('refuses captured inactive model mutation when its Account retires during the actual metadata read', async () => {
@@ -887,7 +873,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         }
         expect(await mutation).toMatchObject({ ok: false });
         expect(remote.writes).toEqual([]);
-        expect(remote.readMetadata().modelSelectionIntentV1).toEqual(session.metadata?.modelSelectionIntentV1);
+        expect(remote.readMetadata().modelSelectionIntentV1).toEqual(readSessionOwnerMetadataView(session)?.modelSelectionIntentV1);
     });
 
     it('refuses an omitted-connection model selection when Session Provider state is unreadable', async () => {
@@ -895,8 +881,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             // Corrupt persisted bytes enter at the Home/store boundary; production parsing remains real.
             const unreadable = active ? { ...binding, connectionRevision: 'not-a-number' } : { selection: { providerConnectionId: 'pc_work' } };
             const session = seedSession(active);
-            const metadata = { ...session.metadata, [active ? 'providerBindingV1' : 'modelSelectionIntentV1']: unreadable };
-            storage.getState().applySessions([{ ...session, metadata: metadata as Session['metadata'] }]);
+            const metadata = { ...readSessionOwnerMetadataView(session), [active ? 'providerBindingV1' : 'modelSelectionIntentV1']: unreadable };
+            storage.getState().applySessions([{ ...session, ownerMetadataView: metadata as Session['metadata'] }]);
             expect(await executeModel(modelInput('next-model'))).toEqual({ ok: false, errorCode: 'model_selection_session_provider_state_unreadable', error: 'model_selection_session_provider_state_unreadable' });
         }
         expect(rpc.session).not.toHaveBeenCalled();
@@ -905,7 +891,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
 
     it('reroutes an inactive snapshot through the live transition owner after the conditioned metadata CAS observes activation', async () => {
         const session = seedSession(false, { modelSelectionIntentV1: { v: 1, updatedAt: 10, selection: selection('pending-model', 'pc_pending') } });
-        const remote = serveSession(session, () => remote.activate({ ...session.metadata!, providerBindingV1: binding }));
+        const remote = serveSession(session, () => remote.activate({ ...remote.readMetadata(), providerBindingV1: binding }));
         rpc.session.mockResolvedValueOnce({ ok: true, status: 'applied', activeSelection: selection('provider-next', 'pc_active') });
         expect(await executeModel(modelInput('provider-next'))).toMatchObject({ ok: true, result: { status: 'applied', activeSelection: selection('provider-next', 'pc_active') } });
         expect(remote.writes).toHaveLength(1);
@@ -916,7 +902,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const session = seedSession(false);
         const remote = serveSession(session);
         homes.answer(serverId, 'PATCH /v2/sessions/session_1', { body: { code: 'session_active' }, status: 409 });
-        expect(await executeModel(modelInput('provider-next'))).toMatchObject({ ok: false, errorCode: 'owner_unavailable', details: { reason: 'session_model_transition_owner_unproven', requestedSelection: selection('provider-next') } });
+        const result = await executeModel(modelInput('provider-next'));
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'owner_unavailable', details: { reason: 'session_model_transition_owner_unproven', requestedSelection: selection('provider-next') } });
         expect(homes.requestsFor('/v2/sessions/session_1').filter(({ input }) => input !== null)).toHaveLength(1);
         expect(remote.readMetadata().modelSelectionIntentV1).toBeUndefined();
         expect(rpc.session).not.toHaveBeenCalled();
@@ -928,7 +915,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const remote = serveSession(session, () => {
             if (!first) return;
             first = false;
-            remote.replaceMetadata({ ...session.metadata!, modelSelectionIntentV1: { v: 1, updatedAt: Number.MAX_SAFE_INTEGER, selection: selection('newer-model') } });
+            remote.replaceMetadata({ ...remote.readMetadata(), modelSelectionIntentV1: { v: 1, updatedAt: Number.MAX_SAFE_INTEGER, selection: selection('newer-model') } });
         });
         expect(await executeModel(modelInput('provider-model', 'pc_work'))).toMatchObject({ ok: false, errorCode: 'superseded', details: {
             status: 'superseded', requestedSelection: selection('provider-model', 'pc_work'), reason: 'accepted_intent_was_superseded' } });
@@ -936,106 +923,54 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         expect(rpc.session).not.toHaveBeenCalled();
     });
 
-    it.each(['updated', 'conflict'] as const)('prompt catalog export preserves row neighbors and requires the captured row acknowledgement: %s', async outcome => {
-        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_doc.v2', title: 'Review', tags: [], folderId: null, origin: 'user', locked: false },
-            JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }));
-        const catalog = serveExternalLinksCatalog(outcome);
-        const settings = storage.getState().settings;
-        await servePromptTransfers();
-        const input = { artifactId, machineId: 'machine_1', assetTypeId: 'claude.command', scope: 'user', targetPath: 'review.md' };
-        const result = await createDefaultActionExecutor().execute('prompt_asset.export', input, { serverId, surface: 'ui' });
-        if (outcome === 'updated') {
-            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { artifactId, exported: true } });
-            expect(catalog.read().record.value.links).toEqual(expect.arrayContaining([
-                expect.objectContaining({ id: 'neighbor-link' }), expect.objectContaining({ artifactId, machineId: 'machine_1' }),
-            ]));
-            expect(catalog.read().revision).toBe(5);
-        } else {
-            expect(result).toMatchObject({ ok: false, errorCode: 'conflict', details: { artifactId, exported: true } });
-            expect(catalog.read().record.value.links.map(link => link.id)).toEqual(['neighbor-link']);
-        }
-        expect(catalog.mutations, JSON.stringify(result)).toHaveLength(1);
-        expect(catalog.mutations[0]).toMatchObject({ expectedRevision: 4 });
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.import.prepare' }));
-        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
-        expect(storage.getState().settings).toBe(settings);
-    });
 
-    it.each(['updated', 'conflict'] as const)('prompt catalog registry install preserves row neighbors and requires the captured row acknowledgement: %s', async outcome => {
-        const catalog = serveExternalLinksCatalog(outcome);
-        const settings = storage.getState().settings;
-        await servePromptTransfers();
-        const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', ...registryPointer,
-            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
-        }, { serverId, surface: 'ui' });
-        if (outcome === 'updated') {
-            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true, artifactId: expect.any(String) } });
-            if (!result.ok) throw new Error(result.error);
-            const artifactId = (result.result as { artifactId: string }).artifactId;
-            expect(JSON.parse(homes.artifacts(serverId).readPlainBody(artifactId) ?? 'null')).toMatchObject({ entries: registryFixture.files });
-            expect(catalog.read().record.value.links).toEqual(expect.arrayContaining([
-                expect.objectContaining({ id: 'neighbor-link' }), expect.objectContaining({ artifactId, machineId: 'machine_1' }),
-            ]));
-            expect(catalog.read().revision).toBe(5);
-        } else {
-            expect(result).toMatchObject({ ok: false, errorCode: 'conflict', details: { artifactId: expect.any(String), exported: true,
-                response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' } } });
-            expect(catalog.read().record.value.links.map(link => link.id)).toEqual(['neighbor-link']);
-        }
-        expect(catalog.mutations, JSON.stringify(result)).toHaveLength(1);
-        expect(catalog.mutations[0]).toMatchObject({ expectedRevision: 4 });
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.export.prepare',
-            payload: { t: 'prompt_registry_download_v1', kind: 'skill', ...registryPointer, version: registryItem.summary.version } }));
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.import.prepare' }));
-        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
-        expect(storage.getState().settings).toBe(settings);
-    });
 
     it('prompt catalog public registry install preserves acknowledged library content when its rule write is refused', async () => {
-        const catalog = serveExternalLinksCatalog('updated', { publicSource: true, refuseSkillRules: true });
+        const catalog = servePromptLibraryCatalog('updated', { publicSource: true, refuseSkillRules: true });
         await servePromptTransfers();
         const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
             machineId: 'machine_1', ...registryPointer,
             installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
         }, { serverId, surface: 'ui' });
-        expect(result).toMatchObject({ ok: true, result: { artifactId: expect.any(String), exported: true,
+        expect(result).toMatchObject({ ok: true, result: { artifactId: expect.any(String), exported: false,
             skillIds: [expect.any(String)], includedInSessionId: null,
             incomplete: [{ skillId: expect.any(String), step: 'rules' }] } });
         if (!result.ok) throw new Error(result.error);
         const receipt = result.result as Readonly<{ artifactId: string; skillIds: string[] }>;
         expect(receipt.skillIds).toEqual([receipt.artifactId]);
         expect(homes.artifacts(serverId).readPlainBody(receipt.artifactId)).not.toBeNull();
-        expect(catalog.read().record.value.links.some(link => link.artifactId === receipt.artifactId)).toBe(true);
-    });
-
-    it.each(['cancelled', 'retired'] as const)('prompt catalog public registry install retains its native and library ACK before row preparation is %s', async outcome => {
-        const controller = new AbortController();
-        let transfer: Awaited<ReturnType<typeof servePromptTransfers>>;
-        const catalog = serveExternalLinksCatalog('updated', { publicSource: true, afterSkillRulesWrite: async () => {
-            // The real loader may first publish the built-in rule seed. Retire
-            // only after this install's content exists and its rules are written.
-            if (!homes.artifacts(serverId).list().some(artifact => {
-                const body: unknown = JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id) ?? 'null');
-                return body !== null && typeof body === 'object' && 'entries' in body;
-            })) return;
-            expect(transfer.readFinalized()).toMatchObject({ ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' });
-            if (outcome === 'cancelled') controller.abort();
-            else await homes.switchAccount(serverId, 'replacement-account');
-        } });
-        transfer = await servePromptTransfers();
-        const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', ...registryPointer,
-            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
-        }, { serverId, surface: 'ui', signal: controller.signal });
-        expect(result).toMatchObject({ ok: false, details: { artifactId: expect.any(String), exported: true,
-            response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' }, skillIds: [expect.any(String)] } });
-        expect(homes.artifacts(serverId).list()).toHaveLength(1);
+        expect(catalog.read().record.value.links.map(link => link.id)).toEqual(['neighbor-link']);
         expect(catalog.mutations).toEqual([]);
     });
 
-    it('prompt catalog registry install does not begin external installation after cancellation during the Machine download', async () => {
-        const catalog = serveExternalLinksCatalog('updated');
+    it('installs pinned registry files through the real skills Action and reads the produced library item without a native install', async () => {
+        const catalog = servePromptLibraryCatalog('updated', { publicSource: true });
+        await servePromptTransfers();
+        const executor = createDefaultActionExecutor();
+        const installed = await executor.execute('skills.install', { source: { kind: 'registry', ...registryPointer,
+            version: registryItem.summary.version } }, { serverId, surface: 'ui' });
+        expect(installed, JSON.stringify(installed)).toMatchObject({ ok: true, result: { skillIds: [expect.any(String)] } });
+        if (!installed.ok) throw new Error(installed.error);
+        const receipt = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(installed.result);
+        if (!('skillIds' in receipt)) throw new Error('Expected committed skill receipt');
+        const read = await executor.execute('skills.read', { skillId: receipt.skillIds[0], file: 'scripts/review.sh' }, { serverId, surface: 'ui' });
+        if (!read.ok) throw new Error(read.error);
+        expect(SkillReadResultV1Schema.parse(read.result)).toMatchObject({
+            skillId: receipt.skillIds[0], files: registryFixture.files.map(file => ({ path: file.path, unixMode: file.unixMode })),
+            file: registryFixture.files[1], trust: 'runs_scripts',
+            provenance: { kind: 'registry', registry: { ...registryPointer, ref: { commit: registryItem.summary.version } } },
+        });
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1',
+            method: 'daemon.directTransfer.export.prepare', payload: { t: 'prompt_registry_download_v1', kind: 'skill',
+                ...registryPointer, version: registryItem.summary.version } }));
+        expect(rpc.machine.mock.calls.map(([request]) => request).filter((request: DaemonRequest) =>
+            request.method === 'daemon.directTransfer.import.prepare')).toEqual([]);
+        expect(catalog.mutations).toEqual([]);
+    });
+
+
+    it('does not create library content after cancellation during the registry download', async () => {
+        const catalog = servePromptLibraryCatalog('updated');
         await servePromptTransfers();
         const controller = new AbortController();
         const daemon = rpc.machine.getMockImplementation();
@@ -1064,44 +999,21 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         expect(catalog.mutations).toEqual([]);
     });
 
-    it('prompt catalog registry install retains its acknowledged Machine effect when Account Artifact creation is refused', async () => {
-        const catalog = serveExternalLinksCatalog('updated');
-        await servePromptTransfers();
-        homes.answer(serverId, 'POST /v1/artifacts', { status: 503, body: { error: 'artifact_write_unavailable' } });
-        const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', ...registryPointer,
-            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
-        }, { serverId, surface: 'ui' });
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: false, details: { exported: true,
-            response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' } } });
-        expect(JSON.stringify(result)).not.toContain(registryFixture.files[0]!.contentBase64);
-        expect(JSON.stringify(result)).not.toContain(registryItem.summary.title);
-        expect(homes.artifacts(serverId).list()).toEqual([]);
-        expect(catalog.mutations).toEqual([]);
-        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
-    });
 
-    it.each(['prompt_asset.export', 'prompt_registry.install'] as const)('prompt catalog %s refuses an unavailable row before external effects', async actionId => {
-        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_doc.v2', title: 'Review', tags: [], folderId: null, origin: 'user', locked: false },
-            JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }));
-        const catalog = serveExternalLinksCatalog('unavailable');
+    it('refuses an unavailable registry source row before creating library content', async () => {
+        const catalog = servePromptLibraryCatalog('unavailable');
         await servePromptTransfers();
-        const input = actionId === 'prompt_asset.export'
-            ? { artifactId, machineId: 'machine_1', assetTypeId: 'claude.command', scope: 'user', targetPath: 'review.md' }
-            : { machineId: 'machine_1', ...registryPointer,
-                installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } };
-        const result = await createDefaultActionExecutor().execute(actionId, input, { serverId, surface: 'ui' });
+        const result = await createDefaultActionExecutor().execute('prompt_registry.install', { machineId: 'machine_1', ...registryPointer,
+            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } }, { serverId, surface: 'ui' });
         expect(result).toMatchObject({ ok: false });
         expect(rpc.machine).not.toHaveBeenCalled();
         expect(catalog.mutations).toEqual([]);
         expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
     });
 
-    it.each(['prompt_asset.export', 'prompt_registry.install'] as const)('prompt catalog %s keeps an explicit inactive source Account row while an independent Home is displayed', async actionId => {
-        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_doc.v2', title: 'Review', tags: [], folderId: null, origin: 'user', locked: false },
-            JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }));
-        const catalog = serveExternalLinksCatalog('updated');
-        const displayedUrl = `https://displayed-${actionId.replaceAll('_', '-')}.test`;
+    it('keeps a retained registry install on its captured Home and ignores the old native target', async () => {
+        const catalog = servePromptLibraryCatalog('updated');
+        const displayedUrl = 'https://displayed-registry-install.test';
         const displayedServerId = await homes.addHome({ name: 'Displayed Home', serverUrl: displayedUrl, accountId: 'account-b' });
         await connection?.dispose();
         connection = await restoreServerAccountForTest({ serverUrl: displayedUrl, accountId: 'account-b' });
@@ -1112,16 +1024,19 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         storage.getState().applySettingsForScope(displayedScope, baseline.settings, 11);
         const displayedPreferences = storage.getState().settings;
         await servePromptTransfers();
-        const input = actionId === 'prompt_asset.export'
-            ? { artifactId, machineId: 'machine_1', assetTypeId: 'claude.command', scope: 'user', targetPath: 'review.md' }
-            : { machineId: 'machine_1', ...registryPointer,
-                installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } };
-        const result = await createDefaultActionExecutor().execute(actionId, input, { serverId, surface: 'ui' });
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true } });
-        expect(catalog.read().record.value.links).toHaveLength(2);
-        expect(catalog.mutations[0]).toMatchObject({ expectedRevision: 4 });
+        const result = await createDefaultActionExecutor().execute('prompt_registry.install', { machineId: 'machine_1', ...registryPointer,
+            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } }, { serverId, surface: 'ui' });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: false, artifactId: expect.any(String) } });
+        if (!result.ok) throw new Error(result.error);
+        const receipt = result.result as Readonly<{ artifactId: string }>;
+        expect(homes.artifacts(serverId).readPlainBody(receipt.artifactId)).not.toBeNull();
+        expect(homes.artifacts(displayedServerId).list()).toEqual([]);
+        expect(catalog.read().record.value.links.map(link => link.id)).toEqual(['neighbor-link']);
+        expect(catalog.mutations).toEqual([]);
         expect(homes.requestsFor(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/external-links`).filter(request => request.input !== null))
-            .toEqual([expect.objectContaining({ serverId })]);
+            .toEqual([]);
+        expect(rpc.machine.mock.calls.map(([request]) => request).filter((request: DaemonRequest) =>
+            request.method === 'daemon.directTransfer.import.prepare')).toEqual([]);
         expect(storage.getState().settingsScope).toEqual(displayedScope);
         expect(storage.getState().settings).toEqual(displayedPreferences);
         const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
@@ -1167,6 +1082,9 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         seedSession(true);
         const machine = createMachineFixture({ id: 'machine_1', active: true });
         storage.setState({ machines: { machine_1: machine }, machineListByServerId: { [serverId]: [machine] } });
+        const machineRow = { ...createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account-a' }), runnerContentKeyBinding: null };
+        homes.answer(serverId, '/v1/machines', { body: [machineRow] });
+        homes.answer(serverId, '/v1/machines/machine_1', { body: { machine: machineRow } });
         const snapshot = {
             v: 1 as const,
             machineId: 'machine_1',
@@ -1181,6 +1099,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             generatedAt: 2_500,
             refreshState: 'idle' as const,
             resources: [],
+            previews: [],
             diagnostics: [],
         };
         const localServiceInventorySnapshot = {
@@ -1242,19 +1161,6 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             exposure: publicExposure,
             snapshot: publicPreviewSnapshot,
         };
-        const redactedPublicExposure = {
-            ...publicExposure,
-            publicUrl: REDACTED_LOCAL_SERVICE_PUBLIC_PREVIEW_URL,
-        };
-        const redactedPublicPreviewSnapshot = {
-            ...publicPreviewSnapshot,
-            exposures: [redactedPublicExposure],
-        };
-        const redactedPublicPreviewCreateResponse = {
-            ...publicPreviewCreateResponse,
-            exposure: redactedPublicExposure,
-            snapshot: redactedPublicPreviewSnapshot,
-        };
         const publicPreviewCopyUrlResponse = {
             protocolVersion: 1 as const,
             machineId: 'machine_1',
@@ -1278,25 +1184,21 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 recordedAt: 5_000,
             }],
         };
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({
-            protocolVersion: 1,
-            snapshot,
-        }).mockResolvedValueOnce({
-            protocolVersion: 1,
-            snapshot: localServicePreviewSnapshot,
-        }).mockResolvedValueOnce({
-            protocolVersion: 1,
-            snapshot: localServiceInventorySnapshot,
-        }).mockResolvedValueOnce({
-            protocolVersion: 1,
-            snapshot: localServiceLauncherSnapshot,
-        }).mockResolvedValueOnce(localServiceLauncherStartResponse).mockResolvedValueOnce({
-            protocolVersion: 1,
-            result: localServiceActionResult,
-        }).mockResolvedValueOnce({
-            protocolVersion: 1,
-            snapshot: publicPreviewSnapshot,
-        }).mockResolvedValueOnce(publicPreviewCreateResponse).mockResolvedValueOnce(publicPreviewCopyUrlResponse);
+        const responses = new Map<string, unknown>([
+            ['daemon.devices.simulator.preview.snapshot', { protocolVersion: 1, snapshot }],
+            ['daemon.localServices.preview.snapshot', { protocolVersion: 1, snapshot: localServicePreviewSnapshot }],
+            ['daemon.localServices.inventory.snapshot', { protocolVersion: 1, snapshot: localServiceInventorySnapshot }],
+            ['daemon.localServices.launcher.snapshot', { protocolVersion: 1, snapshot: localServiceLauncherSnapshot }],
+            ['daemon.localServices.launcher.start', localServiceLauncherStartResponse],
+            ['daemon.localServices.actions.execute', { protocolVersion: 1, result: localServiceActionResult }],
+            ['daemon.localServices.publicPreview.status', { protocolVersion: 1, snapshot: publicPreviewSnapshot }],
+            ['daemon.localServices.publicPreview.create', publicPreviewCreateResponse],
+            ['daemon.localServices.publicPreview.copyUrl', publicPreviewCopyUrlResponse],
+        ]);
+        machineRpcWithServerScopeMock.mockImplementation(async ({ method }: DaemonRequest) => {
+            if (!responses.has(method)) throw new Error(`Unexpected native Machine RPC: ${method}`);
+            return responses.get(method);
+        });
 
         const executor = createDefaultActionExecutor();
 
@@ -1321,12 +1223,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 defaultSessionId: 'session_1',
                 serverId,
             },
-        })).resolves.toEqual({
-            generatedAt: 2_500,
-            refreshState: 'idle',
-            previews: [],
-            diagnostics: [],
-        });
+        })).resolves.toEqual(localServicePreviewSnapshot);
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine_1',
             serverId,
@@ -1383,7 +1280,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 defaultSessionId: 'session_1',
                 serverId,
             },
-        })).resolves.toEqual(redactedPublicPreviewSnapshot);
+        })).resolves.toEqual(publicPreviewSnapshot);
         await expect(executeRuntime(executor, {
             actionId: 'localServices.publicPreview.create',
             input: {
@@ -1397,7 +1294,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 defaultSessionId: 'session_1',
                 serverId,
             },
-        })).resolves.toEqual(redactedPublicPreviewCreateResponse);
+        })).resolves.toEqual(publicPreviewCreateResponse);
         await expect(executeRuntime(executor, {
             actionId: 'localServices.publicPreview.copyUrl',
             input: {
@@ -1467,6 +1364,46 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             errorCode: 'runtime_action_disabled',
             error: 'runtime_action_disabled:peerMediation:runtime_family_unimplemented',
         });
+    });
+
+    it('dispatches a daemon Browser observation to the captured Account and exact mounted Machine', async () => {
+        await admitBrowserAutomation();
+        const { applyBrowserControlEvent, createBrowserControlState } = await import('@/sync/domains/browser/control');
+        const { buildBrowserAdapterCapabilities } = await import('@/sync/domains/browser/adapters/capabilities');
+        const { BrowserAutomationActionResultV1Schema } = await import('@happier-dev/protocol/browser/automation/v1');
+        const target = { kind: 'externalUrl' as const, targetId: 'external', url: 'https://browser.example.test/',
+            display: { title: 'Browser', addressLabel: 'browser.example.test' } };
+        const state = applyBrowserControlEvent(applyBrowserControlEvent(createBrowserControlState(), {
+            kind: 'sessionCreated', eventId: 'session', browserSessionId: 'browser_session_1', profileId: 'profile', occurredAt: 1,
+        }), {
+            kind: 'viewOpened', eventId: 'view', browserSessionId: 'browser_session_1', viewId: 'view_1', target,
+            platform: 'desktop', currentUrl: target.url, adapterKind: 'chromiumSidecar', engineKind: 'desktopWebView',
+            adapterCapabilities: buildBrowserAdapterCapabilities({ adapterKind: 'chromiumSidecar',
+                supportedTargetKinds: ['externalUrl'], supportedRenderEngines: ['desktopWebView'] }), occurredAt: 2,
+        });
+        const input = { v: 1, automationRequestId: 'observe', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            navigationGeneration: 0, requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' },
+            actionKind: 'snapshot', payload: {}, timeoutMs: 1000 };
+        const output = BrowserAutomationActionResultV1Schema.parse({ v: 1, automationRequestId: 'observe', status: 'succeeded',
+            durationMs: 1, adapterKind: 'chromiumSidecar', fidelity: 'cdp', trustedInput: true,
+            navigationGenerationBefore: 0, navigationGenerationAfter: 0, controlEpochBefore: 0, controlEpochAfter: 0 });
+        const machineRow = { ...createPlainMachineRowFixture({ id: 'browser-machine', accountId: 'account-a' }), runnerContentKeyBinding: null };
+        homes.answer(serverId, '/v1/machines', { body: [machineRow] });
+        homes.answer(serverId, '/v1/machines/browser-machine', { body: { machine: machineRow } });
+        homes.answer(serverId, 'POST /v1/actions/browser.automation.snapshot', { select: request => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request);
+            expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: 'browser-machine' }, input });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'browser.automation.snapshot',
+                requestId: envelope.requestId, execution: { ok: true, result: output } }) };
+        } });
+        const executor = createDefaultActionExecutor({ runtimeActions: { browserControl: {
+            readState: () => state, applyDispatchResult: () => {},
+        } } });
+        expect(await executor.execute('browser.automation.snapshot', input, { surface: 'ui', serverId,
+            expectedAccountId: 'account-a', defaultSessionMachineId: 'other-machine',
+            externalActionTarget: { kind: 'machine', machineId: 'browser-machine' },
+        })).toEqual({ ok: true, result: output });
+        expect(homes.requestsFor('/v1/actions/browser.automation.snapshot')).toHaveLength(1);
     });
 
     it('routes browser.navigate through a registered browser surface adapter', async () => {

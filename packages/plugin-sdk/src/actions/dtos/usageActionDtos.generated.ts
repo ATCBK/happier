@@ -361,50 +361,9 @@ export type UsageActionInputById = {
                 updatedAt: number;
             };
         } | {
+            [x: string]: any;
             kind: 'mcp_binding';
-            owner: {
-                serverId: string;
-                rules: {
-                    id: string;
-                    target: {
-                        t: 'allMachines';
-                    } | {
-                        t: 'machine';
-                        machineId: string;
-                    } | {
-                        t: 'project';
-                        projectKey: string;
-                    } | {
-                        t: 'workspace';
-                        machineId: string;
-                        workspaceRoot: string;
-                    };
-                    enabled: boolean;
-                    createdAt: number;
-                    updatedAt: number;
-                    agentId?: string | undefined;
-                }[];
-                previous: {
-                    id: string;
-                    target: {
-                        t: 'allMachines';
-                    } | {
-                        t: 'machine';
-                        machineId: string;
-                    } | {
-                        t: 'project';
-                        projectKey: string;
-                    } | {
-                        t: 'workspace';
-                        machineId: string;
-                        workspaceRoot: string;
-                    };
-                    enabled: boolean;
-                    createdAt: number;
-                    updatedAt: number;
-                    agentId?: string | undefined;
-                }[];
-            };
+            appliedRevision: number;
         };
     };
     readonly "usage.coach.dismiss": {
@@ -548,7 +507,7 @@ export type UsageActionResultById = {
             asOfMs: number | null;
             coverage: {
                 accounting: {
-                    status: 'unknown' | 'complete' | 'partial';
+                    status: 'unknown' | 'partial' | 'complete';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -580,7 +539,7 @@ export type UsageActionResultById = {
                 coach?: {
                     currentness: 'unknown' | 'stale' | 'current';
                     asOfMs: number | null;
-                    findings: ('unknown' | 'complete' | 'partial')[];
+                    findings: ('unknown' | 'partial' | 'complete')[];
                 } | undefined;
                 intervals?: {
                     method: 'witnessed_intervals_v1';
@@ -684,10 +643,10 @@ export type UsageActionResultById = {
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable';
         };
         file: {
+            base64: string;
             v: 1;
             asOfMs: number | null;
             fileName: string;
-            base64: string;
             mediaType: 'image/png';
             selectedFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
         };
@@ -709,7 +668,7 @@ export type UsageActionResultById = {
             asOfMs: number | null;
             coverage: {
                 accounting: {
-                    status: 'unknown' | 'complete' | 'partial';
+                    status: 'unknown' | 'partial' | 'complete';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -741,7 +700,7 @@ export type UsageActionResultById = {
                 coach?: {
                     currentness: 'unknown' | 'stale' | 'current';
                     asOfMs: number | null;
-                    findings: ('unknown' | 'complete' | 'partial')[];
+                    findings: ('unknown' | 'partial' | 'complete')[];
                 } | undefined;
                 intervals?: {
                     method: 'witnessed_intervals_v1';
@@ -860,7 +819,7 @@ export type UsageActionResultById = {
         asOfMs: number | null;
         coverage: {
             accounting: {
-                status: 'unknown' | 'complete' | 'partial';
+                status: 'unknown' | 'partial' | 'complete';
                 reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                 missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 range: {
@@ -892,7 +851,7 @@ export type UsageActionResultById = {
             coach?: {
                 currentness: 'unknown' | 'stale' | 'current';
                 asOfMs: number | null;
-                findings: ('unknown' | 'complete' | 'partial')[];
+                findings: ('unknown' | 'partial' | 'complete')[];
             } | undefined;
             intervals?: {
                 method: 'witnessed_intervals_v1';
@@ -1073,6 +1032,7 @@ export type UsageActionResultById = {
             }[];
             pending: boolean;
             accounting?: {
+                [x: string]: any;
                 v: 1;
                 totals: {
                     eventCount: number;
@@ -1090,6 +1050,8 @@ export type UsageActionResultById = {
                         currency: string;
                         apiEquivalentUsd?: number | undefined;
                         pricingSource?: string | undefined;
+                        reportedTotalId?: string | undefined;
+                        reportedTotalContributionIds?: string[] | undefined;
                         invoiceUsd?: number | undefined;
                         billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                         costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1120,6 +1082,8 @@ export type UsageActionResultById = {
                         currency: string;
                         apiEquivalentUsd?: number | undefined;
                         pricingSource?: string | undefined;
+                        reportedTotalId?: string | undefined;
+                        reportedTotalContributionIds?: string[] | undefined;
                         invoiceUsd?: number | undefined;
                         billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                         costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1150,6 +1114,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1182,6 +1148,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1214,6 +1182,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1246,6 +1216,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1278,6 +1250,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1310,6 +1284,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1342,6 +1318,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1374,6 +1352,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1445,6 +1425,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1470,6 +1452,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1496,6 +1480,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1521,6 +1507,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1547,6 +1535,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1572,6 +1562,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1598,6 +1590,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1623,6 +1617,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1649,6 +1645,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1674,6 +1672,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1700,6 +1700,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1725,6 +1727,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1755,6 +1759,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1780,6 +1786,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1810,6 +1818,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1835,6 +1845,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1871,27 +1883,8 @@ export type UsageActionResultById = {
                     complete: boolean;
                     source: string;
                 }[] | undefined;
-                priceCatalog?: {
-                    v: 1;
-                    models: Record<string, {
-                        inputUsdPerMillion: number;
-                        outputUsdPerMillion: number;
-                        cacheReadUsdPerMillion?: number | undefined;
-                        cacheWriteUsdPerMillion?: number | undefined;
-                        reasoningUsdPerMillion?: number | undefined;
-                        provider?: string | undefined;
-                        sourceUrl?: string | undefined;
-                    }>;
-                    provenance: {
-                        source: 'litellm';
-                        origin: 'bundled' | 'fetched' | 'cached';
-                        asOfMs: number;
-                        revision: string;
-                        fetchStatus: 'error' | 'ready' | 'disabled';
-                        errorCode?: string | undefined;
-                    };
-                } | undefined;
                 contributions?: {
+                    [x: string]: any;
                     id: string;
                     observedAtMs: number;
                     sessionId: string | null;
@@ -1916,6 +1909,8 @@ export type UsageActionResultById = {
                         currency: string;
                         apiEquivalentUsd?: number | undefined;
                         pricingSource?: string | undefined;
+                        reportedTotalId?: string | undefined;
+                        reportedTotalContributionIds?: string[] | undefined;
                         invoiceUsd?: number | undefined;
                         billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                         costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -1928,8 +1923,6 @@ export type UsageActionResultById = {
                         windowTokens?: number | null | undefined;
                     } | undefined;
                     backendMode?: string | null | undefined;
-                    providerId?: string | null | undefined;
-                    providerConnectionId?: string | null | undefined;
                     providerAttribution?: 'unknown' | 'known' | undefined;
                     providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                     connectedAccount?: {
@@ -1961,7 +1954,7 @@ export type UsageActionResultById = {
                     total: number;
                 } | undefined;
                 coverage?: {
-                    status: 'unknown' | 'complete' | 'partial';
+                    status: 'unknown' | 'partial' | 'complete';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -2081,7 +2074,7 @@ export type UsageActionResultById = {
                         source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                         scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                         limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
-                        confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
                     }[];
                     planLabel?: string | null | undefined;
                     accountLabel?: string | null | undefined;
@@ -2139,7 +2132,7 @@ export type UsageActionResultById = {
                         totalCount?: number | undefined;
                         nextExpiresAtMs?: number | null | undefined;
                         source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                        confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
                     } | undefined;
                     recoveryCreditDetails?: Record<string, {
                         remainingCount: number;
@@ -2290,7 +2283,7 @@ export type UsageActionResultById = {
                                 source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                                 scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                                 limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
-                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                                confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
                             }[];
                             planLabel?: string | null | undefined;
                             accountLabel?: string | null | undefined;
@@ -2348,7 +2341,7 @@ export type UsageActionResultById = {
                                 totalCount?: number | undefined;
                                 nextExpiresAtMs?: number | null | undefined;
                                 source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                                confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
                             } | undefined;
                             recoveryCreditDetails?: Record<string, {
                                 remainingCount: number;
@@ -2370,6 +2363,151 @@ export type UsageActionResultById = {
                         observedAtMs: number;
                         id: string;
                     } | null;
+                } | undefined;
+                pageProjection?: {
+                    v: 1;
+                    recordId: string;
+                    resolution: 'accepted_observations';
+                    range: {
+                        startAtMs: number;
+                        endAtMs: number;
+                    };
+                    bases: {
+                        source: 'unknown' | 'cached' | 'runtimeSignal' | 'providerHttp' | 'proxy' | 'connectedServiceProbe' | 'manual';
+                        v: 1;
+                        providerId: string;
+                        recordId: string;
+                        recordKey: {
+                            providerId: string;
+                            accountSubjectId: string;
+                            subjectKind: 'unknown' | 'project' | 'workspace' | 'account' | 'organization' | 'tenant' | 'subscription' | 'modelFamily';
+                            quotaScope: 'unknown' | 'model' | 'project' | 'workspace' | 'account' | 'provider' | 'organization';
+                            quotaScopeId?: string | undefined;
+                        };
+                        accountSubject: {
+                            kind: 'providerSubject' | 'provisionalLocalSubject';
+                            id: string;
+                            mergeKey?: string | undefined;
+                        };
+                        staleAfterMs: number;
+                        confidence: 'unknown' | 'estimated' | 'confirmed';
+                        state: 'not_loaded' | 'loaded_empty' | 'loaded_data' | 'stale_data' | 'error_last_known_good';
+                        planLabel?: string | null | undefined;
+                        accountLabel?: string | null | undefined;
+                        recoveryCredits?: {
+                            availableCount: number;
+                            credits: {
+                                kind: 'unknown' | 'usage_limit_reset' | 'rate_limit_reset' | 'quota_reset';
+                                status: 'unknown' | 'available' | 'unavailable' | 'redeeming' | 'redeemed' | 'expired';
+                                id?: string | undefined;
+                                providerResetType?: string | undefined;
+                                appliesToProviderLimitId?: string | null | undefined;
+                                grantedAtMs?: number | null | undefined;
+                                expiresAtMs?: number | null | undefined;
+                                redeemStartedAtMs?: number | null | undefined;
+                                redeemedAtMs?: number | null | undefined;
+                                title?: string | null | undefined;
+                                description?: string | null | undefined;
+                            }[];
+                            totalCount?: number | undefined;
+                            nextExpiresAtMs?: number | null | undefined;
+                            source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
+                            confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                        } | undefined;
+                        recoveryCreditDetails?: Record<string, {
+                            remainingCount: number;
+                            appliesToProviderLimitIds: string[];
+                            unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                        }> | undefined;
+                        diagnostics?: {
+                            kind: 'unknown' | 'unavailable' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection' | 'storage';
+                            code?: string | undefined;
+                            message?: string | undefined;
+                            status?: number | undefined;
+                            headers?: Record<string, string> | undefined;
+                            observedAtMs?: number | undefined;
+                            retryAtMs?: number | undefined;
+                        }[] | undefined;
+                    }[];
+                    meters: {
+                        meterId: string;
+                        label: string;
+                        used: number | null;
+                        limit: number | null;
+                        unit: 'unknown' | 'tokens' | 'count' | 'credits' | 'usd' | 'requests';
+                        utilizationPct: number | null;
+                        resetsAt: number | null;
+                        status: 'estimated' | 'unavailable' | 'ok';
+                        details: {
+                            note?: string | null | undefined;
+                            code?: string | undefined;
+                            rawScope?: string | undefined;
+                            remainingPct?: number | null | undefined;
+                            scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
+                            providerLimitId?: string | undefined;
+                            limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
+                        };
+                        remaining?: number | null | undefined;
+                        remainingPct?: number | null | undefined;
+                        usedPct?: number | null | undefined;
+                        resetAtMs?: number | null | undefined;
+                        resetSource?: 'unknown' | 'provider' | 'manual' | 'in_band_snapshot' | 'header' | 'body' | 'provider_event' | 'provider_probe' | 'computed' | 'retry_after' | undefined;
+                        providerLimitId?: string | undefined;
+                        windowDurationMs?: number | undefined;
+                        modelId?: string | null | undefined;
+                        isExhausted?: boolean | undefined;
+                        isSoftLimited?: boolean | undefined;
+                        isCapacityLimited?: boolean | undefined;
+                        source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
+                        scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
+                        limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
+                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                    }[];
+                    subscriptions: {
+                        renewal: 'unknown' | 'on' | 'off';
+                        status: 'none' | 'unavailable' | 'subscribed';
+                        staleAfterMs: number;
+                        currentPeriodStartAtMs?: number | undefined;
+                        currentPeriodEndAtMs?: number | undefined;
+                        monetaryFacts?: {
+                            kind: 'paid' | 'list';
+                            amount: number;
+                            currency: string;
+                            period: {
+                                startAtMs: number;
+                                endAtMs: number;
+                            };
+                            source: {
+                                kind: 'provider' | 'published';
+                                id: string;
+                                version: string;
+                            };
+                            effectiveAtMs: number;
+                            asOfMs: number;
+                            tier?: string | undefined;
+                            region?: string | undefined;
+                        }[] | undefined;
+                        enteredMonthlyPrice?: {
+                            amount: number;
+                            currency: string;
+                            enteredAtMs: number;
+                        } | undefined;
+                        lastRefreshError?: {
+                            observedAtMs: number;
+                            code: 'network' | 'malformed' | 'provider_backoff' | 'auth_failure' | 'missing_auth';
+                            status?: number | undefined;
+                        } | undefined;
+                    }[];
+                    observations: [
+                        string,
+                        number,
+                        number,
+                        number,
+                        number,
+                        number[],
+                        number | null,
+                        number | null
+                    ][];
                 } | undefined;
                 unusedCapacity?: {
                     historyStatus: 'partial' | 'not_loaded' | 'unavailable' | 'returned_page';
@@ -2526,7 +2664,7 @@ export type UsageActionResultById = {
                             startMs?: number | undefined;
                             endMs?: number | undefined;
                         };
-                        coverage: 'complete' | 'partial';
+                        coverage: 'partial' | 'complete';
                         pricedContributionCount: number;
                         unpricedContributionCount: number;
                         unknownAccountContributionCount: number;
@@ -2627,7 +2765,7 @@ export type UsageActionResultById = {
                     observedWaitMs: number | null;
                     asOfMs: number | null;
                     coverage: 'partial' | 'complete_recorded_history';
-                    accountingCoverage: 'complete' | 'partial';
+                    accountingCoverage: 'partial' | 'complete';
                     intervalCoverage: 'unknown' | 'partial' | 'complete_for_supplied_facts';
                     method: 'recorded_calendar_week';
                     humanPresence: 'unknown';
@@ -2674,6 +2812,7 @@ export type UsageActionResultById = {
                     errorCode?: string | undefined;
                 };
                 accounting?: {
+                    [x: string]: any;
                     v: 1;
                     totals: {
                         eventCount: number;
@@ -2691,6 +2830,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2721,6 +2862,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2751,6 +2894,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2783,6 +2928,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2815,6 +2962,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2847,6 +2996,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2879,6 +3030,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2911,6 +3064,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2943,6 +3098,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -2975,6 +3132,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3046,6 +3205,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3071,6 +3232,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3097,6 +3260,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3122,6 +3287,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3148,6 +3315,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3173,6 +3342,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3199,6 +3370,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3224,6 +3397,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3250,6 +3425,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3275,6 +3452,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3301,6 +3480,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3326,6 +3507,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3356,6 +3539,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3381,6 +3566,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3411,6 +3598,8 @@ export type UsageActionResultById = {
                                 currency: string;
                                 apiEquivalentUsd?: number | undefined;
                                 pricingSource?: string | undefined;
+                                reportedTotalId?: string | undefined;
+                                reportedTotalContributionIds?: string[] | undefined;
                                 invoiceUsd?: number | undefined;
                                 billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                 costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3436,6 +3625,8 @@ export type UsageActionResultById = {
                                     currency: string;
                                     apiEquivalentUsd?: number | undefined;
                                     pricingSource?: string | undefined;
+                                    reportedTotalId?: string | undefined;
+                                    reportedTotalContributionIds?: string[] | undefined;
                                     invoiceUsd?: number | undefined;
                                     billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                                     costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3472,27 +3663,8 @@ export type UsageActionResultById = {
                         complete: boolean;
                         source: string;
                     }[] | undefined;
-                    priceCatalog?: {
-                        v: 1;
-                        models: Record<string, {
-                            inputUsdPerMillion: number;
-                            outputUsdPerMillion: number;
-                            cacheReadUsdPerMillion?: number | undefined;
-                            cacheWriteUsdPerMillion?: number | undefined;
-                            reasoningUsdPerMillion?: number | undefined;
-                            provider?: string | undefined;
-                            sourceUrl?: string | undefined;
-                        }>;
-                        provenance: {
-                            source: 'litellm';
-                            origin: 'bundled' | 'fetched' | 'cached';
-                            asOfMs: number;
-                            revision: string;
-                            fetchStatus: 'error' | 'ready' | 'disabled';
-                            errorCode?: string | undefined;
-                        };
-                    } | undefined;
                     contributions?: {
+                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -3517,6 +3689,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3529,8 +3703,6 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
-                        providerId?: string | null | undefined;
-                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -3562,7 +3734,7 @@ export type UsageActionResultById = {
                         total: number;
                     } | undefined;
                     coverage?: {
-                        status: 'unknown' | 'complete' | 'partial';
+                        status: 'unknown' | 'partial' | 'complete';
                         reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                         missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                         range: {
@@ -3610,6 +3782,7 @@ export type UsageActionResultById = {
             work?: {
                 allocations: {
                     contribution: {
+                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -3634,6 +3807,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3646,8 +3821,6 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
-                        providerId?: string | null | undefined;
-                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -3836,6 +4009,7 @@ export type UsageActionResultById = {
                 }[];
                 branchAllocations: {
                     contribution: {
+                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -3860,6 +4034,8 @@ export type UsageActionResultById = {
                             currency: string;
                             apiEquivalentUsd?: number | undefined;
                             pricingSource?: string | undefined;
+                            reportedTotalId?: string | undefined;
+                            reportedTotalContributionIds?: string[] | undefined;
                             invoiceUsd?: number | undefined;
                             billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
                             costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
@@ -3872,8 +4048,6 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
-                        providerId?: string | null | undefined;
-                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -4064,7 +4238,7 @@ export type UsageActionResultById = {
                     };
                 } | null;
                 autopsy?: {
-                    coverage: 'complete' | 'partial';
+                    coverage: 'partial' | 'complete';
                     events: {
                         evidenceId: string;
                         sessionId: string;
@@ -4098,7 +4272,7 @@ export type UsageActionResultById = {
                         };
                         asOfMs: number | null;
                         currentness: 'unknown' | 'stale' | 'current';
-                        coverage: 'unknown' | 'complete' | 'partial';
+                        coverage: 'unknown' | 'partial' | 'complete';
                         severity: 'info' | 'warning';
                         classification: 'informational' | 'cost_linked';
                         basis: {
@@ -4128,9 +4302,7 @@ export type UsageActionResultById = {
                         remedy: {
                             kind: 'setting';
                             anchor: string;
-                            value: string | number | boolean | readonly JsonValue[] | {
-                                readonly [key: string]: JsonValue;
-                            } | null;
+                            value: JsonValue;
                         } | {
                             kind: 'model';
                             sessionId: string;
@@ -4235,9 +4407,7 @@ export type UsageActionResultById = {
                                 remedy: {
                                     kind: 'setting';
                                     anchor: string;
-                                    value: string | number | boolean | readonly JsonValue[] | {
-                                        readonly [key: string]: JsonValue;
-                                    } | null;
+                                    value: JsonValue;
                                 } | {
                                     kind: 'model';
                                     sessionId: string;
@@ -4370,7 +4540,7 @@ export type UsageActionResultById = {
                             candidateCost: number;
                             currency: string;
                             costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
-                            costCoverage?: 'complete' | 'partial' | undefined;
+                            costCoverage?: 'partial' | 'complete' | undefined;
                             providerAttribution?: 'unknown' | 'known' | undefined;
                             modelResponseSource?: {
                                 kind: 'native';
@@ -4382,8 +4552,8 @@ export type UsageActionResultById = {
                                     accountId: string;
                                 } | null;
                             } | {
+                                [x: string]: any;
                                 kind: 'provider';
-                                providerId: string | null;
                                 providerConnectionId: string;
                             } | undefined;
                             candidateResponseSource?: {
@@ -4396,8 +4566,8 @@ export type UsageActionResultById = {
                                     accountId: string;
                                 } | null;
                             } | {
+                                [x: string]: any;
                                 kind: 'provider';
-                                providerId: string | null;
                                 providerConnectionId: string;
                             } | undefined;
                         } | undefined;
@@ -4431,7 +4601,7 @@ export type UsageActionResultById = {
                     };
                     asOfMs: number | null;
                     currentness: 'unknown' | 'stale' | 'current';
-                    coverage: 'unknown' | 'complete' | 'partial';
+                    coverage: 'unknown' | 'partial' | 'complete';
                     severity: 'info' | 'warning';
                     classification: 'informational' | 'cost_linked';
                     basis: {
@@ -4461,9 +4631,7 @@ export type UsageActionResultById = {
                     remedy: {
                         kind: 'setting';
                         anchor: string;
-                        value: string | number | boolean | readonly JsonValue[] | {
-                            readonly [key: string]: JsonValue;
-                        } | null;
+                        value: JsonValue;
                     } | {
                         kind: 'model';
                         sessionId: string;
@@ -4568,9 +4736,7 @@ export type UsageActionResultById = {
                             remedy: {
                                 kind: 'setting';
                                 anchor: string;
-                                value: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null;
+                                value: JsonValue;
                             } | {
                                 kind: 'model';
                                 sessionId: string;
@@ -4703,7 +4869,7 @@ export type UsageActionResultById = {
                         candidateCost: number;
                         currency: string;
                         costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
-                        costCoverage?: 'complete' | 'partial' | undefined;
+                        costCoverage?: 'partial' | 'complete' | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         modelResponseSource?: {
                             kind: 'native';
@@ -4715,8 +4881,8 @@ export type UsageActionResultById = {
                                 accountId: string;
                             } | null;
                         } | {
+                            [x: string]: any;
                             kind: 'provider';
-                            providerId: string | null;
                             providerConnectionId: string;
                         } | undefined;
                         candidateResponseSource?: {
@@ -4729,8 +4895,8 @@ export type UsageActionResultById = {
                                 accountId: string;
                             } | null;
                         } | {
+                            [x: string]: any;
                             kind: 'provider';
-                            providerId: string | null;
                             providerConnectionId: string;
                         } | undefined;
                     } | undefined;
@@ -4791,9 +4957,7 @@ export type UsageActionResultById = {
                                 valueType: 'string' | 'number' | 'boolean' | 'json';
                                 required: boolean;
                                 enum?: string[] | undefined;
-                                default?: string | number | boolean | readonly JsonValue[] | {
-                                    readonly [key: string]: JsonValue;
-                                } | null | undefined;
+                                default?: JsonValue | undefined;
                                 description?: string | undefined;
                                 optionsSourceId?: string | undefined;
                                 inputType?: {
@@ -4801,7 +4965,7 @@ export type UsageActionResultById = {
                                     localId: string;
                                 } | {
                                     hostType: 'usageQuery';
-                                    field?: 'session' | 'period' | undefined;
+                                    field?: 'period' | 'session' | undefined;
                                 } | {
                                     hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
@@ -5104,9 +5268,7 @@ export type UsageActionResultById = {
         remedy: {
             kind: 'setting';
             anchor: string;
-            value: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            value: JsonValue;
         } | {
             kind: 'model';
             sessionId: string;
@@ -5201,9 +5363,7 @@ export type UsageActionResultById = {
         reversal?: {
             kind: 'setting';
             anchor: string;
-            appliedValue: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null;
+            appliedValue: JsonValue;
             owner: {
                 scope: {
                     serverId: string;
@@ -5280,50 +5440,9 @@ export type UsageActionResultById = {
                 updatedAt: number;
             };
         } | {
+            [x: string]: any;
             kind: 'mcp_binding';
-            owner: {
-                serverId: string;
-                rules: {
-                    id: string;
-                    target: {
-                        t: 'allMachines';
-                    } | {
-                        t: 'machine';
-                        machineId: string;
-                    } | {
-                        t: 'project';
-                        projectKey: string;
-                    } | {
-                        t: 'workspace';
-                        machineId: string;
-                        workspaceRoot: string;
-                    };
-                    enabled: boolean;
-                    createdAt: number;
-                    updatedAt: number;
-                    agentId?: string | undefined;
-                }[];
-                previous: {
-                    id: string;
-                    target: {
-                        t: 'allMachines';
-                    } | {
-                        t: 'machine';
-                        machineId: string;
-                    } | {
-                        t: 'project';
-                        projectKey: string;
-                    } | {
-                        t: 'workspace';
-                        machineId: string;
-                        workspaceRoot: string;
-                    };
-                    enabled: boolean;
-                    createdAt: number;
-                    updatedAt: number;
-                    agentId?: string | undefined;
-                }[];
-            };
+            appliedRevision: number;
         } | undefined;
         spawnedSessionId?: string | undefined;
         reversalUnavailableReason?: 'not_reversible' | 'no_change' | undefined;

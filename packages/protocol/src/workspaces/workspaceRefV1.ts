@@ -1,60 +1,54 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { ScmHostingRepositoryIdentityV1Schema } from '../scm/hostingRepositoryIdentity.js';
 
-const StoredNonEmptyStringSchema = lazyZodSchema(() => z.string().min(1));
-const LookupNonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1));
+const StoredNonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const LookupNonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
-export const WorkspaceProjectFactsV1Schema = lazyZodSchema(() => z.object({
-  projectKey: StoredNonEmptyStringSchema.optional(),
-  repositoryIdentity: ScmHostingRepositoryIdentityV1Schema.optional(),
-  source: z.object({ sourceId: StoredNonEmptyStringSchema, revision: z.number().int().nonnegative() }).strict().optional(),
-}).strict());
+export const WorkspaceProjectFactsV1Schema = lazyZodSchema(() => z.strictObject({
+  projectKey: z.optional(StoredNonEmptyStringSchema),
+  repositoryIdentity: z.optional(ScmHostingRepositoryIdentityV1Schema),
+  source: z.optional(z.strictObject({ sourceId: StoredNonEmptyStringSchema, revision: z.number().check(z.int(), z.nonnegative()) })),
+}));
 export type WorkspaceProjectFactsV1 = z.infer<typeof WorkspaceProjectFactsV1Schema>;
 
-export const WorkspaceRefV1WriteSchema = lazyZodSchema(() => z
-  .object({
+export const WorkspaceRefV1WriteSchema = lazyZodSchema(() => z.strictObject({
     id: StoredNonEmptyStringSchema,
     serverId: StoredNonEmptyStringSchema,
     machineId: StoredNonEmptyStringSchema,
     rootPath: StoredNonEmptyStringSchema,
-    label: StoredNonEmptyStringSchema.nullable().optional().catch(null),
-    createdAtMs: z.number().finite().nonnegative(),
-    lastOpenedAtMs: z.number().finite().nonnegative().nullable().optional().catch(null),
+    label: z.catch(z.optional(z.nullable(StoredNonEmptyStringSchema)), null),
+    createdAtMs: z.number().check(z.nonnegative()),
+    lastOpenedAtMs: z.catch(z.optional(z.nullable(z.number().check(z.nonnegative()))), null),
     ...WorkspaceProjectFactsV1Schema.shape,
-  })
-  .strict());
+  }));
 export const WorkspaceRefV1Schema = createStoredReadSchema(WorkspaceRefV1WriteSchema);
 export type WorkspaceRefV1 = z.infer<typeof WorkspaceRefV1WriteSchema>;
 
-const ProjectKeyByIdV1Schema = lazyZodSchema(() => z
-  .object({
+const ProjectKeyByIdV1Schema = lazyZodSchema(() => z.strictObject({
     id: LookupNonEmptyStringSchema,
-    serverId: LookupNonEmptyStringSchema.optional(),
-  })
-  .strict());
+    serverId: z.optional(LookupNonEmptyStringSchema),
+  }));
 
-const ProjectKeyByScopeV1Schema = lazyZodSchema(() => z
-  .object({
+const ProjectKeyByScopeV1Schema = lazyZodSchema(() => z.strictObject({
     serverId: LookupNonEmptyStringSchema,
     machineId: LookupNonEmptyStringSchema,
     rootPath: LookupNonEmptyStringSchema,
-  })
-  .strict());
+  }));
 
-export const QualifiedProjectKeyV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedProjectKeyV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: LookupNonEmptyStringSchema,
   projectKey: LookupNonEmptyStringSchema,
-}).strict());
+}));
 export type QualifiedProjectKeyV1 = z.infer<typeof QualifiedProjectKeyV1Schema>;
 
-export const WorkspaceAddressV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceAddressV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: LookupNonEmptyStringSchema,
   workspaceId: LookupNonEmptyStringSchema,
   machineId: LookupNonEmptyStringSchema,
   rootPath: LookupNonEmptyStringSchema,
-}).strict());
+}));
 export type WorkspaceAddressV1 = z.infer<typeof WorkspaceAddressV1Schema>;
 
 export const ProjectKeyV1Schema = lazyZodSchema(() => z.union([

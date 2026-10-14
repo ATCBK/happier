@@ -108,6 +108,10 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     return this.currentPermissionMode;
   }
 
+  getPermissionMode(): PermissionMode {
+    return this.currentPermissionMode;
+  }
+
   protected isCurrentRemoteMediationAllowEligible(params: Readonly<{
     requestId: string;
     toolName: string;

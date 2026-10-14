@@ -1,11 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-    HOME_LOGIN_APPROVALS_HTTP_PATH_V1,
-    HOME_LOGIN_APPROVAL_DECISION_HTTP_PATH_V1,
-    HomeDeviceApprovalDecisionRequestV1Schema,
-    HomeDeviceApprovalDecisionResponseV1Schema,
-    HomeDeviceApprovalListV1Schema,
-} from "@happier-dev/protocol";
+import { HOME_LOGIN_APPROVALS_HTTP_PATH_V1, HOME_LOGIN_APPROVAL_DECISION_HTTP_PATH_V1, HomeDeviceApprovalDecisionRequestV1Schema, HomeDeviceApprovalDecisionResponseV1Schema, HomeDeviceApprovalListV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { resolveHomeDeviceApprovalRequiredFromEnv } from "@happier-dev/cli-common/firstPartyRuntime/personalHome/configuration";
 import { z } from "zod";
 import { db } from "@/storage/db";

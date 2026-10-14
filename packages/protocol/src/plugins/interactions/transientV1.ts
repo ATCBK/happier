@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema, type JsonValue } from '../../json/strictJsonValue.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -41,8 +41,8 @@ function hasUnpairedSurrogate(value: string): boolean {
   return false;
 }
 
-function boundedIdentifier(label: string): z.ZodString {
-  return z.string().min(1).superRefine((value, context) => {
+function boundedIdentifier(label: string): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (utf8ByteLength(value) > MAX_INTERACTION_TRANSIENT_IDENTIFIER_UTF8_BYTES_V1) {
       context.addIssue({
         code: 'custom',
@@ -52,11 +52,11 @@ function boundedIdentifier(label: string): z.ZodString {
     if (hasUnpairedSurrogate(value)) {
       context.addIssue({ code: 'custom', message: `${label} must be well-formed Unicode.` });
     }
-  });
+  }));
 }
 
-function boundedText(label: string, maxCodePoints: number): z.ZodString {
-  return z.string().min(1).superRefine((value, context) => {
+function boundedText(label: string, maxCodePoints: number): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (codePointLength(value) > maxCodePoints) {
       context.addIssue({
         code: 'custom',
@@ -66,18 +66,18 @@ function boundedText(label: string, maxCodePoints: number): z.ZodString {
     if (hasUnpairedSurrogate(value)) {
       context.addIssue({ code: 'custom', message: `${label} must be well-formed Unicode.` });
     }
-  });
+  }));
 }
 
-function boundedPrompt(label: string): z.ZodString {
+function boundedPrompt(label: string): z.ZodMiniString {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1);
 }
 
-function boundedTitleOrLabel(label: string): z.ZodString {
+function boundedTitleOrLabel(label: string): z.ZodMiniString {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1);
 }
 
-function boundedTextAnswer(label: string): z.ZodString {
+function boundedTextAnswer(label: string): z.ZodMiniString {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_TEXT_ANSWER_CODE_POINTS_V1);
 }
 
@@ -91,7 +91,7 @@ function jsonByteLength(value: unknown): number | null {
 
 function issueForOversizedPayload(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   label: string,
 ): void {
   const byteLength = jsonByteLength(value);
@@ -125,7 +125,7 @@ function containsMalformedUnicode(value: unknown, seen = new WeakSet<object>()):
 
 function issueForMalformedUnicodePayload(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   label: string,
 ): void {
   if (containsMalformedUnicode(value)) {
@@ -135,7 +135,7 @@ function issueForMalformedUnicodePayload(
 
 function issueForInvalidPayload(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   label: string,
 ): void {
   issueForOversizedPayload(value, context, label);
@@ -144,7 +144,7 @@ function issueForInvalidPayload(
 
 function issueForDuplicateIds(
   values: readonly { readonly id: string }[],
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   path: readonly (string | number)[],
   label: string,
 ): void {
@@ -161,12 +161,12 @@ function issueForDuplicateIds(
   });
 }
 
-export const InteractionTransientRequesterV1Schema = lazyZodSchema(() => z.object({
+export const InteractionTransientRequesterV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionId: asProtocolZod(PluginContributionLocalIdSchema),
   occurrenceId: boundedIdentifier('Interaction occurrence ids'),
   invocationId: boundedIdentifier('Interaction invocation ids'),
-}).strict());
+}));
 export type InteractionTransientRequesterV1 = z.infer<typeof InteractionTransientRequesterV1Schema>;
 
 /**
@@ -175,16 +175,16 @@ export type InteractionTransientRequesterV1 = z.infer<typeof InteractionTransien
  * scope is available only from an exact present-user application invocation.
  */
 export const InteractionTransientScopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  ...PluginExecutionScopeV1Schema.options,
-  z.object({ kind: z.literal('app') }).strict(),
+  ...PluginExecutionScopeV1Schema._zod.def.options,
+  z.strictObject({ kind: z.literal('app') }),
 ]));
 export type InteractionTransientScopeV1 = z.infer<typeof InteractionTransientScopeV1Schema>;
 
-export const InteractionTransientRequestStampV1Schema = lazyZodSchema(() => z.object({
+export const InteractionTransientRequestStampV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction request ids'),
   scope: InteractionTransientScopeV1Schema,
   requester: InteractionTransientRequesterV1Schema,
-  createdAtMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
   /**
    * Two explicit arms. Present: the host imposed this deadline and its owner
    * arms a timer that settles `timedOut`. Absent: the host imposes no deadline
@@ -193,8 +193,8 @@ export const InteractionTransientRequestStampV1Schema = lazyZodSchema(() => z.ob
    * abort, occurrence retirement, Session end, host restart, unavailability).
    * An absent deadline is never a very large one: no timer exists for it.
    */
-  expiresAtMs: z.number().int().nonnegative().optional(),
-}).strict().superRefine((value, context) => {
+  expiresAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}).check(z.superRefine((value, context) => {
   if (value.expiresAtMs !== undefined && value.expiresAtMs <= value.createdAtMs) {
     context.addIssue({
       code: 'custom',
@@ -202,41 +202,41 @@ export const InteractionTransientRequestStampV1Schema = lazyZodSchema(() => z.ob
       message: 'Interaction expiry must be later than creation.',
     });
   }
-}));
+})));
 export type InteractionTransientRequestStampV1 = z.infer<typeof InteractionTransientRequestStampV1Schema>;
 
-export const InteractionTransientChoiceV1Schema = lazyZodSchema(() => z.object({
+export const InteractionTransientChoiceV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction choice ids'),
   label: boundedTitleOrLabel('Interaction choice labels'),
-  description: boundedPrompt('Interaction choice descriptions').optional(),
-}).strict());
+  description: z.optional(boundedPrompt('Interaction choice descriptions')),
+}));
 export type InteractionTransientChoiceV1 = z.infer<typeof InteractionTransientChoiceV1Schema>;
 
-const InteractionTransientAuthorChoiceV1Schema = lazyZodSchema(() => z.object({
+const InteractionTransientAuthorChoiceV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction choice ids'),
-  label: boundedTitleOrLabel('Interaction choice labels').optional(),
-  description: boundedPrompt('Interaction choice descriptions').optional(),
-}).strict());
+  label: z.optional(boundedTitleOrLabel('Interaction choice labels')),
+  description: z.optional(boundedPrompt('Interaction choice descriptions')),
+}));
 
-const TextQuestionV1Schema = lazyZodSchema(() => z.object({
+const TextQuestionV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction question ids'),
   prompt: boundedPrompt('Interaction question prompts'),
-  description: boundedPrompt('Interaction question descriptions').optional(),
-  initialValue: boundedPrompt('Interaction question initial values').optional(),
+  description: z.optional(boundedPrompt('Interaction question descriptions')),
+  initialValue: z.optional(boundedPrompt('Interaction question initial values')),
   type: z.literal('text'),
   required: z.boolean(),
-}).strict());
-const ChoiceQuestionV1Schema = lazyZodSchema(() => z.object({
+}));
+const ChoiceQuestionV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction question ids'),
   prompt: boundedPrompt('Interaction question prompts'),
-  description: boundedPrompt('Interaction question descriptions').optional(),
+  description: z.optional(boundedPrompt('Interaction question descriptions')),
   type: z.union([z.literal('singleChoice'), z.literal('multipleChoice')]),
   required: z.boolean(),
   allowCustom: z.boolean(),
-  choices: z.array(InteractionTransientChoiceV1Schema).min(1).max(MAX_INTERACTION_TRANSIENT_CHOICES_V1),
-}).strict().superRefine((question, context) => {
+  choices: z.array(InteractionTransientChoiceV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_CHOICES_V1)),
+}).check(z.superRefine((question, context) => {
   issueForDuplicateIds(question.choices, context, ['choices'], 'Interaction choice');
-}));
+})));
 
 export const InteractionTransientQuestionV1Schema = lazyZodSchema(() => z.union([
   TextQuestionV1Schema,
@@ -244,61 +244,59 @@ export const InteractionTransientQuestionV1Schema = lazyZodSchema(() => z.union(
 ]));
 export type InteractionTransientQuestionV1 = z.infer<typeof InteractionTransientQuestionV1Schema>;
 
-const AuthorTextQuestionV1Schema = lazyZodSchema(() => z.object({
+const AuthorTextQuestionV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction question ids'),
   prompt: boundedPrompt('Interaction question prompts'),
-  description: boundedPrompt('Interaction question descriptions').optional(),
-  initialValue: boundedPrompt('Interaction question initial values').optional(),
+  description: z.optional(boundedPrompt('Interaction question descriptions')),
+  initialValue: z.optional(boundedPrompt('Interaction question initial values')),
   type: z.literal('text'),
-  required: z.boolean().optional(),
-}).strict());
-const AuthorChoiceQuestionV1Schema = lazyZodSchema(() => z.object({
+  required: z.optional(z.boolean()),
+}));
+const AuthorChoiceQuestionV1Schema = lazyZodSchema(() => z.strictObject({
   id: boundedIdentifier('Interaction question ids'),
   prompt: boundedPrompt('Interaction question prompts'),
-  description: boundedPrompt('Interaction question descriptions').optional(),
+  description: z.optional(boundedPrompt('Interaction question descriptions')),
   type: z.union([z.literal('singleChoice'), z.literal('multipleChoice')]),
-  required: z.boolean().optional(),
-  allowCustom: z.boolean().optional(),
-  choices: z.array(InteractionTransientAuthorChoiceV1Schema).min(1).max(MAX_INTERACTION_TRANSIENT_CHOICES_V1),
-}).strict().superRefine((question, context) => {
+  required: z.optional(z.boolean()),
+  allowCustom: z.optional(z.boolean()),
+  choices: z.array(InteractionTransientAuthorChoiceV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_CHOICES_V1)),
+}).check(z.superRefine((question, context) => {
   issueForDuplicateIds(question.choices, context, ['choices'], 'Interaction choice');
-}));
+})));
 export const InteractionTransientAuthorQuestionV1Schema = lazyZodSchema(() => z.union([
   AuthorTextQuestionV1Schema,
   AuthorChoiceQuestionV1Schema,
 ]));
 export type InteractionTransientAuthorQuestionV1 = z.infer<typeof InteractionTransientAuthorQuestionV1Schema>;
 
-const InteractionTransientStrictJsonValueV1Schema = lazyZodSchema(() => z.unknown().superRefine((value, context) => {
+const InteractionTransientStrictJsonValueV1Schema = lazyZodSchema(() => z.pipe(z.unknown().check(z.superRefine((value, context) => {
   issueForMalformedUnicodePayload(value, context, 'Interaction approval input');
-}).pipe(StrictJsonValueSchema));
+})), StrictJsonValueSchema));
 
-const InteractionTransientApprovalSubjectV1Schema = lazyZodSchema(() => z.object({
+const InteractionTransientApprovalSubjectV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('tool'),
   // Complete native tool names share the enclosing request's JSON-byte and
   // Unicode validation; they are not short host-generated custody identifiers.
-  name: z.string().min(1),
+  name: z.string().check(z.minLength(1)),
   input: InteractionTransientStrictJsonValueV1Schema,
-}).strict());
+}));
 export type InteractionTransientApprovalSubjectV1 = z.infer<typeof InteractionTransientApprovalSubjectV1Schema>;
 
-const QuestionsRequestV1Schema = lazyZodSchema(() => InteractionTransientRequestStampV1Schema.extend({
+const QuestionsRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(InteractionTransientRequestStampV1Schema, {
   kind: z.literal('questions'),
-  title: boundedTitleOrLabel('Interaction question titles').optional(),
-  questions: z.array(InteractionTransientQuestionV1Schema)
-    .min(1)
-    .max(MAX_INTERACTION_TRANSIENT_QUESTIONS_V1),
-}).strict().superRefine((request, context) => {
+  title: z.optional(boundedTitleOrLabel('Interaction question titles')),
+  questions: z.array(InteractionTransientQuestionV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_QUESTIONS_V1)),
+})).check(z.superRefine((request, context) => {
   issueForDuplicateIds(request.questions, context, ['questions'], 'Interaction question');
   issueForInvalidPayload(request, context, 'Interaction requests');
-}));
-const ApprovalRequestV1Schema = lazyZodSchema(() => InteractionTransientRequestStampV1Schema.extend({
+})));
+const ApprovalRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(InteractionTransientRequestStampV1Schema, {
   kind: z.literal('approval'),
   title: boundedTitleOrLabel('Interaction approval titles'),
-  description: boundedPrompt('Interaction approval descriptions').optional(),
+  description: z.optional(boundedPrompt('Interaction approval descriptions')),
   subject: InteractionTransientApprovalSubjectV1Schema,
-  allowedPersistenceScopes: z.tuple([z.literal('session')]).optional(),
-}).strict().superRefine((request, context) => {
+  allowedPersistenceScopes: z.optional(z.tuple([z.literal('session')])),
+})).check(z.superRefine((request, context) => {
   issueForInvalidPayload(request, context, 'Interaction requests');
   if (request.scope.kind === 'app' && request.allowedPersistenceScopes !== undefined) {
     context.addIssue({
@@ -307,49 +305,47 @@ const ApprovalRequestV1Schema = lazyZodSchema(() => InteractionTransientRequestS
       message: 'App-scoped interactions cannot request Session persistence.',
     });
   }
-}));
-const ConfirmationRequestV1Schema = lazyZodSchema(() => InteractionTransientRequestStampV1Schema.extend({
+})));
+const ConfirmationRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(InteractionTransientRequestStampV1Schema, {
   kind: z.literal('confirmation'),
   title: boundedTitleOrLabel('Interaction confirmation titles'),
   message: boundedPrompt('Interaction confirmation messages'),
-}).strict().superRefine((request, context) => issueForInvalidPayload(request, context, 'Interaction requests')));
+})).check(z.superRefine((request, context) => issueForInvalidPayload(request, context, 'Interaction requests'))));
 
 export const InteractionTransientRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   QuestionsRequestV1Schema,
   ApprovalRequestV1Schema,
   ConfirmationRequestV1Schema,
-]).superRefine((request, context) => {
+]).check(z.superRefine((request, context) => {
   issueForInvalidPayload(request, context, 'Interaction requests');
-}));
+})));
 export type InteractionTransientRequestV1 = z.infer<typeof InteractionTransientRequestV1Schema>;
 
-const QuestionsAuthorRequestV1Schema = lazyZodSchema(() => z.object({
+const QuestionsAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('questions'),
-  title: boundedTitleOrLabel('Interaction question titles').optional(),
-  questions: z.array(InteractionTransientAuthorQuestionV1Schema)
-    .min(1)
-    .max(MAX_INTERACTION_TRANSIENT_QUESTIONS_V1),
-}).strict().superRefine((request, context) => {
+  title: z.optional(boundedTitleOrLabel('Interaction question titles')),
+  questions: z.array(InteractionTransientAuthorQuestionV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_QUESTIONS_V1)),
+}).check(z.superRefine((request, context) => {
   issueForDuplicateIds(request.questions, context, ['questions'], 'Interaction question');
-}));
-const ApprovalAuthorRequestV1Schema = lazyZodSchema(() => z.object({
+})));
+const ApprovalAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('approval'),
   title: boundedTitleOrLabel('Interaction approval titles'),
-  description: boundedPrompt('Interaction approval descriptions').optional(),
+  description: z.optional(boundedPrompt('Interaction approval descriptions')),
   subject: InteractionTransientApprovalSubjectV1Schema,
-  allowSessionPersistence: z.boolean().optional(),
-}).strict());
-const ConfirmationAuthorRequestV1Schema = lazyZodSchema(() => z.object({
+  allowSessionPersistence: z.optional(z.boolean()),
+}));
+const ConfirmationAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('confirmation'),
-  title: boundedTitleOrLabel('Interaction confirmation titles').optional(),
+  title: z.optional(boundedTitleOrLabel('Interaction confirmation titles')),
   message: boundedPrompt('Interaction confirmation messages'),
-}).strict());
+}));
 
 export const InteractionTransientAuthorRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   QuestionsAuthorRequestV1Schema,
   ApprovalAuthorRequestV1Schema,
   ConfirmationAuthorRequestV1Schema,
-]).superRefine((request, context) => issueForInvalidPayload(request, context, 'Interaction author requests')));
+]).check(z.superRefine((request, context) => issueForInvalidPayload(request, context, 'Interaction author requests'))));
 export type InteractionTransientAuthorRequestV1 = z.infer<typeof InteractionTransientAuthorRequestV1Schema>;
 export type InteractionTransientQuestionsAuthorRequestV1 = Extract<InteractionTransientAuthorRequestV1, { kind: 'questions' }>;
 export type InteractionTransientApprovalAuthorRequestV1 = Extract<InteractionTransientAuthorRequestV1, { kind: 'approval' }>;
@@ -446,33 +442,31 @@ export const InteractionTerminalStatusV1Schema = lazyZodSchema(() => z.enum([
 export type InteractionTerminalStatusV1 = z.infer<typeof InteractionTerminalStatusV1Schema>;
 
 const InteractionTransientChoiceSelectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('choice'),
     choiceId: boundedIdentifier('Interaction answer choice ids'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('custom'),
     value: boundedTextAnswer('Interaction custom answers'),
-  }).strict(),
+  }),
 ]));
 export type InteractionTransientChoiceSelectionV1 = z.infer<typeof InteractionTransientChoiceSelectionV1Schema>;
 
 export const InteractionTransientQuestionAnswerV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('text'),
     value: boundedTextAnswer('Interaction text answers'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('singleChoice'),
     answer: InteractionTransientChoiceSelectionV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('multipleChoice'),
-    answers: z.array(InteractionTransientChoiceSelectionV1Schema)
-      .min(1)
-      .max(MAX_INTERACTION_TRANSIENT_CHOICES_V1),
-  }).strict(),
-]).superRefine((answer, context) => {
+    answers: z.array(InteractionTransientChoiceSelectionV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_CHOICES_V1)),
+  }),
+]).check(z.superRefine((answer, context) => {
   if (answer.kind !== 'multipleChoice') return;
   const selectionKeys = answer.answers.map((selection) => (
     selection.kind === 'choice' ? `choice:${selection.choiceId}` : `custom:${selection.value}`
@@ -483,46 +477,46 @@ export const InteractionTransientQuestionAnswerV1Schema = lazyZodSchema(() => z.
   if (answer.answers.filter((selection) => selection.kind === 'custom').length > 1) {
     context.addIssue({ code: 'custom', message: 'Interaction multi-choice answers may contain at most one custom answer.' });
   }
-}));
+})));
 export type InteractionTransientQuestionAnswerV1 = z.infer<typeof InteractionTransientQuestionAnswerV1Schema>;
 
-const QuestionsAnsweredResultV1Schema = lazyZodSchema(() => z.object({
+const QuestionsAnsweredResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('questions'),
   status: z.literal('answered'),
   answers: z.record(boundedIdentifier('Interaction answer question ids'), InteractionTransientQuestionAnswerV1Schema),
-}).strict());
-const QuestionsTerminalResultV1Schema = lazyZodSchema(() => z.object({
+}));
+const QuestionsTerminalResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('questions'),
   status: InteractionTerminalStatusV1Schema,
-}).strict());
-const ApprovalApprovedResultV1Schema = lazyZodSchema(() => z.object({
+}));
+const ApprovalApprovedResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('approval'),
   status: z.literal('approved'),
-  persistence: z.enum(['once', 'session']).optional(),
-}).strict());
-const ApprovalDeclinedResultV1Schema = lazyZodSchema(() => z.object({
+  persistence: z.optional(z.enum(['once', 'session'])),
+}));
+const ApprovalDeclinedResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('approval'),
   status: z.literal('declined'),
-}).strict());
-const ApprovalTerminalResultV1Schema = lazyZodSchema(() => z.object({
+}));
+const ApprovalTerminalResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('approval'),
   status: InteractionTerminalStatusV1Schema,
-}).strict());
-const ConfirmationDecisionResultV1Schema = lazyZodSchema(() => z.object({
+}));
+const ConfirmationDecisionResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('confirmation'),
   status: z.enum(['approved', 'declined']),
-}).strict());
-const ConfirmationTerminalResultV1Schema = lazyZodSchema(() => z.object({
+}));
+const ConfirmationTerminalResultV1Schema = lazyZodSchema(() => z.strictObject({
   requestId: boundedIdentifier('Interaction result request ids'),
   kind: z.literal('confirmation'),
   status: InteractionTerminalStatusV1Schema,
-}).strict());
+}));
 
 export const InteractionTransientResultV1Schema = lazyZodSchema(() => z.union([
   QuestionsAnsweredResultV1Schema,
@@ -532,21 +526,21 @@ export const InteractionTransientResultV1Schema = lazyZodSchema(() => z.union([
   ApprovalTerminalResultV1Schema,
   ConfirmationDecisionResultV1Schema,
   ConfirmationTerminalResultV1Schema,
-]).superRefine((result, context) => issueForInvalidPayload(result, context, 'Interaction results')));
+]).check(z.superRefine((result, context) => issueForInvalidPayload(result, context, 'Interaction results'))));
 export type InteractionTransientResultV1 = z.infer<typeof InteractionTransientResultV1Schema>;
 export type InteractionTransientQuestionsResultV1 = Extract<InteractionTransientResultV1, { kind: 'questions' }>;
 export type InteractionTransientApprovalResultV1 = Extract<InteractionTransientResultV1, { kind: 'approval' }>;
 export type InteractionTransientConfirmationResultV1 = Extract<InteractionTransientResultV1, { kind: 'confirmation' }>;
 
 export const InteractionTransientSettlementReceiptV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('settled'),
     result: InteractionTransientResultV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('notCurrent'),
     requestId: boundedIdentifier('Interaction settlement request ids'),
-  }).strict(),
+  }),
 ]));
 export type InteractionTransientSettlementReceiptV1 = z.infer<typeof InteractionTransientSettlementReceiptV1Schema>;
 

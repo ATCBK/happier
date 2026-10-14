@@ -14,7 +14,7 @@ import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplay
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -419,7 +419,7 @@ function PairingSteps(props: Readonly<{ purpose: HomePairingPurpose }>) {
  */
 function CopyLinkButton(props: Readonly<{ testIDPrefix: string; link: string | null }>) {
     const { theme } = useUnistyles();
-    const feedback = useTemporaryCopyFeedback(4000);
+    const feedback = useHappierCopyFeedback(4000);
     const link = props.link;
     return (
         <View style={styles.copy}>
@@ -578,12 +578,12 @@ const styles = StyleSheet.create((theme) => ({
         paddingTop: 22,
         paddingBottom: 22,
         paddingLeft: 22,
-        paddingRight: 24,
+        paddingRight: theme.space.s24,
     },
     rootPage: {
         paddingLeft: 0,
         paddingRight: 0,
-        paddingTop: 4,
+        paddingTop: theme.space.s4,
     },
     rootModal: {
         paddingTop: 26,
@@ -603,7 +603,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     stacked: {
         alignItems: 'center',
-        gap: 20,
+        gap: theme.space.s20,
     },
     bodySide: {
         flex: 1,
@@ -626,8 +626,8 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.inset,
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
-        gap: 6,
+        padding: theme.space.s16,
+        gap: theme.space.s6,
     },
     standInTitle: {
         ...Typography.default('semiBold'),
@@ -652,7 +652,7 @@ const styles = StyleSheet.create((theme) => ({
     body: {
         ...Typography.default(),
         ...happierPageTextMetrics('pageDescription'),
-        marginTop: 5,
+        marginTop: theme.space.s4,
         maxWidth: 460,
         color: theme.colors.text.secondary,
     },
@@ -662,7 +662,7 @@ const styles = StyleSheet.create((theme) => ({
         alignSelf: 'center',
     },
     steps: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
     },
     stepText: {
         ...Typography.default(),
@@ -675,10 +675,10 @@ const styles = StyleSheet.create((theme) => ({
     },
     store: {
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     storePaper: {
-        padding: 5,
+        padding: theme.space.s4,
         borderRadius: 10,
         backgroundColor: PAIRING_QR_PALETTE.paper,
         borderWidth: StyleSheet.hairlineWidth,
@@ -694,7 +694,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     actionsCentred: {
         justifyContent: 'center',
@@ -704,7 +704,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     copy: {
         alignItems: 'flex-end',
-        gap: 6,
+        gap: theme.space.s6,
     },
     copyWarning: {
         ...Typography.default(),
@@ -714,12 +714,12 @@ const styles = StyleSheet.create((theme) => ({
         textAlign: 'right',
     },
     status: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
         paddingTop: 14,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
         alignSelf: 'stretch',
-        gap: 10,
+        gap: theme.space.s10,
     },
     statusCentred: {
         alignItems: 'center',
@@ -727,10 +727,10 @@ const styles = StyleSheet.create((theme) => ({
     statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     statusColumn: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     pulse: {
         width: 8,

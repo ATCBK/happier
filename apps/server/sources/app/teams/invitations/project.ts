@@ -1,9 +1,4 @@
-import {
-    deriveTeamInvitationStateV1,
-    maskTeamInvitationRecipientEmail,
-    TeamInvitationAdmissibleRoleV1Schema,
-    type TeamInvitationRowV1,
-} from "@happier-dev/protocol/teams";
+import { deriveTeamInvitationStateV1, maskTeamInvitationRecipientEmail, TeamInvitationAdmissibleRoleV1Schema, type TeamInvitationRowV1 } from '@happier-dev/protocol/teams/invitation';
 import type { TeamInvitationRecord } from "./invitationLifecycle";
 import {
     ACCOUNT_DISPLAY_PROFILE_SELECT,

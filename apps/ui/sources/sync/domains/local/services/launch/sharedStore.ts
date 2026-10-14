@@ -139,6 +139,11 @@ export function getLocalServiceLauncherState(
     return store.getState(input);
 }
 
+/** Join the subscribed owner's first/current read before consuming its projection. */
+export function readLocalServiceLauncherStore(input: LocalServiceLauncherStoreKeyInput): Promise<void> {
+    return store.readOnce(input);
+}
+
 export function subscribeLocalServiceLauncherStore(
     input: LocalServiceLauncherStoreKeyInput,
     listener: () => void,

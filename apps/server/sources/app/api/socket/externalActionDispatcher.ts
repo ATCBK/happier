@@ -1,27 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import {
-    EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
-    computeExternalActionRequestEnvelopeDigestV1,
-    getActionSpec,
-    parseExternalActionDaemonDispatchResult,
-    type ExternalActionActionIdV1,
-    type ExternalActionDaemonDispatchRequest,
-    type ParsedExternalActionDaemonDispatchResult,
-    type ExternalActionDaemonPlacementV1,
-    type ExternalActionExecutionAuthorizationBindingV1,
-    type ExternalActionExecutionAuthorizationV1,
-    type ExternalActionRequestEnvelope,
-    type ExternalActionServerPrincipalV1,
-    prepareExternalActionResponseEnvelopeV1,
-    isExternalActionRequestVersionAllowedForAccountModeV1,
-} from "@happier-dev/protocol/actions";
-import {
-    supportsMachineOperationProtocolCapabilityV1,
-    supportsMachineSessionInputAdmissionProtocolVersion,
-    ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema, resolveManagedAcquireReviewV1,
-} from "@happier-dev/protocol";
-import { ACTION_API_SERVER_ORIGIN } from "@happier-dev/protocol/rpc";
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, parseExternalActionDaemonDispatchResult, type ExternalActionActionIdV1, type ExternalActionDaemonDispatchRequest, type ParsedExternalActionDaemonDispatchResult, type ExternalActionDaemonPlacementV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1, type ExternalActionRequestEnvelope, type ExternalActionServerPrincipalV1, prepareExternalActionResponseEnvelopeV1, isExternalActionRequestVersionAllowedForAccountModeV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { supportsMachineOperationProtocolCapabilityV1, supportsMachineSessionInputAdmissionProtocolVersion } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema, resolveManagedAcquireReviewV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
 import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 import type { Server } from "socket.io";

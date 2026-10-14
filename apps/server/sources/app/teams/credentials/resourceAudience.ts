@@ -1,4 +1,5 @@
-import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, TeamCredentialSourceBindingV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1 } from "@happier-dev/protocol/teams";
+import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";

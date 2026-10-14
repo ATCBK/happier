@@ -162,7 +162,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'session.folderless.folder',
         // Prompts (lane e): "Prompt" (singular of "Prompty") and "Link" are Polish words.
         'promptLibrary.surface.promptSection',
-        'promptLibrary.surface.installMethodLink',
         // Plugins: platform names (Android, iOS, Web) are product names; the rest are the words these
         // locales use ("Plugins", "Community", "Updates", "Links", "Website", "Support", "app", "Source", "Categories").
         'settingsPlugins.discover.platform.android',
@@ -394,7 +393,7 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'profiles.requirements.secretRequired',
         'projects.detail.fields.machine',
         'promptLibrary.actions',
-        'promptLibrary.externalAssetsMachine',
+        'contextBar.machine',
         'promptLibrary.prompts',
         'promptLibrary.registriesSources',
         'promptLibrary.sections',
@@ -437,9 +436,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.mcpServersEditorStdio',
         'settings.mcpServersFieldArgs',
         'settings.mcpServersFieldTransport',
-        'settings.mcpServersPreviewAgentTitle',
-        'settings.mcpServersPreviewDirectoryPlaceholder',
-        'settings.mcpServersPreviewMachineTitle',
         'settings.mcpServersScopeMachine',
         'settings.mcpServersScopeWorkspace',
         'settings.mcpServersTestTitle',
@@ -806,8 +802,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.mcpServersFieldArgs',
         'settings.mcpServersFieldName',
         'settings.mcpServersFieldTransport',
-        'settings.mcpServersPreviewAgentTitle',
-        'settings.mcpServersPreviewDirectoryPlaceholder',
         'settings.mcpServersScopeWorkspace',
         'settings.mcpServersTestTitle',
         'settings.mcpServersValueSourceLiteral',
@@ -1847,11 +1841,11 @@ describe('i18n integrity', () => {
             { code: 'zh-Hant', root: zhHant },
             { code: 'ja', root: ja },
         ];
-        const expected = flattenTranslationLeaves(en.pluginSurfaces)
+        const expected = flattenTranslationLeaves({ pluginSurfaces: en.pluginSurfaces, pluginRuntime: en.pluginRuntime })
             .map((leaf) => ({ key: leaf.key, kind: leaf.kind }))
             .sort((left, right) => left.key.localeCompare(right.key));
         const mismatches = locales.flatMap(({ code, root }) => {
-            const actual = flattenTranslationLeaves(root.pluginSurfaces)
+            const actual = flattenTranslationLeaves({ pluginSurfaces: root.pluginSurfaces, pluginRuntime: root.pluginRuntime })
                 .map((leaf) => ({ key: leaf.key, kind: leaf.kind }))
                 .sort((left, right) => left.key.localeCompare(right.key));
             return JSON.stringify(actual) === JSON.stringify(expected)
@@ -1860,7 +1854,7 @@ describe('i18n integrity', () => {
         });
         const untranslated = Object.values(auditTranslations({ en, locales }))
             .flatMap((report) => report.untranslatedStrings)
-            .filter((entry) => entry.key.startsWith('pluginSurfaces.'));
+            .filter((entry) => entry.key.startsWith('pluginSurfaces.') || entry.key.startsWith('pluginRuntime.'));
 
         expect(mismatches).toEqual([]);
         expect(untranslated).toEqual([]);

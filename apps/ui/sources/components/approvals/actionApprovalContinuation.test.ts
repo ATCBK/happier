@@ -34,7 +34,7 @@ const actionResult = {
     authorizeUrl: 'https://issuer.example.test/authorize',
 };
 
-type ReadableArtifact = Extract<DecryptedArtifact, Readonly<{ isDecrypted: true }>>;
+type ReadableArtifact = Extract<DecryptedArtifact, Readonly<{ isDecrypted: true }>> & Readonly<{ body: string }>;
 
 function executedArtifact(overrides?: Readonly<{
     artifactId?: string;

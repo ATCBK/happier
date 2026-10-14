@@ -1,7 +1,7 @@
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
-import type { FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import type { ChatFindSeed, FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import type { MemoryDocumentSearchHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { ExternalSessionCandidateV1, ExternalSessionsSource } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 
@@ -27,7 +27,7 @@ export type UniversalSearchTarget =
      * is never re-derived from focus at activation, so focusing Home A while a
      * Home B result is open cannot retarget the navigation.
      */
-    | Readonly<{ kind: 'session'; serverId: string; accountId: string; sessionId: string; seq?: number }>
+    | Readonly<{ kind: 'session'; serverId: string; accountId: string; sessionId: string; seq?: number; find?: ChatFindSeed }>
     | Readonly<{ kind: 'externalConversation'; serverId: string; accountId: string; machineId: string;
         agentId: string; sourceKey?: string; source?: ExternalSessionsSource; candidate: ExternalSessionCandidateV1;
         sourceItemId: string; query: string }>

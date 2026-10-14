@@ -1,16 +1,7 @@
-import type { QualifiedConnectedAccountServiceRef } from "@happier-dev/protocol";
-import {
-    computeCanonicalDomainSeparatedDigest,
-} from "@happier-dev/protocol";
-import {
-    TEAM_CREDENTIAL_MANUAL_CONNECTED_ACCOUNT_DIRECT_CONTRACT_V1,
-    TeamCredentialSourceBindingV1Schema,
-    computeTeamCredentialConnectedAccountSourceVersionV1,
-    computeTeamCredentialPoolMemberSourceVersionV1,
-    computeTeamCredentialSourceMemberKeyV1,
-    parseTeamCredentialSourceVersionV1,
-    type TeamCredentialSourceMemberV1,
-} from "@happier-dev/protocol/teams";
+import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { TEAM_CREDENTIAL_MANUAL_CONNECTED_ACCOUNT_DIRECT_CONTRACT_V1, computeTeamCredentialConnectedAccountSourceVersionV1, computeTeamCredentialPoolMemberSourceVersionV1, computeTeamCredentialSourceMemberKeyV1, parseTeamCredentialSourceVersionV1, type TeamCredentialSourceMemberV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { Tx } from "@/storage/inTx";
 import {

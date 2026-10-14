@@ -17,6 +17,8 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     machineId: string;
     method: string;
     payload: A;
+    /** Materialize domain budgets after route/setup, before encoding or signing the request. */
+    preparePayload?: (remainingTimeoutMs: number) => A;
     /** Original admitted invocation identity, consumed by the existing RPC owner. */
     requestId?: string;
     serverId?: string | null;

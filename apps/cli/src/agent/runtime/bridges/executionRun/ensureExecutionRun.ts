@@ -16,6 +16,7 @@ import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTy
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
 import type { ExecutionRunTranscriptPublisher } from './executionRunTranscriptPublisher';
 import type { ExecutionRunHostRuntime } from './executionRunHostRuntime';
+import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
 import type { ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import type { ExecutionRunProfileContributionCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
 import { isExecutionRunControllerCurrent, settleExecutionRunController } from './settleExecutionRunController';
@@ -68,6 +69,7 @@ export async function ensureExecutionRun(args: Readonly<{
   onPublicStateUpdated?: (runId: string) => void;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
   attachRetainedRunSessionInput?: AttachRetainedRunSessionInput;
+  registerRunOccurrence?: RegisterExecutionRunOccurrence;
 }>): Promise<ExecutionRunEnsureResult> {
   let run = args.runs.get(args.runId);
   if (!run) return { ok: false, errorCode: 'execution_run_not_found', error: 'Not found', resumeFailureKind: 'indeterminate' };
@@ -138,6 +140,7 @@ export async function ensureExecutionRun(args: Readonly<{
     });
     const voiceCtrl: ExecutionRunVoiceAgentController = {
       kind: 'voice_agent',
+      ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
       controllerOccurrenceId,
       voiceAgentId: args.runId,
       cancelled: false,
@@ -160,6 +163,8 @@ export async function ensureExecutionRun(args: Readonly<{
       }),
     });
     materialization.publishProvisioning();
+    const releaseOccurrence = args.registerRunOccurrence?.({ runId: args.runId, sidechainId: run.sidechainId, controller: voiceCtrl });
+    if (releaseOccurrence) voiceCtrl.releaseSessionInputAttachment = async () => releaseOccurrence();
     const isCurrentResumeOccurrence = materialization.isCurrent;
 
     const retireVoiceResumeOccurrence = async (): Promise<boolean> => {
@@ -324,6 +329,7 @@ export async function ensureExecutionRun(args: Readonly<{
     ...(args.attachRetainedRunSessionInput
       ? { attachRetainedRunSessionInput: args.attachRetainedRunSessionInput }
       : {}),
+    ...(args.registerRunOccurrence ? { registerRunOccurrence: args.registerRunOccurrence } : {}),
   });
   if (!resumed.ok) return resumed;
   const resumedController = args.controllers.get(args.runId) ?? null;

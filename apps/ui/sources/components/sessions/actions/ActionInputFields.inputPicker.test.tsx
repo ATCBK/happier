@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { HappierInputPickerProvider } from '@happier-dev/plugin-ui/presentation';
 import { ActionInputFieldHintSchema, type EffectiveActionInputField } from '@happier-dev/protocol';
@@ -13,6 +14,7 @@ import {
 import { installSessionActionsCommonModuleMocks } from './sessionActionsTestHelpers';
 
 installSessionActionsCommonModuleMocks();
+vi.mock('@/utils/web/reactDomCjs', async () => (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
 
 // The public authoring example's declared repository type, its options Resource and picker.
 const declared: ResolvedInputTypeV1 = {

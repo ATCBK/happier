@@ -8,8 +8,6 @@ import {
 
 import type { LocalServicePreviewSnapshot, LocalServicePreviewSnapshotRow } from './store';
 
-export const LOCAL_SERVICE_PREVIEW_SNAPSHOT_ROUTE = '/local-services/preview/snapshot';
-
 export type LocalServicePreviewLifecycleFailureReason =
     | 'unavailable'
     | 'request_failed'
@@ -36,16 +34,10 @@ export type LocalServicePreviewRevokeClientResult =
     | Readonly<{ ok: true; response: DaemonLocalServicePreviewRevokeResponseV1 }>
     | Readonly<{ ok: false; reason: LocalServicePreviewLifecycleFailureReason }>;
 
-export type LocalServicePreviewSnapshotRequest = (
-    path: string,
-    init?: RequestInit,
-) => Promise<Response>;
-
 export type LocalServicePreviewSnapshotClientInput = Readonly<{
     machineId: string;
     serverId?: string | null;
     signal?: AbortSignal;
-    request?: LocalServicePreviewSnapshotRequest;
 }>;
 
 export type LocalServicePreviewSnapshotClientResult =
@@ -126,38 +118,4 @@ export function normalizeLocalServicePreviewSnapshotPayload(
         previews,
         diagnostics: readDiagnostics(value.diagnostics),
     };
-}
-
-function readResponseSnapshotPayload(value: unknown): unknown {
-    if (!isRecord(value)) {
-        return null;
-    }
-    return value.ok === true ? value.snapshot : value;
-}
-
-export async function fetchLocalServicePreviewSnapshot(
-    input: LocalServicePreviewSnapshotClientInput,
-): Promise<LocalServicePreviewSnapshotClientResult> {
-    const request = input.request;
-    if (!request) {
-        return { ok: false, reason: 'unavailable' };
-    }
-
-    try {
-        const response = await request(LOCAL_SERVICE_PREVIEW_SNAPSHOT_ROUTE, {
-            method: 'POST',
-            signal: input.signal,
-        });
-        if (response.status === 404 || response.status === 501) {
-            return { ok: false, reason: 'unavailable' };
-        }
-        if (!response.ok) {
-            return { ok: false, reason: 'request_failed' };
-        }
-        const payload = readResponseSnapshotPayload(await response.json());
-        const snapshot = normalizeLocalServicePreviewSnapshotPayload(payload, input.machineId);
-        return snapshot ? { ok: true, snapshot } : { ok: false, reason: 'invalid_response' };
-    } catch {
-        return { ok: false, reason: 'request_failed' };
-    }
 }

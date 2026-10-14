@@ -10,11 +10,11 @@ import {
   ensureDevTargetSyncProject,
   flushDevTargetSync,
   pauseOwnedDevTargetSyncProject,
+  resolveOwnedDevTargetSyncProjectSources,
   resumeDevTargetSync,
 } from '../dev_targets/sync_project.mjs';
 import { inspectDevTargetSync, runDevTargetDependencyBootstrap } from '../dev_targets/executor.mjs';
-
-const CANDIDATE_SYNC_OWNER = 'execution-host-candidate';
+import { EXECUTION_HOST_CANDIDATE_SYNC_OWNER as CANDIDATE_SYNC_OWNER } from '../dev_targets/mutagen_project.mjs';
 
 function candidateSyncOwner(workspaceId = '') {
   return workspaceId ? `${CANDIDATE_SYNC_OWNER}-${workspaceId}` : CANDIDATE_SYNC_OWNER;
@@ -410,17 +410,24 @@ function candidateSyncTarget(profile, paths, ssh = {}) {
   };
 }
 
+function candidateSourceDir(profile, workspaceId, state) {
+  return state?.sourceDir ?? profile.workspaces?.find(workspace => workspace.id === workspaceId)?.hostSourceDir;
+}
+
 export async function inspectExecutionHostCandidateMirror(
-  { profile, workspaceId = '', env = process.env, allowMissingState = false },
+  { profile, workspaceId = '', sourceDir: recoveredSourceDir, env = process.env, allowMissingState = false },
   { inspectSync = inspectDevTargetSync } = {},
 ) {
   const state = await readExecutionHostCandidateState(profile, env, workspaceId);
   if (!state && !allowMissingState) requireCandidateState(state);
   const paths = resolveExecutionHostCandidatePaths(profile, env, workspaceId);
   const target = candidateSyncTarget(profile, paths);
+  const sourceDir = candidateSourceDir(profile, workspaceId, state) ?? recoveredSourceDir;
   return {
     ...(state ?? { candidateState: 'missing' }),
-    status: await inspectSync({ target, stackBaseDir: paths.syncBaseDir, env }),
+    status: sourceDir
+      ? await inspectSync({ target, stackBaseDir: paths.syncBaseDir, sourceDir, ownerId: target.name, env })
+      : { state: 'missing' },
   };
 }
 
@@ -461,20 +468,24 @@ export async function syncExecutionHostCandidateMirror(
   await flushSync({ target, env: syncProject.env });
   return {
     ...state,
-    status: await inspectSync({ target, stackBaseDir: paths.syncBaseDir, env: syncProject.env }),
+    status: await inspectSync({ target, stackBaseDir: paths.syncBaseDir, sourceDir: state.sourceDir,
+      ownerId: target.name, env: syncProject.env }),
   };
 }
 
 export async function pauseExecutionHostCandidateMirror(
-  { profile, workspaceId = '', env = process.env, allowMissingState = false },
+  { profile, workspaceId = '', sourceDir: recoveredSourceDir, env = process.env, allowMissingState = false },
   { pauseProject = pauseOwnedDevTargetSyncProject } = {},
 ) {
   const state = await readExecutionHostCandidateState(profile, env, workspaceId);
   if (!state && !allowMissingState) requireCandidateState(state);
   const paths = resolveExecutionHostCandidatePaths(profile, env, workspaceId);
+  const sourceDir = candidateSourceDir(profile, workspaceId, state) ?? recoveredSourceDir;
+  if (!sourceDir) return { paused: false };
   return {
     paused: await pauseProject({
       stackBaseDir: paths.syncBaseDir,
+      sourceDir,
       ownerId: candidateSyncOwner(paths.workspaceId),
       env,
     }),
@@ -495,6 +506,17 @@ function candidateMirrorScopes(profile) {
   ];
 }
 
+async function candidateMirrorSourceScopes(scope, state, env) {
+  const sourceDir = candidateSourceDir(scope.profile, scope.workspaceId, state);
+  if (sourceDir) return [{ ...scope, sourceDir }];
+  // A legacy producer can have started its project before it published state.
+  // Recover its source only from the canonical sync owner's existing metadata.
+  const paths = resolveExecutionHostCandidatePaths(scope.profile, env, scope.workspaceId);
+  const sources = await resolveOwnedDevTargetSyncProjectSources({ stackBaseDir: paths.syncBaseDir,
+    ownerId: candidateSyncOwner(scope.workspaceId), env });
+  return sources.map(sourceDir => ({ ...scope, sourceDir }));
+}
+
 function isRetiredCandidateMirrorStatus(status) {
   return status?.state === 'paused' || status?.state === 'missing';
 }
@@ -509,7 +531,7 @@ function candidateMirrorDiagnostic({ scope, state, status }) {
           guestRepositoryDir: state.guestRepositoryDir,
           capture: state.capture,
         }
-      : { candidateState: 'missing' }),
+      : { candidateState: 'missing', ...(scope.sourceDir ? { sourceDir: scope.sourceDir } : {}) }),
     status,
   };
 }
@@ -526,41 +548,45 @@ export async function retireExecutionHostCandidateMirrors(
     throw new Error('[execution-host] candidate mirror retirement requires activation=candidate');
   }
   const retired = [];
-  for (const scope of candidateMirrorScopes(profile)) {
+  for (const candidateScope of candidateMirrorScopes(profile)) {
     // eslint-disable-next-line no-await-in-loop
-    const state = await readCandidateState(scope.profile, env, scope.workspaceId);
-    // eslint-disable-next-line no-await-in-loop
-    const pause = await pauseCandidateMirror({
-      profile: scope.profile,
-      workspaceId: scope.workspaceId,
-      env,
-      allowMissingState: true,
-    });
-    // A missing state file can occur if candidate preparation died after
-    // creating its project. Only inspect that scope when the existing project
-    // still proves it is execution-host-owned; otherwise this profile never
-    // established a candidate transport for the scope.
-    if (!state && pause.paused !== true) continue;
-    // `pause` may report no owned project only when the candidate transport was
-    // removed separately. A read-back still proves that its deterministic
-    // session is not an active candidate-direction writer.
-    // eslint-disable-next-line no-await-in-loop
-    const inspected = await inspectCandidateMirror({
-      profile: scope.profile,
-      workspaceId: scope.workspaceId,
-      env,
-      allowMissingState: true,
-    });
-    if (!state && inspected.status.state === 'missing') continue;
-    if (!isRetiredCandidateMirrorStatus(inspected.status)) {
-      throw new Error(
-        `[execution-host] candidate mirror ${scope.workspaceId || 'legacy'} did not retire before activation: ${inspected.status.state}`,
-      );
+    const state = await readCandidateState(candidateScope.profile, env, candidateScope.workspaceId);
+    for (const scope of await candidateMirrorSourceScopes(candidateScope, state, env)) {
+      // eslint-disable-next-line no-await-in-loop
+      const pause = await pauseCandidateMirror({
+        profile: scope.profile,
+        workspaceId: scope.workspaceId,
+        sourceDir: scope.sourceDir,
+        env,
+        allowMissingState: true,
+      });
+      // A missing state file can occur if candidate preparation died after
+      // creating its project. Only inspect that scope when the existing project
+      // still proves it is execution-host-owned; otherwise this profile never
+      // established a candidate transport for the scope.
+      if (!state && pause.paused !== true) continue;
+      // `pause` may report no owned project only when the candidate transport was
+      // removed separately. A read-back still proves that its deterministic
+      // session is not an active candidate-direction writer.
+      // eslint-disable-next-line no-await-in-loop
+      const inspected = await inspectCandidateMirror({
+        profile: scope.profile,
+        workspaceId: scope.workspaceId,
+        sourceDir: scope.sourceDir,
+        env,
+        allowMissingState: true,
+      });
+      if (!state && inspected.status.state === 'missing') continue;
+      if (!isRetiredCandidateMirrorStatus(inspected.status)) {
+        throw new Error(
+          `[execution-host] candidate mirror ${scope.workspaceId || 'legacy'} did not retire before activation: ${inspected.status.state}`,
+        );
+      }
+      retired.push({
+        ...candidateMirrorDiagnostic({ scope, state, status: inspected.status }),
+        paused: pause.paused === true,
+      });
     }
-    retired.push({
-      ...candidateMirrorDiagnostic({ scope, state, status: inspected.status }),
-      paused: pause.paused === true,
-    });
   }
   return retired;
 }
@@ -586,17 +612,19 @@ export async function inspectExecutionHostCandidateRetirement(
       });
       continue;
     }
-    if (!state) continue;
     try {
-      // eslint-disable-next-line no-await-in-loop
-      const inspected = await inspectCandidateMirror({
-        profile: scope.profile,
-        workspaceId: scope.workspaceId,
-        env,
-        allowMissingState: true,
-      });
-      if (state || inspected.status.state !== 'missing') {
-        mirrors.push(candidateMirrorDiagnostic({ scope, state, status: inspected.status }));
+      for (const sourceScope of await candidateMirrorSourceScopes(scope, state, env)) {
+        // eslint-disable-next-line no-await-in-loop
+        const inspected = await inspectCandidateMirror({
+          profile: scope.profile,
+          workspaceId: scope.workspaceId,
+          sourceDir: sourceScope.sourceDir,
+          env,
+          allowMissingState: true,
+        });
+        if (state || inspected.status.state !== 'missing') {
+          mirrors.push(candidateMirrorDiagnostic({ scope: sourceScope, state, status: inspected.status }));
+        }
       }
     } catch (error) {
       mirrors.push(candidateMirrorDiagnostic({
@@ -637,6 +665,7 @@ export async function adoptLegacyExecutionHostCandidate(
   }
   await pauseProject({
     stackBaseDir: legacyPaths.syncBaseDir,
+    sourceDir: legacy.sourceDir,
     ownerId: CANDIDATE_SYNC_OWNER,
     env,
   });
@@ -706,6 +735,7 @@ async function updateCandidateRepository({
     await exportGitBundle({ sourceDir, bundlePath, basis: normalizedBasis });
     await pauseProject({
       stackBaseDir: paths.syncBaseDir,
+      sourceDir,
       ownerId,
       env,
     });
@@ -770,7 +800,7 @@ async function updateCandidateRepository({
         target,
         stackBaseDir: paths.syncBaseDir,
         syncAlreadyVerified: true,
-        env,
+        env: syncProject.env,
       }), 'candidate dependency bootstrap');
     } catch (error) {
       await atomicWriteJson(paths.stateFile, {

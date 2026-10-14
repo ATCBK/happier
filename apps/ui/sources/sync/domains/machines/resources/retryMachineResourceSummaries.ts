@@ -1,8 +1,11 @@
 import { readHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { machineResourceStore } from './machineResourceStore';
-import type { MachineResourceKey } from './machineRpc';
+import { resolveMachineResourceKey, type MachineResourceKey } from './machineRpc';
 
-export function retryMachineResourceSummaries(machineKeys: readonly MachineResourceKey[]): void {
+export async function retryMachineResourceSummaries(machineKeys: readonly MachineResourceKey[]): Promise<void> {
     if (!readHostActivelyViewed()) return;
-    for (const input of machineKeys) machineResourceStore.retry({ ...input, view: 'summary' });
+    await Promise.all(machineKeys.map(async input => {
+        const key = await resolveMachineResourceKey(input);
+        if (key && readHostActivelyViewed()) await machineResourceStore.retry({ ...key, view: 'summary' });
+    }));
 }

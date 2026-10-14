@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountUsernameUpdateErrorV1Schema } from '../account/profile.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
 
 import {
@@ -105,9 +105,9 @@ export type HomeDomainActionErrorCodeV1 =
 
 // The session DELETE route predates typed error codes. Keep its exact released
 // refusals at the same Home error boundary as the other domain envelopes.
-const SessionDeleteRefusalSchema = lazyZodSchema(() => z.object({
+const SessionDeleteRefusalSchema = lazyZodSchema(() => z.strictObject({
   error: z.enum(['Session not found or not owned by user', 'Session delete condition was lost']),
-}).strict());
+}));
 
 /**
  * Reads the existing answering domain's typed refusal without creating a
@@ -150,7 +150,7 @@ export function homeDomainActionTransportV1(
 }
 
 /** The strict domain result this intent declared on its Action row. */
-export function homeDomainActionOutputSchemaV1(actionId: HomeDomainActionIdV1): z.ZodTypeAny {
+export function homeDomainActionOutputSchemaV1(actionId: HomeDomainActionIdV1): z.ZodMiniType {
   const outputSchema = getActionSpec(actionId).outputSchema;
   if (!outputSchema) {
     throw new TypeError(`Home family Action declares no result schema: ${actionId}`);
@@ -159,7 +159,7 @@ export function homeDomainActionOutputSchemaV1(actionId: HomeDomainActionIdV1): 
 }
 
 /** The strict domain input this intent declared on its Action row. */
-export function homeDomainActionInputSchemaV1(actionId: HomeDomainActionIdV1): z.ZodTypeAny {
+export function homeDomainActionInputSchemaV1(actionId: HomeDomainActionIdV1): z.ZodMiniType {
   return getActionSpec(actionId).inputSchema;
 }
 

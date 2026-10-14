@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
@@ -80,19 +80,19 @@ type LockArtifact = Readonly<{
   isLegacyDirectory: boolean;
 }>;
 
-const CurrentOwnerStoredReadSchema = createStoredReadSchema(z.object({
-  pid: z.number().int().positive(),
-  ownerToken: z.string().min(1),
-  processStartedAtMs: z.number().finite(),
-  processWitness: z.literal('observed').optional(),
-  createdAtMs: z.number().finite(),
-  updatedAtMs: z.number().finite(),
-}).strict());
-const PredecessorDirectoryOwnerStoredReadSchema = createStoredReadSchema(z.object({
-  pid: z.number().int().positive(),
-  providerId: z.string().nullable(),
+const CurrentOwnerStoredReadSchema = createStoredReadSchema(z.strictObject({
+  pid: z.number().check(z.int(), z.positive()),
+  ownerToken: z.string().check(z.minLength(1)),
+  processStartedAtMs: z.number(),
+  processWitness: z.optional(z.literal('observed')),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+}));
+const PredecessorDirectoryOwnerStoredReadSchema = createStoredReadSchema(z.strictObject({
+  pid: z.number().check(z.int(), z.positive()),
+  providerId: z.nullable(z.string()),
   acquiredAt: z.string(),
-}).strict());
+}));
 
 function parseCurrentOwner(raw: string): JsonOwnerFileLockRecord | null {
   try {

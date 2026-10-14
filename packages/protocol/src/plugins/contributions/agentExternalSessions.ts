@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   cloneStrictPluginJsonValue,
@@ -32,7 +32,7 @@ function isPlainObject(value: unknown): value is PluginAgentExternalSessionLinkD
 
 function validateLinkDataBounds(
   value: PluginAgentExternalSessionLinkDataValue,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): boolean {
   const pending: Array<Readonly<{
     value: PluginAgentExternalSessionLinkDataValue;
@@ -86,21 +86,19 @@ function validateLinkDataBounds(
   return true;
 }
 
-export const PluginAgentExternalSessionLinkDataSchema: z.ZodType<PluginAgentExternalSessionLinkData> = z
-  .unknown()
-  .transform((value, ctx) => {
+export const PluginAgentExternalSessionLinkDataSchema: z.ZodMiniType<PluginAgentExternalSessionLinkData> = z.pipe(z
+  .unknown(), z.transform((value, ctx) => {
     let snapshot: unknown;
     try {
       snapshot = cloneStrictPluginJsonValue(value, 'External-session linkData');
     } catch (error) {
-      ctx.addIssue({
+      ctx.issues.push({
         code: 'custom',
-        message: error instanceof Error ? error.message : 'External-session linkData must contain strict JSON data.',
-      });
+        message: error instanceof Error ? error.message : 'External-session linkData must contain strict JSON data.', input: ctx.value });
       return z.NEVER;
     }
     if (!isPlainObject(snapshot)) {
-      ctx.addIssue({ code: 'custom', message: 'External-session linkData must be a JSON object.' });
+      ctx.issues.push({ code: 'custom', message: 'External-session linkData must be a JSON object.', input: ctx.value });
       return z.NEVER;
     }
     const linkData = snapshot as PluginAgentExternalSessionLinkData;
@@ -110,8 +108,8 @@ export const PluginAgentExternalSessionLinkDataSchema: z.ZodType<PluginAgentExte
       'External-session linkData',
       MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_BYTES,
     ) > MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_BYTES) {
-      ctx.addIssue({ code: 'custom', message: 'External-session linkData exceeds the serialized-byte limit.' });
+      ctx.issues.push({ code: 'custom', message: 'External-session linkData exceeds the serialized-byte limit.', input: ctx.value });
       return z.NEVER;
     }
     return linkData;
-  }) as z.ZodType<PluginAgentExternalSessionLinkData>;
+  })) as z.ZodMiniType<PluginAgentExternalSessionLinkData>;

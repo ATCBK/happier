@@ -8,9 +8,9 @@ import { io, type Socket } from 'socket.io-client';
 import { expect, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, CallToolRequestSchema, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import {
   accountSettingsParse,
   ConnectedAccountAttemptResponseSchema,
@@ -24,8 +24,10 @@ import {
   McpServerCatalogSnapshotV1Schema,
   buildAccountStoredContentCompatibilitySocketAuthV1,
   CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
+  SPAWN_SESSION_ERROR_CODES,
 } from '@happier-dev/protocol';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { ConnectedAccountPeerOperationTransportSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import { MCP_OAUTH_CALLBACK_URL_V1, MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
@@ -36,8 +38,17 @@ import { createConnectedAccountSocketHome } from '../../../../server/sources/tes
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { ApiClient } from '@/api/api';
+import * as persistenceBoundary from '@/persistence';
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
 import { registerMachineConnectedAccountRpcHandlers } from '@/api/machine/rpcHandlers.connectedAccounts';
+import { registerMachineRpcHandlers } from '@/api/machine/rpcHandlers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonMcpServersTestResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
+import { McpServerToolsSnapshotV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
+import { refreshActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { readQualifiedConnectedAccountCredentialV4, listQualifiedConnectedAccountsV4,
   listQualifiedConnectedAccountGroupsV4, readQualifiedConnectedAccountGroupV4,
@@ -56,6 +67,7 @@ import { createDaemonConnectedAccountPurposeBindingRuntime } from '@/daemon/conn
 import { createConnectedAccountRequestAuthSubjectRegistry } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
 import { createConnectedAccountRequestAuthService } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthService';
 import { createDaemonQualifiedRequestAuthCallbacks } from '@/daemon/connectedServices/requestAuth/createDaemonQualifiedRequestAuthCallbacks';
+import { createDaemonMcpRequestAuthForTest, type IssueMcpTestRequestAuth } from '@/daemon/connectedServices/requestAuth/createDaemonMcpRequestAuthForTest';
 import { ConnectedServiceRefreshCoordinator } from '@/daemon/connectedServices/refresh/ConnectedServiceRefreshCoordinator';
 import { applyConnectedAccountRequestAuthRecovery } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthRecovery';
 import { createDaemonControlApp } from '@/daemon/controlServer';
@@ -65,13 +77,24 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { issueMcpRequestAuthCapability } from '@/mcp/runtime/issueMcpRequestAuthCapability';
 import { MCP_REQUEST_AUTH_PURPOSE } from '@/mcp/runtime/mcpRequestAuth';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
+import * as mcpExecutableBoundary from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createConnectedAccountRequestAuthClient } from '@happier-dev/plugin-sdk/connected-accounts/request-auth';
 import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
 
 const cleanup: Array<() => Promise<unknown>> = [];
+let preparedHome: Awaited<ReturnType<typeof createConnectedAccountSocketHome>> | null = null;
+
+/** Database deployment belongs to fixture setup, outside the finite RPC journey. */
+export async function prepareMcpOAuthSocketRequestAuthFixture(): Promise<void> {
+  preparedHome = await createConnectedAccountSocketHome();
+  const home = preparedHome;
+  cleanup.push(() => home.close());
+}
+
 export async function closeMcpOAuthSocketRequestAuthFixture(): Promise<void> {
+  preparedHome = null;
   const failures: unknown[] = [];
   for (const close of cleanup.splice(0).reverse()) {
     try { await close(); } catch (error) { failures.push(error); }
@@ -88,12 +111,21 @@ async function connect(socket: Socket) {
   });
 }
 
-export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
-  const harness = await createConnectedAccountSocketHome();
-  cleanup.push(() => harness.close());
+export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ testPipeline?: boolean }>): Promise<void> {
+  if (!preparedHome) await prepareMcpOAuthSocketRequestAuthFixture();
+  const harness = preparedHome!;
+  preparedHome = null;
   const homeAccount = { id: harness.accountId };
   const token = harness.token;
   const credentials = { token, encryption: null };
+  if (options?.testPipeline) {
+    vi.spyOn(persistenceBoundary, 'readStoredCredentials').mockResolvedValue(credentials);
+    // Executable resolution is the process boundary. Keep the real materializer,
+    // probe and bridge while choosing the current source entrypoint for this run.
+    const resolveExecutable = mcpExecutableBoundary.resolveNodeBackedMcpServerCommand;
+    vi.spyOn(mcpExecutableBoundary, 'resolveNodeBackedMcpServerCommand').mockImplementation(
+      input => resolveExecutable({ ...input, preferSourceEntrypoint: true }));
+  }
   const keys = harness.keys;
   const installationId = harness.installationId;
   const machine = { id: harness.machineId };
@@ -110,6 +142,7 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
   cleanup.push(() => tls.cleanup());
   let acceptedToken = 'access-1';
   let failNextRequest = false;
+  let failToolsDiscovery = false;
   const bearerRequests: string[] = [];
   const mcpHttp = createSecureServer({ key: await readFile(tls.privateKeyPath), cert: await readFile(tls.leafCertificatePath) });
   mcpHttp.on('request', async (request, response) => {
@@ -119,8 +152,15 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
       response.writeHead(401, { 'www-authenticate': 'Bearer error="invalid_token"' }).end('{}');
       return;
     }
-    const server = new McpServer({ name: 'composed-oauth', version: '1.0.0' });
-    server.registerTool('ping', {}, async () => ({ content: [{ type: 'text', text: 'pong' }] }));
+    const server = new Server({ name: 'composed-oauth', version: '7.8.9' },
+      { capabilities: { tools: {} }, instructions: 'Instructions from the authenticated upstream.' });
+    server.setRequestHandler(ListToolsRequestSchema, async request => {
+      if (failToolsDiscovery) throw new McpError(-32603, 'Fixture discovery failure');
+      return request.params?.cursor === 'second-page'
+      ? { tools: [{ name: 'second_page_tool', title: 'Second page', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }] }
+      : { tools: [{ name: 'ping', title: 'Ping upstream', inputSchema: { type: 'object' } }], nextCursor: 'second-page' };
+    });
+    server.setRequestHandler(CallToolRequestSchema, async () => ({ content: [{ type: 'text', text: 'pong' }] }));
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     response.once('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);
@@ -193,9 +233,9 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
       acquireRefreshLease: acquireQualifiedConnectedAccountRefreshLeaseV4,
       mutateCredential: mutateQualifiedConnectedAccountCredentialV4 } });
   const runtime = createConnectedAccountDaemonRuntime({ reloadController: controller, persistence,
-    resolvePeerOperationTransport: ({ service, operation }) => resolveQualifiedConnectedAccountPeerOperationTransport({
+    resolvePeerOperationTransport: ({ service, operation }) => ConnectedAccountPeerOperationTransportSchema.parse(resolveQualifiedConnectedAccountPeerOperationTransport({
       snapshot: featuresSnapshot, service, operation,
-    }),
+    })),
     configurationConsequences: {
       assertAvailable: async () => {
         if (!refreshCoordinator) throw new Error('connected_account_configuration_consequence_unavailable');
@@ -224,6 +264,26 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
   // Exercise the real registered handler with its runtime temporarily unbound.
   // Restoring this dependency must be necessary for the same journey to succeed.
   let rpcRuntime: typeof runtime | null = null;
+  let testAuthBound = false;
+  let testIssuer: IssueMcpTestRequestAuth | undefined;
+  const testCapabilityPaths: string[] = [];
+  if (options?.testPipeline) {
+    const registration = registerMachineRpcHandlers({ rpcHandlerManager: rpc,
+      handlers: { spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'unused' }),
+        stopSession: async () => true, requestShutdown() {} },
+      deps: { currentMachineId: machine.id, mcpServers: {
+        readCredentials: async () => credentials,
+        env: { ...process.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, NODE_OPTIONS: '--conditions=happier-source' },
+        issueRequestAuth: async (input, operationContext, context) => {
+          if (!testAuthBound || !testIssuer) throw new Error('mcp_request_auth_not_active');
+          const capability = await testIssuer(input, operationContext, context);
+          testCapabilityPaths.push(capability.capabilityFile);
+          return capability;
+        },
+      } },
+    });
+    cleanup.push(() => registration.dispose());
+  }
   registerMachineConnectedAccountRpcHandlers({ rpcHandlerManager: rpc, machineId: machine.id, getRuntime: () => rpcRuntime });
   machineSocket.on('disconnect', () => rpc.onSocketDisconnect());
   machineSocket.on(SOCKET_RPC_EVENTS.REQUEST, (request: SocketRpcRequestPayload, ack: (result: unknown) => void) => {
@@ -234,11 +294,12 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
   // ApiMachineClient owns the current machine-control registration budget
   // (MACHINE_CONTROL_RPC_REGISTRATION_TIMEOUT_MS in apiMachine.ts).
   expect(await rpc.waitForRegisteredHandlers([CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
-    CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD], { timeoutMs: 10_000 })).toMatchObject({ status: 'ready' });
-  const call = async (method: string, command: unknown) => {
+    CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ...(options?.testPipeline ? [RPC_METHODS.DAEMON_MCP_SERVERS_TEST] : [])],
+    { timeoutMs: 10_000 })).toMatchObject({ status: 'ready' });
+  const call = async (method: string, command: unknown, envelope = true) => {
     const fullMethod = `${machine.id}:${method}`;
     const callId = randomUUID().replaceAll('-', '');
-    const params = await socketRpcCodec.encodeParams({ mode: 'plain' }, { v: 1, machineId: machine.id, command }, { method: fullMethod, callId });
+    const params = await socketRpcCodec.encodeParams({ mode: 'plain' }, envelope ? { v: 1, machineId: machine.id, command } : command, { method: fullMethod, callId });
     // ApiMachineClient.machineRpc's current socket call default is 20_000ms.
     const reply = await viewer.timeout(20_000).emitWithAck(SOCKET_RPC_EVENTS.CALL, { method: fullMethod, params });
     expect(reply).toMatchObject({ ok: true });
@@ -280,8 +341,8 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
   let attempt = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.signIn.start'].parse(begun.result);
   let state = new URL(attempt.authorizationUrl).searchParams.get('state')!;
   expect(state.startsWith(`${attempt.attemptId}.`)).toBe(true);
-  const rejected = await connectedHost.authenticationCommand!(machine.id, { operation: 'completeOAuth', attemptId: attempt.attemptId,
-    completion: { code: 'private-code', state, callbackUrl: MCP_OAUTH_CALLBACK_URL_V1, iss: 'https://wrong-issuer.example' } });
+  const rejected = ConnectedAccountAttemptResponseSchema.parse(await connectedHost.authenticationCommand!(machine.id, { operation: 'completeOAuth', attemptId: attempt.attemptId,
+    completion: { code: 'private-code', state, callbackUrl: MCP_OAUTH_CALLBACK_URL_V1, iss: 'https://wrong-issuer.example' } }));
   expect(rejected.status).toBe('rejected');
   expect(authorizationBodies).toEqual([]);
   const restarted = await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server-one' },
@@ -315,7 +376,7 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
       return { status: recovery.effect === 'stale_context' ? 'stale_context' : 'current_unchanged' };
     }, reportQuotaFailure: async () => { throw new Error('OAuth fixture must not report quota failure'); } });
   const broker = createDaemonControlApp({ getChildren: () => [], machineId: machine.id, controlToken: 'fixture-control',
-    stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'error', errorCode: 'unused', errorMessage: 'unused' }),
+    stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'unused' }),
     requestShutdown() {}, onHappySessionWebhook() {}, connectedAccountRequestAuth: { authenticate: subjects.authenticate, ...requestAuth } });
   cleanup.push(() => broker.close());
   await broker.listen({ host: '127.0.0.1', port: 0 });
@@ -326,6 +387,59 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
       loadedAtMs: Date.now(), settingsSecretsReadKeys: [], mcpServerCatalog: catalog }),
     establishedOwner: established, activatePurposeBindings: purposes.activatePurposeBindings, registry: subjects,
     httpPort: brokerAddress.port, isCurrent: () => active, assertCurrent: async () => { if (!active) throw new Error('Session retired'); } };
+  testIssuer = createDaemonMcpRequestAuthForTest({ credentials, materializationBaseDir: issuance.materializationBaseDir,
+    establishedOwner: established, activatePurposeBindings: purposes.activatePurposeBindings,
+    registry: subjects, getHttpPort: () => brokerAddress.port, isCurrent: () => active });
+  if (options?.testPipeline) {
+    await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
+    const store = createCliMcpServerStore({ credentials });
+    const initial = await refreshActiveMcpServerCatalog({ credentials });
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') throw new Error('MCP catalog unavailable');
+    expect(await store.mutate({ kind: 'server-create', entry: catalog.catalog.servers[0]!, rules: catalog.catalog.bindings },
+      initial.revision)).toMatchObject({ status: 'updated' });
+    const testInput = { t: 'byId', machineId: machine.id, serverId: 'server-one', directory: harness.baseDir };
+    expect(DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, testInput, false)))
+      .toMatchObject({ ok: false, errorCode: 'materialization_failed' });
+    testAuthBound = true;
+    const tested = DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, testInput, false));
+    expect(tested.ok, tested.ok ? undefined : tested.error).toBe(true);
+    expect(tested).toMatchObject({ ok: true, toolCount: 2, serverInfo: { name: 'composed-oauth', version: '7.8.9' },
+      instructions: 'Instructions from the authenticated upstream.' });
+    const persisted = await refreshActiveMcpServerCatalog({ credentials });
+    if (persisted.status !== 'ready') throw new Error('Persisted MCP snapshot unavailable');
+    const snapshot = McpServerToolsSnapshotV1Schema.parse(persisted.catalog.servers[0]?.toolsSnapshot);
+    expect(snapshot).toMatchObject({ machineId: machine.id, serverInfo: { name: 'composed-oauth', version: '7.8.9' },
+      instructions: 'Instructions from the authenticated upstream.' });
+    expect(snapshot.tools.map(tool => tool.name)).toEqual(['ping', 'second_page_tool']);
+    expect(snapshot.tools.every(tool => tool.tokens > 0)).toBe(true);
+    expect(testCapabilityPaths).toHaveLength(1);
+    for (const path of testCapabilityPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(getActiveAccountSettingsSnapshot()?.mcpServerCatalog?.status).toBe('ready');
+    failToolsDiscovery = true;
+    const failedProbe = DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, testInput, false));
+    expect(failedProbe).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed' });
+    failToolsDiscovery = false;
+    expect(testCapabilityPaths).toHaveLength(2);
+    for (const path of testCapabilityPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    const afterFailure = await refreshActiveMcpServerCatalog({ credentials });
+    expect(afterFailure.status).toBe('ready');
+    if (afterFailure.status !== 'ready') throw new Error('MCP catalog unavailable after failed probe');
+    expect(afterFailure.revision).toBe(persisted.revision);
+    expect(afterFailure.catalog.servers[0]?.toolsSnapshot).toEqual(snapshot);
+    const beforeWrongResource = bearerRequests.length;
+    const storedEntry = persisted.catalog.servers[0]!;
+    expect(await store.mutate({ kind: 'server-update', entry: { ...storedEntry,
+      remote: { ...storedEntry.remote!, url: `${resource}/other` } } }, persisted.revision))
+      .toMatchObject({ status: 'updated' });
+    expect(DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, testInput, false)))
+      .toMatchObject({ ok: false, errorCode: 'materialization_failed' });
+    expect(bearerRequests).toHaveLength(beforeWrongResource);
+    const changed = await refreshActiveMcpServerCatalog({ credentials });
+    if (changed.status !== 'ready') throw new Error('Changed MCP catalog unavailable');
+    expect(await store.mutate({ kind: 'server-update', entry: storedEntry }, changed.revision))
+      .toMatchObject({ status: 'updated' });
+  }
   const capability = await issueMcpRequestAuthCapability({ serverId: 'server-one', resource, materializationId: 'composed-bridge' }, issuance, new AbortController().signal);
   cleanup.push(() => subjects.retireSessionCapabilities({ parentSessionId: issuance.parentSessionId, materializationId: 'composed-bridge' }));
   const requestClient = await createConnectedAccountRequestAuthClient({ capabilityFile: capability.capabilityFile });
@@ -377,4 +491,19 @@ export async function exerciseMcpOAuthSocketRequestAuth(): Promise<void> {
   const retired = CallToolResultSchema.parse(await client.callTool({ name: 'ping', arguments: {} }));
   expect(retired.isError).toBe(true);
   expect(bearerRequests).toHaveLength(retiredRequestStart);
+  if (options?.testPipeline) {
+    active = true;
+    expect(await connectedHost.controlCommand!(machine.id, { operation: 'revokeAccount',
+      account: { service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, accountId: 'server-one' }, cleanupGroupReferences: true }))
+      .toMatchObject({ status: 'revoked' });
+    const beforeRevokedTest = bearerRequests.length;
+    expect(DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST,
+      { t: 'byId', machineId: machine.id, serverId: 'server-one', directory: harness.baseDir }, false)))
+      .toMatchObject({ ok: false, errorCode: 'materialization_failed' });
+    expect(bearerRequests).toHaveLength(beforeRevokedTest);
+  }
+}
+
+export async function exerciseMcpOAuthMachineTest(): Promise<void> {
+  await exerciseMcpOAuthSocketRequestAuth({ testPipeline: true });
 }

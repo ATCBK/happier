@@ -3,13 +3,14 @@ import { AccessibilityInfo, Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { WidgetSizePicker, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { JsonValue } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs';
 
 import { useInputFieldOptions, type InputFieldOptionsRequest } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX, resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
+import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { Text } from '@/components/ui/text/Text';
 import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets';
@@ -22,6 +23,7 @@ import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl'
 import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { WidgetSetupFieldRow, type WidgetSetupFieldChange } from './WidgetSetupFieldRow';
 import {
     describeWidgetSetupBlocker,
@@ -45,9 +47,9 @@ const PHONE_PREVIEW_HEIGHT_PX = 168;
 const SIDE_BY_SIDE_MIN_WIDTH_PX = POPOVER_PREVIEW_WIDTH_PX + 260;
 
 const NO_OPTIONS: readonly WidgetSetupValue[] = Object.freeze([]);
-/** Cancels the untitled group's own inset and top spacer, so its sheet starts at the pane's edges. */
+/** Cancels the untitled group's top spacer, so its sheet starts at the pane's top edge. The pane owns its own
+ * sides (a contained list scope), so the sheet adds no inset there to cancel with a negative margin. */
 const PANE_SHEET_FLUSH = {
-    marginHorizontal: -resolveItemGroupContentHorizontalInsetPx(),
     marginTop: -(Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX) ?? 0),
 } as const;
 
@@ -103,8 +105,11 @@ export function WidgetSetupStep(props: Readonly<{
     const { setup } = props;
     const { theme } = useUnistyles();
     const [draft, setDraft] = React.useState<WidgetSetupDraft>(setup.initial);
+    const [pickedOptions, setPickedOptions] = React.useState<Readonly<Record<string, readonly WidgetSetupValue[]>>>({});
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    // The Add pane stays open after an Add (another can follow): its button then offers another copy.
+    const [added, setAdded] = React.useState(false);
     const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
     const homeUnreachable = useFailureExplainedByUnreachableHome(pendingHomeIds);
     const resolution = React.useMemo(() => setup.resolve(draft), [draft, setup]);
@@ -134,8 +139,15 @@ export function WidgetSetupStep(props: Readonly<{
 
     const change = React.useCallback((path: string, next: WidgetSetupFieldChange) => {
         setError(null);
+        const request = requests.find(request => request.field.path === path);
+        const offered = request ? options.state(request.field, request).options : [];
+        setPickedOptions(current => ({ ...current, [path]: next.kind === 'pin'
+            ? [...offered, ...(current[path] ?? [])].filter(option => sameStrictJsonValue(option.value, next.value)
+                || Array.isArray(next.value) && next.value.some(value => sameStrictJsonValue(option.value, value)))
+                .filter((option, index, all) => all.findIndex(candidate => sameStrictJsonValue(candidate.value, option.value)) === index)
+                .map(option => ({ value: option.value as JsonValue, label: option.label })) : [] }));
         setDraft((current) => setWidgetSetupBinding(current, path, next));
-    }, []);
+    }, [options.state, requests]);
 
     const submit = React.useCallback(async () => {
         if (busy || !finishable) return;
@@ -145,6 +157,7 @@ export function WidgetSetupStep(props: Readonly<{
             const result = await setup.submit(draft);
             if (result.ok) {
                 AccessibilityInfo.announceForAccessibility?.(result.approvalPending ? t('widgetAdd.areaApprovalPending') : t('widgetAdd.saved', { widget: setup.title }));
+                if (!result.approvalPending) setAdded(true);
                 props.onDone(result);
                 return;
             }
@@ -181,7 +194,7 @@ export function WidgetSetupStep(props: Readonly<{
     // The values the draft is bound to, as their rows name them, for the line that says what Add does.
     const boundValues = setup.describeOutcome ? setup.fields.flatMap((entry, index) => {
         const request = requests[index]!;
-        const row = describeWidgetSetupRow({ entry, draft, resolution, options: options.state(request.field, request).options.map((option): WidgetSetupValue => ({
+        const row = describeWidgetSetupRow({ entry, draft, resolution, pickedOptions: pickedOptions[entry.field.path], options: options.state(request.field, request).options.map((option): WidgetSetupValue => ({
             value: option.value as JsonValue, label: option.label })) });
         const label = row.kind === 'pinned' ? row.value?.label ?? row.label : row.kind === 'follows' ? row.valueLabel ?? row.label : null;
         return label ? [label] : [];
@@ -191,7 +204,8 @@ export function WidgetSetupStep(props: Readonly<{
         <InputTypePickerHostProvider enabled={setup.fields.some(({ field }) => field.inputType !== undefined)}
             {...options.resolveOptions.pickerContext}
             contextKey={JSON.stringify([consumer, draft, options.snapshot])}>
-        <ListPresentationProvider value="page">
+        <CoreCollectionScope>
+        <ListPresentationProvider value="page" {...(pane ? { pageInsets: 'contained' as const } : {})}>
             {/* In the Add pane the inputs' sheet shares the title's and the preview's edges (lab A2/A2p). */}
             <ItemGroup surface={pane ? 'sheet' : 'none'} density="compact" {...(pane ? { style: PANE_SHEET_FLUSH } : {})}>
                 {setup.fields.map((entry, index) => {
@@ -205,7 +219,7 @@ export function WidgetSetupStep(props: Readonly<{
                         ...(option.description ? { description: option.description } : {}),
                         ...(option.disabled ? { disabled: true } : {}),
                     }));
-                    const row = describeWidgetSetupRow({ entry, draft, resolution, options: values });
+                    const row = describeWidgetSetupRow({ entry, draft, resolution, options: values, pickedOptions: pickedOptions[entry.field.path] });
                     const binding = draft.bindings[entry.field.path];
                     const field = facts ? { ...entry.field, required: facts.required } : entry.field;
                     return (
@@ -228,6 +242,7 @@ export function WidgetSetupStep(props: Readonly<{
                 })}
             </ItemGroup>
         </ListPresentationProvider>
+        </CoreCollectionScope>
         </InputTypePickerHostProvider>
     );
 
@@ -334,7 +349,7 @@ export function WidgetSetupStep(props: Readonly<{
         ...(props.backLabel ? { backLabel: props.backLabel } : {}),
         primary: {
             testID: `${props.testID}.submit`,
-            label: setup.submitLabel,
+            label: pane && added ? t('widgetAdd.addAnother') : setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
             disabled: busy || !finishable,

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -61,21 +62,21 @@ function Cell(props: Readonly<{ title: string; description: string; children: Re
 
 const styles = StyleSheet.create((theme) => ({
     board: { flexDirection: 'row', flexWrap: 'wrap', gap: 22, marginTop: 28 },
-    cell: { flexGrow: 1, flexShrink: 1, flexBasis: 420, minWidth: 0, maxWidth: 680, gap: 4 },
-    cellTitle: { fontSize: 13, fontWeight: '600', color: theme.colors.text.primary },
-    cellDescription: { fontSize: 12.5, lineHeight: 17, color: theme.colors.text.secondary, marginBottom: 6 },
+    cell: { flexGrow: 1, flexShrink: 1, flexBasis: 420, minWidth: 0, maxWidth: 680, gap: theme.space.s4 },
+    cellTitle: { ...Typography.variant('body', 'semiBold'),  color: theme.colors.text.primary },
+    cellDescription: { fontSize: 12.5, lineHeight: 17, color: theme.colors.text.secondary, marginBottom: theme.space.s6 },
     panel: {
         borderRadius: 12,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
         padding: 14,
-        gap: 12,
+        gap: theme.space.s12,
     },
-    header: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44, paddingHorizontal: 8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, minHeight: 44, paddingHorizontal: theme.space.s8 },
     phoneHeader: { maxWidth: 390 },
-    headerTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: theme.colors.text.primary },
-    composerStage: { paddingTop: 8, gap: 0 },
+    headerTitle: { flex: 1, ...Typography.variant('heading'),  color: theme.colors.text.primary },
+    composerStage: { paddingTop: theme.space.s8, gap: 0 },
     composer: {
         height: 56,
         borderRadius: 18,

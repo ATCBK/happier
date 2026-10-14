@@ -66,7 +66,8 @@ export type StorageServiceDeps = Readonly<{
 
 export function createStorageService(deps: StorageServiceDeps) {
     let currentTrashRoots: readonly string[] = [];
-    const catalog = createStorageCategoryCatalog({ ...deps.catalog, trashRoots: () => currentTrashRoots.length ? currentTrashRoots
+    const catalog = createStorageCategoryCatalog({ ...deps.catalog, scmRegistry: deps.scmRegistry ?? deps.catalog.scmRegistry,
+        trashRoots: () => currentTrashRoots.length ? currentTrashRoots
         : deps.catalog.trashRoots?.() ?? [] });
     const now = deps.nowMs ?? Date.now;
     const listeners = new Set<() => void>();

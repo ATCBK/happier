@@ -16,6 +16,7 @@ import { resolveValidRuntimeSnapshot } from '../../../../cli/bin/_resolveRuntime
 import {
   inspectSourceDevSharedDepsForSourceDev,
 } from '../../../../cli/scripts/buildSharedDeps.mjs';
+import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
 
 const CLI_DIST_BUILD_MANIFEST_MODULE_PATH = fileURLToPath(
   new URL('../../../../../packages/cli-common/cliDistBuildManifest.cjs', import.meta.url),
@@ -163,14 +164,16 @@ test('CLI runtime input identity ignores an identical rewrite with different fil
   }), 'utf-8');
   const content = 'export const generated = true;\n';
   await writeFile(inputPath, content, 'utf-8');
+  await utimes(inputPath, 1_700_000_000, 1_700_000_000);
 
   const beforeStat = await stat(inputPath, { bigint: true });
   const before = await readHappyCliRuntimeInputFreshness(cliDir);
   await writeFile(inputPath, content, 'utf-8');
+  await utimes(inputPath, 1_700_000_060, 1_700_000_060);
   const afterStat = await stat(inputPath, { bigint: true });
   const after = await readHappyCliRuntimeInputFreshness(cliDir);
 
-  assert.notEqual(afterStat.ctimeNs, beforeStat.ctimeNs);
+  assert.notEqual(afterStat.mtimeNs, beforeStat.mtimeNs);
   assert.equal(after.fingerprint, before.fingerprint);
 });
 
@@ -2321,6 +2324,9 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
 });
 
 test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built once', async (t) => {
+  // This standalone fixture has no monorepo/admitted publisher; its temporary
+  // CLI lock models independent callers rather than the routed suite's lease.
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-cli-build-lock-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -2357,7 +2363,7 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
     HAPPIER_STACK_ENV_FILE: null,
   });
 
-  const firstBuild = ensureCliBuilt(cliDir, {
+  const builds = [ensureCliBuilt(cliDir, {
     buildCli: true,
     quiet: true,
     env: {
@@ -2365,19 +2371,24 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
       HAPPIER_TEST_BUILD_SLEEP_SECONDS: '3',
       HAPPIER_TEST_BUILD_COMPLETE_MARKER: buildCompleteMarkerPath,
     },
-  });
-  await waitForFileText(outputPath, /^build:prepared$/m);
-  const secondBuild = ensureCliBuilt(cliDir, {
-    buildCli: true,
-    quiet: true,
-    env: {
-      ...process.env,
-      HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'second-cache'),
-      HAPPIER_TEST_WAIT_FOR_BUILD_MARKER: buildCompleteMarkerPath,
-      HAPPIER_TEST_WAIT_FOR_BUILD_LOCK: buildLockPath,
-    },
-  });
-  await Promise.all([firstBuild, secondBuild]);
+  })];
+  void builds[0].catch(() => {});
+  try {
+    await waitForFileText(outputPath, /^build:prepared$/m);
+    builds.push(ensureCliBuilt(cliDir, {
+      buildCli: true,
+      quiet: true,
+      env: {
+        ...process.env,
+        HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'second-cache'),
+        HAPPIER_TEST_WAIT_FOR_BUILD_MARKER: buildCompleteMarkerPath,
+        HAPPIER_TEST_WAIT_FOR_BUILD_LOCK: buildLockPath,
+      },
+    }));
+    await Promise.all(builds);
+  } finally {
+    await Promise.allSettled(builds);
+  }
 
   const argv = await readFile(outputPath, 'utf-8');
   const buildInvocations = argv

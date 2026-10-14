@@ -40,6 +40,19 @@ async function catalogAccount(catalogAvailable = true) {
 }
 
 describe('Summary settings catalog admission', () => {
+    it('admits an unset low-cost default for prefetch without persisting a model override', async () => {
+        const before = storage.getState();
+        onTestFinished(() => storage.setState(before, true));
+        storage.setState({ settings: settingsDefaults });
+        const { account } = await catalogAccount(false);
+        const reader = createScmDiffSummarySettingsCatalogReader(account);
+        const catalog = await reader(settingsDefaults, '');
+        expect(catalog?.profiles.some(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported')).toBe(true);
+        const binding = scmDiffSummarySettingBinding<typeof settingsDefaults>(SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch);
+        const prepared = await binding.prepare(settingsDefaults, true, { readScmDiffSummaryCatalog: reader });
+        expect(prepared?.(settingsDefaults)).toEqual({ [SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch]: true });
+        expect(storage.getState().settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+    });
     it('reads real offered model support and rejects catalog authority after the selected Agent is disabled', async () => {
         const before = storage.getState();
         onTestFinished(() => storage.setState(before, true));

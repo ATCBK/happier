@@ -97,20 +97,22 @@ describe('Antigravity external-session pure leaf', () => {
     } finally { await rm(home, { recursive: true, force: true }); }
   });
 
-  it('yields an unfinished content candidate and binds continuation to the query', async () => {
+  it('yields at the cooperative scan deadline while retaining the hard deadline and query-bound continuation', async () => {
     const home = await mkdir(join(tmpdir(), `antigravity-content-yield-${Date.now()}-`), { recursive: true });
     const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');
     await createConversation(brainDir, 'conversation-content', [JSON.stringify({ id: 'answer', type: 'PLANNER_RESPONSE', text: 'body-only phrase' })]);
     const contribution = createAntigravityExternalSessionsContribution({ env: { HOME: home } });
     const clock = Date.now;
     let now = clock();
-    const bounds = { ...invocation(), deadlineAtMs: now + 100 };
+    const bounds = { ...invocation(), scanDeadlineAtMs: now + 100 };
     const ripgrep = { run: async () => { now += 100; return { exitCode: 0, stdout: 'hit\0', stderr: '' }; } };
     Date.now = () => now;
     try {
       const result = await contribution.listCandidates({ ...bounds, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' });
       expect(result).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) } });
       if (!result.ok || !result.value.nextCursor) throw new Error('Expected content continuation');
+      await expect(contribution.listCandidates({ ...bounds, deadlineAtMs: now, scanDeadlineAtMs: now + 100, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+      await expect(contribution.listCandidates({ ...bounds, deadlineAtMs: now + 100, scanDeadlineAtMs: now + 100, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
       Date.now = clock;
       const changed = await contribution.listCandidates({ ...invocation(), ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'other', cursor: result.value.nextCursor });
       expect(changed).toMatchObject({ ok: false, code: 'invalid_request' });

@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-    normalizeTeamAuthenticationPolicyV1,
-    TeamAuthenticationPolicyV1Schema,
-} from "@happier-dev/protocol";
+import { normalizeTeamAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema } from '@happier-dev/protocol/auth/entry';
 
 import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 import { resolveDeploymentProviderSnapshot } from "@/app/auth/providers/providerModules";

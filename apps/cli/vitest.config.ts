@@ -1,7 +1,6 @@
 import { configDefaults, defineConfig } from 'vitest/config'
-import type { Alias } from 'vite'
 import { realpathSync } from 'node:fs'
-import { join, resolve as resolvePath, sep } from 'node:path'
+import { resolve as resolvePath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -13,6 +12,7 @@ import {
     workspacePackageSourcesPlugin,
 } from './scripts/vitestWorkspacePackageResolution'
 import uiVitestConfig from '../ui/vitest.config'
+import { createWorkspaceHostSourceAlias } from '../../scripts/testing/vitestWorkspacePackageResolution'
 
 const packageRoot = fileURLToPath(new URL('.', import.meta.url))
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths)
@@ -42,8 +42,6 @@ mergedTestEnv.HAPPIER_FEATURE_POLICY_ENV = '';
 mergedTestEnv.CLAUDE_CONFIG_DIR = '';
 
 const cliSourceRoot = resolve('./src')
-const uiSourceRoot = resolve('../ui/sources')
-const serverSourceRoot = resolve('../server/sources')
 // Cross-package Voice tests keep the real UI Account and Sync owners. Reuse the
 // UI harness's platform boundaries, including duplicated UI native dependencies
 // whose CommonJS loaders otherwise bypass test-local mocks.
@@ -53,21 +51,7 @@ const uiPlatformAliases = Array.isArray(uiVitestConfig.resolve?.alias)
 
 // Cross-package tests compose real UI owners (Voice) and server routes (stored
 // shares). Resolve their package-relative source alias from the importing file.
-const packageSourceAlias: Alias = {
-    find: /^@\//u,
-    replacement: '@/',
-    async customResolver(id, importer, options) {
-        const importerPath = importer?.split('?')[0];
-        const root = importerPath?.startsWith(`${uiSourceRoot}${sep}`)
-            ? uiSourceRoot
-            : importerPath?.startsWith(`${serverSourceRoot}${sep}`)
-                ? serverSourceRoot
-            : cliSourceRoot;
-        const target = join(root, id.slice('@/'.length));
-        const resolved = await this.resolve(target, importer, { skipSelf: true, ...options });
-        return resolved ?? { id: target };
-    },
-}
+const packageSourceAlias = createWorkspaceHostSourceAlias(resolve('../..'), cliSourceRoot)
 
 export default defineConfig({
     ...uiVitestConfig,

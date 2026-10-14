@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -13,11 +19,11 @@ describe('resolveVoiceAgentInitialContexts', () => {
       sessions: {
         'voice-carrier': createSessionFixture({ id: 'voice-carrier', serverId }),
         'shared-session': createSessionFixture({ id: 'shared-session', serverId,
-          metadata: { ...createSessionFixture().metadata, summary: { text: 'Active Home private summary', updatedAt: 1 } } }),
+          metadata: { ...fixtureMetadata, summary: { text: 'Active Home private summary', updatedAt: 1 } } }),
       },
       sessionMessages: {},
       sessionListRowsByServerId: { 'home-b': { 'shared-session': createSessionFixture({ id: 'shared-session',
-        metadata: { ...createSessionFixture().metadata, summaryText: 'Qualified Home B summary' } }) } },
+        metadata: { ...fixtureMetadata, summaryText: 'Qualified Home B summary' } }) } },
       ordinarySessionListMembershipByServerId: { 'home-b': ['shared-session'] },
       sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {},
     });

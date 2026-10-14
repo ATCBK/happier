@@ -1,9 +1,6 @@
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
-import {
-    SessionTurnMutationReceiptV1Schema,
-    SessionTurnMutationV1Schema,
-    SessionTurnsProjectionV1Schema,
-} from "@happier-dev/protocol";
+import { SessionTurnMutationReceiptV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { z } from "zod";
 
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";

@@ -80,7 +80,7 @@ export function ThemePalettePreview(props: Readonly<{
             <View style={{ position: 'absolute', left: 12, right: 12, bottom: 8, height: 38, overflow: 'hidden', borderRadius: 12 }}>
                 {/* The lab's coloured page remains behind the floating coat on this device. */}
                 {props.backdrop}
-                <View style={[{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', backgroundColor: paint(floatingFill, 'floating'), borderWidth: 1, borderColor: c.border.default }, Platform.OS === 'web' ? createBackdropWebStyle({ backgroundColor: paint(floatingFill, 'floating'), blurPx: 0, surfaceGroup: 'floating', backdropTone, fallbackBackgroundColorWhenBlurDisabled: floatingFill }) as unknown as ViewStyle : null]}>
+                <View style={[{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', borderRadius: 12, backgroundColor: paint(floatingFill, 'floating'), borderWidth: 1, borderColor: c.border.default }, Platform.OS === 'web' ? createBackdropWebStyle({ backgroundColor: paint(floatingFill, 'floating'), blurPx: 0, surfaceGroup: 'floating', backdropTone, fallbackBackgroundColorWhenBlurDisabled: floatingFill }) as unknown as ViewStyle : null]}>
                     {[0, 1, 2, 3].map(id => <View key={id} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.border.strong }} />)}
                 </View>
             </View>

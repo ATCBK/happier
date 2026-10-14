@@ -1,12 +1,10 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getFirstPartyComponentCatalogEntry, resolveFirstPartyVersionInstallPath } from '@happier-dev/cli-common/firstPartyRuntime';
-import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installables';
-import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
@@ -40,7 +38,6 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
     let envScope = createEnvKeyScope(envKeys);
     const tempDirs: string[] = [];
     const originalExecPath = Object.getOwnPropertyDescriptor(process, 'execPath')!;
-    let optionalRuntimeEntrypoint = '';
 
     // The executable's physical location is the OS boundary. Asset and installable
     // decisions remain with their real owners, using only files in the test home.
@@ -90,20 +87,8 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
     beforeEach(async () => {
         const happyHomeDir = await createTempDir();
         envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir, HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE: undefined });
-        const { configuration, reloadConfiguration } = await import('@/configuration');
+        const { reloadConfiguration } = await import('@/configuration');
         reloadConfiguration();
-        const source = BUILT_IN_INSTALLABLES_REGISTRY.descriptorsByKey[INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME]?.descriptor.source;
-        if (source?.kind !== 'first_party_runtime') throw new Error('Voice runtime fixture requires the canonical first-party component');
-        const entry = getFirstPartyComponentCatalogEntry(source.componentId).nodeEntrypointRelativePath;
-        if (!entry) throw new Error('Voice runtime fixture requires its declared Node entrypoint');
-        optionalRuntimeEntrypoint = join(resolveFirstPartyVersionInstallPath({
-            componentId: source.componentId,
-            versionId: configuration.currentCliVersion,
-            channel: configuration.publicReleaseRing,
-            processEnv: { ...process.env, HAPPIER_HOME_DIR: happyHomeDir },
-        }), entry);
-        await mkdir(dirname(optionalRuntimeEntrypoint), { recursive: true });
-        await writeFile(optionalRuntimeEntrypoint, 'export {};\n', 'utf8');
     });
 
     async function createInputFixture(rootDir: string): Promise<VoiceInferenceRuntimeTranscribeInput> {
@@ -392,7 +377,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
         });
     });
 
-    it('acquires the exact managed voice runtime and projects its entrypoint into the packaged engine', async () => {
+    it('projects the source native dependency entrypoint into the packaged engine', async () => {
         const runtimeRoot = await createTempDir();
         const packagedModulePath = join(runtimeRoot, 'package-dist', 'daemon', 'voiceInference', 'runtime', 'packagedVoiceInferenceRuntime.mjs');
         await createRuntimeModule({
@@ -407,7 +392,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
 
         await expect(runtime?.transcribeAudio(input)).resolves.toMatchObject({ text: 'packaged-runtime' });
         expect((globalThis as { __voiceInferenceSherpaSpecifier?: string }).__voiceInferenceSherpaSpecifier).toBe(
-            pathToFileURL(optionalRuntimeEntrypoint).href,
+            pathToFileURL(createRequire(import.meta.url).resolve('sherpa-onnx-node/sherpa-onnx.js')).href,
         );
     });
 

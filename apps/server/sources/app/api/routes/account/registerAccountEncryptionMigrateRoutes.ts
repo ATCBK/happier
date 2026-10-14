@@ -3,43 +3,13 @@ import { type Fastify } from "../../types";
 import { z } from "zod";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
-import {
-    AccountEncryptionMigrateRequestSchema,
-    ArtifactQuotaExceededV1Schema,
-    AccountEncryptionMigrateSuccessResponseSchema,
-    AccountEncryptionMigrateBadRequestResponseSchema,
-    AccountEncryptionMigrateForbiddenResponseSchema,
-    AccountEncryptionMigrateNotFoundResponseSchema,
-    AccountEncryptionMigrateConflictResponseSchema,
-    AccountEncryptionMigrateInternalResponseSchema,
-    AccountEncryptionMigrateAutomationsInventoryResponseSchema,
-    AccountEncryptionMigrateInvalidParamsReasonSchema,
-    AccountEncryptionMigrateTransitionPrepareRequestSchema,
-    AccountEncryptionMigrateTransitionPrepareResponseSchema,
-    AccountEncryptionMigrateTransitionAuthorizeRequestSchema,
-    AccountEncryptionMigrateTransitionAuthorizeResponseSchema,
-    AccountEncryptionMigrateCollectionInventoryPageRequestSchema,
-    AccountEncryptionMigrateCollectionInventoryPageSchema,
-    AccountEncryptionMigrateCollectionStageBatchRequestSchema,
-    AccountEncryptionMigrateCollectionStageBatchResponseSchema,
-    AccountEncryptionMigrateTransitionCancelRequestSchema,
-    AccountEncryptionMigrateTransitionCancelResponseSchema,
-    AccountEncryptionMigrateTransitionActivateRequestSchema,
-    AccountEncryptionMigrateTransitionActivateResponseSchema,
-    ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema,
-    SessionOrganizationAccountEncryptionMigrationInventorySchema,
-    ACCOUNT_ENCRYPTION_MIGRATE_REQUEST_MAX_UTF8_BYTES,
-    computeAccountEncryptionMigrateKeyFingerprintV1,
-    createAccountEncryptionMigrateProofSigningInputV1,
-    createAccountEncryptionMigrateRequestBindingDigestV1,
-    createAccountEncryptionMigrateTransitionAuthorizationBindingDigestV1,
-    createPasswordCredentialTargetDigestV1,
-    parseAccountPasswordCredentialV1,
-    createAccountEncryptionMigrateTransitionAuthorizationProofSigningInputV1,
-    type AccountEncryptionMigrateKeyProof,
-    type AccountEncryptionMigrateRequest,
-    type AccountEncryptionMigrateTransitionAuthorizeRequest,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateRequestSchema, AccountEncryptionMigrateSuccessResponseSchema, AccountEncryptionMigrateBadRequestResponseSchema, AccountEncryptionMigrateForbiddenResponseSchema, AccountEncryptionMigrateNotFoundResponseSchema, AccountEncryptionMigrateConflictResponseSchema, AccountEncryptionMigrateInternalResponseSchema, AccountEncryptionMigrateAutomationsInventoryResponseSchema, AccountEncryptionMigrateInvalidParamsReasonSchema, AccountEncryptionMigrateTransitionPrepareRequestSchema, AccountEncryptionMigrateTransitionPrepareResponseSchema, AccountEncryptionMigrateTransitionAuthorizeRequestSchema, AccountEncryptionMigrateTransitionAuthorizeResponseSchema, AccountEncryptionMigrateCollectionInventoryPageRequestSchema, AccountEncryptionMigrateCollectionInventoryPageSchema, AccountEncryptionMigrateCollectionStageBatchRequestSchema, AccountEncryptionMigrateCollectionStageBatchResponseSchema, AccountEncryptionMigrateTransitionCancelRequestSchema, AccountEncryptionMigrateTransitionCancelResponseSchema, AccountEncryptionMigrateTransitionActivateRequestSchema, AccountEncryptionMigrateTransitionActivateResponseSchema, ACCOUNT_ENCRYPTION_MIGRATE_REQUEST_MAX_UTF8_BYTES, createAccountEncryptionMigrateProofSigningInputV1, createAccountEncryptionMigrateRequestBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationProofSigningInputV1, type AccountEncryptionMigrateKeyProof, type AccountEncryptionMigrateRequest, type AccountEncryptionMigrateTransitionAuthorizeRequest } from '@happier-dev/protocol/account/encryptionMigrate';
+import { ArtifactQuotaExceededV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema } from '@happier-dev/protocol/reviews/comments/content';
+import { SessionOrganizationAccountEncryptionMigrationInventorySchema } from '@happier-dev/protocol/sessions/organization/accountEncryptionMigrationInventory';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { createPasswordCredentialTargetDigestV1 } from '@happier-dev/protocol/auth/passwordMutationChallenge';
+import { parseAccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
 import {

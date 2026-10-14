@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WorkflowAuthoredResultReferenceSchema, WorkflowBlockIdSchema, type WorkflowAuthoredResultReference } from './workflowReferenceV1.js';
 import { WorkflowArtifactRevisionV1Schema, WorkflowDefinitionMetadataV1Schema } from './workflowDefinitionV1.js';
 import { WorkflowDefinitionIdV1Schema } from './workflowIdsV1.js';
@@ -9,6 +10,7 @@ import {
 } from './workflowV1.js';
 import type { WorkflowCondition, WorkflowAuthoredProducerRef, WorkflowValueReference } from './workflowReferenceV1.js';
 import type { WorkflowActionLeafV1 } from './workflowLeafV1.js';
+import { buildWorkflowResultFieldsContract, projectWorkflowResultFields } from './workflowResultFieldsV1.js';
 import type {
   WorkflowBlock,
   WorkflowDefinitionV1,
@@ -328,6 +330,77 @@ export function resolvePreviousResultInputForInsertion(
   return { kind: 'result', producer: { blockId: previous.id, scope: { kind: 'current' } }, path: [] };
 }
 
+/** How `rewriteWorkflowBlockReferences` rewrites one block's typed references; `child` rewrites nested blocks. */
+export type WorkflowBlockReferenceRewrite = Readonly<{
+  reference: (ref: WorkflowValueReference) => WorkflowValueReference;
+  producer: (ref: WorkflowAuthoredProducerRef) => WorkflowAuthoredProducerRef;
+  inputName: (name: string) => string;
+  child: (block: WorkflowBlock) => WorkflowBlock;
+}>;
+
+const keep = <T,>(value: T): T => value;
+const READ_ONLY_REWRITE = { producer: keep, inputName: keep, child: keep } as const;
+
+/**
+ * The one map of where a block holds typed references (inputs, conditions,
+ * Action fields, loop sources, conversation/workspace producers). Copy, the
+ * result-field consumer list and rename-with-consumers all go through it, so a
+ * new reference-bearing field is added once.
+ */
+export function rewriteWorkflowBlockReferences(block: WorkflowBlock, rewrite: WorkflowBlockReferenceRewrite): WorkflowBlock {
+  const { reference, producer } = rewrite;
+  const condition = (value: WorkflowCondition): WorkflowCondition => {
+    switch (value.kind) {
+      case 'exists': return { ...value, value: reference(value.value) };
+      case 'compare': return { ...value, left: reference(value.left), right: reference(value.right) };
+      case 'all':
+      case 'any': return { ...value, conditions: value.conditions.map(condition) };
+      case 'not': return { ...value, condition: condition(value.condition) };
+    }
+  };
+  const guarded = 'onlyWhen' in block && block.onlyWhen !== undefined ? { onlyWhen: condition(block.onlyWhen) } : {};
+  const leaf = (evaluator: WorkflowStep | WorkflowActionLeafV1): WorkflowStep | WorkflowActionLeafV1 => {
+    const rewritten = rewrite.child(evaluator);
+    return rewritten.kind === 'step' || rewritten.kind === 'action' ? rewritten : evaluator;
+  };
+  switch (block.kind) {
+    case 'step': return {
+      ...block, ...guarded,
+      input: block.input.map(reference),
+      ...(block.execution === undefined ? {} : { execution: {
+        ...block.execution,
+        ...(block.execution.conversation?.kind === 'from_step' ? { conversation: {
+          ...block.execution.conversation, producer: producer(block.execution.conversation.producer),
+        } } : {}),
+        ...(block.execution.workspace?.kind === 'from_step' ? { workspace: {
+          ...block.execution.workspace, producer: producer(block.execution.workspace.producer),
+        } } : {}),
+      } }),
+    };
+    case 'action': return {
+      ...block, ...guarded,
+      input: Object.fromEntries(Object.entries(block.input).map(([key, value]) => [key,
+        value.kind === 'list' ? { ...value, items: value.items.map((item) => item.kind === 'origin_session_id' ? item : reference(item)) }
+          : value.kind === 'origin_session_id' ? value : reference(value)])),
+    };
+    case 'workflow': return { ...block, ...guarded, input: Object.fromEntries(Object.entries(block.input).map(([key, value]) => [key, reference(value)])) };
+    case 'wait': return { ...block, ...guarded };
+    case 'parallel': return { ...block, ...guarded, branches: block.branches.map((branch) => ({ ...branch, blocks: branch.blocks.map(rewrite.child) })) };
+    case 'if': return { ...block, ...guarded, when: condition(block.when), then: block.then.map(rewrite.child), otherwise: block.otherwise.map(rewrite.child) };
+    case 'loop': {
+      const repetition = block.repetition;
+      const maxIterations = 'maxIterations' in repetition && typeof repetition.maxIterations !== 'number'
+        ? { ...repetition.maxIterations, name: rewrite.inputName(repetition.maxIterations.name) }
+        : 'maxIterations' in repetition ? repetition.maxIterations : undefined;
+      const rewritten = repetition.kind === 'count' ? { ...repetition, count: reference(repetition.count) }
+        : repetition.kind === 'items' ? { ...repetition, items: reference(repetition.items) }
+        : repetition.kind === 'until' ? { ...repetition, maxIterations: maxIterations!, stopWhen: condition(repetition.stopWhen) }
+        : { ...repetition, maxIterations: maxIterations!, evaluator: leaf(repetition.evaluator) };
+      return { ...block, ...guarded, body: block.body.map(rewrite.child), repetition: rewritten } as WorkflowBlock;
+    }
+  }
+}
+
 /** Copies one authored subtree, remapping only typed references to copied identities. */
 export function copyWorkflowBlocks(
   blocks: readonly WorkflowBlock[],
@@ -369,62 +442,81 @@ export function copyWorkflowBlocks(
       default: return ref;
     }
   };
-  const condition = (value: WorkflowCondition): WorkflowCondition => {
-    switch (value.kind) {
-      case 'exists': return { ...value, value: reference(value.value) };
-      case 'compare': return { ...value, left: reference(value.left), right: reference(value.right) };
-      case 'all':
-      case 'any': return { ...value, conditions: value.conditions.map(condition) };
-      case 'not': return { ...value, condition: condition(value.condition) };
-    }
-  };
-  const copyStep = (block: WorkflowStep): WorkflowStep => ({
-    ...block, id: ids.get(block.id)!,
-    ...(block.onlyWhen === undefined ? {} : { onlyWhen: condition(block.onlyWhen) }),
-    input: block.input.map(reference),
-    ...(block.execution === undefined ? {} : { execution: {
-      ...block.execution,
-      ...(block.execution.conversation?.kind === 'from_step' ? { conversation: {
-        ...block.execution.conversation, producer: producer(block.execution.conversation.producer),
-      } } : {}),
-      ...(block.execution.workspace?.kind === 'from_step' ? { workspace: {
-        ...block.execution.workspace, producer: producer(block.execution.workspace.producer),
-      } } : {}),
-    } }),
-  });
-  const copyAction = (block: WorkflowActionLeafV1): WorkflowActionLeafV1 => ({
-    ...block, id: ids.get(block.id)!,
-    ...(block.onlyWhen === undefined ? {} : { onlyWhen: condition(block.onlyWhen) }),
-    input: Object.fromEntries(Object.entries(block.input).map(([key, value]) => [key,
-      value.kind === 'list' ? { ...value, items: value.items.map((item) => item.kind === 'origin_session_id' ? item : reference(item)) }
-        : value.kind === 'origin_session_id' ? value : reference(value)])),
-  });
   const copy = (block: WorkflowBlock): WorkflowBlock => {
-    const identity = { id: ids.get(block.id)! };
-    const guarded = 'onlyWhen' in block && block.onlyWhen !== undefined ? { onlyWhen: condition(block.onlyWhen) } : {};
-    switch (block.kind) {
-      case 'step': return copyStep(block);
-      case 'action': return copyAction(block);
-      case 'workflow': return { ...block, ...identity, ...guarded, input: Object.fromEntries(Object.entries(block.input).map(([key, value]) => [key, reference(value)])) };
-      case 'wait': return { ...block, ...identity, ...guarded };
-      case 'parallel': return { ...block, ...identity, ...guarded, branches: block.branches.map((branch) => ({
-        ...branch, id: ids.get(branch.id)!, blocks: branch.blocks.map(copy),
-      })) };
-      case 'if': return { ...block, ...identity, when: condition(block.when), then: block.then.map(copy), otherwise: block.otherwise.map(copy) };
-      case 'loop': {
-        const repetition = block.repetition;
-        const maxIterations = 'maxIterations' in repetition && typeof repetition.maxIterations !== 'number'
-          ? { ...repetition.maxIterations, name: inputs.get(repetition.maxIterations.name) ?? repetition.maxIterations.name }
-          : 'maxIterations' in repetition ? repetition.maxIterations : undefined;
-        const copiedRepetition = repetition.kind === 'count' ? { ...repetition, count: reference(repetition.count) }
-          : repetition.kind === 'items' ? { ...repetition, items: reference(repetition.items) }
-          : repetition.kind === 'until' ? { ...repetition, maxIterations: maxIterations!, stopWhen: condition(repetition.stopWhen) }
-          : { ...repetition, maxIterations: maxIterations!, evaluator: repetition.evaluator.kind === 'step' ? copyStep(repetition.evaluator) : copyAction(repetition.evaluator) };
-        return { ...block, ...identity, ...guarded, body: block.body.map(copy), repetition: copiedRepetition };
-      }
-    }
+    const rewritten = rewriteWorkflowBlockReferences(block, {
+      reference, producer, inputName: (name) => inputs.get(name) ?? name, child: copy,
+    });
+    const id = ids.get(block.id)!;
+    return rewritten.kind === 'parallel'
+      ? { ...rewritten, id, branches: rewritten.branches.map((branch) => ({ ...branch, id: ids.get(branch.id)! })) }
+      : { ...rewritten, id };
   };
   return { blocks: blocks.map(copy), remapResult: result };
+}
+
+/** A place that reads a named result field: a block, or the workflow's final output. */
+export type WorkflowResultFieldConsumer = Readonly<{ blockId: string }> | Readonly<{ finalOutput: true }>;
+
+function readsResultField(producerBlockId: string, field: string) {
+  return (ref: WorkflowValueReference): boolean => (ref.kind === 'result' || ref.kind === 'loop_trailing_count')
+    && ref.producer.blockId === producerBlockId && ref.path[0] === field;
+}
+
+/** Every block (in document order) and the final output that read `field` of `producerBlockId`'s result. */
+export function listWorkflowResultFieldConsumers(
+  draft: WorkflowDefinitionDraftV1,
+  producerBlockId: string,
+  field: string,
+): readonly WorkflowResultFieldConsumer[] {
+  const reads = readsResultField(producerBlockId, field);
+  const consumers: WorkflowResultFieldConsumer[] = [];
+  for (const block of walkWorkflowBlocks(draft.blocks)) {
+    let found = false;
+    rewriteWorkflowBlockReferences(block, { ...READ_ONLY_REWRITE, reference: (ref) => { if (reads(ref)) found = true; return ref; } });
+    if (found) consumers.push({ blockId: block.id });
+  }
+  if (draft.finalOutput !== undefined && reads(draft.finalOutput)) consumers.push({ finalOutput: true });
+  return consumers;
+}
+
+/**
+ * Renames one named result field and every reference that reads it, as one
+ * edit (04 §6.1 "Rename everywhere"). Returns the same draft when the producer
+ * has no such named field or the new name is taken.
+ */
+export function renameWorkflowResultField<TDraft extends WorkflowDefinitionDraftV1>(
+  draft: TDraft,
+  producerBlockId: string,
+  from: string,
+  to: string,
+): TDraft {
+  const name = to.trim();
+  const producerBlock = findWorkflowBlock(draft, producerBlockId);
+  if (producerBlock === null || (producerBlock.kind !== 'step' && producerBlock.kind !== 'wait')) return draft;
+  const projection = projectWorkflowResultFields(producerBlock.result);
+  if (projection.kind !== 'fields' || name.length === 0 || name === from
+    || !projection.fields.some((field) => field.name === from)
+    || projection.fields.some((field) => field.name === name)) return draft;
+  const result = buildWorkflowResultFieldsContract(
+    projection.fields.map((field) => field.name === from ? { ...field, name } : field),
+    { closed: projection.closed },
+  );
+  const reads = readsResultField(producerBlockId, from);
+  const rename = (ref: WorkflowValueReference): WorkflowValueReference => (
+    reads(ref) && (ref.kind === 'result' || ref.kind === 'loop_trailing_count') ? { ...ref, path: [name, ...ref.path.slice(1)] } : ref
+  );
+  const consumers = listWorkflowResultFieldConsumers(draft, producerBlockId, from);
+  let next = updateWorkflowBlock(draft, producerBlockId, (block) => (
+    block.kind === 'step' || block.kind === 'wait' ? { ...block, result } : block
+  ));
+  for (const consumer of consumers) {
+    if ('blockId' in consumer) {
+      next = updateWorkflowBlock(next, consumer.blockId, (block) => rewriteWorkflowBlockReferences(block, { ...READ_ONLY_REWRITE, reference: rename }));
+    } else if (next.finalOutput !== undefined) {
+      next = { ...next, finalOutput: rename(next.finalOutput) as WorkflowAuthoredResultReference };
+    }
+  }
+  return next;
 }
 
 export function duplicateWorkflowBlock<TDraft extends WorkflowDefinitionDraftV1>(
@@ -959,11 +1051,11 @@ function materializeInsertedBlock(input: unknown, takenIds: ReadonlySet<string>)
   return WorkflowBlockSchema.safeParse(parsed.data);
 }
 export const WorkflowBlockListRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('root') }).strict(),
-  z.object({ kind: z.literal('loopBody'), loopId: WorkflowBlockIdSchema }).strict(),
-  z.object({ kind: z.literal('ifThen'), ifId: WorkflowBlockIdSchema }).strict(),
-  z.object({ kind: z.literal('ifOtherwise'), ifId: WorkflowBlockIdSchema }).strict(),
-  z.object({ kind: z.literal('parallelBranch'), parallelId: WorkflowBlockIdSchema, branchId: WorkflowBlockIdSchema }).strict(),
+  z.strictObject({ kind: z.literal('root') }),
+  z.strictObject({ kind: z.literal('loopBody'), loopId: WorkflowBlockIdSchema }),
+  z.strictObject({ kind: z.literal('ifThen'), ifId: WorkflowBlockIdSchema }),
+  z.strictObject({ kind: z.literal('ifOtherwise'), ifId: WorkflowBlockIdSchema }),
+  z.strictObject({ kind: z.literal('parallelBranch'), parallelId: WorkflowBlockIdSchema, branchId: WorkflowBlockIdSchema }),
 ]));
 
 type WorkflowSelectionEdit<TKind extends string, TSelection extends object> = {
@@ -971,11 +1063,11 @@ type WorkflowSelectionEdit<TKind extends string, TSelection extends object> = {
 }[keyof TSelection];
 
 function selectionEditSchema<TKind extends 'set_default' | 'set_step_setting'>(kind: TKind) {
-  const variants = Object.entries(WorkflowStepExecutionSelectionSchema.shape).map(([field, value]) => z.object({
+  const variants = Object.entries(WorkflowStepExecutionSelectionSchema.shape).map(([field, value]) => z.strictObject({
     kind: z.literal(kind), field: z.literal(field), value,
     ...(kind === 'set_step_setting' ? { blockId: WorkflowBlockIdSchema } : {}),
-  }).strict());
-  return z.union(variants) as z.ZodType<
+  }));
+  return z.union(variants) as z.ZodMiniType<
     WorkflowSelectionEdit<TKind, WorkflowStepExecutionSelection> & (TKind extends 'set_step_setting' ? { blockId: string } : object),
     WorkflowSelectionEdit<TKind, z.input<typeof WorkflowStepExecutionSelectionSchema>>
       & (TKind extends 'set_step_setting' ? { blockId: string } : object)
@@ -983,32 +1075,33 @@ function selectionEditSchema<TKind extends 'set_default' | 'set_step_setting'>(k
 }
 
 export const WorkflowDefinitionEditOpV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('insert_block'), list: WorkflowBlockListRefV1Schema, block: WorkflowInsertBlockV1Schema, afterBlockId: WorkflowBlockIdSchema.optional() }).strict(),
-  z.object({ kind: z.literal('replace_block'), blockId: WorkflowBlockIdSchema, block: WorkflowBlockSchema }).strict(),
-  z.object({ kind: z.literal('remove_block'), blockId: WorkflowBlockIdSchema }).strict(),
-  z.object({ kind: z.literal('move_block'), blockId: WorkflowBlockIdSchema, direction: z.enum(['up', 'down', 'in', 'out']) }).strict(),
-  z.object({ kind: z.literal('set_step_prompt'), blockId: WorkflowBlockIdSchema, text: z.string() }).strict(),
-  z.object({ kind: z.literal('set_block_name'), blockId: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('insert_block'), list: WorkflowBlockListRefV1Schema, block: WorkflowInsertBlockV1Schema, afterBlockId: zMini.optional(WorkflowBlockIdSchema) }),
+  z.strictObject({ kind: z.literal('replace_block'), blockId: WorkflowBlockIdSchema, block: WorkflowBlockSchema }),
+  z.strictObject({ kind: z.literal('remove_block'), blockId: WorkflowBlockIdSchema }),
+  z.strictObject({ kind: z.literal('move_block'), blockId: WorkflowBlockIdSchema, direction: z.enum(['up', 'down', 'in', 'out']) }),
+  z.strictObject({ kind: z.literal('set_step_prompt'), blockId: WorkflowBlockIdSchema, text: z.string() }),
+  z.strictObject({ kind: z.literal('set_block_name'), blockId: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema }),
   selectionEditSchema('set_step_setting'),
-  z.object({ kind: z.literal('set_step_setting'), blockId: WorkflowBlockIdSchema, field: z.literal('timeoutMs'), value: WorkflowStepSchema.shape.timeoutMs }).strict(),
+  z.strictObject({ kind: z.literal('set_step_setting'), blockId: WorkflowBlockIdSchema, field: z.literal('timeoutMs'), value: WorkflowStepSchema.shape.timeoutMs }),
   selectionEditSchema('set_default'),
-  z.object({ kind: z.literal('set_inputs'), inputs: z.array(WorkflowInputDefinitionSchema) }).strict(),
-  z.object({ kind: z.literal('set_final_output'), finalOutput: WorkflowAuthoredResultReferenceSchema.nullable() }).strict(),
-  z.object({ kind: z.literal('rename'), name: z.string().trim().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('set_inputs'), inputs: z.array(WorkflowInputDefinitionSchema) }),
+  z.strictObject({ kind: z.literal('set_final_output'), finalOutput: zMini.nullable(WorkflowAuthoredResultReferenceSchema) }),
+  z.strictObject({ kind: z.literal('rename'), name: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('rename_result_field'), blockId: WorkflowBlockIdSchema, from: z.string().check(z.minLength(1)), to: z.string().check(z.trim(), z.minLength(1)) }),
 ]));
 export type WorkflowDefinitionEditOpV1 = z.infer<typeof WorkflowDefinitionEditOpV1Schema>;
 
-export const WorkflowDefinitionEditRequestV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowDefinitionEditRequestV1Schema = lazyZodSchema(() => z.strictObject({
   definitionId: WorkflowDefinitionIdV1Schema,
   expectedRevision: WorkflowArtifactRevisionV1Schema,
-  ops: z.array(WorkflowDefinitionEditOpV1Schema).min(1),
-}).strict());
-export const WorkflowDefinitionEditResultV1Schema = lazyZodSchema(() => z.object({
+  ops: z.array(WorkflowDefinitionEditOpV1Schema).check(z.minLength(1)),
+}));
+export const WorkflowDefinitionEditResultV1Schema = lazyZodSchema(() => z.strictObject({
   definition: WorkflowDefinitionV1Schema,
   revision: WorkflowArtifactRevisionV1Schema,
   metadata: WorkflowDefinitionMetadataV1Schema,
   changedBlockIds: z.array(WorkflowBlockIdSchema),
-}).strict());
+}));
 export type WorkflowDefinitionEditRequestV1 = z.infer<typeof WorkflowDefinitionEditRequestV1Schema>;
 export type WorkflowDefinitionEditResultV1 = z.infer<typeof WorkflowDefinitionEditResultV1Schema>;
 
@@ -1074,6 +1167,14 @@ export function applyWorkflowDefinitionEditsV1<TDraft extends WorkflowDefinition
       case 'set_inputs': next = setWorkflowInputs(next, op.inputs); break;
       case 'set_final_output': next = setWorkflowFinalOutput(next, op.finalOutput); break;
       case 'rename': next = { ...next, name: op.name }; break;
+      case 'rename_result_field': {
+        const consumers = listWorkflowResultFieldConsumers(next, op.blockId, op.from);
+        next = renameWorkflowResultField(next, op.blockId, op.from, op.to);
+        if (next === before) return fail('invalid_target');
+        changed.add(op.blockId);
+        for (const consumer of consumers) if ('blockId' in consumer) changed.add(consumer.blockId);
+        break;
+      }
     }
   }
   const surviving = new Set(walkWorkflowBlocks(next.blocks).map((block) => block.id));

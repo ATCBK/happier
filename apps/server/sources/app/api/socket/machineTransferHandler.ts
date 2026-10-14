@@ -1,4 +1,4 @@
-import { MachineTransferSendEnvelopeSchema } from '@happier-dev/protocol';
+import { MachineTransferSendEnvelopeSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { readMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import { Server, Socket } from 'socket.io';

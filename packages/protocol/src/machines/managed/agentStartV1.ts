@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionSpawnNewInputV2BaseSchema } from '../../sessions/creation/sessionSpawnNewInputV2.js';
@@ -9,9 +9,6 @@ import { refineSessionDirectoryIntentCheckoutV1 } from '../../sessions/creation/
  * Only the managed owner may bind the resulting execution target; callers
  * cannot claim an existing Machine or supply host admission facts here.
  */
-export const ManagedAcquireAgentStartV1Schema = lazyZodSchema(() => SessionSpawnNewInputV2BaseSchema
-  .omit({ executionTarget: true, environmentVariables: true })
-  .strict()
-  .superRefine(refineSessionDirectoryIntentCheckoutV1));
+export const ManagedAcquireAgentStartV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.omit(SessionSpawnNewInputV2BaseSchema, { executionTarget: true, environmentVariables: true })).check(z.superRefine(refineSessionDirectoryIntentCheckoutV1)));
 
 export type ManagedAcquireAgentStartV1 = z.infer<typeof ManagedAcquireAgentStartV1Schema>;

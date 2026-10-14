@@ -1,17 +1,17 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ACCOUNT_LIFECYCLE_ACTION_IDS = ['account.signOut', 'account.credentials.forgetAll', 'account.delete'] as const;
 export type AccountLifecycleActionId = typeof ACCOUNT_LIFECYCLE_ACTION_IDS[number];
-const target = z.object({ serverId: z.string().trim().min(1), accountId: z.string().trim().min(1) }).strict();
+const target = z.strictObject({ serverId: z.string().check(z.trim(), z.minLength(1)), accountId: z.string().check(z.trim(), z.minLength(1)) });
 export const ACCOUNT_LIFECYCLE_ACTION_INPUT_SCHEMAS = {
   'account.signOut': target,
-  'account.credentials.forgetAll': target.extend({ scope: z.literal('all-credentials') }).strict(),
+  'account.credentials.forgetAll': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(target, { scope: z.literal('all-credentials') })),
   'account.delete': target,
 } as const;
 export const ACCOUNT_LIFECYCLE_ACTION_OUTPUT_SCHEMAS = {
-  'account.signOut': z.object({ status: z.enum(['signed_out', 'cancelled']) }).strict(),
-  'account.credentials.forgetAll': z.object({ status: z.enum(['forgotten', 'cancelled']) }).strict(),
-  'account.delete': z.object({ status: z.enum(['deleted', 'deleted_cleanup_pending', 'cancelled']) }).strict(),
+  'account.signOut': z.strictObject({ status: z.enum(['signed_out', 'cancelled']) }),
+  'account.credentials.forgetAll': z.strictObject({ status: z.enum(['forgotten', 'cancelled']) }),
+  'account.delete': z.strictObject({ status: z.enum(['deleted', 'deleted_cleanup_pending', 'cancelled']) }),
 } as const;
 export type AccountLifecycleActionInput = z.infer<(typeof ACCOUNT_LIFECYCLE_ACTION_INPUT_SCHEMAS)[AccountLifecycleActionId]>;
 export function isAccountLifecycleActionId(id: string): id is AccountLifecycleActionId {

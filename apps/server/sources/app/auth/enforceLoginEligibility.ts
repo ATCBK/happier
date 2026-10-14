@@ -1,7 +1,7 @@
 import { LRUTtlMap } from "@/utils/collections/lru";
 import { resolveAuthPolicyFromEnv } from "@/app/auth/authPolicy";
 import type { LoginEligibilityResult } from "@/app/auth/loginEligibilityResult";
-import { isActiveHomeAccountStatus, type AccountStatusV1 } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus, type AccountStatusV1 } from '@happier-dev/protocol/home/governance';
 import { resolveIdentityRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
 import { observeLoginEligibilityStage, recordLoginEligibilityCache } from "@/app/monitoring/metrics/authMetrics";
 import { inTx } from "@/storage/inTx";

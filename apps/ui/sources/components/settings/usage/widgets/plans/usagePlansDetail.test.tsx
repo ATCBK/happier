@@ -321,6 +321,38 @@ it('lists every reported window with its projection beside other widgets, withou
   expect(quiet.getTextContent().split(t('usage.board.plans.paceNotDerived')).length - 1).toBe(1);
 });
 
+it('holds the list room its accounts will fill while their first allowance reads are pending, then lets it go', async () => {
+  const { QualifiedConnectedServiceUsageSourceV4Schema } = await import('@happier-dev/protocol/connect/qualifiedConnectedAccountsV4');
+  const { WidgetPresentationProvider } = await import('@happier-dev/plugin-ui');
+  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
+  const sourcesFor = (count: number, status: 'pending' | 'available') => Array.from({ length: count }, (_, index) => ({
+    source: `quota:${JSON.stringify(QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+      ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: `acct-${index}` } }))}`,
+    status,
+  }));
+  const render = async (count: number, status: 'pending' | 'available') => {
+    const slice = resolveUsagePageAggregation({ queries: [query], nowMs: Date.now(), sources: sourcesFor(count, status),
+      ...(status === 'available' ? { quota: { status: 'available' as const, value: [] } } : {}) }).results[0]!;
+    const model = { requestedQuery: null, shownQuery: null, slice, pending: status === 'pending', error: null,
+      freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel;
+    return renderScreen(wrap(<WidgetPresentationProvider value={{ size: 'medium',
+      footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
+      <UsageProjectionsWidget model={model} slice={slice} query={query} serverId="home" id="usage_projections" testID="proj" />
+    </WidgetPresentationProvider>));
+  };
+  const heldRoom = (screen: Awaited<ReturnType<typeof render>>) => {
+    const style = ([] as unknown[]).concat(screen.findByTestId('proj.projections')?.props.style ?? []).flat(2);
+    return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
+  };
+  // Each allowance account is expected to report a session and a longer window, up to the rows a list leads with:
+  // reads fill that room as they arrive, and a settled list holds none.
+  const five = heldRoom(await render(5, 'pending'));
+  const one = heldRoom(await render(1, 'pending'));
+  expect(one).toBeGreaterThan(0);
+  expect(five).toBeGreaterThan(one);
+  expect(heldRoom(await render(3, 'available'))).toBe(0);
+});
+
 it('shows attributed API-equivalent account value and a qualified price multiple without claiming paid savings', async () => {
   const now = Date.now();
   const shownQuery = normalizeUsageQuery({ period: { startMs: now - DAY, endMs: now + DAY } });
@@ -342,6 +374,8 @@ it('shows attributed API-equivalent account value and a qualified price multiple
   }).results[0]!;
   const { UsagePlanFitWidget } = await import('../UsagePlanFitWidget');
   const screen = await renderScreen(wrap(<UsagePlanFitWidget {...base} slice={slice} model={{ ...base.model, slice }} id="usage_plan_fit" testID="fit" />));
+  // The row's one key figure is the qualified multiple ($4.00 observed against the $2.00 entered price).
+  expect(screen.getTextContent()).toContain('2×');
   await screen.pressByTestIdAsync('fit.plan.work.details-header');
   const value = screen.findHostByTestId('fit.plan.work.value');
   expect(value).toBeTruthy();

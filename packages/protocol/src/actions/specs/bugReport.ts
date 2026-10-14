@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { BUG_REPORT_DEFAULT_ISSUE_OWNER, BUG_REPORT_DEFAULT_ISSUE_REPO } from '../../bugs/reports/types.js';
 
@@ -6,40 +6,40 @@ export const BUG_REPORT_SUBMISSION_ACTION_IDS = ['bugreport.submit'] as const;
 
 // This is the submission envelope, not a second form-validation policy. The
 // answering client's existing draft owner validates required fields and consent.
-export const BugReportDraftInputSchema = lazyZodSchema(() => z.object({
-  title: z.string(), summary: z.string(), reporterGithubUsername: z.string().optional(),
-  currentBehavior: z.string().optional(), expectedBehavior: z.string().optional(),
+export const BugReportDraftInputSchema = lazyZodSchema(() => z.strictObject({
+  title: z.string(), summary: z.string(), reporterGithubUsername: z.optional(z.string()),
+  currentBehavior: z.optional(z.string()), expectedBehavior: z.optional(z.string()),
   reproductionStepsText: z.string(), whatChangedRecently: z.string(),
-  frequency: z.enum(['always', 'often', 'sometimes', 'once']).optional(),
-  severity: z.enum(['blocker', 'high', 'medium', 'low']).optional(),
-  environment: z.object({
+  frequency: z.optional(z.enum(['always', 'often', 'sometimes', 'once'])),
+  severity: z.optional(z.enum(['blocker', 'high', 'medium', 'low'])),
+  environment: z.strictObject({
     appVersion: z.string(), platform: z.string(),
-    osVersion: z.string().optional(), deviceModel: z.string().optional(),
-    serverUrl: z.string().optional(), serverVersion: z.string().optional(),
+    osVersion: z.optional(z.string()), deviceModel: z.optional(z.string()),
+    serverUrl: z.optional(z.string()), serverVersion: z.optional(z.string()),
     deploymentType: z.enum(['cloud', 'self-hosted', 'enterprise']),
-  }).strict(),
-  includeDiagnostics: z.boolean(), diagnosticsKinds: z.array(z.string()).optional(),
+  }),
+  includeDiagnostics: z.boolean(), diagnosticsKinds: z.optional(z.array(z.string())),
   acceptedPrivacyNotice: z.boolean(),
-}).strict());
+}));
 
-export const BugReportSubmitInputSchema = lazyZodSchema(() => z.object({
+export const BugReportSubmitInputSchema = lazyZodSchema(() => z.strictObject({
   draft: BugReportDraftInputSchema,
-  destination: z.object({
-    providerUrl: z.string().url().refine(value => {
+  destination: z.strictObject({
+    providerUrl: z.nullable(z.string().check(z.url(), z.refine(value => {
       const url = new URL(value);
       return !url.username && !url.password;
-    }, 'Report destination must not contain credentials').nullable(),
+    }, 'Report destination must not contain credentials'))),
     issueOwner: z.literal(BUG_REPORT_DEFAULT_ISSUE_OWNER),
     issueRepo: z.literal(BUG_REPORT_DEFAULT_ISSUE_REPO),
-    existingIssueNumber: z.number().int().positive().optional(),
-  }).strict(),
-  pastedCliDoctorSnapshotJson: z.string().optional(),
-}).strict());
+    existingIssueNumber: z.optional(z.number().check(z.int(), z.positive())),
+  }),
+  pastedCliDoctorSnapshotJson: z.optional(z.string()),
+}));
 
 export const BugReportSubmitOutputSchema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('fallback') }).strict(),
-  z.object({ mode: z.literal('submitted'), reportId: z.string().min(1), issueNumber: z.number().int().positive(),
-    issueUrl: z.string().url(), artifactCount: z.number().int().nonnegative() }).strict(),
+  z.strictObject({ mode: z.literal('fallback') }),
+  z.strictObject({ mode: z.literal('submitted'), reportId: z.string().check(z.minLength(1)), issueNumber: z.number().check(z.int(), z.positive()),
+    issueUrl: z.string().check(z.url()), artifactCount: z.number().check(z.int(), z.nonnegative()) }),
 ]));
 export type BugReportDraftInput = z.infer<typeof BugReportDraftInputSchema>;
 export type BugReportSubmitInput = z.infer<typeof BugReportSubmitInputSchema>;

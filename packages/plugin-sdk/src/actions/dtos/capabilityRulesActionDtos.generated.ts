@@ -49,6 +49,7 @@ export type CapabilityRulesActionInputById = {
                 agentId?: string | undefined;
             }[];
         };
+        expectedRevision?: number | undefined;
     };
     readonly "skills.rules.set": {
         items: ({
@@ -100,49 +101,7 @@ export type CapabilityRulesActionInputById = {
 export type CapabilityRulesActionResultById = {
     readonly "mcp.rules.set": {
         ok: true;
-        items: {
-            serverId: string;
-            rules: {
-                id: string;
-                target: {
-                    t: 'allMachines';
-                } | {
-                    t: 'machine';
-                    machineId: string;
-                } | {
-                    t: 'project';
-                    projectKey: string;
-                } | {
-                    t: 'workspace';
-                    machineId: string;
-                    workspaceRoot: string;
-                };
-                enabled: boolean;
-                createdAt: number;
-                updatedAt: number;
-                agentId?: string | undefined;
-            }[];
-            previous: {
-                id: string;
-                target: {
-                    t: 'allMachines';
-                } | {
-                    t: 'machine';
-                    machineId: string;
-                } | {
-                    t: 'project';
-                    projectKey: string;
-                } | {
-                    t: 'workspace';
-                    machineId: string;
-                    workspaceRoot: string;
-                };
-                enabled: boolean;
-                createdAt: number;
-                updatedAt: number;
-                agentId?: string | undefined;
-            }[];
-        }[];
+        items: any[];
         revision: number;
     } | {
         ok: false;

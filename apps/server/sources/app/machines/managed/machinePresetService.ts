@@ -1,16 +1,8 @@
 import type { Prisma } from "@prisma/client";
-import {
-    ManagedMachinePresetCreateInputV1Schema, ManagedMachinePresetUpdateInputV1Schema,
-    ManagedMachinePresetV1ReadSchema, ManagedMachinePresetV1Schema,
-    createManagedMachinePresetV1Schema, createStoredReadSchema,
-    isQualifiedConnectedAccountProfileActiveV4,
-    sameQualifiedConnectedAccountRef,
-    type ManagedMachinePresetV1, type ManagedMachinePresetCreateInputV1,
-    type ManagedMachinePresetUpdateInputV1, type ManagedMachinePresetRevisionInputV1,
-    type ManagedMachinePresetGetInputV1, type ManagedMachinePresetListInputV1,
-    type ManagedMachinePresetGetResultV1, type ManagedMachinePresetListResultV1,
-    type PresetMutationResultV1,
-} from "@happier-dev/protocol";
+import { ManagedMachinePresetCreateInputV1Schema, ManagedMachinePresetUpdateInputV1Schema, ManagedMachinePresetV1ReadSchema, ManagedMachinePresetV1Schema, createManagedMachinePresetV1Schema, type ManagedMachinePresetV1, type ManagedMachinePresetCreateInputV1, type ManagedMachinePresetUpdateInputV1, type ManagedMachinePresetRevisionInputV1, type ManagedMachinePresetGetInputV1, type ManagedMachinePresetListInputV1, type ManagedMachinePresetGetResultV1, type ManagedMachinePresetListResultV1, type PresetMutationResultV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { isQualifiedConnectedAccountProfileActiveV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { qualifyPluginContributionReferenceV1 } from "@happier-dev/protocol/plugins/contribution-identity";
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { isMachineProvisionerCredentialPurposeRequiredV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';

@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 
-import {
-    HAPPIER_FOCUS_LIVE_ACTIVITY_NAME,
-    LiveActivityRemoteTargetKindSchema,
-    LiveActivityRemoteTransportModeSchema,
-} from "@happier-dev/protocol";
+import { HAPPIER_FOCUS_LIVE_ACTIVITY_NAME, LiveActivityRemoteTargetKindSchema, LiveActivityRemoteTransportModeSchema } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import { z } from "zod";
 
 export const LiveActivityTargetRegistrationSchema = z

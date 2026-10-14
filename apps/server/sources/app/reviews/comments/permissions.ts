@@ -1,12 +1,6 @@
-import {
-    REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1,
-    type ReviewCommentActorRefV1,
-    type ReviewCommentCurrentIntentV1,
-    type ReviewCommentStateV1,
-    type ReviewCommentV1,
-    type ReviewCommentStoredSourceV1,
-    reviewCommentActorsEqualV1,
-} from "@happier-dev/protocol";
+import { REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1, type ReviewCommentActorRefV1, type ReviewCommentStateV1, type ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import { type ReviewCommentCurrentIntentV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { type ReviewCommentStoredSourceV1, reviewCommentActorsEqualV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 
 import type { AccountEncryptionCurrentness } from "@/app/encryption/accountContentKeyAdmission";
 import { ReviewCommentOperationError } from "./errors";

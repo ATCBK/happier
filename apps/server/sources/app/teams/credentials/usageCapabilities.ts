@@ -1,8 +1,5 @@
-import {
-    TeamCredentialDeliveryModeV1Schema,
-    TeamCredentialSessionUsePolicyV1Schema,
-    type TeamCredentialUsageCapabilitiesV1,
-} from '@happier-dev/protocol/teams';
+import { TeamCredentialDeliveryModeV1Schema, TeamCredentialSessionUsePolicyV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { type TeamCredentialUsageCapabilitiesV1 } from '@happier-dev/protocol/teams';
 
 export type TeamCredentialUsageRouteCapability = Readonly<{
     id:

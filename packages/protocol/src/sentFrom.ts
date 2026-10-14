@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SENT_FROM_VALUES = [
     'unknown',
@@ -22,7 +22,7 @@ export type SentFrom = (typeof SENT_FROM_VALUES)[number];
  * - Unknown/invalid values parse as `'unknown'` (forward compatible; never throws).
  */
 export function createSentFromSchema(zod: typeof z) {
-    return zod.enum(SENT_FROM_VALUES).catch('unknown');
+    return zod.catch(zod.enum(SENT_FROM_VALUES), 'unknown');
 }
 
 export const SentFromSchema = createSentFromSchema(z);

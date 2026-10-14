@@ -1,8 +1,6 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PluginIdSchema,
-    SESSION_SYSTEM_RECORD_VERSION_MAX,
-} from "@happier-dev/protocol";
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { SESSION_SYSTEM_RECORD_VERSION_MAX } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRevision';
 
 import { deriveSessionSystemRecordAddressKeys } from "./sessionSystemRecordAddressKeys";
 import {

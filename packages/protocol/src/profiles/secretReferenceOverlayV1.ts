@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { parseSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
 import { isCanonicalProviderSavedSecretIdV1 } from '../providers/settings/v1.js';
@@ -22,19 +22,16 @@ const SecretRequirementNameSchema = EnvVarRequirementSchema.shape.name;
  * fingerprint is their currentness. A shared resource reference must carry
  * its exact `SavedSecretCatalogResourceV1.revision`.
  */
-export const SavedSecretReferenceV1Schema = lazyZodSchema(() => z.object({
-  ref: z.string().refine(
-    isCanonicalProviderSavedSecretIdV1,
-    'Saved-secret reference must be canonical',
-  ),
-  revision: z.number().int().positive().optional(),
-}).strict().superRefine((value, ctx) => {
+export const SavedSecretReferenceV1Schema = lazyZodSchema(() => z.strictObject({
+  ref: z.string().check(z.refine(isCanonicalProviderSavedSecretIdV1, 'Saved-secret reference must be canonical')),
+  revision: z.optional(z.number().check(z.int(), z.positive())),
+}).check(z.superRefine((value, ctx) => {
   let kind: 'personal' | 'shared_resource';
   try {
     kind = parseSavedSecretRefV1(value.ref).kind;
   } catch {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['ref'],
       message: 'Saved-secret reference must be a parsable V1 reference',
     });
@@ -42,36 +39,36 @@ export const SavedSecretReferenceV1Schema = lazyZodSchema(() => z.object({
   }
   if (kind === 'personal' && value.revision !== undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['revision'],
       message: 'Personal Saved Secret references have no revision',
     });
   }
   if (kind === 'shared_resource' && value.revision === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['revision'],
       message: 'Shared Saved Secret references require their exact revision',
     });
   }
-}));
+})));
 export type SavedSecretReferenceV1 = Readonly<z.infer<typeof SavedSecretReferenceV1Schema>>;
 
-export const SecretReferenceOverlayV1Schema = lazyZodSchema(() => z.object({
+export const SecretReferenceOverlayV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   bindings: z.record(SecretRequirementNameSchema, SavedSecretReferenceV1Schema),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   const names = Object.keys(value.bindings).filter(
     (name) => Object.prototype.hasOwnProperty.call(value.bindings, name),
   );
   if (names.length === 0) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['bindings'],
       message: 'Omit the overlay instead of sending an empty one',
     });
   }
-}));
+})));
 export type SecretReferenceOverlayV1 = Readonly<z.infer<typeof SecretReferenceOverlayV1Schema>>;
 
 /** Deterministic own-key projection; never reads an inherited prototype key. */

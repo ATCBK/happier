@@ -104,6 +104,8 @@ export type AgentRuntimeDaemonServiceAuthorityExpectedInput =
     sessionId: string;
     runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
     retainedAgent: AgentSessionRunnerBindingV1;
+    /** Host-local selector for a daemon-issued child executable snapshot. */
+    executionRunSnapshotId?: string;
   }>;
 
 function resolveAgentRuntimeDaemonServiceAuthorityDir(

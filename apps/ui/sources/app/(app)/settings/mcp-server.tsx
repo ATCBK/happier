@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Redirect, useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-import { mcpServerRoute, newMcpServerRoute, type McpAddMode } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
+import { MCP_COLLECTION_ROUTE, MCP_NEW_SERVER_ROUTE, mcpServerRoute } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
 
 function readParam(value: string | string[] | undefined): string | null {
     const raw = Array.isArray(value) ? value[0] : value;
@@ -10,19 +10,20 @@ function readParam(value: string | string[] | undefined): string | null {
 }
 
 /**
- * `/settings/mcp-server?serverId=…|addMode=…`: the former stand-alone editor. Servers are edited and
- * added inside the MCP collection now; old links land on the same server or add flow there.
+ * `/settings/mcp-server?serverId=…|addMode=…`: the former stand-alone editor. Servers are edited inside the MCP
+ * collection and added in its Add modal now; old links land on the same server or the matching Add mode.
  */
 export const WorkspaceRouteBody = React.memo(function LegacyMcpServerEditorRoute() {
-    const params = useLocalSearchParams<{ serverId?: string | string[]; addMode?: string | string[]; presetId?: string | string[] }>();
+    const params = useLocalSearchParams<{ serverId?: string | string[]; addMode?: string | string[] }>();
     const serverId = readParam(params.serverId);
     const addMode = readParam(params.addMode);
     const href = serverId
         ? mcpServerRoute(serverId)
-        : newMcpServerRoute(
-            addMode === 'import-json' || addMode === 'quick-install' ? addMode as McpAddMode : 'configure',
-            readParam(params.presetId) ?? undefined,
-        );
+        : addMode === 'import-json'
+            ? `${MCP_COLLECTION_ROUTE}?add=paste`
+            : addMode === 'quick-install'
+                ? `${MCP_COLLECTION_ROUTE}?add=catalog`
+                : MCP_NEW_SERVER_ROUTE;
     return <Redirect href={href as never} />;
 });
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';

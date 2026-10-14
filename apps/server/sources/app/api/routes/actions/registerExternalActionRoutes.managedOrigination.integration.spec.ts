@@ -13,6 +13,7 @@ import {
 } from '@happier-dev/protocol';
 import {
     ExternalActionDaemonDispatchRequestSchema, createExternalActionDaemonDispatchResponseV1,
+    ExternalActionRequestEnvelopeSchema,
     prepareExternalActionResponseEnvelopeV1, sealExternalActionRequestV2, ExternalActionExecutionAuthorizationV1Schema,
     bindExternalActionExecutionAuthorizationHttpPathV1, computeExternalActionRequestEnvelopeDigestV1,
     bindExternalActionExecutionAuthorizationVerifyHttpPathV1,
@@ -192,7 +193,8 @@ describe('ordinary Account managed Action origination', () => {
             const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
             expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authority,
                 authentication: { kind } });
-            expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
+            expect(admitted.executionAuthorization).toBeDefined();
+            expect(admitted.executionAuthorization?.binding).toMatchObject(selected.controller);
             return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
                 v: 1, actionId: 'machines.provisioners.list', requestId: selected.requestId,
                 execution: { ok: true, result: { controller: selected.controller, provisioners: [] } },
@@ -233,7 +235,8 @@ describe('ordinary Account managed Action origination', () => {
                 const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
                 expect(admitted.principal).toMatchObject({ accountId: selected.account.id,
                     authentication: { kind: 'account' } });
-                expect(admitted.executionAuthorization.binding).toMatchObject({ actionId, target,
+                expect(admitted.executionAuthorization).toBeDefined();
+                expect(admitted.executionAuthorization?.binding).toMatchObject({ actionId, target,
                     machineId: selected.controller.machineId });
                 return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
                     v: 1, actionId, requestId: selected.requestId,
@@ -272,7 +275,8 @@ describe('ordinary Account managed Action origination', () => {
             expect(admitted.actionId).toBe(actionId);
             expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authentication: { kind } });
             expect(admitted.principal).not.toHaveProperty('sessionActionOrigin');
-            expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
+            expect(admitted.executionAuthorization).toBeDefined();
+            expect(admitted.executionAuthorization?.binding).toMatchObject(selected.controller);
             return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
                 v: 1, actionId, requestId: selected.requestId, execution: { ok: true, result },
             })) };
@@ -382,7 +386,8 @@ describe('ordinary Account managed Action origination', () => {
             expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authority: 'account_automation',
                 authentication: { kind: 'terminal' } });
             expect(admitted.principal).not.toHaveProperty('sessionActionOrigin');
-            expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
+            expect(admitted.executionAuthorization).toBeDefined();
+            expect(admitted.executionAuthorization?.binding).toMatchObject(selected.controller);
             delivered.push(admitted);
             return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
                 v: 1, actionId, requestId: selected.requestId, execution: { ok: true, result },
@@ -984,8 +989,7 @@ describe('ordinary Account managed Action origination', () => {
             let interleavedRead = false;
             // Transparent DB-boundary interleaving only: the actual first
             // transaction really loses the existing tag's unique insert.
-            // Prisma's generic delegate return is retained by this boundary cast.
-            const readThenRetire = ((args: Parameters<typeof db.session.findUnique>[0]) => {
+            const readThenRetire = (args: Parameters<typeof db.session.findUnique>[0]) => {
                 if (interleavedRead) return actualRead(args);
                 interleavedRead = true;
                 return actualRead(args).then(async result => {
@@ -995,10 +999,12 @@ describe('ordinary Account managed Action origination', () => {
                     }
                     return result;
                 });
-            }) as typeof db.session.findUnique;
+            };
             // Prisma's delegate is a lazy proxy, not an own method descriptor.
             // Restore the actual method value rather than a spy descriptor.
-            db.session.findUnique = readThenRetire;
+            // Install the DB-boundary adapter without claiming its ordinary
+            // Promise is Prisma's generic lazy client.
+            Reflect.set(db.session, 'findUnique', readThenRetire);
             restoreRead = () => { db.session.findUnique = originalRead; };
             const rejoin = await instance.inject({ method: 'POST', url: '/v1/sessions', payload: sessionBody,
                 headers: { [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: child.token,
@@ -1342,9 +1348,9 @@ describe('ordinary Account managed Action origination', () => {
             const agentStart = { directory: { kind: 'path' as const, path: '/repo' },
                 agentTarget: { kind: 'agent' as const, identity: { pluginId: 'native.agent', localId: 'agent' } },
                 creationKey: 'guest-start', initialInput: { text: 'Original retained Agent continuation' } };
-            const rootEnvelope = { v: 1 as const, requestId: selected.requestId,
+            const rootEnvelope = ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: selected.requestId,
                 target: { kind: 'machine' as const, machineId: selected.controller.machineId },
-                input: ManagedAcquireInputV1Schema.parse({ ...selected.input, agentStart }) };
+                input: ManagedAcquireInputV1Schema.parse({ ...selected.input, agentStart }) });
             const installationProof = origin ? signMachineInstallationProof({ privateKey: selected.keys.secretKey,
                 payload: { version: 1, accountId: selected.account.id, ...selected.controller,
                     externalActionOrigin: { homeId, actionId: 'machines.managed.acquire', requestId: selected.requestId,

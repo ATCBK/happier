@@ -2,6 +2,12 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthContextType } from '@/auth/context/AuthContext';
 import { createSessionFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -47,20 +53,20 @@ beforeEach(async () => {
         logout: async () => ({ kind: 'completed' }), refreshFromActiveServer: async () => {},
     });
     const setup = createSessionFixture({ id: 's_setup', serverId: a,
-        metadata: { ...createSessionFixture().metadata, summary: { text: 'Session Setup', updatedAt: 1 } } });
+        metadata: { ...fixtureMetadata, summary: { text: 'Session Setup', updatedAt: 1 } } });
     const matrix = createSessionFixture({ id: 's_matrix', serverId: a,
-        metadata: { ...createSessionFixture().metadata, name: 'leeroy' } });
+        metadata: { ...fixtureMetadata, name: 'leeroy' } });
     storage.setState({
         sessions: { s_setup: setup, s_matrix: matrix },
         sessionListRowsByServerId: {
             [a]: {
                 s_visible: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_visible', serverId: a, updatedAt: 321,
-                    metadata: { ...createSessionFixture().metadata, summaryText: 'Visible only in current list' } })),
+                    metadata: { ...fixtureMetadata, summaryText: 'Visible only in current list' } })),
                 s_matrix: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_matrix', serverId: a, updatedAt: 322,
-                    metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix' } })),
+                    metadata: { ...fixtureMetadata, summaryText: 'Session QA Voice Matrix' } })),
             },
             [b]: { s_other: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_other', serverId: b,
-                metadata: { ...createSessionFixture().metadata, summary: { text: 'Other summary', updatedAt: 1 } } })) },
+                metadata: { ...fixtureMetadata, summary: { text: 'Other summary', updatedAt: 1 } } })) },
         },
         ordinarySessionListMembershipByServerId: { [a]: ['s_visible', 's_matrix'], [b]: ['s_other'] },
         sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: { [b]: { serverName: 'Server B' } },
@@ -147,7 +153,7 @@ describe('openSessionForVoiceTool', () => {
     });
     it('prefers the current visible session title over a stale raw session title for the same session id', async () => {
         storage.setState(current => ({ sessions: { ...current.sessions, s_matrix: createSessionFixture({ id: 's_matrix', serverId: a,
-            metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix!' } }),
+            metadata: { ...fixtureMetadata, summaryText: 'Session QA Voice Matrix!' } }),
         } }));
         const result = await openSessionForVoiceTool({ sessionTitle: 'Session QA Voice Matrix',
             corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },

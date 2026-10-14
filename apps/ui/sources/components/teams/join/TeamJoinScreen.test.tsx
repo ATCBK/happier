@@ -26,12 +26,14 @@ const routerCanGoBackMock = vi.hoisted(() => vi.fn(() => false));
 // The route reads its link from the router, and Expo Router updates a mounted
 // dynamic route's params IN PLACE. This holder is how a second link arrives.
 const routeParams = vi.hoisted(() => ({ current: {} as Record<string, string> }));
+const routePathname = vi.hoisted(() => ({ current: '/' }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({
         navigation: { setOptions: setOptionsSpy },
         router: { replace: routerReplaceSpy, canGoBack: routerCanGoBackMock },
         params: () => routeParams.current,
+        pathname: () => routePathname.current,
     }).module;
 });
 
@@ -74,7 +76,7 @@ vi.mock('@/components/account/auth/HomeAuthenticationFlow', async () => {
                 testID: 'team-join-account-authentication-success',
                 onPress: () => props.onAuthenticated({
                     teamId: 'team-1',
-                    credentials: { token: 'fresh-account-token' },
+                    credentials: { token: tokenForSub('fresh-account') },
                     homeServerIdentityId: 'srv_acme_home',
                 }),
             }),
@@ -82,7 +84,7 @@ vi.mock('@/components/account/auth/HomeAuthenticationFlow', async () => {
     };
 });
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import {
     primeServerFeaturesSnapshot,
@@ -99,6 +101,15 @@ import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { createTeamInvitationTargetBindingV1 } from '@happier-dev/protocol/teams';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { t } from '@/text';
+import { resolveCompactAppDestinations, hrefForDestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { createWorkspaceNavigationAdapter } from '@/components/appShell/workspace/workspaceNavigationAdapter';
+import { createWorkspaceState, reduceWorkspaceState } from '@/components/appShell/workspace/workspaceState';
+import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProvider';
+import { storage } from '@/sync/domains/state/storage';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { Platform } from 'react-native';
 
 import { TeamJoinScreen } from './TeamJoinScreen';
 import TeamJoinRoute from '@/app/(app)/join/[token]';
@@ -162,6 +173,7 @@ async function addCapableHome(name: string, serverUrl: string): Promise<string> 
 }
 
 beforeEach(() => {
+    routePathname.current = '/';
     restoreWebLockManager = installWebLockManagerMock().restore;
     runtimeFetchMock.mockReset();
     serverFetchMock.mockReset();
@@ -647,7 +659,31 @@ describe('TeamJoinScreen', () => {
         runtimeFetchMock.mockImplementation(joinFetch);
         serverFetchMock.mockImplementation(joinFetch);
 
-        const rendered = await renderScreen(<TeamJoinScreen token={TOKEN} homeTarget="srv_acme_home" />);
+        let workspaceState = createWorkspaceState({ id: 'settings-tab',
+            target: { kind: 'settings', params: {} }, pinned: false, preview: false });
+        const catalog = resolveCompactAppDestinations({ builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        }, pages: [] });
+        const committed: string[] = [];
+        const workspaceAdapter = createWorkspaceNavigationAdapter({
+            getState: () => workspaceState, getCatalog: () => catalog,
+            dispatch: (action) => { workspaceState = reduceWorkspaceState(workspaceState, action); },
+            transport: { commit: (href) => { committed.push(href); } },
+            createId: () => 'team-tab', onChange: () => {},
+        });
+        const workspace: WorkspaceNavigationContextValue = {
+            active: true, state: workspaceState, catalog, canGoBack: false, canGoForward: false,
+            openHref: workspaceAdapter.openHref.bind(workspaceAdapter),
+            activateTab: workspaceAdapter.activateTab.bind(workspaceAdapter),
+            closeTab: workspaceAdapter.closeTab.bind(workspaceAdapter),
+            closeTabs: workspaceAdapter.closeTabs.bind(workspaceAdapter),
+            dispatch: workspaceAdapter.dispatch.bind(workspaceAdapter),
+            navigationForTab: () => { throw new Error('Unexpected tab navigation'); },
+            registerBackStep: () => () => {}, back: () => {}, forward: () => {},
+        };
+        const rendered = await renderScreen(<WorkspaceNavigationContext.Provider value={workspace}>
+            <TeamJoinScreen token={TOKEN} homeTarget="srv_acme_home" />
+        </WorkspaceNavigationContext.Provider>);
         await waitForTestId(rendered, 'team-auth-entry-action:email_password');
         await rendered.pressByTestIdAsync('team-auth-entry-action:email_password');
         await waitForTestId(rendered, 'team-join-account-authentication-success');
@@ -667,7 +703,140 @@ describe('TeamJoinScreen', () => {
             refreshAuth: expect.any(Function),
             requireExactProfile: true,
         });
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/teams/srv_acme_home/team-1');
+        const focused = workspaceState.tabs[workspaceState.groups[workspaceState.focusedGroupId]!.activeTabId]!;
+        expect(hrefForDestinationRef(catalog, focused.target)).toBe('/settings/teams/srv_acme_home/team-1');
+        expect(committed).toEqual(['/settings/teams/srv_acme_home/team-1']);
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['asks the unnamed fresh Account how its colleagues should see it', null, true],
+        ['never asks a fresh Account that already has a name', 'Ada Lovelace', false],
+    ] as const)('%s on the joined card', async (_label, name, asksName) => {
+        const previousScope = storage.getState().profileScope;
+        const previousProfile = storage.getState().profile;
+        const home = await addCapableHome('Acme', 'https://acme-home.example');
+        await setServerProfileIdentityForUrl('https://acme-home.example', 'srv_acme_home');
+        await setActiveServerId(home, { scope: 'device' });
+        getCredentialsForServerUrlMock.mockResolvedValue(null);
+        const joinFetch = async (input: string | Readonly<{ url: string }>) => {
+            const path = typeof input === 'string' ? input : input.url;
+            if (path.includes('/v1/team-invitations/preview')) return new Response(JSON.stringify({ outcome: 'ok', preview: {
+                home: { serverId: 'srv_acme_home', displayName: 'Acme', storageMode: null },
+                team: { teamId: 'team-1', name: 'Acme Team', logo: null, accentSeed: 'team-1' },
+                role: 'member', historyAccess: 'from_membership', state: 'active', expiresAt: Date.UTC(2030, 0, 1), recipientEmailMask: null,
+            } }));
+            if (path.includes('/v1/auth/entry')) return new Response(JSON.stringify({ v: 1, state: 'admission_required', scope: { kind: 'invitation' },
+                home: { serverId: 'srv_acme_home', displayName: 'Acme', storageMode: null },
+                team: { teamId: 'team-1', name: 'Acme Team', logo: null },
+                invitationEmailVerificationRequired: false,
+                actions: [{ kind: 'authenticate', methodId: 'email_password', action: 'provision', mode: 'either', origin: 'home', presentation: { displayName: 'Email' } }], autoRedirect: null }));
+            throw new Error(`Unexpected Team join request: ${path}`);
+        };
+        runtimeFetchMock.mockImplementation(joinFetch);
+        serverFetchMock.mockImplementation(joinFetch);
+        try {
+            const rendered = await renderScreen(<TeamJoinScreen token={TOKEN} homeTarget="srv_acme_home" />);
+            await waitForTestId(rendered, 'team-auth-entry-action:email_password');
+            await rendered.pressByTestIdAsync('team-auth-entry-action:email_password');
+            // The new Account's profile is the one in sync on the Home it joined.
+            await act(async () => {
+                storage.setState({
+                    profileScope: { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'fresh-account' },
+                    profile: { ...profileDefaults, id: 'fresh-account', name, username: 'ada' },
+                });
+            });
+            await rendered.pressByTestIdAsync('team-join-account-authentication-success');
+
+            expect(await waitForTestId(rendered, 'team-auth-entry-admission-complete')).toBeTruthy();
+            expect(rendered.findByTestId('team-auth-entry-admission-complete-name-field') !== null).toBe(asksName);
+        } finally {
+            await act(async () => { storage.setState({ profileScope: previousScope, profile: previousProfile }); });
+        }
+    });
+
+    it.each([false, true])('opens the admitted Team through the current workspace after exact-Home focus (scope changes=%s)', async scopeChanges => {
+        const previousPlatform = Platform.OS;
+        const previousScope = storage.getState().profileScope;
+        const previousReady = storage.getState().isDataReady;
+        Platform.OS = 'web';
+        routePathname.current = '/join/invitation';
+        const location = { pathname: routePathname.current, search: '', hash: '' };
+        const history = { state: null as unknown,
+            replaceState(state: unknown, _unused: string, href?: string | URL | null) {
+                this.state = state;
+                if (href) { const next = new URL(href, 'https://workspace.test'); location.pathname = next.pathname; location.search = next.search; }
+            },
+            pushState(state: unknown, unused: string, href: string) { this.replaceState(state, unused, href); },
+            go() {},
+        };
+        const events = new EventTarget();
+        vi.stubGlobal('window', { location, history, sessionStorage: { getItem: () => 'main' },
+            addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
+            dispatchEvent: events.dispatchEvent.bind(events) });
+        let rendered: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            const home = await addCapableHome('Acme', 'https://acme-home.example');
+            await setServerProfileIdentityForUrl('https://acme-home.example', 'srv_acme_home');
+            await setActiveServerId(home, { scope: 'device' });
+            storage.setState({ profileScope: { serverId: scopeChanges ? 'home-a' : 'srv_acme_home', accountId: 'account' }, isDataReady: true });
+            getCredentialsForServerUrlMock.mockResolvedValue(null);
+            const joinFetch = async (input: string | Readonly<{ url: string }>) => {
+                const path = typeof input === 'string' ? input : input.url;
+                if (path.includes('/v1/features')) {
+                    const features = createRootLayoutFeaturesResponse();
+                    tryWriteServerEnabledBitInPlace(features, 'teams', true);
+                    return new Response(JSON.stringify(features));
+                }
+                if (path.includes('/v1/team-invitations/preview')) return new Response(JSON.stringify({ outcome: 'ok', preview: {
+                    home: { serverId: 'srv_acme_home', displayName: 'Acme', storageMode: null },
+                    team: { teamId: 'team-1', name: 'Acme Team', logo: null, accentSeed: 'team-1' },
+                    role: 'member', historyAccess: 'from_membership', state: 'active', expiresAt: Date.UTC(2030, 0, 1), recipientEmailMask: null,
+                } }));
+                if (path.includes('/v1/auth/entry')) return new Response(JSON.stringify({ v: 1, state: 'admission_required', scope: { kind: 'invitation' },
+                    home: { serverId: 'srv_acme_home', displayName: 'Acme', storageMode: null },
+                    team: { teamId: 'team-1', name: 'Acme Team', logo: null },
+                    invitationEmailVerificationRequired: false,
+                    actions: [{ kind: 'authenticate', methodId: 'email_password', action: 'provision', mode: 'either', origin: 'home', presentation: { displayName: 'Email' } }], autoRedirect: null }));
+                throw new Error(`Unexpected Team request: ${path}`);
+            };
+            runtimeFetchMock.mockImplementation(joinFetch);
+            serverFetchMock.mockImplementation(joinFetch);
+            const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+                externalSessions: false, inbox: false, workflows: false, friends: false,
+            } });
+            const element = (enabled = false) => <WorkspaceProvider enabled={enabled} entry catalog={catalog}>
+                {navigation => <>{React.createElement('WorkspaceOwner', { navigation })}<TeamJoinScreen token={TOKEN} homeTarget="srv_acme_home" /></>}
+            </WorkspaceProvider>;
+            rendered = await renderScreen(element());
+            await waitForTestId(rendered, 'team-auth-entry-action:email_password');
+            await rendered.pressByTestIdAsync('team-auth-entry-action:email_password');
+            await rendered.pressByTestIdAsync('team-join-account-authentication-success');
+            const focusedHome = createDeferred<'switched'>();
+            activeServerSwitchMock.mockImplementation(async () => await focusedHome.promise);
+            act(() => { rendered!.pressByTestId('team-auth-entry-admission-complete-action'); });
+            // Focus remains in flight while the real store publishes its new
+            // Home/Account binding and the workspace retires the old dispatcher.
+            await act(async () => {
+                storage.setState({ profileScope: { serverId: 'srv_acme_home', accountId: scopeChanges ? 'new-account' : 'account' } });
+                await rendered!.update(element());
+            });
+            await act(async () => { focusedHome.resolve('switched'); });
+            await settle();
+            routePathname.current = '/settings';
+            if (location.pathname.startsWith('/join/')) history.replaceState(history.state, '', '/settings');
+            await rendered.update(element(true));
+            const navigation = rendered.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+            const state = navigation.state;
+            const focused = state.tabs[state.groups[state.focusedGroupId]!.activeTabId]!;
+            expect(hrefForDestinationRef(catalog, focused.target)).toBe('/settings/teams/srv_acme_home/team-1');
+            expect(location.pathname).toBe('/settings/teams/srv_acme_home/team-1');
+        } finally {
+            await rendered?.unmount();
+            Platform.OS = previousPlatform;
+            await act(async () => { storage.setState({ profileScope: previousScope, isDataReady: previousReady }); });
+            vi.unstubAllGlobals();
+        }
     });
 
     /** A current link: the Home's own strict descriptor, as the join producer emits it. */

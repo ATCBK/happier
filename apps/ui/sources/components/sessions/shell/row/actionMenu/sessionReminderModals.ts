@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { Modal } from '@/modal';
 import type { SessionReminderPresetV1 } from '@/sync/domains/session/organization/sessionReminderPreset';
 import { t } from '@/text';
@@ -23,7 +24,7 @@ export async function showSessionReminderDateTimeModal(
                 kind: 'card',
                 title: t('sessionsList.reminders.customTitle'),
                 testID: 'session-reminder-date-time-modal',
-                dimensions: { width: 480, maxHeightRatio: 0.86, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' },
             },
             closeOnBackdrop: true,
         });
@@ -44,7 +45,7 @@ export async function showSessionReminderPresetManagerModal(
                 title: t('sessionsList.reminders.managePresets'),
                 subtitle: t('sessionsList.reminders.managePresetsMessage'),
                 testID: 'session-reminder-preset-manager-modal',
-                dimensions: { width: 560, maxHeightRatio: 0.86, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'md' },
             },
             closeOnBackdrop: true,
         });

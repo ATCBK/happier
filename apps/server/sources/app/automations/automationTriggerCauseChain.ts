@@ -1,8 +1,7 @@
-import type {
-    AutomationRunLifecycleOccurrenceEvidenceV1,
-    AutomationSessionLifecycleOccurrenceEvidenceV1,
-} from "@happier-dev/protocol";
-import { createCanonicalJsonSigningInput, parseAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol';
+import type { AutomationRunLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationRunLifecycle';
+import type { AutomationSessionLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { parseAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
 
 import { parseStoredSessionTurnFacts } from "@/app/session/turns/parseSessionTurnState";
 import { resolveWorkflowRunAccessInTx } from "@/app/workflows/workflowRunAccess";

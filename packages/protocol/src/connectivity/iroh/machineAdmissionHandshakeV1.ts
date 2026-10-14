@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RunnerBrokerReadinessRequestV1Schema } from '../../teams/credentials/readinessV1.js';
 import { IrohProviderBrokerHandshakeV1Schema } from '../../providers/brokerRouteGrantV1.js';

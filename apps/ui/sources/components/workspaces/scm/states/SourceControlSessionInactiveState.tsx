@@ -22,8 +22,8 @@ export function SourceControlSessionInactiveState(props: {
                 flex: 1,
                 justifyContent: 'center',
                 alignItems: 'center',
-                paddingTop: 40,
-                paddingHorizontal: 20,
+                paddingTop: theme.space.s40,
+                paddingHorizontal: theme.space.s20,
                 gap: 14,
             }}
         >
@@ -52,7 +52,7 @@ export function SourceControlSessionInactiveState(props: {
             </Text>
 
             {props.onOpenSession && (
-                <View style={{ marginTop: 6 }}>
+                <View style={{ marginTop: theme.space.s6 }}>
                     <RoundButton size="normal" title={t('common.continue')} onPress={props.onOpenSession} />
                 </View>
             )}

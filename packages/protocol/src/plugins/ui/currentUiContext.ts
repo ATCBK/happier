@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
 import { PluginUiSemanticCommandV1Schema } from './semanticCommands.js';
@@ -9,56 +9,56 @@ import { PluginUiSemanticCommandV1Schema } from './semanticCommands.js';
  * It is a data-only detail fragment:
  * it never carries a command payload, identity, or execution authority.
  */
-export const CurrentUiContextBoundedIncompletenessV1Schema = lazyZodSchema(() => z.object({
+export const CurrentUiContextBoundedIncompletenessV1Schema = lazyZodSchema(() => z.strictObject({
   incomplete: z.literal(true),
-}).strict());
+}));
 export type CurrentUiContextBoundedIncompletenessV1 = Readonly<
   z.infer<typeof CurrentUiContextBoundedIncompletenessV1Schema>
 >;
 export const CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1:
   CurrentUiContextBoundedIncompletenessV1 = Object.freeze({ incomplete: true });
 
-const CurrentUiTextV1Schema = lazyZodSchema(() => z.string().trim().min(1));
+const CurrentUiTextV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
-export const CurrentUiContextEntityV1Schema = lazyZodSchema(() => z.object({
+export const CurrentUiContextEntityV1Schema = lazyZodSchema(() => z.strictObject({
   kind: CurrentUiTextV1Schema,
   label: CurrentUiTextV1Schema,
-  summary: CurrentUiTextV1Schema.optional(),
-  reference: PluginUiJsonValueV1Schema.optional(),
-}).strict());
+  summary: z.optional(CurrentUiTextV1Schema),
+  reference: z.optional(PluginUiJsonValueV1Schema),
+}));
 export type CurrentUiContextEntityV1 = z.infer<typeof CurrentUiContextEntityV1Schema>;
 
-export const CurrentUiCommandDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const CurrentUiCommandDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   title: CurrentUiTextV1Schema,
-  description: CurrentUiTextV1Schema.optional(),
+  description: z.optional(CurrentUiTextV1Schema),
   command: PluginUiSemanticCommandV1Schema,
-}).strict());
+}));
 export type CurrentUiCommandDeclarationV1 = z.infer<typeof CurrentUiCommandDeclarationV1Schema>;
 
 /** A host-generated opaque command handle; semantic payloads never cross it. */
-export const CurrentUiCommandDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const CurrentUiCommandDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   id: CurrentUiTextV1Schema,
   title: CurrentUiTextV1Schema,
-  description: CurrentUiTextV1Schema.optional(),
-}).strict());
+  description: z.optional(CurrentUiTextV1Schema),
+}));
 export type CurrentUiCommandDescriptorV1 = z.infer<typeof CurrentUiCommandDescriptorV1Schema>;
 
-export const PluginUiContextEnrichmentV1Schema = lazyZodSchema(() => z.object({
-  entity: CurrentUiContextEntityV1Schema.optional(),
-  detail: PluginUiJsonValueV1Schema.optional(),
-  commands: z.array(CurrentUiCommandDeclarationV1Schema).optional(),
-}).strict());
+export const PluginUiContextEnrichmentV1Schema = lazyZodSchema(() => z.strictObject({
+  entity: z.optional(CurrentUiContextEntityV1Schema),
+  detail: z.optional(PluginUiJsonValueV1Schema),
+  commands: z.optional(z.array(CurrentUiCommandDeclarationV1Schema)),
+}));
 export type PluginUiContextEnrichmentV1 = z.infer<typeof PluginUiContextEnrichmentV1Schema>;
 
-export const CurrentUiContextSnapshotV1Schema = lazyZodSchema(() => z.object({
-  navigation: z.object({
+export const CurrentUiContextSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  navigation: z.strictObject({
     area: CurrentUiTextV1Schema,
     screen: CurrentUiTextV1Schema,
-    title: CurrentUiTextV1Schema.optional(),
-    presentation: z.enum(['screen', 'modal', 'pane']).optional(),
-  }).strict(),
-  entity: CurrentUiContextEntityV1Schema.optional(),
-  detail: PluginUiJsonValueV1Schema.optional(),
+    title: z.optional(CurrentUiTextV1Schema),
+    presentation: z.optional(z.enum(['screen', 'modal', 'pane'])),
+  }),
+  entity: z.optional(CurrentUiContextEntityV1Schema),
+  detail: z.optional(PluginUiJsonValueV1Schema),
   commands: z.array(CurrentUiCommandDescriptorV1Schema),
-}).strict());
+}));
 export type CurrentUiContextSnapshotV1 = z.infer<typeof CurrentUiContextSnapshotV1Schema>;

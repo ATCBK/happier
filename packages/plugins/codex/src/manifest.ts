@@ -517,11 +517,11 @@ export const CODEX_PLUGIN = definePlugin({
     discoverySources: {
       config: {
         declaration: { title: 'Codex MCP configuration', loadedInHappierSessions: false, metadata: { agentId: 'codex' } },
-        discover: async () => {
-          const detected = await readCodexMcpConfigServers({});
+        discover: async (input) => {
+          const detected = await readCodexMcpConfigServers({ directory: input?.directory });
           return {
             items: [],
-            endpoints: [],
+            detectedServers: detected.servers,
             warnings: detected.warnings,
           };
         },

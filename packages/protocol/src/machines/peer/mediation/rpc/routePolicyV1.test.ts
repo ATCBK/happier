@@ -20,6 +20,15 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('classifies Agent install job transports without promoting native mutations to direct routes', async () => {
+    const { resolveMachineRpcRoutePolicy } = await import('./routePolicyV1');
+    for (const method of [RPC_METHODS.DAEMON_AGENTS_INSTALL_START, RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL,
+      RPC_METHODS.DAEMON_AGENTS_INSTALL_READ, RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST]) {
+      expect(resolveMachineRpcGovernance(method)).toEqual({ rpcClassification: 'internal_only' });
+      expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+        rpcClassification: 'internal_only', scope: { accountRequired: true, machineRequired: true, serverRequired: true } });
+    }
+  });
   it('spends only an exact Found root on the existing download transport', async () => {
     const { resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     for (const actionId of ['skills.found.read', 'skills.found.adopt'] as const) {
@@ -30,7 +39,10 @@ describe('MachineRpcRoutePolicyV1', () => {
         target: { kind: 'machine', machineId: 'native' },
       } }).binding;
       for (const method of [RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK,
-        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT]) {
+        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
+        RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE, RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE,
+        RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+        RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT]) {
         expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBe(actionId);
         expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'session', sessionId: 'selected-session' } })).toBe(actionId);
         expect(resolveMachineRpcExternalActionEffectV1(method)).toBeNull();
@@ -39,6 +51,27 @@ describe('MachineRpcRoutePolicyV1', () => {
       }
       expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, binding)).toBeNull();
       expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, binding)).toBeNull();
+    }
+  });
+  it('spends only the matching filesystem transfer direction and exact Machine root', async () => {
+    const { resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-transfer', binding: {
+      accountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      serverIdentityId: `srv_${'a'.repeat(32)}`, machineId: 'native', installationId: 'native-installation',
+      custodianAccountId: 'requester', actionId: 'daemon.filesystem.download', requestId: 'download-request',
+      requestEnvelopeDigest: 'b'.repeat(43), target: { kind: 'machine', machineId: 'native' },
+    } }).binding;
+    for (const method of [RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+      RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT]) {
+      expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBe('daemon.filesystem.download');
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, actionId: 'daemon.filesystem.upload' })).toBeNull();
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'machine', machineId: 'other' } })).toBeNull();
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'session', sessionId: 'other-session' } })).toBeNull();
+    }
+    for (const method of [RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK,
+      RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT]) {
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, actionId: 'daemon.filesystem.upload' })).toBe('daemon.filesystem.upload');
+      expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBeNull();
     }
   });
   it('admits machine skill installation only through its canonical server-required Action routes', async () => {
@@ -366,7 +399,6 @@ describe('MachineRpcRoutePolicyV1', () => {
       SESSION_RPC_METHODS.SESSION_NOTES_SET,
       SESSION_RPC_METHODS.SESSION_ROLES_APPLY_TO_REPORTS,
       SESSION_RPC_METHODS.SESSION_WORKFLOW_STEP_WITHDRAW,
-      SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE,
     ]) {
       expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({
         routeClass: 'server_required', serverRequiredReason: 'durable_session_write',
@@ -382,7 +414,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     const method = SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1;
     const policy = protocol.resolveMachineRpcRoutePolicy(method);
     expect(policy).toMatchObject({
-      routeClass: 'server_required', serverRequiredReason: 'reconnect_catch_up',
+      routeClass: 'server_required', serverRequiredReason: 'auth',
       sharedMachineAccess: 'custodian_only', commandReceiptRequired: false,
       scope: { accountRequired: true, machineRequired: true, sessionRequired: true, serverRequired: true },
     });
@@ -418,6 +450,10 @@ describe('MachineRpcRoutePolicyV1', () => {
       expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({
         routeClass: 'server_required', rpcClassification: 'action_spec_bound', actionSpecId,
       });
+      if (method === RPC_METHODS.SCM_DIFF_SUMMARY_REVIEWED_MARK
+        || method === RPC_METHODS.SCM_DIFF_SUMMARY_REVIEWED_UNMARK) {
+        expect(protocol.resolveMachineRpcRoutePolicy(method).sharedMachineAccess).toBe('custodian_only');
+      }
       expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
     }
   });

@@ -883,6 +883,24 @@ describe('SessionBoardSurface', () => {
         expect(screen.findHostByTestId('session-board-empty-secondary-action')).not.toBeNull();
     });
 
+    it('counts only what is on the Board, not the replies that stay in the conversation', async () => {
+        const reply = { ...note('Usage today'), destination: 'transcript' } as SessionSurfaceItemV1;
+        const screen = await renderScreen(
+            <PaneHarness
+                host="sidebar"
+                snapshot={snapshot({ layout: POPULATED, items: [
+                    { itemId: 'note-1', item: note('Plan') },
+                    { itemId: 'reply-1', item: reply },
+                    { itemId: 'reply-2', item: reply },
+                ] })}
+            />,
+        );
+
+        expect(screen.findByTestId('pane-header-line')?.props.children).toBe(
+            `${t('sessionBoard.sidebar.sharedWithEveryone')} · ${t('sessionBoard.sidebar.widgetCount', { count: 1 })}`,
+        );
+    });
+
     it('puts the phone Board\'s Add chooser in the pane header', async () => {
         const screen = await renderScreen(
             <PaneHarness host="mobileCockpit" snapshot={snapshot({ layout: POPULATED, items: [{ itemId: 'note-1', item: note('Plan') }] })} />,

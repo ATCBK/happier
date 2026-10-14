@@ -155,7 +155,7 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
     preset: OverlayMotionPreset;
-    /** Web frames animate as a whole; one holding material paint moves by transform and never fades. */
+    /** Web frames animate as a whole; one holding material paint moves by transform, and on exit fades its paint and content, never the frame. */
     elementRef?: React.RefObject<unknown>;
 }>): Readonly<{
     exitMs: number;
@@ -230,6 +230,42 @@ function webOverlayMotionTargets(element: HTMLElement): WebMotionTarget[] {
     return [{ element, paint: material }];
 }
 
+/**
+ * What a leaving material frame fades: every glass paint layer itself and every subtree beside the paint
+ * (content, the directional rim, a card's tinted ring), never an ancestor of a paint. The surface thins
+ * out as it travels, while each paint keeps sampling the page through its own blur.
+ */
+function webMaterialFadeLayers(frame: HTMLElement): Element[] {
+    if (frame.matches(GLASS_BACKDROP_SELECTOR)) return [frame];
+    const layers: Element[] = [];
+    const visit = (parent: Element) => {
+        for (const child of Array.from(parent.children)) {
+            if (child.matches(GLASS_BACKDROP_SELECTOR) || child.querySelector(GLASS_BACKDROP_SELECTOR) === null) layers.push(child);
+            else visit(child);
+        }
+    };
+    visit(frame);
+    return layers;
+}
+
+/**
+ * The elevation a leaving material frame drops: a card's shadow is drawn on an ancestor of its paint (the
+ * paint clips, so the shadow cannot move onto it). It fades by the shadow itself, never by opacity, so no
+ * shadow is left standing where the card was while the blur keeps its backdrop.
+ */
+function webMaterialShadowLayers(frame: HTMLElement): Element[] {
+    const ancestors = new Set<Element>();
+    for (const paint of Array.from(frame.querySelectorAll(GLASS_BACKDROP_SELECTOR))) {
+        for (let node = paint.parentElement; node; node = node.parentElement) {
+            if (!node.matches(GLASS_BACKDROP_SELECTOR)) ancestors.add(node);
+            if (node === frame) break;
+        }
+    }
+    return Array.from(ancestors).filter(element => { const shadow = getComputedStyle(element).boxShadow; return shadow !== '' && shadow !== 'none'; });
+}
+
+type MaterialFade = Readonly<{ animation: Animation; property: 'opacity' | 'boxShadow' }>;
+
 type WebContentMotionTarget = {
     animation: Animation | null;
     opacity: string;
@@ -244,6 +280,7 @@ function useWebOverlayContentMotion(params: Readonly<{
     elementRef?: React.RefObject<unknown>;
 }>, reducedMotion: boolean): void {
     const targetsRef = React.useRef(new Map<HTMLElement, WebContentMotionTarget>());
+    const fadesRef = React.useRef(new Map<Element, MaterialFade>());
     const presetRef = React.useRef(params.preset);
     presetRef.current = params.preset;
     React.useLayoutEffect(() => {
@@ -290,8 +327,11 @@ function useWebOverlayContentMotion(params: Readonly<{
                 });
             }
         }
+        if (hasMaterial) fadeMaterialLayers(element, fadesRef.current, params.visible, duration);
     }, [params.elementRef, params.visible, reducedMotion]);
     React.useEffect(() => () => {
+        for (const fade of fadesRef.current.values()) fade.animation.cancel();
+        fadesRef.current.clear();
         for (const [target, state] of targetsRef.current) {
             state.animation?.cancel();
             target.style.opacity = state.opacity;
@@ -299,6 +339,35 @@ function useWebOverlayContentMotion(params: Readonly<{
         }
         targetsRef.current.clear();
     }, []);
+}
+
+/**
+ * A material frame enters by transform alone (it is never see-through on the way in). On the way out its
+ * paint and content fade, and its elevation drops, while it travels, so it does not end in a cut; the fade
+ * holds until the overlay unmounts. Opening again mid-way fades back from where each layer is.
+ */
+function fadeMaterialLayers(frame: HTMLElement, fades: Map<Element, MaterialFade>, visible: boolean, duration: number): void {
+    const layers: [Element, MaterialFade['property']][] = visible
+        ? Array.from(fades, ([layer, fade]) => [layer, fade.property])
+        : [
+            ...webMaterialFadeLayers(frame).map(layer => [layer, 'opacity'] as [Element, MaterialFade['property']]),
+            ...webMaterialShadowLayers(frame).map(layer => [layer, 'boxShadow'] as [Element, MaterialFade['property']]),
+        ];
+    for (const [layer, property] of layers) {
+        const previous = fades.get(layer);
+        const current = previous?.animation.playState === 'running' ? getComputedStyle(layer)[property] : null;
+        previous?.animation.cancel();
+        fades.delete(layer);
+        if (duration <= 0 || typeof layer.animate !== 'function') continue;
+        if (visible) {
+            // A finished fade only needs cancelling; a running one turns around from where it is.
+            if (current !== null) fades.set(layer, { property, animation: layer.animate([{ [property]: current, offset: 0 }], { duration, easing: motionTokens.easingCss.standard }) });
+            continue;
+        }
+        const gone = property === 'opacity' ? 0 : 'none';
+        const leave: Keyframe[] = current === null ? [{ [property]: gone, offset: 1 }] : [{ [property]: current }, { [property]: gone }];
+        fades.set(layer, { property, animation: layer.animate(leave, { duration, easing: motionTokens.easingCss.exit, fill: 'forwards' }) });
+    }
 }
 
 type OverlayPanelMotionParams = Readonly<{

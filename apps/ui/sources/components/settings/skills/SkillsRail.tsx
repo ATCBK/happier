@@ -33,6 +33,7 @@ import {
   useReachMachines,
   type ReachMachine,
 } from '@/sync/domains/capabilities/reach/useReachProjection';
+import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
 import {
   useSkillsLibrary,
   type SkillsLibrary,
@@ -40,19 +41,22 @@ import {
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { useOpenSkillAddModal } from './add/useOpenSkillAddModal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
   SKILLS_COLLECTION_ROUTE,
-  SKILLS_NEW_ROUTE,
   SKILLS_SEARCH_THRESHOLD,
-  countSkillsNeedingALook,
   filterSkills,
   groupSkillsByFolder,
   groupSkillsByUse,
   skillHref,
   skillSource,
 } from './skillsCollectionModel';
+import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
+import { useSkillsNeedsALook } from './status/useSkillsNeedsALook';
+import { SKILLS_CHOOSE_ROUTE, useSkillsFirstRun } from './firstRun/useSkillsFirstRun';
+import { SKILLS_UPDATES_ROUTE, countSkillUpdates } from './updates/skillsUpdatesModel';
 import { setPreviewedSkill } from './skillsPreviewStore';
 import { skillStatus } from './status/skillStatus';
 
@@ -100,6 +104,9 @@ export const SkillsList = React.memo(function SkillsList(
   const { library } = props;
   const { machines } = useReachMachines();
   const machineFilter = useSkillsMachineFilter(machines);
+  const foundCount = useFoundSkillsCount(
+    React.useMemo(() => machines.map((machine) => machine.machineId), [machines]),
+  );
   const [query, setQuery] = React.useState('');
   const agentIds = React.useMemo(
     () => [...new Set(machines.flatMap((machine) => machine.agentIds))],
@@ -116,7 +123,6 @@ export const SkillsList = React.memo(function SkillsList(
   const { names } = useWhereItsOnNames({
     agentIds,
     machines: placeMachines,
-    projects: NO_PROJECTS,
   });
   const searchable = library.items.length > SKILLS_SEARCH_THRESHOLD;
   const visible = React.useMemo(
@@ -152,14 +158,18 @@ export const SkillsList = React.memo(function SkillsList(
           ].filter((section) => section.rows.length > 0),
     [folderGroups, groups],
   );
-  const needLook = React.useMemo(
-    () => countSkillsNeedingALook(library.items),
-    [library.items],
-  );
+  const needLook = useSkillsNeedsALook(library, machines).length;
   const selectedId = selectedSkillId(pathname);
   const atRoot = pathname === SKILLS_COLLECTION_ROUTE;
+  const atFound = pathname === SKILLS_FOUND_ROUTE;
+  const atUpdates = pathname === SKILLS_UPDATES_ROUTE;
+  const atChoose = pathname === SKILLS_CHOOSE_ROUTE;
+  // Pinned destinations (P6 §4.1): Choose what's on only during first run, Updates only when one waits.
+  const { firstVisit } = useSkillsFirstRun(library.items);
+  const updateCount = React.useMemo(() => countSkillUpdates(library.items), [library.items]);
   const rail = props.variant === 'rail';
 
+  const openAdd = useOpenSkillAddModal();
   const open = React.useCallback(
     (href: string) => {
       // Beside a detail, switching skills replaces the shown detail instead of stacking history.
@@ -284,6 +294,45 @@ export const SkillsList = React.memo(function SkillsList(
             />
           </ItemGroup>
         ) : null}
+        {firstVisit || updateCount > 0 ? (
+          <ItemGroup>
+            {firstVisit ? (
+              <Item
+                testID="skills.page.choose"
+                title={t('capabilities.skills.home.choose')}
+                detail={t('capabilities.skills.home.chooseOff', { count: firstVisit.off })}
+                icon={<Icon name="sparkle" size={20} color={theme.colors.text.secondary} />}
+                onPress={() => open(SKILLS_CHOOSE_ROUTE)}
+              />
+            ) : null}
+            {updateCount > 0 ? (
+              <Item
+                testID="skills.page.updates"
+                title={t('capabilities.skills.updates')}
+                detail={String(updateCount)}
+                icon={<Icon name="arrow-up" size={20} color={theme.colors.text.secondary} />}
+                onPress={() => open(SKILLS_UPDATES_ROUTE)}
+              />
+            ) : null}
+          </ItemGroup>
+        ) : null}
+        {machines.length > 0 ? (
+          <ItemGroup>
+            <Item
+              testID="skills.page.found"
+              title={t('capabilities.skillsFound.destination')}
+              detail={foundCount > 0 ? String(foundCount) : undefined}
+              icon={
+                <Icon
+                  name="desktop"
+                  size={20}
+                  color={theme.colors.text.secondary}
+                />
+              }
+              onPress={() => open(SKILLS_FOUND_ROUTE)}
+            />
+          </ItemGroup>
+        ) : null}
         {unavailable
           ? stateCard('skills.rail.error', 'error', t('capabilities.skills.loadFailed'), {
               label: t('common.retry'),
@@ -318,6 +367,36 @@ export const SkillsList = React.memo(function SkillsList(
           selected={atRoot}
           onPress={() => open(SKILLS_COLLECTION_ROUTE)}
         />
+      {firstVisit ? (
+        <CollectionIndexRow
+          testID="skills.rail.choose"
+          icon="sparkle"
+          title={t('capabilities.skills.home.choose')}
+          detail={t('capabilities.skills.home.chooseOff', { count: firstVisit.off })}
+          selected={atChoose}
+          onPress={() => open(SKILLS_CHOOSE_ROUTE)}
+        />
+      ) : null}
+      {updateCount > 0 ? (
+        <CollectionIndexRow
+          testID="skills.rail.updates"
+          icon="arrow-up"
+          title={t('capabilities.skills.updates')}
+          detail={String(updateCount)}
+          selected={atUpdates}
+          onPress={() => open(SKILLS_UPDATES_ROUTE)}
+        />
+      ) : null}
+      {machines.length > 0 ? (
+        <CollectionIndexRow
+          testID="skills.rail.found"
+          icon="desktop"
+          title={t('capabilities.skillsFound.destination')}
+          detail={foundCount > 0 ? String(foundCount) : undefined}
+          selected={atFound}
+          onPress={() => open(SKILLS_FOUND_ROUTE)}
+        />
+      ) : null}
       {machineFilter ? (
         <Item
           testID="skills.rail.machineFilter"
@@ -408,8 +487,7 @@ export const SkillsList = React.memo(function SkillsList(
           variant="plain"
           accessibilityLabel={t('capabilities.skills.addSkill')}
           tooltip={t('capabilities.skills.addSkill')}
-          // Until the add modal lands (U6.4), "+" opens the one way to add that exists: write a new skill.
-          onPress={() => open(SKILLS_NEW_ROUTE)}
+          onPress={() => openAdd()}
         />
       }
       search={
@@ -428,8 +506,6 @@ export const SkillsList = React.memo(function SkillsList(
   );
 });
 
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
-  Object.freeze([]);
 
 const pageStyles = StyleSheet.create((theme) => ({
   // The search field lines up with the sheets below it (the grouped list's content edge).

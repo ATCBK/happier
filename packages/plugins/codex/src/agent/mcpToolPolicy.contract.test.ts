@@ -65,14 +65,15 @@ async function openSession(request: AgentSessionOpenRequest): Promise<AgentSessi
         return;
       }
       const nativeId = `native-approval-${call.id}`;
+      const correlatedApproval = launch.includes('features.tool_call_mcp_elicitation=false');
       const reply = (bytes: { toString(): string }) => {
-        const result = JSON.parse(bytes.toString()) as { id?: string; result?: { answers?: Record<string, { answers: string[] }> } };
+        const result = JSON.parse(bytes.toString()) as { id?: string; result?: { action?: string; answers?: Record<string, { answers: string[] }> } };
         if (result.id !== nativeId) return;
         socket.off('message', reply);
         void (async () => {
           const answer = result.result?.answers?.mcp_tool_call_approval_1?.answers[0];
           if (answer === 'Approve this Session') throw new Error('Native Session grant bypasses later host MCP policy');
-          const approved = answer === 'Approve Once';
+          const approved = correlatedApproval ? answer === 'Approve Once' : result.result?.action === 'accept';
           if (approved) await fixture.callServer(call.server, call.tool, call.arguments);
           outcome.resolve({ outcome: approved ? 'completed' : 'denied', permissions: fixture.permissions() });
           socket.send(JSON.stringify({ method: 'turn/completed', params: { threadId: 'fresh-thread', turn: { id: turnId, status: 'completed' } } }));
@@ -81,6 +82,14 @@ async function openSession(request: AgentSessionOpenRequest): Promise<AgentSessi
       socket.on('message', reply);
       socket.send(JSON.stringify({ method: 'item/started', params: { threadId: 'fresh-thread', turnId,
         item: { id: call.id, type: 'mcpToolCall', server: key, tool: call.tool, arguments: call.arguments } } }));
+      if (!correlatedApproval) {
+        socket.send(JSON.stringify({ id: nativeId, method: 'mcpServer/elicitation/request', params: {
+          threadId: 'fresh-thread', turnId, serverName: key, mode: 'form',
+          _meta: { codex_approval_kind: 'mcp_tool_call', tool_title: 'Human title shared by every tool', tool_params: call.arguments },
+          message: 'May this tool run?', requestedSchema: { type: 'object', properties: {} },
+        } }));
+        return;
+      }
       socket.send(JSON.stringify({ id: nativeId, method: 'item/tool/requestUserInput', params: {
         threadId: 'fresh-thread', turnId, itemId: call.id,
         questions: [{ id: 'mcp_tool_call_approval_1', header: 'Tool permission', question: 'May the fixture tool run?',

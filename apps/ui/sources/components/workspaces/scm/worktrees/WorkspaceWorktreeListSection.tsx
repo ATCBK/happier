@@ -15,24 +15,23 @@ import { Icon } from '@/components/ui/icons/Icon';
 
 const stylesheet = StyleSheet.create((theme) => ({
     searchContainer: {
-        paddingHorizontal: 12,
-        paddingTop: 12,
-        paddingBottom: 6,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s6,
     },
     searchInput: {
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
         color: theme.colors.text.primary,
         fontSize: 13,
     },
     helperText: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        ...Typography.default(),
+        ...Typography.variant('body'),
     },
 }));
 

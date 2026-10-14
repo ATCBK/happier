@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { ReachRuleDraftV1Schema, ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
 import { McpServerCatalogMutationResponseV1Schema } from '../../mcp/servers/catalogSchemasV1.js';
@@ -9,32 +9,34 @@ import type { ActionId } from '../actionIds.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
 export { CAPABILITY_RULES_ACTION_IDS_V1 } from '../capabilityRulesActionIdsV1.js';
-const identity = lazyZodSchema(() => z.string().trim().min(1));
-export const McpRulesSetInputV1Schema = lazyZodSchema(() => z.object({
-  items: z.array(z.union([z.object({ serverId: identity }).strict(), z.object({ name: identity }).strict()])).min(1),
+const identity = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+export const McpRulesSetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  items: z.array(z.union([z.strictObject({ serverId: identity }), z.strictObject({ name: identity })])).check(z.minLength(1)),
   change: ReachRulesChangeV1Schema,
-}).strict());
-export const McpRulesSetItemResultV1Schema = lazyZodSchema(() => McpServerCatalogMutationResponseV1Schema.options[0].shape.items.unwrap().element);
+  /** Evidence-bound changes compare at the catalog owner before its row CAS. */
+  expectedRevision: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+}));
+export const McpRulesSetItemResultV1Schema = lazyZodSchema(() => McpServerCatalogMutationResponseV1Schema._zod.def.options[0].shape.items.unwrap().element);
 export const McpRulesSetOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), items: z.array(McpRulesSetItemResultV1Schema),
-    revision: z.number().int().nonnegative() }).strict(),
-  z.object({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }).strict(),
+  z.strictObject({ ok: z.literal(true), items: z.array(McpRulesSetItemResultV1Schema),
+    revision: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }),
 ]));
-export const SkillsRulesSetInputV1Schema = lazyZodSchema(() => z.object({
-  items: z.array(z.union([z.object({ skillId: identity }).strict(), z.object({ name: identity }).strict()])).min(1),
+export const SkillsRulesSetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  items: z.array(z.union([z.strictObject({ skillId: identity }), z.strictObject({ name: identity })])).check(z.minLength(1)),
   change: ReachRulesChangeV1Schema,
-}).strict());
+}));
 export const SkillsRulesSetOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), items: z.array(z.object({ skillId: identity,
-    rules: z.array(ReachRuleV1Schema), previous: z.array(ReachRuleV1Schema) }).strict()),
-    revision: z.number().int().nonnegative() }).strict(),
-  z.object({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }).strict(),
+  z.strictObject({ ok: z.literal(true), items: z.array(z.strictObject({ skillId: identity,
+    rules: z.array(ReachRuleV1Schema), previous: z.array(ReachRuleV1Schema) })),
+    revision: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }),
 ]));
-const rulesCliInput = lazyZodSchema(() => z.object({
-  names: z.array(identity).optional(), itemIds: z.array(identity).optional(),
-  everywhere: z.boolean().optional(), machine: identity.optional(), project: identity.optional(), folder: identity.optional(),
-  agent: identity.optional(), rules: z.array(ReachRuleDraftV1Schema).optional(),
-}).strict());
+const rulesCliInput = lazyZodSchema(() => z.strictObject({
+  names: z.optional(z.array(identity)), itemIds: z.optional(z.array(identity)),
+  everywhere: z.optional(z.boolean()), machine: z.optional(identity), project: z.optional(identity), folder: z.optional(identity),
+  agent: z.optional(identity), rules: z.optional(z.array(ReachRuleDraftV1Schema)),
+}));
 
 /** Friendly argv reshaping only; name lookup and mutation belong to the catalog Action. */
 function bindRulesCliInput(value: unknown, context: ActionCliBindContext, idField: 'serverId' | 'skillId'): unknown {
@@ -58,7 +60,7 @@ function bindRulesCliInput(value: unknown, context: ActionCliBindContext, idFiel
 }
 
 /** Both catalogs declare one rules operation and their own identity/receipt schemas. */
-export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput extends z.ZodTypeAny, TOutput extends z.ZodTypeAny>(input: Readonly<{
+export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput extends z.ZodMiniType, TOutput extends z.ZodMiniType>(input: Readonly<{
   id: TId; title: string; itemKind: 'mcp' | 'skills'; idField: 'serverId' | 'skillId';
   inputSchema: TInput; outputSchema: TOutput;
 }>): PreNormalizedActionSpec & Readonly<{ id: TId; inputSchema: TInput; outputSchema: TOutput }> {
@@ -83,9 +85,20 @@ export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput e
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
     bindings: { rpcMethod: input.id, mcpToolName: input.id.replaceAll('.', '_') },
     inputSchema: input.inputSchema, outputSchema: input.outputSchema,
-    inputHints: { fields: [{ path: 'items', title: 'Items', widget: 'json', required: true },
-      { path: 'change', title: 'Rules change', widget: 'json', required: true }] },
     projectObservationInput: projectObservation, projectObservationOutput: projectObservation,
+    // The deciding person reviews the complete rule intent; shared observations
+    // retain only identity and receipt fields.
+    approvalPresentation: { summary: () => null, projectInput: raw => input.inputSchema.parse(raw), retainInputOnSettlement: true },
+    inputHints: { fields: [
+      { path: `items.[].${input.idField}`, title: input.itemKind === 'skills' ? 'Skill' : 'MCP server', widget: 'text' },
+      { path: 'items.[].name', title: input.itemKind === 'skills' ? 'Skill' : 'MCP server', widget: 'text' },
+      { path: 'change.write.place', title: 'Where', widget: 'json' },
+      { path: 'change.write.state', title: 'Change', widget: 'select', options: [
+        { value: 'on', label: 'Turn on' }, { value: 'off', label: 'Turn off' }, { value: 'inherit', label: 'Use inherited rules' },
+      ] },
+      { path: 'change.write.agentId', title: 'Agent', widget: 'text' },
+      { path: 'change.rules', title: 'Replacement rules', widget: 'json' },
+    ] },
     cli: { acceptsServerId: true, commands, inputSchema: rulesCliInput,
       bindInput: (value, context) => bindRulesCliInput(value, context, input.idField),
       flagAliases: [{ path: 'everywhere', aliases: ['--all-machines'] }, ...(input.itemKind === 'mcp' ? [{ path: 'names', aliases: ['--mcp-server'] }] : []),

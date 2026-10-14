@@ -1,15 +1,8 @@
 import { randomUUID } from "node:crypto";
 import tweetnacl from "tweetnacl";
-import {
-    MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1,
-    MachineLiveStreamCapsV1Schema,
-    PEER_MEDIATION_RECEIPTS,
-    createMachineLiveStreamRelayAuthorizationSigningInputV1,
-    type MachineLiveStreamCapsV1,
-    type MachineLiveStreamCodecIdV1,
-    type MachineLiveStreamRelayAuthorizationPayloadV1,
-    type MachineLiveStreamRelayAuthorizationV1,
-} from "@happier-dev/protocol";
+import { MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1, MachineLiveStreamCapsV1Schema, createMachineLiveStreamRelayAuthorizationSigningInputV1, type MachineLiveStreamCapsV1, type MachineLiveStreamRelayAuthorizationPayloadV1, type MachineLiveStreamRelayAuthorizationV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { type MachineLiveStreamCodecIdV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
 
 export type MintMachineLiveStreamRelayAuthorizationV1Result =
     | Readonly<{

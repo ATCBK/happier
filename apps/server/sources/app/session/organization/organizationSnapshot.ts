@@ -1,16 +1,10 @@
-import {
-    type SessionAttentionStanding,
-    type SessionOrganizationContentEnvelope,
-    type SessionOrganizationDisplayState,
-    type SessionFolderAssignment,
-    type SessionOrganizationFolder,
-    type SessionOrganizationLabel,
-    type SessionOrganizationOrderEntry,
-    type SessionOrganizationPin,
-    type SessionOrganizationSnapshot,
-    type SessionOrganizationTag,
-    type SessionTagAssignment,
-} from "@happier-dev/protocol";
+import { type SessionAttentionStanding } from '@happier-dev/protocol/sessions/organization/standings';
+import { type SessionOrganizationContentEnvelope, type SessionOrganizationDisplayState } from '@happier-dev/protocol/sessions/organization/content';
+import { type SessionFolderAssignment, type SessionOrganizationFolder } from '@happier-dev/protocol/sessions/organization/folders';
+import { type SessionOrganizationLabel, type SessionOrganizationOrderEntry } from '@happier-dev/protocol/sessions/organization/ordering';
+import { type SessionOrganizationPin } from '@happier-dev/protocol/sessions/organization/pins';
+import { type SessionOrganizationSnapshot } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { type SessionOrganizationTag, type SessionTagAssignment } from '@happier-dev/protocol/sessions/organization/tags';
 
 import type { EffectiveAccountEncryptionMode } from "@/app/encryption/accountEncryptionMode";
 import { parseSessionOrganizationDisplayEnvelope } from "./contentEnvelope";

@@ -102,10 +102,30 @@ export function mergeInstalledPluginUiProjections(
     if (previous?.runtime === runtime) return previous.projection;
     const installedPluginIds = new Set(installed.flatMap(model => declarationMaps(model).flatMap(map =>
         Object.values(map).flatMap(entry => { const id = readString(asRecord(entry)?.pluginId); return id ? [id] : []; }))));
+    const hostBundledPluginIds = new Set(installed.flatMap(model => Object.values(model.installedPackagesById)
+        .filter(plugin => plugin.source.kind === 'bundled' && !plugin.occurrenceId).map(plugin => plugin.id)));
     const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>) => {
         const declared: Record<string, T> = Object.assign({}, ...installed.map(read));
         for (const [key, entry] of Object.entries(runtime ? read(runtime) : {})) {
             const pluginId = readString(asRecord(entry)?.pluginId);
+            const packageSource = pluginId ? runtime?.installedPackagesById[pluginId]?.sourceCustody : null;
+            if (pluginId && hostBundledPluginIds.has(pluginId) && packageSource?.kind === 'development'
+                && readPluginUiContributionSupplies(entry).some(supply => supply.phase === 'current' && supply.interactionEnabled)) {
+                // A user-selected live source remains the authoring selector. Host
+                // bytes supply the bundled fallback when no such source is current.
+                declared[key] = entry;
+                continue;
+            }
+            const declaration = asRecord(declared[key]);
+            if (declaration && Array.isArray(declaration.hostSupplies) && !declaration.occurrenceId) {
+                declared[key] = Object.freeze(Object.assign({}, declared[key], {
+                    hostSupplies: readPluginUiContributionSupplies(entry),
+                    // Daemon Resource facts bind data, never the host renderer bytes.
+                    ...(declaration.contributionKind === 'surfacePlacement' || declaration.contributionKind === 'settingsPage'
+                        ? { runtime: asRecord(entry)?.runtime ?? declaration.runtime } : {}),
+                }));
+                continue;
+            }
             if (!pluginId || !installedPluginIds.has(pluginId)
                 || (declared[key] && stableContent(declarationContent(declared[key])) === stableContent(declarationContent(entry)))) {
                 declared[key] = entry;
@@ -265,17 +285,14 @@ function deriveUnionGeneration(members: readonly PluginUiProjectionUnionMember[]
 /**
  * The direct V2 producer stamp. This is intentionally parsed as an origin
  * record, not rebuilt from entry/plugin/machine fields: only the projection
- * producer knows which materialization produced an entry.
+ * producer knows which installation or source produced an entry.
  */
 export function readPluginUiProjectionEntryExecutionOrigin(entry: unknown): PluginMachineExecutionOriginV1 | null {
     const candidate = asRecord(entry);
     const pluginId = readString(candidate?.pluginId);
-    if (!candidate || !pluginId || candidate.serverIdentityId == null || candidate.materializationRef == null) return null;
-    const parsed = PluginMachineExecutionOriginV1Schema.safeParse({
-        serverIdentityId: candidate.serverIdentityId,
-        materializationRef: candidate.materializationRef,
-    });
-    if (!parsed.success || !('materializationRef' in parsed.data) || parsed.data.materializationRef.pluginId !== pluginId) return null;
+    if (!candidate || !pluginId || candidate.executionOrigin == null) return null;
+    const parsed = PluginMachineExecutionOriginV1Schema.safeParse(candidate.executionOrigin);
+    if (!parsed.success || getPluginMachineExecutionOriginRef(parsed.data).pluginId !== pluginId) return null;
     return parsed.data;
 }
 
@@ -290,11 +307,9 @@ function selectedOriginOwnsEntry(input: Readonly<{
     const producerOrigin = readPluginUiProjectionEntryExecutionOrigin(input.entry);
     return selectedOrigin !== undefined
         && producerOrigin !== null
-        && 'materializationRef' in selectedOrigin
-        && 'materializationRef' in producerOrigin
-        && selectedOrigin.materializationRef.pluginId === pluginId
-        && selectedOrigin.materializationRef.machineId === input.machineId
-        && producerOrigin.materializationRef.machineId === input.machineId
+        && getPluginMachineExecutionOriginRef(selectedOrigin).pluginId === pluginId
+        && getPluginMachineExecutionOriginRef(selectedOrigin).machineId === input.machineId
+        && getPluginMachineExecutionOriginRef(producerOrigin).machineId === input.machineId
         && arePluginMachineExecutionOriginsEqual(selectedOrigin, producerOrigin);
 }
 
@@ -321,7 +336,7 @@ function declarationMaps(model: PluginUiProjectionModel): readonly Readonly<Reco
 function declarationContent(entry: unknown): unknown {
     const record = asRecord(entry);
     if (!record) return entry;
-    const { occurrenceId, serverIdentityId, materializationRef, sourceCustody, immutableGenerationId, generation,
+    const { occurrenceId, executionOrigin, sourceCustody, immutableGenerationId, generation,
         enabled, availability, available, runtimeMode, runtimeDiagnostics, diagnostics, ...content } = record;
     const renderer = asRecord(content.renderer);
     if (renderer?.kind !== 'declarative' || renderer.model === undefined) return content;
@@ -406,10 +421,10 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
         // admission. A package occurrence must never introduce an alternate source for one.
         if (member.materializationsByPluginId?.[params.pluginId]?.portableRelease) continue;
         const origin = resolveMemberContributionOrigin({ ...member, projection: member.projection }, {
-            pluginId: params.pluginId, occurrenceId: installed.occurrenceId,
+            pluginId: params.pluginId, occurrenceId: installed.occurrenceId, executionOrigin: installed.executionOrigin,
         });
         if (!origin?.executionOrigin) continue;
-        packageSupplies.push({ ...origin, occurrenceId: installed.occurrenceId, pluginVersion: installed.version,
+        packageSupplies.push({ ...origin, occurrenceId: installed.occurrenceId, pluginVersion: installed.version ?? null,
             sourceCustody: installed.sourceCustody ?? null,
             executionTargetDefault: installed.executionTarget?.default === 'installation' });
     }
@@ -455,10 +470,11 @@ function entryHasCurrentOccurrence(projection: PluginUiProjectionModel, entry: R
 function resolveMemberEntryExecutionOrigin(
     member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>,
     entry: UnknownRecord,
-    sourceOriginsByPluginId?: Map<string, PluginMachineExecutionOriginV1 | null>,
+    packageOriginsByPluginId?: Map<string, PluginMachineExecutionOriginV1 | null>,
 ): PluginMachineExecutionOriginV1 | null {
     const producerOrigin = readPluginUiProjectionEntryExecutionOrigin(entry);
     if (producerOrigin) return producerOrigin;
+    if (entry.executionOrigin !== undefined) return null;
     const pluginId = readString(entry.pluginId);
     if (!pluginId) return null;
     const installation = member.materializationsByPluginId?.[pluginId];
@@ -466,28 +482,26 @@ function resolveMemberEntryExecutionOrigin(
         return composePluginMachineExecutionOriginV1(installation);
     }
     const installed = member.projection.installedPackagesById[pluginId];
-    if (!installed?.sourceCustody || !entryHasCurrentOccurrence(member.projection, {
+    if (!installed || !entryHasCurrentOccurrence(member.projection, {
         pluginId, occurrenceId: readString(entry.occurrenceId) ?? undefined,
     })) return null;
-    if (sourceOriginsByPluginId?.has(pluginId)) return sourceOriginsByPluginId.get(pluginId) ?? null;
-    const source = PluginMachineExecutionOriginV1Schema.safeParse({ serverIdentityId: member.serverIdentityId,
-        sourceRef: { machineId: member.machineId, pluginId, sourceCustody: installed.sourceCustody } });
-    const origin = source.success ? source.data : null;
-    sourceOriginsByPluginId?.set(pluginId, origin);
+    if (packageOriginsByPluginId?.has(pluginId)) return packageOriginsByPluginId.get(pluginId) ?? null;
+    const origin = readPluginUiProjectionEntryExecutionOrigin({ pluginId, executionOrigin: installed.executionOrigin });
+    packageOriginsByPluginId?.set(pluginId, origin);
     return origin;
 }
 
 function resolveMemberContributionOrigin(
     member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>,
     entry: UnknownRecord,
-    sourceOriginsByPluginId?: Map<string, PluginMachineExecutionOriginV1 | null>,
+    packageOriginsByPluginId?: Map<string, PluginMachineExecutionOriginV1 | null>,
 ): PluginUiContributionOriginV1 | null {
     const pluginId = readString(entry.pluginId);
     if (!pluginId) return null;
     const observedInstallation = member.materializationsByPluginId?.[pluginId];
     return Object.freeze({ machineId: member.machineId, serverId: member.serverId,
         generation: member.projection.generation, phase: member.phase,
-        executionOrigin: resolveMemberEntryExecutionOrigin(member, entry, sourceOriginsByPluginId),
+        executionOrigin: resolveMemberEntryExecutionOrigin(member, entry, packageOriginsByPluginId),
         interactionEnabled: member.interactionEnabled && member.projection.generation !== null
             && member.projection.installedPackagesById[pluginId]?.enabled !== false
             && (!observedInstallation || (observedInstallation.enabled && observedInstallation.trustState === 'trusted'))
@@ -683,7 +697,7 @@ export function unionPluginUiProjections(
             ...(binding?.pluginVersion ? { pluginVersion: binding.pluginVersion } : {}),
             // A descriptive row may not carry the first replica's runtime
             // identity into a consumer that reads the direct producer stamp.
-            ...(!binding ? { occurrenceId: undefined, serverIdentityId: undefined, materializationRef: undefined } : {}),
+            ...(!binding ? { occurrenceId: undefined, executionOrigin: undefined } : {}),
             hostOrigin: binding,
             hostSupplies: supplies,
             hostCompatibility: conflict ? 'conflict' : 'compatible',
@@ -699,9 +713,9 @@ export function unionPluginUiProjections(
         const model = member.projection;
         const admittedPluginIds = new Set<string>();
         const admittedOriginsByPluginId = new Map<string, PluginUiContributionOriginV1>();
-        const sourceOriginsByPluginId = new Map<string, PluginMachineExecutionOriginV1 | null>();
+        const packageOriginsByPluginId = new Map<string, PluginMachineExecutionOriginV1 | null>();
         const originFor = (entry: UnknownRecord): PluginUiContributionOriginV1 | null => {
-            const origin = resolveMemberContributionOrigin(member, entry, sourceOriginsByPluginId);
+            const origin = resolveMemberContributionOrigin(member, entry, packageOriginsByPluginId);
             if (!origin) return null;
             const pluginId = readString(entry.pluginId);
             if (pluginId) admittedPluginIds.add(pluginId);
@@ -772,7 +786,7 @@ export function unionPluginUiProjections(
             }
         }
         for (const [id, entry] of Object.entries(model.resourcesById)) {
-            const hasProducerStamp = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
+            const hasProducerStamp = entry.executionOrigin !== undefined;
             const origin = hasProducerStamp
                 ? resourceHasCurrentProducerOrigin(model, entry)
                     && selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }) ? originFor(entry) : null

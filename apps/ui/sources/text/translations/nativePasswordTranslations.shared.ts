@@ -20,6 +20,7 @@ export const nativePasswordTranslationsEnglish = { en: {
         newPassword: 'New password',
         confirmPassword: 'Confirm password',
         signInFailed: 'That email and password combination did not work.',
+        accountVerificationFailed: "We could not verify this Account to change its password. Sign in again or use your recovery key, then try again.",
         accountDisabledHere: 'This account is disabled on this Home. Ask a Home administrator to re-enable it.',
         notEligible: 'This account cannot sign in to this Home right now.',
         linkExpired: 'This link has expired or was already used. Request a new one.',

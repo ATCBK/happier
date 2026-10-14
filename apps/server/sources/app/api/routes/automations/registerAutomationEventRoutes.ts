@@ -1,14 +1,7 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
-import {
-    AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1,
-    AutomationEventActionHttpPathsV1,
-    AutomationEventActionHttpRequestSchemasV1,
-    AutomationEventAdmitHttpResultV1Schema,
-    AutomationEventStoredDefinitionsReadHttpRequestV1Schema,
-    AutomationEventStoredDefinitionsReadResultV1Schema,
-    AutomationEventSourceStatusReportResultV1Schema,
-} from "@happier-dev/protocol";
+import { AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1, AutomationEventActionHttpPathsV1, AutomationEventActionHttpRequestSchemasV1, AutomationEventStoredDefinitionsReadHttpRequestV1Schema, AutomationEventStoredDefinitionsReadResultV1Schema } from '@happier-dev/protocol/automations/event';
+import { AutomationEventAdmitHttpResultV1Schema, AutomationEventSourceStatusReportResultV1Schema } from '@happier-dev/protocol/automations/automationActionSpecsV1';
 
 import {
     AutomationEventAdmissionError,
@@ -34,7 +27,7 @@ import type { Fastify } from "../../types";
 const STATUS_REPORT_PATH = AutomationEventActionHttpPathsV1["automation.event.source.status.report"];
 const ADMIT_PATH = AutomationEventActionHttpPathsV1["automation.event.admit"];
 const STORED_DEFINITION_READ_PATH = AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1;
-const ConflictResponseSchema = z.object({ error: z.string().min(1).max(64) }).strict();
+const ConflictResponseSchema = z.strictObject({ error: z.string().check(z.minLength(1), z.maxLength(64)) });
 
 type RouteDependencies = Readonly<{
     admitEvent: typeof admitAutomationEventV1;

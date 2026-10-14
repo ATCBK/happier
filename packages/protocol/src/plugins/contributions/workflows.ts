@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ActionIdSchema } from '../../actions/actionIds.js';
 import { WorkflowDefinitionV1Schema, type WorkflowValidationIssue } from '../../workflows/workflowV1.js';
 import { walkWorkflowBlocks } from '../../workflows/workflowDefinitionEditV1.js';
@@ -14,12 +14,12 @@ import {
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 
 /** Read-only plugin definitions use the same grammar as library workflows. */
-export const PluginWorkflowContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginWorkflowContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
-  title: z.string().trim().min(1),
-  description: z.string().optional(),
+  title: z.string().check(z.trim(), z.minLength(1)),
+  description: z.optional(z.string()),
   definition: WorkflowDefinitionV1Schema,
-}).strict());
+}));
 export type PluginWorkflowContributionV1 = z.infer<typeof PluginWorkflowContributionV1Schema>;
 
 export class PluginWorkflowContributionErrorV1 extends Error {

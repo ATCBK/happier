@@ -14,6 +14,13 @@ import type { VoiceConversationBindingResolution } from './voiceConversationBind
 import { readLocalConversationVoiceSettings, voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { storage } from '@/sync/domains/state/storage';
+import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
+import { isVoiceConversationSystemSessionMetadata, shouldRetireLegacyVoiceConversationSession } from '@/voice/persistence/voiceConversationSystemSessionLookup';
+import { readVoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
+import { readPreferredVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
+import { sync } from '@/sync/sync';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /**
  * Read the provider-owned transcript-mode decision for a voice adapter from the
@@ -92,6 +99,24 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
 
     const transcriptMode = resolveBindingTranscriptMode(providerId, params.settings);
     if (!transcriptMode) return null;
+
+    let requestedMetadata = targetSessionAddress
+        ? readVoiceSessionOwnerMetadataFromState(storage.getState(), targetSessionAddress) : null;
+    if (targetSessionAddress && !requestedMetadata
+        && areServerProfileIdentifiersEquivalent(targetSessionAddress.serverId, getActiveServerSnapshot().serverId)) {
+        await sync.ensureSessionVisibleForMessageRoute(targetSessionAddress.sessionId, { serverId: targetSessionAddress.serverId });
+        requestedMetadata = readVoiceSessionOwnerMetadataFromState(storage.getState(), targetSessionAddress);
+    }
+    if (targetSessionAddress && isVoiceConversationSystemSessionMetadata(requestedMetadata)
+        && !shouldRetireLegacyVoiceConversationSession({ metadata: requestedMetadata })) {
+        const conversationSessionId = await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: targetSessionAddress });
+        const existing = readPreferredVoiceConversationBindingMetadata({ conversationSessionId,
+            preferredMetadata: requestedMetadata, sourceServerId: targetSessionAddress.serverId });
+        const scope = readVoiceConversationScopeMetadata(requestedMetadata);
+        return { controlSessionId, conversationSessionId, conversationSessionAddress: targetSessionAddress, transcriptMode,
+            targetSessionAddress: existing ? existing.targetSessionAddress
+                : (scope?.kind === 'session_root' ? normalizeSessionAddress(targetSessionAddress.serverId, scope.sessionRootId) : null) };
+    }
 
     // The hidden conversation Session belongs to the same Home as its root Session: for the
     // global voice agent that is the resolved target address, and for a Session-attached

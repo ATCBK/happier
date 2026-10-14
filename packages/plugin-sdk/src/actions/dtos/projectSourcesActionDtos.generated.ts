@@ -26,6 +26,7 @@ export type ProjectSourcesActionInputById = {
         sourceId: string;
     };
     readonly "projects.sources.create": {
+        name: string;
         repository: {
             provider: {
                 id: string;
@@ -43,7 +44,6 @@ export type ProjectSourcesActionInputById = {
             };
             protocol: 'auto' | 'ssh' | 'https';
         };
-        name: string;
         serverId: string;
         requestKey: string;
         defaultRef?: string | undefined;

@@ -70,6 +70,10 @@ function start(f, entry, options) {
   let stderr = '';
   child.stderr.on('data', chunk => { stderr += chunk; });
   const completed = once(child, 'close');
+  const cancel = () => child.kill('SIGTERM');
+  const stopObservingCancellation = () => options?.signal?.removeEventListener('abort', cancel);
+  options?.signal?.addEventListener('abort', cancel, { once: true });
+  completed.then(stopObservingCancellation, stopObservingCancellation);
   return { child, completed, stderr: () => stderr };
 }
 
@@ -86,10 +90,12 @@ for (const entry of ['launcher', 'custody', 'control']) {
         assert.ok(exit >= 0);
         await writeFile(path, original.slice(0, exit) + '\n#' + ' padding'.repeat(8192) + '\n' + original.slice(exit));
       }
-      const running = start(f, entry);
+      const running = start(f, entry, { signal: t.signal });
       try {
+        // Flush progress is diagnostic stderr; direct payloads retain stdout.
+        const outputStream = entry === 'control' ? running.child.stderr : running.child.stdout;
         const output = await Promise.race([
-          once(running.child.stdout, 'data').then(([chunk]) => String(chunk)),
+          once(outputStream, 'data', { signal: t.signal }).then(([chunk]) => String(chunk)),
           running.completed.then(result => assert.fail(`payload never started: ${result}; ${running.stderr()}`)),
         ]);
         assert.equal(output, 'payload-ready\n', running.stderr());

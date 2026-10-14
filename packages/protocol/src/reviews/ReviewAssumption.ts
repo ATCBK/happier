@@ -1,9 +1,9 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const ReviewAssumptionSchema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  text: z.string().min(1),
-  findingIds: z.array(z.string().min(1)).optional(),
-}).passthrough());
+export const ReviewAssumptionSchema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  text: z.string().check(z.minLength(1)),
+  findingIds: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
 export type ReviewAssumption = z.infer<typeof ReviewAssumptionSchema>;

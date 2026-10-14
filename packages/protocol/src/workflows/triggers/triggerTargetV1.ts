@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WorkflowDefinitionRefV1StringSchema } from '../workflowDefinitionRefV1.js';
 import { WorkflowDefinitionV1Schema } from '../workflowV1.js';
 import { AutomationStoredWorkflowDefinitionV2ReadSchema } from '../../automations/automationWorkflowRecipeV2.js';
 
 export const TriggerTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('workflow'), ref: WorkflowDefinitionRefV1StringSchema }).strict(),
-  z.object({ kind: z.literal('inline'), definition: WorkflowDefinitionV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('workflow'), ref: WorkflowDefinitionRefV1StringSchema }),
+  z.strictObject({ kind: z.literal('inline'), definition: WorkflowDefinitionV1Schema }),
 ]));
 export type TriggerTargetV1 = z.infer<typeof TriggerTargetV1Schema>;
 export type ReadTriggerTargetV1Result =

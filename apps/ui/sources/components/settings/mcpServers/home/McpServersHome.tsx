@@ -1,0 +1,699 @@
+import * as React from 'react';
+import { Image, View, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { HomeOrbitMap } from '@/components/atmosphere/orbit/HomeOrbitMap';
+import { layoutHomeOrbitRing } from '@/components/atmosphere/orbit/homeOrbitScene';
+import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
+import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
+import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
+import { t } from '@/text';
+import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+
+import {
+  mcpServerRoute,
+} from '../collection/mcpServerCollectionModel';
+import { McpServerMark } from '../identity/McpServerMark';
+import {
+  MCP_RING_MORE_KEY,
+  type McpHome,
+  type McpHomeServer,
+} from './mcpHomeModel';
+import { McpFoundBlock } from './McpFoundBlock';
+import { McpRegistryShelf } from './McpRegistryShelf';
+import { setPreviewedMcpServer, usePreviewedMcpServer } from './mcpServerPreview';
+import { useMcpHome } from './useMcpHome';
+import { useOpenMcpAddModal } from '../add/useOpenMcpAddModal';
+
+/** The tether map beside its legend (lab hm-A §12: 300 × 268, ring radius 104 around a 36 px planet). */
+const MAP_BOX = {
+  width: 300,
+  height: 268,
+  planetRadius: 36,
+  ring: 104,
+} as const;
+/** Phone hero: the map alone across the column, a little smaller (lab hm-A2p). */
+const PHONE_MAP = { height: 244, planetRadius: 32, ring: 92 } as const;
+const RING_MARK_PX = 22;
+/** The legend's narrowest useful column; under it the legend moves beneath the map. */
+const LEGEND_MIN_PX = 360;
+const REACH_GAP_PX = 32;
+const SIDE_BY_SIDE_MIN_PX = MAP_BOX.width + REACH_GAP_PX + LEGEND_MIN_PX;
+
+function useGo() {
+  const router = useRouter();
+  return React.useCallback(
+    (href: string) => {
+      const result = runGuardedNavigation(() => router.push(href as never));
+      if (result !== true) fireAndForget(result, { tag: 'McpServersHome.go' });
+    },
+    [router],
+  );
+}
+
+/**
+ * `/settings/mcp` beside the rail: the homepage (P7 U7.11, lab hm-A Reach). The Home planet with every
+ * server's mark on a ring, tethered by how it reaches the agents; the legend says the same in words in
+ * two groups, each problem with its one fix; then the present in one line, the registry's suggestions
+ * and what is already on the machines.
+ */
+export const McpServersHome = React.memo(function McpServersHome() {
+  const home = useMcpHome();
+  return <McpServersHomeView home={home} />;
+});
+
+/** The homepage drawn from its data (the dev specimen renders it from lab-cast fixtures). */
+export const McpServersHomeView = React.memo(function McpServersHomeView(
+  props: Readonly<{ home: McpHomeData }>,
+) {
+  return (
+    <ItemList pageColumn="wide">
+      <PageContentColumn>
+        <McpServersHomeBody home={props.home} phone={false} />
+      </PageContentColumn>
+    </ItemList>
+  );
+});
+
+/** The phone's list page leads with the same map as its hero (lab hm-A2p), then the list follows. */
+export const McpServersHomeHero = React.memo(function McpServersHomeHero() {
+  const home = useMcpHome();
+  return <McpServersHomeBody home={home} phone />;
+});
+
+export type McpHomeData = ReturnType<typeof useMcpHome>;
+
+const McpServersHomeBody = React.memo(function McpServersHomeBody(
+  props: Readonly<{ home: McpHomeData; phone: boolean }>,
+) {
+  const { home } = props;
+  const go = useGo();
+  const openAdd = useOpenMcpAddModal();
+  const { model } = home;
+  const brandNew =
+    !home.loading && !home.unavailable && model.servers.length === 0;
+  const firstVisit = model.firstVisitLine && !brandNew;
+  const headline = brandNew
+    ? t('capabilities.mcpHome.newTitle')
+    : firstVisit
+      ? t('capabilities.mcpHome.firstHeadline')
+      : t('settings.mcpServers');
+  const purpose = brandNew
+    ? t('capabilities.mcpHome.newBody')
+    : firstVisit
+      ? t('capabilities.mcpHome.firstPurpose')
+      : t('capabilities.mcpHome.purpose');
+  if (props.phone) {
+    // The phone list page draws its own header; the hero is the map and the present line.
+    if (home.unavailable || brandNew) return null;
+    return (
+      <View style={styles.inset}>
+        <ReachBlock
+          home={model}
+          phone
+          loading={home.loading}
+          brandNew={false}
+          suggestions={home.suggestions}
+        />
+        {home.loading ? null : <PresentLine home={model} />}
+      </View>
+    );
+  }
+  return (
+    <>
+      <PageHeader
+        testID="mcp.home.header"
+        title={headline}
+        titleProminence="hero"
+        alwaysShowTitle
+        description={purpose}
+        {...(firstVisit
+          ? {
+              actionsPlacement: 'page' as const,
+              actions: (
+                <IconButton
+                  testID="mcp.home.firstVisit.dismiss"
+                  iconName="x"
+                  variant="plain"
+                  accessibilityLabel={t('capabilities.mcpHome.firstDismiss')}
+                  tooltip={t('capabilities.mcpHome.firstDismiss')}
+                  onPress={home.dismissFirstVisit}
+                />
+              ),
+            }
+          : {})}
+      />
+      <View style={styles.inset}>
+        {home.unavailable ? (
+          <SurfaceStateCard
+            testID="mcp.home.error"
+            size="page"
+            kind="error"
+            title={t('capabilities.mcpHome.loadFailed')}
+            action={{
+              label: t('common.retry'),
+              onPress: () => {
+                void home.reload();
+              },
+            }}
+          />
+        ) : (
+          <ReachBlock
+            home={model}
+            phone={false}
+            loading={home.loading}
+            brandNew={brandNew}
+            suggestions={home.suggestions}
+          />
+        )}
+        {home.loading || home.unavailable || brandNew ? null : (
+          <PresentLine home={model} />
+        )}
+        {brandNew ? (
+          <RoundButtonSizeScope size="normal" presentation="uniform">
+            <View style={styles.acts}>
+            <RoundButton
+              testID="mcp.home.browse"
+              title={t('capabilities.mcpHome.browse')}
+              onPress={() => openAdd({ modeKey: 'catalog' })}
+            />
+            <RoundButton
+              testID="mcp.home.paste"
+              display="secondary"
+              title={t('capabilities.mcpHome.paste')}
+              onPress={() => openAdd({ modeKey: 'paste' })}
+            />
+          </View>
+          </RoundButtonSizeScope>
+        ) : null}
+      </View>
+      {home.loading || home.unavailable ? null : (
+        <McpRegistryShelf
+          shelf={home.shelf}
+          servers={model.servers}
+          onAdd={(card) =>
+            openAdd({ modeKey: 'catalog', sourceId: card.sourceId, query: card.title })
+          }
+          onOpen={(serverId) => go(mcpServerRoute(serverId))}
+        />
+      )}
+      {home.loading || home.unavailable ? null : (
+        <McpFoundBlock presentation="section" />
+      )}
+    </>
+  );
+});
+
+/**
+ * No servers where no homepage stands beside a rail (a phone's list page, a narrow pane): the page-level
+ * empty state with its built-in scene (lab mp-E), then what is already on the machines and the registry's
+ * suggestions, so the first add is one press away.
+ */
+export const McpServersEmpty = React.memo(function McpServersEmpty() {
+  const home = useMcpHome();
+  const go = useGo();
+  const openAdd = useOpenMcpAddModal();
+  if (home.loading) return null;
+  if (home.unavailable) {
+    return (
+      <SurfaceStateCard
+        testID="settings.mcpServers.loadFailed"
+        size="page"
+        kind="error"
+        title={t('capabilities.mcpHome.loadFailed')}
+        action={{ label: t('common.retry'), onPress: () => { void home.reload(); } }}
+      />
+    );
+  }
+  return (
+    <>
+      <EmptyState
+        testID="settings.mcpServers.invitation"
+        layout="page"
+        scene="nothingListening"
+        title={t('capabilities.mcpHome.newTitle')}
+        subtitle={t('capabilities.mcpHome.newBody')}
+        primaryAction={{
+          testID: 'settings.mcpServers.invitation.add',
+          label: t('capabilities.mcpHome.browse'),
+          onPress: () => openAdd({ modeKey: 'catalog' }),
+        }}
+        secondaryAction={{
+          testID: 'settings.mcpServers.invitation.paste',
+          label: t('capabilities.mcpHome.paste'),
+          onPress: () => openAdd({ modeKey: 'paste' }),
+        }}
+      />
+      <McpFoundBlock presentation="line" />
+      <McpRegistryShelf
+        shelf={home.shelf}
+        servers={home.model.servers}
+        onAdd={(card) =>
+          openAdd({ modeKey: 'catalog', sourceId: card.sourceId, query: card.title })
+        }
+        onOpen={(serverId) => go(mcpServerRoute(serverId))}
+      />
+    </>
+  );
+});
+
+/** The tether map and its legend. */
+const ReachBlock = React.memo(function ReachBlock(
+  props: Readonly<{
+    home: McpHome;
+    phone: boolean;
+    loading: boolean;
+    brandNew: boolean;
+    suggestions: readonly Readonly<{
+      key: string;
+      iconUrl: string | null;
+      title: string;
+    }>[];
+  }>,
+) {
+  const { home } = props;
+  const go = useGo();
+  const [width, setWidth] = React.useState(0);
+  const onLayout = React.useCallback(
+    (event: LayoutChangeEvent) =>
+      setWidth(Math.round(event.nativeEvent.layout.width)),
+    [],
+  );
+  // A rail row or a legend row being pointed at: one preview for the map and the present line.
+  const previewed = usePreviewedMcpServer();
+  // Leaving the homepage mid-hover never leaves a stale preview behind.
+  React.useEffect(() => () => setPreviewedMcpServer(null), []);
+  const sideBySide = !props.phone && width >= SIDE_BY_SIDE_MIN_PX;
+  const mapWidth = props.phone ? width : MAP_BOX.width;
+  const box = props.phone
+    ? PHONE_MAP
+    : {
+        height: MAP_BOX.height,
+        planetRadius: MAP_BOX.planetRadius,
+        ring: MAP_BOX.ring,
+      };
+  const scene = React.useMemo(
+    () =>
+      layoutHomeOrbitRing(mapWidth, box.height, home.ring.marks, {
+        pr: box.planetRadius,
+        r: box.ring,
+        markSize: RING_MARK_PX,
+      }),
+    [box.height, box.planetRadius, box.ring, home.ring.marks, mapWidth],
+  );
+  const byId = React.useMemo(
+    () => new Map(home.servers.map((server) => [server.id, server])),
+    [home.servers],
+  );
+  const suggestionsByKey = React.useMemo(
+    () => new Map(props.suggestions.map((mark) => [mark.key, mark])),
+    [props.suggestions],
+  );
+  const highlight = React.useMemo(
+    () => (previewed && byId.has(previewed) ? new Set([previewed]) : null),
+    [byId, previewed],
+  );
+  const renderMark = React.useCallback(
+    (key: string) => {
+      if (key === MCP_RING_MORE_KEY) {
+        return (
+          <Text variant="meta" emphasis="semiBold" style={styles.more}>
+            {t('capabilities.mcpHome.more', { count: home.ring.more })}
+          </Text>
+        );
+      }
+      const server = byId.get(key);
+      if (server)
+        return (
+          <McpServerMark
+            transport={server.server.transport}
+            size={RING_MARK_PX - 2}
+          />
+        );
+      const suggestion = suggestionsByKey.get(key);
+      if (suggestion?.iconUrl)
+        return (
+          <Image
+            source={{ uri: suggestion.iconUrl }}
+            style={styles.ringImage}
+            accessibilityIgnoresInvertColors
+          />
+        );
+      return <McpServerMark transport="http" size={RING_MARK_PX - 2} />;
+    },
+    [byId, home.ring.more, suggestionsByKey],
+  );
+  const open = React.useCallback(
+    (serverId: string) => go(mcpServerRoute(serverId)),
+    [go],
+  );
+  return (
+    <View
+      testID="mcp.home.reach"
+      onLayout={onLayout}
+      style={[styles.reach, sideBySide ? styles.reachRow : null]}
+    >
+      {width > 0 ? (
+        <HomeOrbitMap
+          testID="mcp.home.map"
+          scene={scene}
+          highlightKeys={highlight}
+          renderRingMark={renderMark}
+          accessibilityLabel={t('capabilities.mcpHome.mapLabel', {
+            count: home.servers.length,
+          })}
+        />
+      ) : (
+        <View style={{ height: box.height }} />
+      )}
+      {props.phone ? null : (
+        <View style={sideBySide ? styles.legendSide : styles.legendBelow}>
+          {props.brandNew ? (
+            <NewLegend />
+          ) : (
+            <Legend
+              home={home}
+              loading={props.loading}
+              onPreview={setPreviewedMcpServer}
+              onOpen={open}
+            />
+          )}
+        </View>
+      )}
+    </View>
+  );
+});
+
+/** The tether in words: a short solid or dotted rule before each group's name (lab `hm-lk`). */
+function TetherKey(props: Readonly<{ kind: 'account' | 'machine' }>) {
+  return (
+    <View
+      style={[styles.key, props.kind === 'machine' ? styles.keyDotted : null]}
+    />
+  );
+}
+
+function LegendHeader(props: Readonly<{ kind: 'account' | 'machine' }>) {
+  return (
+    <View style={[collectionListStyles.row, styles.legendHeader]}>
+      <TetherKey kind={props.kind} />
+      <Text variant="meta" emphasis="semiBold" style={styles.legendTitle}>
+        {props.kind === 'account'
+          ? t('capabilities.mcpHome.groupAccount')
+          : t('capabilities.mcpHome.groupMachine')}
+      </Text>
+    </View>
+  );
+}
+
+/** Brand new: the two ways a server reaches the agents, said before there is any (lab hm-A4). */
+function NewLegend() {
+  return (
+    <View style={styles.legend}>
+      <View style={styles.legendGroup}>
+        <LegendHeader kind="account" />
+        <Text variant="body" style={styles.newBody}>
+          {t('capabilities.mcpHome.newAccountBody')}
+        </Text>
+      </View>
+      <View style={styles.legendGroup}>
+        <LegendHeader kind="machine" />
+        <Text variant="body" style={styles.newBody}>
+          {t('capabilities.mcpHome.newMachineBody')}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function Legend(
+  props: Readonly<{
+    home: McpHome;
+    loading: boolean;
+    onPreview: (serverId: string | null) => void;
+    onOpen: (serverId: string) => void;
+  }>,
+) {
+  const groups = (['account', 'machine'] as const).filter(
+    (kind) => props.home.legend[kind].length > 0,
+  );
+  return (
+    <View style={styles.legend} testID="mcp.home.legend">
+      {groups.map((kind) => (
+        <View key={kind} style={styles.legendGroup}>
+          <LegendHeader kind={kind} />
+          {/* Rows at the rail's density, without a sheet: a legend, not a list to manage (lab hm-A). */}
+          {props.home.legend[kind].map((server) => (
+            <LegendRow
+              key={server.id}
+              server={server}
+              onPreview={props.onPreview}
+              onOpen={props.onOpen}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function problemStatus(
+  server: McpHomeServer,
+  fix: () => void,
+): CapabilityStatus | null {
+  switch (server.problem) {
+    case 'expired':
+      return { kind: 'expired', fix: { kind: 'reconnect', onPress: fix } };
+    case 'signin':
+      return { kind: 'signin', fix: { kind: 'sign_in', onPress: fix } };
+    case 'key':
+      return { kind: 'key', fix: { kind: 'add_key', onPress: fix } };
+    default:
+      return null;
+  }
+}
+
+function legendFact(server: McpHomeServer): string | undefined {
+  if (server.problem) return undefined;
+  if (server.group === 'machine') return server.server.stdio?.command;
+  if (server.server.remote?.auth?.kind === 'oauth') {
+    return server.identity
+      ? t('capabilities.mcpHome.factAs', { identity: server.identity })
+      : t('capabilities.mcpHome.factSignedIn');
+  }
+  const keyed = Object.values(server.server.remote?.headers ?? {}).some(
+    (ref) => ref.t === 'savedSecret' || ref.t === 'template',
+  );
+  return keyed
+    ? t('capabilities.mcpHome.factKey')
+    : t('capabilities.mcpHome.factRemote');
+}
+
+const LegendRow = React.memo(function LegendRow(
+  props: Readonly<{
+    server: McpHomeServer;
+    onPreview: (serverId: string | null) => void;
+    onOpen: (serverId: string) => void;
+  }>,
+) {
+  const { server, onPreview, onOpen } = props;
+  // Each fix lives on the server's page (its Sign-in section, its key row): the homepage leads there.
+  const fix = React.useCallback(() => onOpen(server.id), [onOpen, server.id]);
+  const status = problemStatus(server, fix);
+  const fixLabel =
+    server.problem === 'expired'
+      ? t('capabilities.mcpHome.reconnect')
+      : server.problem === 'signin'
+        ? t('capabilities.mcpHome.signIn')
+        : t('capabilities.mcpHome.addKey');
+  const action = status ? (
+    <View style={styles.fix}>
+      <CapabilityStatusChip
+        status={status}
+        testID={`mcp.home.legend.${server.id}:status`}
+      />
+      <RoundButton
+        testID={`mcp.home.legend.${server.id}.fix`}
+        size="small"
+        display="secondary"
+        title={fixLabel}
+        onPress={fix}
+      />
+    </View>
+  ) : (
+    <Text variant="meta" style={styles.tools}>
+      {server.toolCount === null
+        ? t('capabilities.mcpHome.notTested')
+        : t('capabilities.mcpHome.tools', { count: server.toolCount })}
+    </Text>
+  );
+  const fact = legendFact(server);
+  return (
+    <CapabilityRow
+      testID={`mcp.home.legend.${server.id}`}
+      title={server.title}
+      {...(fact ? { whereSummary: fact } : {})}
+      mark={<McpServerMark transport={server.server.transport} size={16} />}
+      action={action}
+      density="rail"
+      divider={false}
+      // A problem's fix is the row's one button (a pressable row cannot hold a button); a healthy row opens its page.
+      {...(status ? { stackActionWhenNarrow: true } : { onPress: fix })}
+      onPreviewChange={(active) => onPreview(active ? server.id : null)}
+    />
+  );
+});
+
+function formatTokens(tokens: number): string {
+  return tokens >= 1000
+    ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`
+    : String(tokens);
+}
+
+/** One line of the present; while a server is previewed, the line says how that one reaches you. */
+function PresentLine(props: Readonly<{ home: McpHome }>) {
+  const { home } = props;
+  const railPreview = usePreviewedMcpServer();
+  const previewed = railPreview
+    ? (home.servers.find((server) => server.id === railPreview) ?? null)
+    : null;
+  let text: string;
+  if (previewed) text = previewLine(previewed);
+  else if (home.present.servers === 0)
+    text = t('capabilities.mcpHome.presentNone');
+  else if (!home.present.toolsKnown)
+    text = t('capabilities.mcpHome.presentNoTools', {
+      count: home.present.servers,
+    });
+  else
+    text = t('capabilities.mcpHome.present', {
+      servers: home.present.servers,
+      tools: home.present.tools,
+      tokens: formatTokens(home.present.tokens),
+    });
+  return (
+    <Text
+      testID="mcp.home.sentence"
+      variant="reading"
+      style={styles.sentence}
+      accessibilityLiveRegion="polite"
+    >
+      {previewed ? (
+        <Text
+          variant="reading"
+          emphasis="semiBold"
+          style={styles.count}
+        >{`${previewed.title} · `}</Text>
+      ) : null}
+      {withCounts(text, 'p')}
+      {!previewed && home.needsYou > 0 ? (
+        <Text variant="reading" style={styles.attention}>
+          {withCounts(
+            t('capabilities.mcpHome.needYou', { count: home.needsYou }),
+            'a',
+            styles.attention,
+          )}
+        </Text>
+      ) : null}
+    </Text>
+  );
+}
+
+function previewLine(server: McpHomeServer): string {
+  if (server.off) return t('capabilities.mcpHome.previewOff');
+  if (server.problem === 'expired')
+    return t('capabilities.mcpHome.previewExpired');
+  if (server.problem === 'signin')
+    return t('capabilities.mcpHome.previewSignIn');
+  if (server.problem === 'key')
+    return t('capabilities.mcpHome.previewNeedsKey');
+  const tools =
+    server.toolCount === null
+      ? ''
+      : ` · ${t('capabilities.mcpHome.tools', { count: server.toolCount })}`;
+  if (server.group === 'machine')
+    return `${t('capabilities.mcpHome.previewMachine')}${tools}`;
+  if (server.server.remote?.auth?.kind === 'oauth') {
+    return `${server.identity ? t('capabilities.mcpHome.previewSignedInAs', { identity: server.identity }) : t('capabilities.mcpHome.previewSignedIn')}${tools}`;
+  }
+  return `${t('capabilities.mcpHome.previewKey')}${tools}`;
+}
+
+/** The line's counts read as facts: in ink, a step heavier (lab `hm-num`). */
+function withCounts(
+  text: string,
+  key: string,
+  style?: object,
+): React.ReactNode[] {
+  return text.split(/(\d[\d.,]*k?)/).map((part, index) =>
+    index % 2 === 1 ? (
+      <Text
+        key={`${key}${index}`}
+        variant="reading"
+        emphasis="semiBold"
+        style={style ?? styles.count}
+      >
+        {part}
+      </Text>
+    ) : (
+      part
+    ),
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  inset: { paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() },
+  reach: { gap: theme.space.s16, marginTop: theme.space.s8, alignItems: 'center' },
+  reachRow: { flexDirection: 'row', alignItems: 'center', gap: REACH_GAP_PX },
+  legendSide: { flex: 1, minWidth: 0 },
+  legendBelow: { alignSelf: 'stretch' },
+  legend: { gap: theme.space.s16 },
+  legendGroup: { gap: theme.space.s4 },
+  legendHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+    minHeight: 0,
+    paddingVertical: theme.space.s4,
+  },
+  legendTitle: { color: theme.colors.text.secondary },
+  key: {
+    width: 20,
+    height: 0,
+    borderTopWidth: 1.2,
+    borderColor: theme.colors.text.secondary,
+    opacity: 0.7,
+  },
+  keyDotted: { borderStyle: 'dotted' },
+  newBody: { color: theme.colors.text.secondary, paddingLeft: theme.space.s24 },
+  fix: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  tools: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
+  more: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
+  ringImage: { width: RING_MARK_PX - 2, height: RING_MARK_PX - 2 },
+  sentence: {
+    color: theme.colors.text.secondary,
+    marginTop: theme.space.s16,
+    marginBottom: theme.space.s8,
+  },
+  count: { color: theme.colors.text.primary, fontVariant: ['tabular-nums'] },
+  attention: { color: theme.colors.state.warning.foreground },
+  acts: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+    marginTop: theme.space.s16,
+    marginBottom: theme.space.s16,
+  },
+}));

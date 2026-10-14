@@ -1,32 +1,32 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EntityDragScopeV1Schema, EntityDragSessionAddressV1Schema } from '../plugins/ui/entityDragDrop.js';
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from './actionSpecs.js';
 
 import { SESSION_CANVAS_ACTION_IDS, type SessionCanvasActionId } from './sessionCanvasActionIds.js';
 export { SESSION_CANVAS_ACTION_IDS, type SessionCanvasActionId } from './sessionCanvasActionIds.js';
-const id = z.string().trim().min(1);
-const scope = z.object({ scope: EntityDragScopeV1Schema, canvasKey: id }).strict();
-const tab = scope.extend({ tabId: id }).strict();
+const id = z.string().check(z.trim(), z.minLength(1));
+const scope = z.strictObject({ scope: EntityDragScopeV1Schema, canvasKey: id });
+const tab = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { tabId: id }));
 const placement = z.enum(['center', 'left', 'right', 'up', 'down']);
 export const SESSION_CANVAS_ACTION_INPUT_SCHEMAS = {
   'session.canvas.tabs.list': scope,
-  'session.canvas.tabs.open': scope.extend({ sessionId: id, leafId: id, placement: placement.default('center'), beforeTabId: id.nullable().optional() }).strict(),
+  'session.canvas.tabs.open': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(scope, { sessionId: id, leafId: id, placement: z._default(placement, 'center'), beforeTabId: z.optional(z.nullable(id)) })),
   'session.canvas.tabs.activate': tab,
   'session.canvas.tabs.close': tab,
-  'session.canvas.tabs.move': tab.extend({ targetLeafId: id, placement: placement.default('center'), beforeTabId: id.nullable().optional() }).strict(),
-  'session.canvas.tabs.reorder': tab.extend({ beforeTabId: id.nullable() }).strict(),
-  'session.canvas.tabs.pin': tab.extend({ pinned: z.boolean() }).strict(),
+  'session.canvas.tabs.move': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(tab, { targetLeafId: id, placement: z._default(placement, 'center'), beforeTabId: z.optional(z.nullable(id)) })),
+  'session.canvas.tabs.reorder': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(tab, { beforeTabId: z.nullable(id) })),
+  'session.canvas.tabs.pin': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(tab, { pinned: z.boolean() })),
 } as const;
-const unavailable = z.object({ status: z.literal('unavailable') }).strict();
-const refused = z.object({ status: z.literal('refused'), reason: id }).strict();
+const unavailable = z.strictObject({ status: z.literal('unavailable') });
+const refused = z.strictObject({ status: z.literal('refused'), reason: id });
 const mutation = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied') }).strict(), z.object({ status: z.literal('unchanged') }).strict(), unavailable, refused,
+  z.strictObject({ status: z.literal('applied') }), z.strictObject({ status: z.literal('unchanged') }), unavailable, refused,
 ]);
-const list = z.discriminatedUnion('status', [unavailable, refused, z.object({
-  status: z.literal('listed'), focusedLeafId: id.nullable(), maximizedLeafId: id.nullable(),
-  leaves: z.array(z.object({ id, tabIds: z.array(id), activeTabId: id.nullable() }).strict()),
-  tabs: z.array(z.object({ id, leafId: id, address: EntityDragSessionAddressV1Schema, pinned: z.boolean(), preview: z.boolean() }).strict()),
-}).strict()]);
+const list = z.discriminatedUnion('status', [unavailable, refused, z.strictObject({
+  status: z.literal('listed'), focusedLeafId: z.nullable(id), maximizedLeafId: z.nullable(id),
+  leaves: z.array(z.strictObject({ id, tabIds: z.array(id), activeTabId: z.nullable(id) })),
+  tabs: z.array(z.strictObject({ id, leafId: id, address: EntityDragSessionAddressV1Schema, pinned: z.boolean(), preview: z.boolean() })),
+})]);
 export const SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS = {
   'session.canvas.tabs.list': list,
   'session.canvas.tabs.open': mutation,

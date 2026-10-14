@@ -234,13 +234,17 @@ function assertCaptureCompatibility(
   leases: ReadonlyMap<string, ActiveLease>,
   next: VoiceAudioSessionRequest,
 ): void {
-  const hasExclusive = [...leases.values()].some(
-    (lease) => lease.request.capture === 'provider_managed_exclusive',
-  );
-  if (
-    (next.capture === 'provider_managed_exclusive' && leases.size > 0)
-    || (next.capture !== 'provider_managed_exclusive' && hasExclusive)
-  ) {
+  const conflict = [...leases.values()].some(({ request }) => {
+    const exclusive = next.capture === 'provider_managed_exclusive' ? next
+      : request.capture === 'provider_managed_exclusive' ? request : null;
+    if (!exclusive) return false;
+    const other = exclusive === next ? request : next;
+    // A recognizer owns input only and can hear while host TTS plays through
+    // this same audio session. A duplex vendor SDK also owns its output; it
+    // remains exclusive, as does capture against any second input owner.
+    return exclusive.output || other.input || other.capture === 'provider_managed_exclusive';
+  });
+  if (conflict) {
     throw new VoiceAudioSessionCoordinatorError(
       'exclusive_capture_conflict',
       'Provider-managed exclusive capture cannot overlap another native audio lease.',

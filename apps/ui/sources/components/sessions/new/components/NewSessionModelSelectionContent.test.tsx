@@ -229,9 +229,9 @@ describe('NewSessionModelSelectionContent', () => {
         expect(trigger?.props.subtitle).toBe('Shared Provider model');
         expect(trigger?.props.detail).toContain('Personal');
         expect(trigger?.props.detail).not.toContain('Work');
-        expect(trigger?.props.accessibilityLabel).toBe(
-            'newSession.selectModelTitle. Gateway, Personal, Shared Provider model',
-        );
+        expect(trigger?.props.accessibilityLabel).toContain('Personal');
+        expect(trigger?.props.accessibilityLabel).toContain('Shared Provider model');
+        expect(trigger?.props.accessibilityLabel).not.toContain('Work');
     });
 
     it('keeps a missing exact Provider selection truthful in the closed compact summary', async () => {

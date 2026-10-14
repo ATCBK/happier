@@ -141,6 +141,7 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
   const localOrigin = workerLoopbackOrigin(workerLoopbackUrl ?? env.HAPPIER_STACK_QA_BROWSER_WORKER_LOOPBACK_URL);
   const profile = await mkdtemp(join(tmpdir(), 'hstack-qa-browser-'));
   const session = `hstack-${sessionName}-${randomUUID()}`;
+  const discoverySession = `hstack-discovery-${randomUUID()}`;
   const browserEnv = { ...env, AGENT_BROWSER_SESSION: session, AGENT_BROWSER_RESTORE_SAVE: 'never',
     // Chromium's singleton socket is rooted in TMPDIR, independently of its
     // profile. Remote command scratch paths can exceed AF_UNIX's path limit.
@@ -164,7 +165,7 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     else if (resolveAudio && line.startsWith('fake-audio:')) resolveAudio(Buffer.from(line.slice('fake-audio:'.length), 'base64'));
   });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) signalSource.on(signal, close);
-  let opened = false;
+  let openedSession = null;
   try {
     const audioPath = audio ? join(profile, 'fake-audio.wav') : null;
     if (audio) {
@@ -184,21 +185,24 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
       ...(trustSpki ? [`--ignore-certificate-errors-spki-list=${trustSpki}`] : []), ...(proxy ? [
       `--proxy-server=socks5://127.0.0.1:${proxyPort}`, `--proxy-bypass-list=<-loopback>${localOrigin ? `;${localOrigin}` : ''}`,
     ] : [])];
-    opened = true; // A failed open can still have created its own daemon.
+    openedSession = discoverySession; // A failed open can still have created its own daemon.
     // agent-browser 0.34's --args parser splits commas even inside a switch.
     // Let its canonical detector select Chromium, observe that executable via
     // public CDP, then append the intact Blink switch at the executable boundary.
+    // v0.34 acknowledges close before its daemon exits. A separate discovery
+    // session keeps that daemon's later teardown away from the serving session.
     // Both launches stay in this worker's owned profile and cleanup lifecycle.
-    const discovery = await capture('agent-browser', ['--session', session, '--profile', profile, ...(gpu ? ['--headed'] : []),
-      '--args', [...launchArgs, '--enable-automation'].join(','), 'open', 'about:blank'], { env: browserEnv });
+    const discoveryEnv = { ...browserEnv, AGENT_BROWSER_SESSION: discoverySession };
+    const discovery = await capture('agent-browser', ['--session', discoverySession, '--profile', profile, ...(gpu ? ['--headed'] : []),
+      '--args', [...launchArgs, '--enable-automation'].join(','), 'open', 'about:blank'], { env: discoveryEnv });
     if (!discovery.ok) throw new Error(`[dev-targets] QA browser launch failed: ${discovery.err || discovery.error?.message || discovery.exitCode}`);
     if (lifetimeAbort.signal.aborted) return;
     let executable;
     try { executable = await readQaBrowserExecutable(profile, lifetimeAbort.signal); }
     catch (error) { if (lifetimeAbort.signal.aborted) return; throw error; }
-    const discoveryClose = await capture('agent-browser', ['--session', session, 'close'], { env: browserEnv });
+    const discoveryClose = await capture('agent-browser', ['--session', discoverySession, 'close'], { env: discoveryEnv });
     if (!discoveryClose.ok) throw new Error(`[dev-targets] QA browser executable discovery cleanup failed: ${discoveryClose.err || discoveryClose.exitCode}`);
-    opened = false;
+    openedSession = null;
     if (lifetimeAbort.signal.aborted) return;
     const wrapper = join(profile, 'chromium-desktop');
     const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -210,7 +214,7 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     ];
     await writeFile(wrapper, `#!/bin/sh\nexec ${quote(executable)} "$@" ${executableArgs.map(quote).join(' ')}\n`, { mode: 0o700 });
     if (lifetimeAbort.signal.aborted) return;
-    opened = true;
+    openedSession = session;
     const launch = await capture('agent-browser', ['--session', session, '--profile', profile, ...(gpu ? ['--headed'] : []),
       '--executable-path', wrapper, '--args', launchArgs.join(','), 'open', 'about:blank'], { env: browserEnv });
     if (!launch.ok) throw new Error(`[dev-targets] QA browser launch failed: ${launch.err || launch.error?.message || launch.exitCode}`);
@@ -222,7 +226,7 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     control.close();
     input.pause();
     try {
-      await cleanupQaBrowserProfile({ session: opened ? session : null, profile, env: browserEnv }, { capture });
+      await cleanupQaBrowserProfile({ session: openedSession, profile, env: browserEnv }, { capture });
     } finally {
       for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) signalSource.off(signal, close);
     }

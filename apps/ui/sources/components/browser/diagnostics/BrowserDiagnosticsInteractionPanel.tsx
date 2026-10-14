@@ -33,31 +33,31 @@ export type BrowserDiagnosticsInteractionSurface = 'all' | 'console' | 'elements
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 8,
+        gap: theme.space.s8,
         borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     title: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
     },
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     warning: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         // Q2 measured the theme's semantic FOREGROUNDS as text at 2.20–3.55:1 in light theme —
         // they are fill colours, not text colours. The words carry their own meaning here, so

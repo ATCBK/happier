@@ -13,7 +13,7 @@ import { reportPendingSessionActivationFailure } from '@/api/session/pendingActi
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
-import { activatePendingInactiveSession } from './activatePendingInactiveSession';
+import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected } from './activatePendingInactiveSession';
 import { createActivityLog } from '../guard/activityLog';
 import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler';
 import { createMinuteHistoryStore } from '../vitals/history/minuteHistoryStore';
@@ -114,9 +114,12 @@ describe('activatePendingInactiveSession', () => {
         errorDetail: { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' } }));
       const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1', requestId: 'pending-after-ui-death',
         pendingVersion: 9, spawnSession,
-        onActivationRejected: async (event: Readonly<{ sessionId: string; reason: string; failure?: SpawnFailureV1 }>) => {
+        onActivationRejected: async (event: PendingInactiveSessionActivationRejected) => {
           const { createGuardSessionRestoration } = await import('../guard/sessionRestoration');
-          await createGuardSessionRestoration({ activity, nowMs: () => now }).onActivationRejected({ ...event, attribution });
+          await createGuardSessionRestoration({ activity, nowMs: () => now,
+            readCustodianTarget: () => ({ serverId: attribution.serverId, machineId: attribution.machineId,
+              installationId: attribution.installationId, custodianAccountId: attribution.accountId }),
+          }).onActivationRejected(event);
         } };
       expect(await activatePendingInactiveSession(params)).toMatchObject({ status: 'rejected', reason: 'spawn-rejected' });
       expect((await activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([

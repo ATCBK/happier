@@ -67,6 +67,7 @@ import {
 } from './collections.js';
 import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConversationBindingUpdateRow } from './accountLocalBindingPolicy.js';
 import { startConversationConnectionTransfer } from './connectionLifecycle.js';
+import type { ConversationConnectionTransportOriginV1 } from './connectionLifecycle.js';
 import { pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
 import { createConversationPairingManager } from './pairing.js';
 
@@ -112,12 +113,15 @@ function pendingPermissionRequest(input: Readonly<{
 
 function payloadTransportOrigin(
   payload: Readonly<Record<string, unknown>>,
-): PluginMachineExecutionOriginV1 {
+): ConversationConnectionTransportOriginV1 {
   const value = payload.transportOrigin;
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Expected the retained connection payload to carry a transport origin.');
   }
-  return value as PluginMachineExecutionOriginV1;
+  if (!('materializationRef' in value)) {
+    throw new Error('Expected retained transport custody to name its materialization.');
+  }
+  return value as ConversationConnectionTransportOriginV1;
 }
 
 import {
@@ -247,6 +251,13 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
     throw new Error('Expected a persisted record.');
   }
   return value as Readonly<Record<string, unknown>>;
+}
+
+function jsonStateRow(row: StoredStateRow | undefined) {
+  if (row === undefined || !isChannelStateJsonRecord(row.value)) {
+    throw new Error('Expected a host-validated Channel state row.');
+  }
+  return { rowId: row.rowId, revision: row.revision, value: row.value };
 }
 
 function channelConnection() {
@@ -1575,6 +1586,17 @@ function measurementFor(
 }
 
 describe('Conversation provider observation ingress', () => {
+  it.each([0, 59_999, 31 * 86_400_000])('admits a current observation with representable freshness %s', async maximumObservationAgeMs => {
+    const now = 1_700_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const harness = createIngressHarness();
+      replaceConnectionPayload(harness.rows, { maximumObservationAgeMs });
+      await ingestConversationProviderObservationForInvocation(observation({ messageRevision: 'freshness:1', occurredAt: now }), harness.context);
+      expect(harness.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
   it('includes attachment descriptors in compacted occurrence replay identity', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -1612,7 +1634,7 @@ describe('Conversation provider observation ingress', () => {
     })]);
     expect(harness.send).toHaveBeenCalledTimes(1);
     const obligation = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation');
-    expect(obligation?.value.payload.disposition).toBe('admitted');
+    expect(record(obligation?.value.payload).disposition).toBe('admitted');
   });
 
   it('restores an archived Session before admitting a new message to the same binding target', async () => {
@@ -1698,12 +1720,12 @@ describe('Conversation provider observation ingress', () => {
     await runConversationIngressRetentionForInvocation({ now: Date.now() + 31 * 86_400_000 }, harness.context);
     expect(relations()).toHaveLength(2);
   });
-  it.each([
+  it.each<Readonly<{ label: string; result: JsonValue }>>([
     { label: 'native success', result: { ok: true } },
     { label: 'acknowledged CLI request', result: { requested: true } },
-  ] as const)('cancels the bound turn once for /stop, bypasses debounce, and rejoins after reload ($label)', async ({ result }) => {
+  ])('cancels the bound turn once for /stop, bypasses debounce, and rejoins after reload ($label)', async ({ result }) => {
     const harness = createIngressHarness({
-      execute: () => result,
+      execute: (): JsonValue => result,
     });
     const binding = channelBinding();
     harness.rows.set(binding.id, stateRow({
@@ -1791,13 +1813,13 @@ describe('Conversation provider observation ingress', () => {
     }
   });
 
-  it.each([
+  it.each<Readonly<{ label: string; result: JsonValue }>>([
     { label: 'no active turn', result: { ok: false, errorCode: 'no_active_turn' } },
     { label: 'empty result', result: {} },
     { label: 'malformed acknowledgement', result: { requested: 'true' } },
     { label: 'explicit refusal beside acknowledgement', result: { ok: false, requested: true } },
-  ] as const)('settles a /stop refusal through control custody without admitting it as input ($label)', async ({ result }) => {
-    const harness = createIngressHarness({ execute: () => result });
+  ])('settles a /stop refusal through control custody without admitting it as input ($label)', async ({ result }) => {
+    const harness = createIngressHarness({ execute: (): JsonValue => result });
     const command = observation({ messageRevision: 'stop:idle', messageText: '/stop' });
     await ingestConversationProviderObservationForInvocation(command, harness.context);
     await ingestConversationProviderObservationForInvocation(command, harness.context);
@@ -3874,7 +3896,7 @@ describe('Conversation provider observation ingress', () => {
   });
 
   it('refuses retained author attestation before a trusted /new spawn', async () => {
-    const harness = createIngressHarness({ availableSessionIds: ['session-1', 'session-2'], execute: actionId => {
+    const harness = createIngressHarness({ availableSessionIds: ['session-1', 'session-2'], execute: (actionId): JsonValue => {
       if (actionId === 'session.spawn_new') return { type: 'success', disposition: 'created', sessionId: 'session-2',
         executionTarget: { serverId: 'server-1', machineId: 'machine-1' }, organizationPlacement: { folderId: null, tagIds: [] },
         initialInput: { status: 'notRequested' } };
@@ -4301,15 +4323,19 @@ describe('Conversation provider observation ingress', () => {
     const harness = createIngressHarness({ connection: socketChannelConnection(), availableSessionIds: ['session-1', 'session-2'],
       sessionSummary: id => ({ id, hasAttestedContext, state: 'idle', runtimeAvailability: { status: 'available' },
         storagePolicy: 'optional', encryptionMode: 'plain', updatedAtMs: 1 }),
-      execute: (actionId, input) => {
+      execute: (actionId, input): JsonValue => {
         if (actionId === 'session.spawn_new') {
           births.push(input);
           return { type: 'success', disposition: 'created', sessionId: 'session-2',
             executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
             organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
         }
-        if (actionId === 'session.transcript.get') return { ok: true, projection: 'externalShareableV1', sessionId: record(input).sessionId,
-          items: [], scannedThroughSeq: 0, hasMore: false };
+        if (actionId === 'session.transcript.get') {
+          const sessionId = record(input).sessionId;
+          if (typeof sessionId !== 'string') throw new Error('Expected a transcript request Session id.');
+          return { ok: true, projection: 'externalShareableV1', sessionId,
+            items: [], scannedThroughSeq: 0, hasMore: false };
+        }
         return threadSpawnBoundary(actionId, input);
       },
     });
@@ -4353,7 +4379,7 @@ describe('Conversation provider observation ingress', () => {
         }
         return { status: 'accepted', localId: 'rejoined-initial-input' };
       },
-      execute: (actionId, input) => {
+      execute: (actionId, input): JsonValue => {
         if (actionId === 'session.spawn_new') return {
           type: 'success', disposition: 'rejoined', sessionId: 'session-2',
           executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
@@ -7223,7 +7249,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       },
       // The public host Action API is external to this plugin. Its boundary
       // records private outcomes and returns the actual read/standing shapes.
-      execute: async (id, input) => {
+      execute: async (id, input): Promise<JsonValue> => {
         const request = record(input);
         expect(request.sessionId).toBe('session-1');
         if (id === 'session.read_state.set') {
@@ -7244,7 +7270,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     harness.rows.set('binding-1', stateRow({ ...original.value, payload: { ...payload, enabled: false, endpoint,
       target: { ...record(payload.target), pullRequestLink: endpoint.pullRequest } } }));
     const readPublishedLinks = () => resolveSessionPullRequestLinksV1([
-      readConversationBindingUpdateRow({ row: harness.rows.get('binding-1')!, bindingId: 'binding-1' }).binding,
+      readConversationBindingUpdateRow({ row: jsonStateRow(harness.rows.get('binding-1')), bindingId: 'binding-1' }).binding,
     ]).map(projection => SessionPullRequestLinksV1Schema.parse(projection));
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
@@ -7289,7 +7315,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
     expect(record(record(harness.rows.get('binding-1')!.value.payload).endpoint).pullRequestState).toEqual({ state: 'unknown', observedAt: 20 });
-    const binding = readConversationBindingUpdateRow({ row: harness.rows.get('binding-1')!, bindingId: 'binding-1' }).binding;
+    const binding = readConversationBindingUpdateRow({ row: jsonStateRow(harness.rows.get('binding-1')), bindingId: 'binding-1' }).binding;
     expect(resolveSessionPullRequestLinksV1([binding]).map(projection => SessionPullRequestLinksV1Schema.parse(projection)))
       .toEqual([{ sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 1,
         url: 'https://github.com/acme/widgets/pull/1', state: 'unknown', observedAt: 20 }] }]);
@@ -7742,7 +7768,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     try {
       let failuresRemaining = 7;
       const harness = createIngressHarness({
-        getPollResult: () => failuresRemaining-- > 0
+        getPollResult: (): JsonValue => failuresRemaining-- > 0
           ? { kind: 'notReady', reason: 'network' }
           : { kind: 'checkpointOnly', checkpointAfterBatch: { v: 1, offset: '0' } },
       });
@@ -10148,11 +10174,11 @@ describe('Conversation history baseline acceptance', () => {
     });
   });
 
-  it('accepts a checkpoint-only baseline without fabricating an occurrence', async () => {
+  it.each([2_000, Number.MAX_SAFE_INTEGER])('accepts a checkpoint-only baseline and preserves representable retry time (%s)', async retryAfterMs => {
     const pollResult = {
       kind: 'checkpointOnly',
       checkpointAfterBatch: { cursor: 'checkpoint-only' },
-      retryHint: { retryAfterMs: 2_000 },
+      retryHint: { retryAfterMs },
     } as const;
     const harness = createIngressHarness({ pollResult });
     const gapConnection = setConnectionHistoryGap(harness.rows);
@@ -10167,7 +10193,7 @@ describe('Conversation history baseline acceptance', () => {
       opaqueToken: pollResult.checkpointAfterBatch,
       lastOccurrenceId: null,
       revision: 1,
-      nextPollNotBeforeMs: expect.any(Number),
+      nextPollNotBeforeMs: retryAfterMs === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : expect.any(Number),
     });
     expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       telegramPollAction,

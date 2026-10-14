@@ -123,12 +123,12 @@ export function ChangedFileEvidenceDisclosure({ entry, children }: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    row: { paddingHorizontal: 12, paddingBottom: 8, columnGap: 8, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
+    row: { paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s8, columnGap: theme.space.s8, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
     secondary: { color: theme.colors.text.secondary, flexShrink: 1 },
     link: { color: theme.colors.text.link },
     trigger: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
     details: { backgroundColor: theme.colors.surface.base, borderRadius: 12 },
-    evidence: { gap: 6 },
+    evidence: { gap: theme.space.s6 },
     code: { ...Typography.mono(), color: theme.colors.text.primary },
-    detailsContent: { padding: 16, gap: 12 },
+    detailsContent: { padding: theme.space.s16, gap: theme.space.s12 },
 }));

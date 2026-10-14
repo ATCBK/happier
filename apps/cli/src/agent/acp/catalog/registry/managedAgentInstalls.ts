@@ -4,6 +4,7 @@ import {
   readManagedAgentCliInstallMetadata, removeAgentCliManagedInstallForRuntime,
   resolveAgentCliManagedInstallRootForRuntime, resolveHappyHomeDirFromEnvironment,
   managedAcpAccountNamespace, readManagedAcpInstallNamespace,
+  uninstallManagedUvAgent,
 } from '@happier-dev/cli-common/agents';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { agentRoutingIdAddressesContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -13,10 +14,11 @@ import { readPinnedArchiveManagedVersion, removePinnedArchiveManagedInstall } fr
 import { resolveTrackedSessionCatalogAgentId } from '@/daemon/sessions/resolveTrackedSessionCatalogAgentId';
 import { normalizeDaemonBackendTargetV2Input } from '@/daemon/backendTargetRouting';
 import type { TrackedSession } from '@/daemon/types';
+import { executeInstallCommand } from '@/capabilities/installJobs/executeInstallCommand';
 
 export type ManagedAcpInstall = Readonly<{
   accountNamespace: string; installId: string;
-  definitionId: string; title: string; kind: 'archive' | 'npm'; installRoot: string; version: string;
+  definitionId: string; title: string; kind: 'archive' | 'npm' | 'uv'; installRoot: string; version: string;
 }>;
 
 async function directories(path: string): Promise<string[]> {
@@ -95,6 +97,7 @@ export async function removeManagedAcpInstall(params: Readonly<{
     if (install.kind === 'archive') {
       await removePinnedArchiveManagedInstall({ installId: install.installId, env: params.env, signal: params.signal });
     } else {
+      if (install.kind === 'uv') await uninstallManagedUvAgent({ id: install.installId }, params.env ?? process.env, params.signal, executeInstallCommand);
       await removeAgentCliManagedInstallForRuntime({ runtimeSpec: { id: install.installId },
         env: params.env, signal: params.signal });
     }

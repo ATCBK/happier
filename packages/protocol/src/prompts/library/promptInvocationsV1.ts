@@ -1,13 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PromptDocArtifactRefV1Schema } from './promptArtifactRefsV1.js';
 
 const PromptInvocationTokenV1Schema = lazyZodSchema(() => z
-  .string()
-  .min(2)
-  // Single-segment invocation tokens only (no nested slashes), and disallow obvious absolute paths.
-  .regex(/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/));
+  .string().check(z.minLength(2), z.regex(/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/)));
 
 export type PromptInvocationTokenV1 = z.infer<typeof PromptInvocationTokenV1Schema>;
 
@@ -21,25 +18,22 @@ export const PromptInvocationTargetV1Schema = PromptDocArtifactRefV1Schema;
 
 export type PromptInvocationTargetV1 = z.infer<typeof PromptInvocationTargetV1Schema>;
 
-export const PromptInvocationEntryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
+export const PromptInvocationEntryV1Schema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
   token: PromptInvocationTokenV1Schema,
-  title: z.string().min(1),
+  title: z.string().check(z.minLength(1)),
   target: PromptInvocationTargetV1Schema,
-  behavior: PromptInvocationBehaviorV1Schema.default('insert'),
-  allowArgs: z.boolean().default(false),
-  availableIn: PromptInvocationAvailabilityV1Schema.default('global'),
-}).passthrough());
+  behavior: z._default(PromptInvocationBehaviorV1Schema, 'insert'),
+  allowArgs: z._default(z.boolean(), false),
+  availableIn: z._default(PromptInvocationAvailabilityV1Schema, 'global'),
+}));
 
 export type PromptInvocationEntryV1 = z.infer<typeof PromptInvocationEntryV1Schema>;
 
-export const PromptInvocationsV1Schema = lazyZodSchema(() => z
-  .object({
-    v: z.literal(1).default(1),
-    entries: z.array(PromptInvocationEntryV1Schema).default([]),
-  })
-  .passthrough()
-  .catch({ v: 1, entries: [] }));
+export const PromptInvocationsV1Schema = lazyZodSchema(() => z.catch(z.looseObject({
+    v: z._default(z.literal(1), 1),
+    entries: z._default(z.array(PromptInvocationEntryV1Schema), []),
+  }), { v: 1, entries: [] }));
 
 export type PromptInvocationsV1 = z.infer<typeof PromptInvocationsV1Schema>;
 

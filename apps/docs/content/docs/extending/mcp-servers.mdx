@@ -1,420 +1,142 @@
 ---
 title: MCP servers
-description: Configure Happier-managed MCP servers, preview the effective tool surface for a session, and reuse the same tools across native-MCP and shell-bridge providers.
+description: Add external tools once, choose where they apply, and control tool permissions for supported Agents.
 ---
 
-MCP servers let agents use external tools such as browser automation, documentation lookup, GitHub APIs, and custom internal systems.
+Connect MCP servers to give your Agents external tools, such as documentation lookup, browser automation and internal APIs. Save a server in your Account, set **Where it's on**, then choose what each Session receives.
 
-Happier gives you one place to manage them across the app, daemon, and CLI:
+## Availability
 
-- define MCP servers once in Happier
-- choose where they should apply by default
-- import existing host MCP JSON
-- detect MCP servers already configured in Claude, Codex, or OpenCode
-- preview the exact tool set for a backend, machine, and workspace
-- override Happier-managed MCP selection for a single session without changing your saved defaults
+This guide describes **unreleased 0.3 development behavior**. The replacement MCP collection, sign-in flow and Session integration are still being validated. Per-tool enforcement depends on the Agent's proven integration, and production OAuth callback deployment remains a release check.
 
-## MCP servers vs Happier tools
+## Before you begin
 
-MCP servers are one part of the broader **Happier tools** surface.
+Use the same Happier Account on your client and connected machines. A reachable machine is needed to test a server, start its local command or complete MCP sign-in. Install any prerequisites the server requires on the machine that will run it.
 
-That means:
-
-- built-in Happier actions and custom MCP tools are configured and delivered as one tool surface
-- providers that support **native MCP** receive the tools through MCP directly
-- providers that use the **Happier shell bridge** still receive the same Happier-managed tools through the CLI bridge
-
-So this page is still the right place to configure custom MCP tools, even when the selected provider does not expose them as native MCP inventory.
-
-For the broader product model, see [Happier tools & actions](/extending/happier-tools).
-
-## Where to manage MCP servers
-
-In the app:
-
-- **Settings → MCP servers**
-
-In the CLI, common examples are:
-
-```bash
-happier mcp servers list
-happier mcp servers test --mcp-server <name-or-id>
-happier mcp servers detect --provider codex
-```
-
-Use `happier mcp servers --help` for the current subcommands and flags.
-
-The same account-synced MCP settings are used by the app UI, the daemon, and the CLI.
-
-## Happier MCP (external control plane)
-
-In addition to managing *other* MCP servers, Happier can also run **its own MCP server** so external MCP clients can control sessions and execute Happier actions:
-
-```bash
-happier mcp serve
-```
-
-Guide: [Happier MCP (external)](/extending/happier-as-mcp-server)
-
-## How the MCP settings screen is organized
-
-In the current development UI, the MCP settings screen is a server collection. On larger screens, selecting a server opens its details beside the list; on phones, it opens a separate details page.
-
-### Saved servers
-
-Shows the MCP servers that you manage directly in Happier.
-
-Use the collection to:
-
-- review your saved servers
-- edit or remove them
-- add a new server
-
-### Found on this machine
-
-Shows MCP servers Happier found in provider-native config files on the selected machine.
-
-Today, Happier can detect provider-native MCP servers for:
-
-- **Claude**
-- **Codex**
-- **OpenCode**
-
-Found definitions are shown as **read-only** until you import them into Happier-managed MCP settings. Discovery does not mean an Agent will load the definition in a Happier session: Codex's native MCP definitions are not included in its Happier-session preview.
-
-### What sessions get
-
-Shows the effective tool picture for a specific combination of:
-
-- backend/provider
-- machine
-- workspace or directory
-
-Open the session preview from the collection's tools when you want to answer:
-
-- “What will this session actually see?”
-- “Which Happier-managed servers apply here by default?”
-- “Which provider-native MCP servers already exist for this backend?”
-- “Which saved servers are available but not currently applied?”
+Review the server's identity and requested access before connecting it. Local servers execute on your machine; remote servers receive the tool calls and data you send them. [Permissions](/sessions/permissions) governs the Session's broader access.
 
 ## Add a server
 
-Use the collection's Add menu to configure a server, import JSON, or import a definition found on a machine.
+Open **Settings → MCP servers**, then use **+**. The development add flow offers registry browsing, **Paste a config**, and manual configuration. Open an item's details to review what will be added, provide required values, choose **Where it's on**, and add it.
 
-### Configure
+Manual configuration supports a **Local command** (`stdio`), **Remote HTTP** (Streamable HTTP), or **Remote SSE**. A local command has arguments, environment values and an optional working directory. Remote configuration has a URL and optional headers. Per-machine differences can override configuration without changing which places enable the server.
 
-Use this when you want to define the server manually.
+### Paste a config
 
-Happier supports:
+Paste a supported host JSON snippet or install link. Happier parses the definitions and asks you to supply values such as API keys and environment variables before adding them. Imported definitions use the same catalog and controls as a manually added server.
 
-- **Local command** (`stdio`)
-- **Remote HTTP**
-- **Remote SSE**
-
-For local command servers, the main field is a command line so you can paste common README examples directly. Happier then splits that into command + arguments internally.
-
-For remote servers, you provide:
-
-- the URL
-- optional headers
-- optional environment variables
-
-### Import JSON
-
-Use this when a README or another tool gives you a host MCP JSON snippet.
-
-Happier supports common host MCP JSON shapes such as:
-
-- `mcpServers`
-- `servers`
-- nested `mcp.servers`
-
-Import JSON is useful when a project tells you to paste something like:
+For example:
 
 ```json
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
+    "docs": {
+      "url": "https://mcp.example.com"
     }
   }
 }
 ```
 
-Happier parses the supported fields, lets you review the result, and then converts it into normal Happier-managed MCP entries.
+A bare `url` defaults to **Streamable HTTP**. An explicit `type: "sse"` or `transport: "sse"` selects SSE; a Gemini-style configuration using `httpUrl` for HTTP can identify its `url` entries as SSE. Review the prefilled transport choice and change it before adding when needed. The server detail retains the transport control. Happier does not guess transport from the URL or probe it during parsing.
 
-## What “Applies to” means
+Resolve each imported value to a Saved Secret, a machine environment reference or a nonsensitive literal. Importing does not silently discard credentials. Review any unsupported-field warnings and the resulting server definition.
 
-Every Happier-managed MCP server has default scope rules under **Applies to**.
+### Found on your machines
 
-That determines where Happier should include the server automatically.
+The **Found on your machines** view reads definitions from Agent-native configuration on the selected machine and directory. Detection is read-only; add a definition to make it Happier-managed. Discovery does not prove an Agent loads it in a Happier Session. In particular, Codex's native definitions are not included as loaded native servers in Happier-session preview.
 
-Supported scopes:
+Sources belong to their declaring Agent, including plugin-contributed Agents. An unavailable scan reports its failure; offline last-known information is dated. Bring the machine online to retrieve current configuration.
 
-- **All machines** — use this for portable servers, especially remote HTTP/SSE servers
-- **One machine** — use this for local command servers installed on a specific machine
-- **One workspace on one machine** — use this when a server should apply only for a specific project directory
+## Where it's on
 
-Examples:
+Use the server's **Where it's on** control for Everywhere, Agent exceptions, machine rules or Account Project rules. New additions by you default to Everywhere. A Project rule follows that Project across its machines. A local command still needs its executable, files and values on each target machine.
 
-- A remote GitHub MCP server usually belongs on **All machines**
-- A local `npx @playwright/mcp` setup often belongs on **One machine**
-- A project-local MCP server started from repo files often belongs on **One workspace on one machine**
+Agent exceptions apply across places unless a rule for that same Agent overrides them. These rules choose defaults. A Session can explicitly include an existing server even when its rules say Off or name another machine or Agent. Unsupported delivery, missing configuration or an unreachable machine still produce a visible refusal.
 
-Important:
+Servers declared by a plugin use the same reach rules and Session selection. The built-in **happier** tool server keeps its own [Actions settings](/extending/happier-tools).
 
-- these are **default apply rules**, not hard limits for every future session
-- you can still override Happier-managed MCP selection from the new-session MCP chip
+## Sign in to a remote server
 
-## Secrets, auth, and environment values
+For a server configured for OAuth, choose **Sign in** on its detail. Happier starts an Account-owned attempt through a connected daemon. Complete authorization in the browser, use the phone handoff, or paste the **full callback URL** into the fallback form, including its `state` and any `iss` value.
 
-### MCP server sign-in (0.3 development)
+The stable client metadata URL is
+`https://app.happier.dev/oauth/mcp/client-metadata.json`, and its callback is
+`https://app.happier.dev/oauth/mcp/callback`. The callback page returns the result to the initiating app flow where supported. Self-hosted web openers use the paste fallback. Publishing these endpoints and verifying installed-app return on devices are release checks; their development source does not imply they are deployed.
 
-The development CLI supports `happier mcp servers sign-in <name-or-id>` and
-`happier mcp servers sign-out <name-or-id>` for remote servers configured to use
-OAuth. Sign-in needs a reachable daemon in the same Happier Account and an HTTPS
-resource URL. The authorization service's discovery, registration, browser and
-token endpoints must also use HTTPS, including services on localhost. Static
-headers and API-key configurations remain separate choices.
+Sign-in requires HTTPS for the resource and its authorization discovery, registration, browser and token endpoints, including localhost. Happier requires PKCE S256 and tries client metadata registration, then dynamic client registration. If the authorization service supports neither, sign-in is refused; use the API-key option if offered. Pasting a callback completes an existing attempt, rather than bypassing registration.
 
-Happier discovers the server's authorization service and requires PKCE S256. It
-uses its client metadata document when the authorization service supports it,
-otherwise dynamic client registration. If neither is supported, sign-in is
-refused; use an API key if the server offers one. Paste the full redirected URL
-into the sign-in prompt, including its `state` and any `iss` parameter—not just
-the authorization code.
+The grant belongs to your Account's Connected Accounts, not a separate machine token store. Storage follows the [Account encryption mode](/security/encryption). A scope challenge shows **Needs more access**; reconnect explicitly to approve the combined scopes. Signing out asks for confirmation. Another origin cannot complete the attempt, and an issuer mismatch is refused before token exchange.
 
-The grant belongs to the Account's Connected Accounts, not a machine-local MCP
-token store. The daemon obtains authorization for the exact configured resource
-for each request. A scope challenge requires an explicit sign-in with the union
-of existing and requested scopes; it does not automatically reconnect.
+For SSE, an advertised message endpoint may use another path on the initial server's origin. An endpoint on another origin is refused; the token remains bound to the original resource.
 
-The stable client identity is
-`https://app.happier.dev/oauth/mcp/client-metadata.json`, with redirect URI
-`https://app.happier.dev/oauth/mcp/callback`. Production-domain publication and
-installed-app return are release checks; these development changes do not imply
-that the callback presentation is already deployed.
+### API keys and other values
 
-Happier lets you set MCP env vars and headers using:
+Use a **Saved Secret** for a reusable API key or token. Remote headers can use a template such as `Bearer {api_key}` bound to that secret. A machine environment reference reads the value on the target machine. Prefer literals for nonsensitive values.
 
-- **Saved Secrets** — recommended
-- **machine environment references** such as `${MY_TOKEN}`
-- **plain text** values
+Happier's managed credential paths avoid exposing secret values in Agent argv, ambient tool-shell environment, logs or transcript events. Agent-specific private files or the host bridge deliver them where needed and retire them with their owning operation or Session. This is not isolation from another process running as the same OS user: that user can read accessible credential files and process state.
 
-Recommended usage:
+## Tools: Off, Ask and Allow
 
-- use **Saved Secrets** for reusable tokens and API keys
-- use **machine env references** when the value should come from the daemon or shell environment on the target machine
-- avoid **plain text** unless the value is not sensitive
+Use **Test** to obtain the server's tool list, then open **Tools**. The server default is **Ask**, **Allow read-only** or **Allow all**; each tool can follow that default or have an explicit setting.
 
-Saved Secrets are especially useful for remote MCP servers that require auth headers such as:
+| Setting | Effect where the Agent supports enforcement |
+| --- | --- |
+| **Off** | Hide the tool at launch, or reject its call through the live approval handler. |
+| **Ask** | Use the Session's permission decision; full-access mode may allow it automatically. |
+| **Allow** | Permit the MCP tool without that additional MCP approval. Other Session restrictions still apply. |
 
-- `Authorization: Bearer ...`
-- GitHub tokens
-- private API tokens
+Read/write/destructive annotations help describe tools and inform defaults; they are claims from the server, not an independent safety audit. Read-only automatic permission also requires the server's explicit read-only opt-in.
 
-## Testing an MCP server
+The detail names Agents where **Tool settings don't apply to &lt;Agent&gt;**. Happier uses an Agent's native controls or its validated live approval path; there is no permission proxy for unsupported Agents. When Off hides a tool from the Agent at launch, turning it back on requires the later launch stated by the page. A blocked-at-call tool can remain visible while its calls are refused.
 
-Each Happier-managed MCP server can be tested from the MCP settings flow.
+**Always allow** on an eligible tool approval writes this same tool setting. A failed save does not mean a persistent policy was installed. Built-in Happier tools keep their separate Actions policy.
 
-Testing verifies that Happier can:
+## Test and diagnose a server
 
-- resolve the configuration
-- resolve saved secrets and env references
-- start or connect to the server
-- list tools successfully
+Testing resolves configuration and values, starts or connects to the server, and reads its tool inventory. Development remote tests read every tool page and retain the server's identity, version and instructions. The detail reports current machine results and dates any last-known state.
 
-This is the fastest way to catch:
+If Test fails, check the executable and working directory for a local server, the URL and chosen transport for a remote server, its sign-in or Saved Secret bindings, and the target machine's environment. Testing from one machine does not establish readiness on another.
 
-- wrong command lines
-- missing local installations
-- bad URLs
-- missing auth
-- missing machine env variables
+**Strict mode**, under **Settings → Sessions**, refuses startup when an enabled effective server cannot be resolved or started. With strict mode Off, optional server failures can let the Session continue with healthy servers and a visible capability notice. Read that notice before assuming all tools are available.
 
-## Detected provider-native MCP servers
+## Choose servers for a Session
 
-**Found on this machine** shows MCP definitions found in the selected Agent's own config files.
+The development **This session gets** sheet separates MCP servers from Skills. Include, exclude or reset a server for this Session without rewriting saved defaults. Preview reports the selected Agent, machine and directory's effective servers; Agent-native definitions contribute only when that Agent actually loads them in Happier.
 
-This is useful when:
+An MCP selection change in a running Session normally applies at the next settled turn through restart with resume. A terminal-started Session or a visible Windows console shows **Restart to apply**, with a restart control or a terminal hint. A path without resume support shows **Applies to new sessions**. Saved selection and acknowledged application are separate states; follow the sheet's status.
 
-- you already configured MCP in Claude, Codex, or OpenCode before using Happier
-- you want to compare provider-native config with Happier-managed defaults
-- you want to import an existing provider-native server into Happier
+Editing a definition changes later server materialization; it does not promise arbitrary hot swapping inside an already-running Agent.
 
-Important:
+## Ask an Agent or use the CLI
 
-- detected entries are **informational and read-only**
-- they are refreshed for the selected machine and directory
-- only native sources loaded by the selected Agent in Happier contribute to its session preview
+The catalog, rules, sign-in and tool controls use the same [host Actions](/plugins/api/host-actions) across the app, CLI, Agent and MCP surfaces. Agent and CLI writes ask by default; configure those policies under **Settings → Actions**. Your own reversible control changes apply directly; deletion and sign-out confirm.
 
-## Preview before starting a session
+```bash
+happier mcp servers list
+happier mcp servers add docs --transport http --url https://mcp.example.com
+happier mcp servers test docs --machine <machine-id>
+happier mcp servers sign-in docs
+happier mcp servers tools docs
+happier mcp found --machine <machine-id> --provider codex
+```
 
-The session preview shows what a session should use for a specific context.
+Use `happier mcp servers --help` and subcommand help for current arguments and the generated [host Action catalog](/plugins/api/host-actions) for the complete schema reference.
 
-It combines:
+## Happier as an MCP server
 
-- the built-in Happier tool surface
-- Happier-managed MCP servers that apply by default
-- provider-native detected MCP servers that the selected Agent loads in Happier for this context
-- Happier-managed servers that are available but not currently applied
+Happier can also expose its own control surface to an external MCP client:
 
-Use Preview when you want confidence before starting an important session, especially across multiple machines or workspaces.
+```bash
+happier mcp serve
+```
 
-## MCP in the new-session composer
-
-When you start a new session, the composer shows an **MCP chip** such as:
-
-- `MCP (3)`
-
-The number is the current MCP count for that session context.
-
-Select the chip to open the MCP picker.
-
-For the broader session-start flow, see [Start a new session](/sessions/start-a-session).
-
-From there you can:
-
-- see which Happier-managed servers are selected by default
-- include additional Happier-managed servers for this session only
-- exclude Happier-managed servers that would normally apply by default
-- see provider-native detected servers that the selected backend already has configured
-
-Important limits:
-
-- provider-native detected entries are shown as **read-only context**
-- the built-in Happier tool surface is always present
-- changes in the picker affect the session you are about to start; they do not rewrite your saved account defaults
-
-Presentation adapts to the device:
-
-- on desktop and larger screens, the picker stays close to the composer
-- on phones and mobile web, the picker expands into a wider, easier-to-scan selection surface
-
-This keeps the MCP override flow usable without leaving the current new-session screen.
-
-## What happens when you change MCP settings
-
-MCP settings apply on the **next session start**.
-
-That means:
-
-- editing an MCP server changes future sessions
-- it does not hot-swap tools into already-running sessions
-- resumed sessions continue to use the session-level tool state they were started with
-
-## Supported providers and important behavior
-
-Tool delivery depends on the selected backend.
-
-Happier can currently deliver managed MCP tools through two broad paths:
-
-- **Native MCP delivery** on backends with native MCP support, including Claude, Codex, OpenCode, and compatible custom ACP backends
-- **Shell-bridge delivery** on backends that use the Happier tools bridge
-
-Important distinction:
-
-- provider-native **detected** MCP configuration is only available where that provider actually has a native MCP config model
-- Happier-managed custom MCP tools can still be delivered through the shell bridge on providers without native MCP delivery
-
-Provider support can change over time, so use the provider pages and the feature matrix as the source of truth for current behavior.
-
-See also:
-
-- [Claude](/agents/claude)
-- [Codex](/agents/codex)
-- [OpenCode](/agents/opencode)
-- [Happier tools & actions](/extending/happier-tools)
-
-## Strict mode
-
-Strict mode changes how Happier reacts to invalid MCP configuration.
-
-- **Off**: Happier skips invalid MCP entries when it can and continues starting the session
-- **On**: Happier fails the start if an enabled effective MCP server cannot be resolved correctly
-
-Use strict mode when you want the startup behavior to be fail-closed instead of best-effort.
-
-## Common use cases
-
-### Use Playwright everywhere on one machine
-
-1. Open **Settings → MCP servers**
-2. Add a local-command server using Playwright's MCP configuration
-3. Set **Applies to → One machine**
-4. Test it
-5. Start sessions on that machine and confirm the MCP chip includes it
-
-### Reuse a remote GitHub MCP server across all machines
-
-1. Add a server with **Remote HTTP**
-2. Store the token as a **Saved Secret**
-3. Set **Applies to → All machines**
-4. Test it from the machine that will run sessions
-
-### Import a README snippet without manually rebuilding it
-
-1. Copy the host MCP JSON from the README
-2. Open **Add server → Import JSON**
-3. Paste the JSON
-4. Review the parsed result
-5. Map any secrets to a Saved Secret or machine env reference
-6. Save and test
-
-### Override MCP selection for one session
-
-1. Open the new-session screen
-2. Select the **MCP** chip
-3. Deselect a default Happier-managed server you do not want
-4. Select an additional Happier-managed server you want for this session only
-5. Start the session
-
-## Troubleshooting
-
-### “The server is saved, but it does not appear in my session”
-
-Check:
-
-- the selected machine
-- the selected workspace/directory
-- the server’s **Applies to** rules
-- the selected backend’s tool-delivery support
-- the new-session MCP chip, which can override Happier-managed defaults per session
-
-Also use the session preview to confirm the effective result before starting the session.
-
-### “Found on this machine does not show what I expected”
-
-Check:
-
-- the selected machine
-- the selected directory/workspace
-- whether the backend stores MCP config in user-level files, project files, or both
-
-The machine discovery view is context-sensitive and refreshes based on the selected machine and directory. A definition found for Codex does not appear as a loaded native server in a Happier-session preview.
-
-### “Test fails”
-
-The most common causes are:
-
-- the local command is not installed on that machine
-- the URL is wrong
-- a required token/header is missing
-- a machine env reference is not present on the daemon host
-
-### “I changed MCP settings, but my current session did not change”
-
-That is expected.
-
-MCP settings apply on the **next session start**. Start a new session to pick up the updated configuration.
+See [Happier as an MCP server](/extending/happier-as-mcp-server) for setup.
 
 ## Related
 
-- [Happier tools & actions](/extending/happier-tools)
-- [Connected services](/accounts/connected-services)
-- [Profiles](/agents/profiles)
-- [Provider integrations](/agents/provider-integrations)
-- [Claude](/agents/claude)
-- [Codex](/agents/codex)
-- [OpenCode](/agents/opencode)
+- [Skills](/extending/skills)
+- [Registry sources](/extending/registries)
+- [Happier tools and actions](/extending/happier-tools)
+- [Permissions](/sessions/permissions)
+- [Agent capabilities](/agents/capabilities)
+- [Start a Session](/sessions/start-a-session)

@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-    TeamCredentialBrokerPlacementV1Schema,
-    type TeamCredentialBrokerPlacementV1,
-} from "@happier-dev/protocol/teams";
-import type { MachineIrohEndpointAuthorityV1 } from "@happier-dev/protocol";
+import { TeamCredentialBrokerPlacementV1Schema, type TeamCredentialBrokerPlacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import type { Tx } from "@/storage/inTx";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
@@ -19,57 +19,57 @@ import { SessionPromptStackV1Schema } from '../context/sessionContextV1.js';
 import { ManagedControllerV1Schema } from '../../machines/managed/managedMachineV1.js';
 
 /** Immutable birth provenance, validated against Home's admitted resource before Session creation. */
-export const SessionManagedCreationV1Schema = lazyZodSchema(() => z.object({
-  homeId: z.string().trim().min(1),
-  managedId: z.string().trim().min(1),
+export const SessionManagedCreationV1Schema = lazyZodSchema(() => z.strictObject({
+  homeId: z.string().check(z.trim(), z.minLength(1)),
+  managedId: z.string().check(z.trim(), z.minLength(1)),
   controller: ManagedControllerV1Schema,
-}).strict());
+}));
 export type SessionManagedCreationV1 = z.infer<typeof SessionManagedCreationV1Schema>;
 
-export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.object({
+export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.strictObject({
   ...AgentSessionToolPolicyShapeV1,
-  execution: z.object({
-    machineId: z.string().trim().min(1),
+  execution: z.strictObject({
+    machineId: z.string().check(z.trim(), z.minLength(1)),
     directory: SessionDirectoryIntentV1Schema,
-  }).strict(),
+  }),
   organization: SessionOrganizationPlacementV1Schema,
   agentTarget: AgentExecutionTargetV1Schema,
-  modelSelection: SessionModelSelectionV1Schema.nullable(),
-  profileId: z.string().trim().min(1).nullable(),
-  identity: SessionIdentityAdditionsV1Schema.optional(),
-  memoryEnabled: z.boolean().optional(),
-  promptStack: SessionPromptStackV1Schema.optional(),
-  managedCreation: SessionManagedCreationV1Schema.optional(),
-  secretReferenceOverlay: SecretReferenceOverlayV1Schema.optional(),
-  requestedPermissionMode: z.string().trim().min(1).nullable(),
-  agentModeId: z.string().trim().min(1).nullable(),
-  configuration: AgentSessionConfigurationSnapshotV1Schema.nullable(),
-  connectedServices: ConnectedServiceBindingsV2IngressSchema.nullable(),
-  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.nullable(),
-  transcriptStorage: z.enum(['persisted', 'direct']).nullable(),
-  terminal: SessionAuthoringTerminalV1Schema.nullable(),
+  modelSelection: z.nullable(SessionModelSelectionV1Schema),
+  profileId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  identity: z.optional(SessionIdentityAdditionsV1Schema),
+  memoryEnabled: z.optional(z.boolean()),
+  promptStack: z.optional(SessionPromptStackV1Schema),
+  managedCreation: z.optional(SessionManagedCreationV1Schema),
+  secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
+  requestedPermissionMode: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  agentModeId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  configuration: z.nullable(AgentSessionConfigurationSnapshotV1Schema),
+  connectedServices: z.nullable(ConnectedServiceBindingsV2IngressSchema),
+  capabilitySelection: z.nullable(SessionCapabilitySelectionAuthoringV1Schema),
+  transcriptStorage: z.nullable(z.enum(['persisted', 'direct'])),
+  terminal: z.nullable(SessionAuthoringTerminalV1Schema),
   agentSessionStartupInstructionsMarkerV1:
-    AgentSessionStartupInstructionsMarkerV1Schema.nullable(),
-  checkout: z.object({
+    z.nullable(AgentSessionStartupInstructionsMarkerV1Schema),
+  checkout: z.nullable(z.strictObject({
     kind: z.literal('git_worktree'),
-    finalDirectory: z.string().trim().min(1),
-    baseRef: z.string().trim().min(1).nullable(),
+    finalDirectory: z.string().check(z.trim(), z.minLength(1)),
+    baseRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     branchMode: z.enum(['new', 'existing']),
-  }).strict().nullable(),
-}).strict().superRefine((recipe, context) => refineSessionDirectoryIntentCheckoutV1(
+  })),
+}).check(z.superRefine((recipe, context) => refineSessionDirectoryIntentCheckoutV1(
   { directory: recipe.execution.directory, checkoutCreationDraft: recipe.checkout },
   context,
   ['checkout'],
-)));
+))));
 export type SessionCreationImmutableRecipeV1 = z.infer<
   typeof SessionCreationImmutableRecipeV1Schema
 >;
 
-export const SessionCreationCorrespondenceV1Schema = lazyZodSchema(() => z.object({
+export const SessionCreationCorrespondenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionCreationTag: SessionCreationTagV1Schema,
   recipe: SessionCreationImmutableRecipeV1Schema,
-}).strict());
+}));
 export type SessionCreationCorrespondenceV1 = z.infer<
   typeof SessionCreationCorrespondenceV1Schema
 >;

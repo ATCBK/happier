@@ -1,5 +1,5 @@
 import { sealReviewCommentSensitiveEnvelopeV1, splitReviewCommentV1, StoredReviewCommentV1Schema } from '@happier-dev/protocol/reviews/comments/content';
-import { type ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import type { ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 
 import type { ReviewCommentLabels } from '@/components/reviews/labels';
 

@@ -40,6 +40,11 @@
       "types": "./dist/presentation/text/typeScale.d.ts",
       "default": "./dist/presentation/text/typeScale.js"
     },
+    "./presentation/pageMetrics": {
+      "happier-source": "./src/presentation/layout/pageMetrics.ts",
+      "types": "./dist/presentation/layout/pageMetrics.d.ts",
+      "default": "./dist/presentation/layout/pageMetrics.js"
+    },
     "./declarative": {
       "happier-source": "./src/declarative/index.ts",
       "types": "./dist/declarative/index.d.ts",

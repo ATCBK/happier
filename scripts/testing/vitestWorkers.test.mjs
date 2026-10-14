@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { availableParallelism } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createVitest } from 'vitest/node';
-import { resolveVitestWorkers } from './vitestWorkers.ts';
+const { resolveVitestWorkers } = createRequire(import.meta.url)('./vitestWorkers.ts');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configs = [

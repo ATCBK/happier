@@ -6,13 +6,15 @@ import { selectVoiceProviderOption } from '@/voice/registry/providerSelection';
 import { captureConversationLanguagePreferenceOwner } from './language/conversationLanguage';
 import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
 import { completeLegacyVoiceOpenAiChatAgentSelection } from '@/voice/adapters/localConversation/migrateLegacyOpenAiChatProvider';
+import { VoiceLocalConversationProviderChatSchema } from '@happier-dev/protocol/voice/settings/localConversation';
 
 describe('Voice settings edit intent', () => {
     it('does not apply admitted Chat models to a concurrently replaced import intent', () => {
         const initial = voiceSettingsParse({ providerId: 'local_conversation' });
         const cfg = readLocalConversationVoiceSettings(initial);
-        const pending = { status: 'needs_selection', providerConnectionId: 'voice-openai-compatible-chat',
-            chatModelId: 'legacy-chat', commitModelId: 'legacy-commit' } as const;
+        const pending = VoiceLocalConversationProviderChatSchema.parse({ status: 'needs_selection', providerConnectionId: 'voice-openai-compatible-chat',
+            chatModelId: 'legacy-chat', commitModelId: 'legacy-commit' });
+        if (pending.status !== 'needs_selection') throw new Error('Expected the canonical pending Provider selection');
         const configured = completeLegacyVoiceOpenAiChatAgentSelection(pending, 'opencode');
         if (!configured) throw new Error('Missing supported legacy Chat Agent choice');
         const before = writeLocalConversationVoiceSettings(initial, { ...cfg, agent: { ...cfg.agent, providerChat: pending } });

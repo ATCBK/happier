@@ -2,7 +2,7 @@ import { DaemonComputerActionExecuteResponseV1Schema } from '@happier-dev/protoc
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { describe, expect, it } from 'vitest';
 
-import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandler, RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
 import { createComputerRoutes } from '@/daemon/computer/routes';
 import { createComputerCaptureSource } from '@/daemon/computer/source';
 import { createMachineLiveStreamCaptureRegistry } from '@/daemon/peer/mediation/stream/captureRegistry';
@@ -14,10 +14,10 @@ function createCapturingRegistrar() {
     const registrar: RpcHandlerRegistrar = {
         registerHandler: (method, handler) => { handlers.set(method, handler as RpcHandler); },
     };
-    const invoke = async (raw: unknown) => {
+    const invoke = async (raw: unknown, context?: RpcHandlerContext) => {
         const handler = handlers.get(RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE);
         if (!handler) throw new Error('No computer handler registered');
-        return DaemonComputerActionExecuteResponseV1Schema.parse(await handler(raw)).result;
+        return DaemonComputerActionExecuteResponseV1Schema.parse(await handler(raw, context)).result;
     };
     return { registrar, invoke };
 }
@@ -38,16 +38,47 @@ describe('daemon computer present-user RPC', () => {
         const routes = createComputerRoutes({ machineId: 'machine_1', machineDisplayName: 'Studio laptop', registry });
         const { registrar, invoke } = createCapturingRegistrar();
         registerDaemonComputerHandler(registrar, { resolveComputer: () => routes });
+        const context = { callerAuthority: 'present_user', signal: new AbortController().signal } as const;
 
         // A present-user-only Action succeeds: the route is the person's, never the payload's claim.
-        expect(await invoke({ sessionId: 'session_1', actionId: 'computer.control.interrupt', input: { machineId: 'machine_1' } }))
+        expect(await invoke({ sessionId: 'session_1', actionId: 'computer.control.interrupt', input: { machineId: 'machine_1' } }, context))
             .toEqual({ target: source.target, sourceId: source.sourceId, status: 'interrupted', completion: 'known' });
-        expect(await invoke({ sessionId: 'session_1', actionId: 'computer.control.status', input: { machineId: 'machine_1' } }))
+        expect(await invoke({ sessionId: 'session_1', actionId: 'computer.control.status', input: { machineId: 'machine_1' } }, context))
             .toMatchObject({ controller: 'human', stopping: false, uncertain: false });
         // The Session scope is the request's: another Session sees no selection and display facts only.
-        expect(await invoke({ sessionId: 'session_2', actionId: 'computer.target.get', input: { machineId: 'machine_1' } }))
+        expect(await invoke({ sessionId: 'session_2', actionId: 'computer.target.get', input: { machineId: 'machine_1' } }, context))
             .toEqual({ consentGranted: false, approvalDisplay: { machineDisplayName: 'Studio laptop', requiresTargetSelection: true } });
         await routes.dispose();
+    });
+
+    it.each(['account_automation', undefined] as const)('keeps verified Computer authority %s and preserves control', async callerAuthority => {
+        const registry = createMachineLiveStreamCaptureRegistry();
+        const source = selectTarget(registry, 'session_1');
+        const routes = createComputerRoutes({ machineId: 'machine_1', registry });
+        const { registrar, invoke } = createCapturingRegistrar();
+        registerDaemonComputerHandler(registrar, { resolveComputer: () => routes });
+        const before = source.status();
+        try {
+            expect(await invoke({ sessionId: 'session_1', actionId: 'computer.control.interrupt', input: { machineId: 'machine_1' } },
+                { callerAuthority, signal: new AbortController().signal })).toMatchObject({ ok: false, errorCode: 'approval_required' });
+            expect(source.status()).toEqual(before);
+        } finally { await routes.dispose(); }
+    });
+
+    it('does not execute cancelled human Computer control', async () => {
+        const registry = createMachineLiveStreamCaptureRegistry();
+        const source = selectTarget(registry, 'session_1');
+        const routes = createComputerRoutes({ machineId: 'machine_1', registry });
+        const { registrar, invoke } = createCapturingRegistrar();
+        registerDaemonComputerHandler(registrar, { resolveComputer: () => routes });
+        const controller = new AbortController();
+        controller.abort();
+        const before = source.status();
+        try {
+            await expect(invoke({ sessionId: 'session_1', actionId: 'computer.control.interrupt', input: { machineId: 'machine_1' } },
+                { callerAuthority: 'present_user', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+            expect(source.status()).toEqual(before);
+        } finally { await routes.dispose(); }
     });
 
     it('never carries agent input and refuses when the machine has no computer owner', async () => {

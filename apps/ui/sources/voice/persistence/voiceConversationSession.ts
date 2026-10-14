@@ -1,11 +1,12 @@
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS, CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES } from '@happier-dev/protocol/connect/connectedServiceUxDiagnostics';
-import { buildBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import type { SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import { buildQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { AgentSessionStartupInstructionsV1Schema, type AgentSessionStartupInstructionsV1, type AgentSessionStartupInstructionsMarkerV1 } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
 import { isConnectedServiceUxDiagnosticSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
 import { renderPromptPlanV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
-import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { ConnectedServiceBindingsV2IngressSchema, type ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import {
     readPermissionModeIntentFromMetadata,
     buildGlobalVoiceAgentStartupInstructionsPlanV1,
@@ -51,6 +52,7 @@ import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/execut
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { buildVoiceSpawnUserAttemptId } from '@/voice/shared/voiceSpawnAttempt';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
+import { resolveVoiceSessionModelSelection } from '@/voice/agent/resolveVoiceSessionModelSelection';
 
 import {
     matchesVoiceConversationScope,
@@ -63,6 +65,8 @@ import {
     findReusableVoiceConversationRuntimeSessionId,
     isReusableVoiceConversationRuntimeSession,
     listVoiceConversationSystemSessions,
+    isVoiceConversationSystemSessionMetadata,
+    shouldRetireLegacyVoiceConversationSession,
     VOICE_CONVERSATION_RETIRED_SYSTEM_SESSION_KEY,
     VOICE_CONVERSATION_SYSTEM_SESSION_KEY,
 } from './voiceConversationSystemSessionLookup';
@@ -365,7 +369,7 @@ async function resolveVoiceConversationBackendTarget(state: any, machineId: stri
 
 async function resolveVoiceConversationAgentTarget(
     machineId: string,
-    backendTarget: BackendTargetRefV2,
+    backendTarget: PersistedBackendTargetRefV2,
     serverId: string,
     accountLifetime?: ActiveServerAccountScopeLifetime,
 ) {
@@ -527,10 +531,11 @@ async function spawnVoiceConversationSession(params: Readonly<{
     machineId: string;
     serverId: string;
     directory: string;
-    backendTarget: BackendTargetRefV2;
+    backendTarget: PersistedBackendTargetRefV2;
     permissionMode: PermissionIntent;
     creationKey: ReturnType<typeof buildVoiceSpawnUserAttemptId>;
     connectedServices?: ConnectedServiceBindingsV2;
+    modelSelection?: SessionModelSelectionV1;
     startupInstructions?: AgentSessionStartupInstructionsV1;
     accountLifetime?: ActiveServerAccountScopeLifetime;
 }>): Promise<string> {
@@ -550,6 +555,7 @@ async function spawnVoiceConversationSession(params: Readonly<{
         agentTarget,
         permissionMode: params.permissionMode,
         transcriptStorage: 'persisted',
+        ...(params.modelSelection !== undefined ? { modelSelection: params.modelSelection } : {}),
         ...(params.connectedServices
             ? { connectedServices: params.connectedServices }
             : {}),
@@ -851,23 +857,8 @@ async function findExactVoiceHomeConversationSession(params: Readonly<{
         ) {
             continue;
         }
-        let backendTargetMatches = false;
-        try {
-            const candidateTarget = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({
-                session: candidate.session,
-            }));
-            backendTargetMatches = candidateTarget !== null
-                && buildBackendTargetKeyV2(candidateTarget) === buildBackendTargetKeyV2(params.requirements.backendTarget);
-        } catch {
-            backendTargetMatches = false;
-        }
-        if (!backendTargetMatches) continue;
-        if (
-            stableJsonStringify(metadata?.connectedServices)
-            !== stableJsonStringify(params.requirements.connectedServices)
-        ) {
-            continue;
-        }
+        if (!matchesVoiceConversationExecutionSelection({ state: params.state, sessionId: candidate.sessionId,
+            backendTarget: params.requirements.backendTarget, connectedServices: params.requirements.connectedServices })) continue;
         const permissionIntent =
             readPermissionModeIntentFromMetadata(metadata ?? {})?.permissionMode
             ?? normalizeNonEmptyString(candidate.session?.permissionMode)
@@ -1064,11 +1055,31 @@ export function ensureVoiceConversationSessionId(): Promise<string> {
     return ensureVoiceConversationSessionForVoiceHome();
 }
 
+function matchesVoiceConversationExecutionSelection(params: Readonly<{
+    state: ReturnType<typeof storage.getState>;
+    sessionId: string;
+    backendTarget: PersistedBackendTargetRefV2;
+    connectedServices?: ConnectedServiceBindingsV2;
+}>): boolean {
+    const metadata = readVoiceSessionOwnerMetadataFromState(params.state, params.sessionId);
+    try {
+        const target = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({ session: { metadata } }));
+        const connectedServices = metadata?.connectedServices == null ? undefined
+            : ConnectedServiceBindingsV2IngressSchema.parse(metadata.connectedServices);
+        return target !== null && buildBackendTargetKeyV2(target) === buildBackendTargetKeyV2(params.backendTarget)
+            && stableJsonStringify(connectedServices) === stableJsonStringify(params.connectedServices);
+    } catch {
+        return false;
+    }
+}
+
 function findSessionRootVoiceConversationSessionId(params: Readonly<{
     state: any;
     sessionId: string;
     machineId: string;
     directory: string;
+    backendTarget: PersistedBackendTargetRefV2;
+    connectedServices?: ConnectedServiceBindingsV2;
 }>): string | null {
     const directoryIdentity = resolveRequiredVoiceSpawnDirectoryIdentity(
         params.state,
@@ -1086,6 +1097,8 @@ function findSessionRootVoiceConversationSessionId(params: Readonly<{
                 (candidate.metadata as any)?.path,
             )
                 === directoryIdentity
+            && matchesVoiceConversationExecutionSelection({ state: params.state, sessionId: candidate.sessionId,
+                backendTarget: params.backendTarget, connectedServices: params.connectedServices })
             && matchesVoiceConversationScope(candidate.metadata ?? null, { kind: 'session_root', sessionRootId: params.sessionId }),
     )?.sessionId ?? null;
 }
@@ -1104,9 +1117,32 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
     if (!areServerProfileIdentifiersEquivalent(rootAddress.serverId, getActiveServerSnapshot().serverId)) {
         throw new Error('voice_conversation_session_home_not_mounted');
     }
+    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    if (!accountLifetime) {
+        throw Object.assign(new Error('voice_agent_account_scope_unavailable'), { code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+    }
+    assertVoiceConversationAccountCurrent(accountLifetime);
     const sessionId = rootAddress.sessionId;
 
+    // An explicit Start on a synced Voice conversation resumes that carrier.
+    // Its recorded voice_home/session_root scope must not become a root pointing
+    // at itself; ordinary coding roots still use the exact scoped lookup below.
+    let requestedMetadata = readVoiceSessionOwnerMetadataFromState(storage.getState(), rootAddress);
+    if (!requestedMetadata) {
+        await sync.ensureSessionVisibleForMessageRoute(sessionId, { serverId: rootAddress.serverId });
+        requestedMetadata = readVoiceSessionOwnerMetadataFromState(storage.getState(), rootAddress);
+    }
+    if (isVoiceConversationSystemSessionMetadata(requestedMetadata)
+        && !shouldRetireLegacyVoiceConversationSession({ metadata: requestedMetadata })) {
+        assertVoiceConversationAccountCurrent(accountLifetime);
+        await recoverPendingVoiceConversationCustody({ sessionId, serverId: rootAddress.serverId,
+            failureMessage: 'Voice conversation custody could not be completed' });
+        await applyVoiceConversationRetentionPolicy({ keepSessionId: sessionId }).catch(() => {});
+        return sessionId;
+    }
+
     const target = await resolveSessionRootTarget(rootAddress);
+    assertVoiceConversationAccountCurrent(accountLifetime);
     const machineId = target?.machineId ?? null;
     const directory = target?.directory ?? null;
     if (!machineId || !directory) throw new Error('voice_conversation_session_target_missing');
@@ -1114,11 +1150,36 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
 
     await retireLegacyVoiceConversationSessions({ machineId, directory }).catch(() => {});
     let state: any = storage.getState();
+    const agentCfg = readLocalConversationVoiceSettings(readCanonicalVoiceSettingsFromState(state)).agent;
+    const followsRoot = agentCfg.agentSource === 'session' && agentCfg.providerChat?.status !== 'configured';
+    const rootMetadata = readVoiceSessionOwnerMetadataFromState(state, rootAddress);
+    const rootBackend = followsRoot ? resolveSessionActionDefaultBackend({
+        session: { metadata: rootMetadata },
+    }) : null;
+    const rootBackendTarget = resolveSessionActionDefaultTarget(rootBackend);
+    if (followsRoot && !rootBackendTarget) {
+        throw Object.assign(new Error('voice_agent_selection_unavailable'), { code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+    }
+    const backendTarget = rootBackendTarget ?? await resolveVoiceConversationBackendTarget(state, machineId);
+    assertVoiceConversationAccountCurrent(accountLifetime);
+    const connectedServices = followsRoot && rootMetadata?.connectedServices != null
+        ? ConnectedServiceBindingsV2IngressSchema.parse(rootMetadata.connectedServices)
+        : undefined;
+    const needsRootModel = followsRoot && agentCfg.chatModelSource === 'session';
+    const modelSelection = needsRootModel && rootBackend?.defaultAgentId ? await resolveVoiceSessionModelSelection({
+        sessionAddress: rootAddress, agentId: rootBackend.defaultAgentId, agentTargetKey: buildBackendTargetKeyV2(backendTarget),
+    }) : null;
+    assertVoiceConversationAccountCurrent(accountLifetime);
+    if (needsRootModel && !modelSelection) {
+        throw Object.assign(new Error('voice_agent_selection_unavailable'), { code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+    }
     let existingSessionId = findSessionRootVoiceConversationSessionId({
         state,
         sessionId,
         machineId,
         directory,
+        backendTarget,
+        connectedServices,
     });
     if (!existingSessionId) {
         const refreshed = await sync.refreshSessions({ awaitSessionListHydration: true });
@@ -1147,10 +1208,13 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
             sessionId,
             machineId,
             directory,
+            backendTarget,
+            connectedServices,
         });
     }
 
     if (existingSessionId) {
+        assertVoiceConversationAccountCurrent(accountLifetime);
         await recoverPendingVoiceConversationCustody({
             sessionId: existingSessionId,
             serverId: rootAddress.serverId,
@@ -1161,7 +1225,6 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
         return existingSessionId;
     }
 
-    const backendTarget = await resolveVoiceConversationBackendTarget(state, machineId);
     const serverId = rootAddress.serverId;
     const creationKey = buildVoiceSpawnUserAttemptId({
             surface: 'voice_session_root',
@@ -1169,13 +1232,18 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
             machineId,
             directory: resolveRequiredVoiceSpawnDirectoryIdentity(state, machineId, directory),
             backendTarget,
+            connectedServices,
+            modelSelection: modelSelection?.ref ?? null,
             sessionId,
         });
     const spawnedSessionId = await spawnVoiceConversationSession({
         machineId,
         serverId,
+        accountLifetime,
         directory,
         backendTarget,
+        ...(connectedServices ? { connectedServices } : {}),
+        ...(modelSelection ? { modelSelection } : {}),
         permissionMode: resolveVoiceConversationPermissionIntent(state),
         creationKey,
     });
@@ -1183,7 +1251,9 @@ export async function ensureVoiceConversationSessionForSessionRoot(params: Reado
     await finalizeSpawnedVoiceConversationSession({
         sessionId: spawnedSessionId,
         scope: { kind: 'session_root', sessionRootId: sessionId },
+        accountLifetime,
     });
+    assertVoiceConversationAccountCurrent(accountLifetime);
     await applyVoiceConversationRetentionPolicy({ keepSessionId: spawnedSessionId }).catch(() => {});
 
     return spawnedSessionId;

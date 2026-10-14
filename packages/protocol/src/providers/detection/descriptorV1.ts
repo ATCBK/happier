@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderCatalogProbeV1Schema } from '../catalog/descriptorV1.js';
 import { ProviderLocalIdSchema } from '../ids.js';
@@ -10,17 +10,11 @@ function isLiteralCommandToken(value: string): boolean {
     && !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(value);
 }
 
-const BoundedTokenSchema = lazyZodSchema(() => z.string().trim().min(1).max(256).refine(
-  isLiteralCommandToken,
-  'Command token must be literal and control/operator free',
-));
-const ExecutableLookupNameSchema = lazyZodSchema(() => z.string().trim().min(1).max(256).refine(
-  (value) => value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\')
-    && isLiteralCommandToken(value),
-  'Executable lookup names must be PATH/application basenames, not paths',
-));
-const LookupNamesSchema = lazyZodSchema(() => z.array(ExecutableLookupNameSchema).min(1).max(16));
-const EnvironmentVariableNameSchema = lazyZodSchema(() => z.string().min(1).max(128).regex(/^[A-Za-z_][A-Za-z0-9_]*$/u));
+const BoundedTokenSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.refine(isLiteralCommandToken, 'Command token must be literal and control/operator free')));
+const ExecutableLookupNameSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.refine((value) => value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\')
+    && isLiteralCommandToken(value), 'Executable lookup names must be PATH/application basenames, not paths')));
+const LookupNamesSchema = lazyZodSchema(() => z.array(ExecutableLookupNameSchema).check(z.minLength(1), z.maxLength(16)));
+const EnvironmentVariableNameSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128), z.regex(/^[A-Za-z_][A-Za-z0-9_]*$/u)));
 
 /**
  * The command-output catalog formats Happier bundles an implementation for.
@@ -51,7 +45,7 @@ export type ProviderCommandCatalogParserV1 =
   | (string & {});
 
 export const ProviderCommandCatalogParserV1Schema:
-  z.ZodType<ProviderCommandCatalogParserV1, ProviderCommandCatalogParserV1> = ProviderLocalIdSchema;
+  z.ZodMiniType<ProviderCommandCatalogParserV1, ProviderCommandCatalogParserV1> = ProviderLocalIdSchema;
 
 const BUNDLED_PROVIDER_COMMAND_CATALOG_PARSER_IDS: ReadonlySet<string> = new Set(
   BUNDLED_PROVIDER_COMMAND_CATALOG_PARSERS_V1,
@@ -81,27 +75,27 @@ export function readBundledProviderCommandCatalogParserFactV1<T>(
   return isBundledProviderCommandCatalogParserV1(parser) ? factsByParser[parser] : null;
 }
 
-export const ProviderCatalogCommandFallbackV1Schema = lazyZodSchema(() => z.object({
+export const ProviderCatalogCommandFallbackV1Schema = lazyZodSchema(() => z.strictObject({
   endpointTemplateId: ProviderLocalIdSchema,
   lookupNames: LookupNamesSchema,
-  fixedArgs: z.array(BoundedTokenSchema).max(32),
+  fixedArgs: z.array(BoundedTokenSchema).check(z.maxLength(32)),
   parser: ProviderCommandCatalogParserV1Schema,
-  endpointEnvName: EnvironmentVariableNameSchema.optional(),
-}).strict());
+  endpointEnvName: z.optional(EnvironmentVariableNameSchema),
+}));
 export type ProviderCatalogCommandFallbackV1 = z.infer<typeof ProviderCatalogCommandFallbackV1Schema>;
 
-export const ProviderDetectionDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const ProviderDetectionDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  listener: z.object({
-    executableBasenames: z.array(z.string().trim().min(1).max(128).regex(/^[^/\\\u0000-\u001f]+$/u)).min(1).max(32),
-    argvMatch: z.object({
+  listener: z.strictObject({
+    executableBasenames: z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(128), z.regex(/^[^/\\\u0000-\u001f]+$/u))).check(z.minLength(1), z.maxLength(32)),
+    argvMatch: z.optional(z.strictObject({
       mode: z.enum(['containsAll', 'orderedSubsequence']),
-      tokens: z.array(BoundedTokenSchema).min(1).max(32),
-    }).strict().optional(),
-    defaultPorts: z.array(z.number().int().min(1).max(65535)).max(16),
-  }).strict(),
+      tokens: z.array(BoundedTokenSchema).check(z.minLength(1), z.maxLength(32)),
+    })),
+    defaultPorts: z.array(z.number().check(z.int(), z.minimum(1), z.maximum(65535))).check(z.maxLength(16)),
+  }),
   availabilityProbe: ProviderCatalogProbeV1Schema,
-  installedCheck: z.object({ lookupNames: LookupNamesSchema }).strict().optional(),
+  installedCheck: z.optional(z.strictObject({ lookupNames: LookupNamesSchema })),
   /**
    * An optional local-readiness shortcut. This vocabulary is deliberately
    * closed and is not a capability gate: `exit-zero-running` is the general
@@ -113,18 +107,18 @@ export const ProviderDetectionDescriptorV1Schema = lazyZodSchema(() => z.object(
    * criterion if a plugin ever needs a readiness signal that neither an exit
    * code nor an availability probe can express.
    */
-  presenceCheck: z.object({
+  presenceCheck: z.optional(z.strictObject({
     lookupNames: LookupNamesSchema,
-    fixedArgs: z.array(BoundedTokenSchema).max(32),
+    fixedArgs: z.array(BoundedTokenSchema).check(z.maxLength(32)),
     parser: z.enum(['exit-zero-running', 'lms-status-json']),
-  }).strict().optional(),
-  catalogFallback: ProviderCatalogCommandFallbackV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  })),
+  catalogFallback: z.optional(ProviderCatalogCommandFallbackV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if (new Set(value.listener.executableBasenames.map((entry) => entry.toLowerCase())).size !== value.listener.executableBasenames.length) {
     ctx.addIssue({ code: 'custom', path: ['listener', 'executableBasenames'], message: 'Executable basenames must be unique' });
   }
   if (new Set(value.listener.defaultPorts).size !== value.listener.defaultPorts.length) {
     ctx.addIssue({ code: 'custom', path: ['listener', 'defaultPorts'], message: 'Default ports must be unique' });
   }
-}));
+})));
 export type ProviderDetectionDescriptorV1 = z.infer<typeof ProviderDetectionDescriptorV1Schema>;

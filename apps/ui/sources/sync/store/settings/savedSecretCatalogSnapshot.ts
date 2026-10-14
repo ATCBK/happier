@@ -67,6 +67,11 @@ function preserveRows(previous: readonly SavedSecretCatalogEntryV1[] | null, inc
     }));
 }
 
+function hasCurrentMaterial(snapshot: SavedSecretCatalogSnapshot | null): snapshot is SavedSecretCatalogSnapshot {
+    return snapshot !== null && !snapshot.stale && snapshot.error === null
+        && (snapshot.status === 'ready' || snapshot.status === 'refreshing');
+}
+
 export function beginSavedSecretCatalogLoad(scope: ServerAccountScope): void {
     const current = getSavedSecretCatalogSnapshot(scope);
     snapshots.set(key(scope), Object.freeze({
@@ -74,7 +79,9 @@ export function beginSavedSecretCatalogLoad(scope: ServerAccountScope): void {
         status: current?.data ? 'refreshing' : 'loading',
         data: current?.data ?? null,
         corruptEntries: current?.corruptEntries ?? EMPTY_CORRUPT_ENTRIES,
-        materializedSecrets: EMPTY_MATERIALIZED_SECRETS,
+        // A read alone does not revoke the admitted material. Wakes, receipts,
+        // observer gaps and failures withdraw its authority through invalidation.
+        materializedSecrets: hasCurrentMaterial(current) ? current.materializedSecrets : EMPTY_MATERIALIZED_SECRETS,
         legacyImport: current?.legacyImport ?? null,
         lastObservedAt: current?.lastObservedAt ?? null,
         stale: current?.stale ?? false,
@@ -209,7 +216,7 @@ export type SavedSecretReferenceResolution = Readonly<{
  * An extant legacy personal row wins before namespace parsing so reserved-ref
  * collisions retain value continuity until the Settings CAS rekeys them.
  * Otherwise shared refs remain shared: their metadata survives transient
- * catalog loss, while material is returned only from a current, ready snapshot
+ * catalog loss, while material is returned only from a current snapshot
  * for this exact Account/Home scope.
  */
 export function resolveSavedSecretReference(
@@ -260,7 +267,7 @@ export function resolveSavedSecretReference(
     const entry = snapshot?.data?.find((candidate) => candidate.ref === ref) ?? null;
     const revision = entry?.revision ?? null;
     const fingerprint = formatSavedSecretCatalogFingerprintV1({ ref, source: 'shared_resource', revision });
-    if (!snapshot || snapshot.stale || snapshot.status !== 'ready') {
+    if (!hasCurrentMaterial(snapshot) || (!entry && snapshot.status !== 'ready')) {
         return Object.freeze({
             ref,
             kind: 'shared_resource',
@@ -320,7 +327,7 @@ export function getMaterializedSavedSecret(
     ref: string,
 ): SavedSecret | null {
     const snapshot = getSavedSecretCatalogSnapshot(scope);
-    if (!snapshot || snapshot.stale || snapshot.status !== 'ready') return null;
+    if (!hasCurrentMaterial(snapshot)) return null;
     return snapshot.materializedSecrets.find((secret) => secret.id === ref) ?? null;
 }
 
@@ -328,7 +335,7 @@ export function getMaterializedSavedSecrets(
     scope: ServerAccountScope | null | undefined,
 ): readonly SavedSecret[] {
     const snapshot = getSavedSecretCatalogSnapshot(scope);
-    return snapshot && !snapshot.stale && snapshot.status === 'ready'
+    return hasCurrentMaterial(snapshot)
         ? snapshot.materializedSecrets
         : EMPTY_MATERIALIZED_SECRETS;
 }

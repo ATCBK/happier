@@ -2,11 +2,20 @@ import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCat
 import type { MachineAgent, MachineAgentState } from '@/agents/machineAgents/machineAgentTypes';
 import { resolveHappierCollectionInitialKey } from '@happier-dev/plugin-ui/presentation';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 
-export type AgentCollectionRowStatus = MachineAgentState | 'disabled';
+/** `installsOnFirstUse`: a registry agent not on this machine yet; a session's first start installs it. */
+export type AgentCollectionRowStatus = MachineAgentState | 'disabled' | 'installsOnFirstUse';
+
+/** An Account ACP definition listed with the agents (a registry agent), with its resolved catalog presentation. */
+export type AgentCollectionDefinition = Readonly<{ definition: AcpBackendDefinitionV1; entry: ResolvedAgentCatalogEntry }>;
 
 export type AgentCollectionRow = Readonly<{
+    /** Unique in the collection: an agent id, or `definition:<id>` for a definition. */
+    key: string;
     entry: ResolvedAgentCatalogEntry;
+    /** Set for a registry agent: it opens its definition, not a catalog agent route. */
+    definition?: AcpBackendDefinitionV1;
     status: AgentCollectionRowStatus;
     signIn: MachineAgent['signIn'] | null;
     /** Only a problem the user must fix (a signed-out installed agent) is flagged. */
@@ -29,6 +38,8 @@ export type AgentCollection = Readonly<{
 export function buildAgentCollection(params: Readonly<{
     entries: readonly ResolvedAgentCatalogEntry[];
     agents: readonly MachineAgent[];
+    /** Registry definitions (not command agents): listed beside the agents by their detected state (P9 F8). */
+    definitions?: readonly AgentCollectionDefinition[];
     query: string;
 }>): AgentCollection {
     const query = params.query.trim().toLocaleLowerCase();
@@ -41,15 +52,33 @@ export function buildAgentCollection(params: Readonly<{
         if (query && !entry.title.toLocaleLowerCase().includes(query)) continue;
         const agent = agentsById.get(entry.agentId);
         if (agent?.state === 'notInstalled' || agent?.state === 'unsupported') {
-            available.push({ entry, status: agent.state, signIn: agent.signIn, trouble: false });
+            available.push({ key: entry.agentId, entry, status: agent.state, signIn: agent.signIn, trouble: false });
             continue;
         }
         const status: AgentCollectionRowStatus = entry.enabled === false
             ? 'disabled'
             : agent?.state ?? 'unknown';
-        onMachine.push({ entry, status, signIn: agent?.signIn ?? null, trouble: status === 'needsSignIn' && agent?.stale !== true });
+        onMachine.push({ key: entry.agentId, entry, status, signIn: agent?.signIn ?? null, trouble: status === 'needsSignIn' && agent?.stale !== true });
     }
-    return { onMachine, available, total: entries.length };
+    const definitions = (params.definitions ?? []).filter(({ definition }) => !isCommandAgentDefinition(definition));
+    const agentsByDefinition = new Map(params.agents.flatMap((agent) => (agent.definitionId ? [[agent.definitionId, agent] as const] : [])));
+    for (const { definition, entry } of definitions) {
+        if (query && !entry.title.toLocaleLowerCase().includes(query)) continue;
+        const key = `definition:${definition.id}`;
+        const agent = agentsByDefinition.get(definition.id);
+        if (!agent || agent.state === 'notInstalled' || agent.state === 'unsupported') {
+            available.push({ key, entry, definition, status: agent?.state === 'unsupported' ? 'unsupported' : 'installsOnFirstUse', signIn: agent?.signIn ?? null, trouble: false });
+            continue;
+        }
+        const status: AgentCollectionRowStatus = entry.enabled === false ? 'disabled' : agent.state;
+        onMachine.push({ key, entry, definition, status, signIn: agent.signIn, trouble: status === 'needsSignIn' && agent.stale !== true });
+    }
+    return { onMachine, available, total: entries.length + definitions.length };
+}
+
+/** "Custom agents" are the ones started from a command; a registry agent is an agent like the built-in ones. */
+export function isCommandAgentDefinition(definition: AcpBackendDefinitionV1): boolean {
+    return definition.launch.kind === 'command';
 }
 
 function isCustomAcpAgentEntry(entry: ResolvedAgentCatalogEntry): boolean {
@@ -77,6 +106,7 @@ export function resolveAgentCollectionLandingId(
     collection: AgentCollection,
     lastVisitedAgentId: string | null,
 ): string | null {
-    const rows = [...collection.onMachine, ...collection.available];
+    // Definition rows open their own editor route; the landing opens a catalog agent.
+    const rows = [...collection.onMachine, ...collection.available].filter((row) => !row.definition);
     return resolveHappierCollectionInitialKey({ keys: rows.map((row) => row.entry.agentId), lastVisited: lastVisitedAgentId });
 }

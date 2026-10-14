@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AcpConfigOptionOverridesV1Schema } from './metadata/metadataOverridesV1.js';
 import { isSessionAgentTransitionDividerLocalId } from './agentTransitionDivider.js';
@@ -57,23 +57,20 @@ import { AgentIdV1Schema } from '../agents/agentIdV1.js';
  *   unavailable and the final mutation rejects with `target_unavailable`; it is
  *   never silently dropped.
  */
-export const SessionAgentTransitionSelectionV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAgentTransitionSelectionV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     agentId: AgentIdV1Schema,
-    modelId: z.string().trim().min(1).max(256).optional(),
+    modelId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
     /**
      * Model-provider connection. Accepted only where the receiving tree and the
      * exact target can honor it; a tree that cannot MUST reject the transition
      * with `target_unavailable` rather than silently dropping the field.
      * Carried as a plain bounded identifier — never a tree-local branded type.
      */
-    providerConnectionId: z.string().trim().min(1).max(128).nullable().optional(),
-    acpSessionModeId: z.string().trim().min(1).max(128).nullable().optional(),
-    sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-  })
-  .strict()
-  .superRefine((selection, ctx) => {
+    providerConnectionId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)))),
+    acpSessionModeId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)))),
+    sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
+  }).check(z.superRefine((selection, ctx) => {
     if (selection.providerConnectionId == null) return;
     if (typeof selection.modelId === 'string' && selection.modelId.length > 0) return;
     ctx.addIssue({
@@ -81,7 +78,7 @@ export const SessionAgentTransitionSelectionV1Schema = lazyZodSchema(() => z
       path: ['modelId'],
       message: 'modelId is required when providerConnectionId is set.',
     });
-  }));
+  })));
 export type SessionAgentTransitionSelectionV1 = z.infer<typeof SessionAgentTransitionSelectionV1Schema>;
 
 /* ------------------------------------------------------------------------- *
@@ -98,24 +95,21 @@ export type SessionAgentTransitionSelectionV1 = z.infer<typeof SessionAgentTrans
  * The transition then closes its own mutation boundary; forward-compatible
  * message metadata remains inside the canonical opaque `meta` record.
  */
-export const SessionAgentTransitionInputV1Schema = lazyZodSchema(() => SessionUserMessageSendRequestSchema.safeExtend({
+export const SessionAgentTransitionInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(SessionUserMessageSendRequestSchema, {
   localId: PendingLocalIdSchema,
-})
-  .strict()
-  .superRefine((input, ctx) => {
+})).check(z.superRefine((input, ctx) => {
     if (!isSessionAgentTransitionDividerLocalId(input.localId)) return;
     ctx.addIssue({
       code: 'custom',
       path: ['localId'],
       message: 'The agent-transition localId namespace is reserved for cutover dividers.',
     });
-  }));
+  })));
 export type SessionAgentTransitionInputV1 = z.infer<typeof SessionAgentTransitionInputV1Schema>;
 
-export const SessionAgentTransitionRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAgentTransitionRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sessionId: z.string().trim().min(1),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     /**
      * The Agent the client believes is current. The daemon compares it against
      * decrypted current metadata before stop and again before sealing cutover.
@@ -125,8 +119,7 @@ export const SessionAgentTransitionRequestV1Schema = lazyZodSchema(() => z
     expectedCurrentAgentId: AgentIdV1Schema,
     selection: SessionAgentTransitionSelectionV1Schema,
     input: SessionAgentTransitionInputV1Schema,
-  })
-  .strict());
+  }));
 export type SessionAgentTransitionRequestV1 = z.infer<typeof SessionAgentTransitionRequestV1Schema>;
 
 /* ------------------------------------------------------------------------- *
@@ -238,15 +231,12 @@ export const SessionAgentTransitionErrorCodeV1Schema = lazyZodSchema(() => z.enu
 export type SessionAgentTransitionErrorCodeV1 =
   z.infer<typeof SessionAgentTransitionErrorCodeV1Schema>;
 
-const SessionAgentTransitionAcceptedResultV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionAgentTransitionAcceptedResultV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.literal('accepted'),
     localId: PendingLocalIdSchema,
-  })
-  .strict());
+  }));
 
-const SessionAgentTransitionRejectedResultV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionAgentTransitionRejectedResultV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.literal('rejected'),
     code: SessionAgentTransitionRejectedCodeV1Schema,
     /**
@@ -255,8 +245,7 @@ const SessionAgentTransitionRejectedResultV1Schema = lazyZodSchema(() => z
      * `partially_applied` or `outcome_unknown` instead.
      */
     sourceEffect: z.literal('none'),
-  })
-  .strict());
+  }));
 
 /**
  * `applied` names exactly how far the transition got:
@@ -270,22 +259,18 @@ const SessionAgentTransitionRejectedResultV1Schema = lazyZodSchema(() => z
  * and a producer cannot pair a committed-view code with a stopped-only depth.
  */
 const SessionAgentTransitionPartiallyAppliedResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('applied', [
-  z
-    .object({
+  z.strictObject({
       type: z.literal('partially_applied'),
       localId: PendingLocalIdSchema,
       applied: z.literal('source_stopped'),
       code: SessionAgentTransitionSourceStoppedCodeV1Schema,
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       type: z.literal('partially_applied'),
       localId: PendingLocalIdSchema,
       applied: z.literal('current_view_committed'),
       code: SessionAgentTransitionCurrentViewCommittedCodeV1Schema,
-    })
-    .strict(),
+    }),
 ]));
 
 /**
@@ -298,12 +283,10 @@ const SessionAgentTransitionPartiallyAppliedResultV1Schema = lazyZodSchema(() =>
  * The canonical reconciliation owner determines subsequent presentation from
  * refreshed Session and input-custody facts; this result prescribes no action.
  */
-const SessionAgentTransitionOutcomeUnknownResultV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionAgentTransitionOutcomeUnknownResultV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.literal('outcome_unknown'),
     localId: PendingLocalIdSchema,
-  })
-  .strict());
+  }));
 
 /**
  * `accepted` means the target current view and divider committed AND the exact
@@ -322,13 +305,11 @@ export type SessionAgentTransitionResultV1 = z.infer<typeof SessionAgentTransiti
  * Live inspection
  * ------------------------------------------------------------------------- */
 
-export const SessionContinuationInspectionRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionContinuationInspectionRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sourceSessionId: z.string().trim().min(1),
+    sourceSessionId: z.string().check(z.trim(), z.minLength(1)),
     selection: SessionAgentTransitionSelectionV1Schema,
-  })
-  .strict());
+  }));
 export type SessionContinuationInspectionRequestV1 =
   z.infer<typeof SessionContinuationInspectionRequestV1Schema>;
 
@@ -348,20 +329,16 @@ export type SessionContinuationInspectionUnavailableReasonV1 =
   z.infer<typeof SessionContinuationInspectionUnavailableReasonV1Schema>;
 
 export const SessionContinuationInspectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z
-    .object({
+  z.strictObject({
       type: z.literal('available'),
       protocolVersion: z.literal(1),
       /** In-place transition on the source machine. */
       sameSessionTransition: z.boolean(),
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       type: z.literal('unavailable'),
       reason: SessionContinuationInspectionUnavailableReasonV1Schema,
-    })
-    .strict(),
+    }),
 ]));
 export type SessionContinuationInspectionV1 = z.infer<typeof SessionContinuationInspectionV1Schema>;
 
@@ -369,22 +346,18 @@ export type SessionContinuationInspectionV1 = z.infer<typeof SessionContinuation
  * One picker projection asks about every target against the same source Session.
  * The result array is positional: inspections[i] answers selections[i].
  */
-export const SessionContinuationInspectionBatchRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionContinuationInspectionBatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sourceSessionId: z.string().trim().min(1),
-    selections: z.array(SessionAgentTransitionSelectionV1Schema).min(1),
-  })
-  .strict());
+    sourceSessionId: z.string().check(z.trim(), z.minLength(1)),
+    selections: z.array(SessionAgentTransitionSelectionV1Schema).check(z.minLength(1)),
+  }));
 export type SessionContinuationInspectionBatchRequestV1 =
   z.infer<typeof SessionContinuationInspectionBatchRequestV1Schema>;
 
-export const SessionContinuationInspectionBatchResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionContinuationInspectionBatchResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     inspections: z.array(SessionContinuationInspectionV1Schema),
-  })
-  .strict());
+  }));
 export type SessionContinuationInspectionBatchResultV1 =
   z.infer<typeof SessionContinuationInspectionBatchResultV1Schema>;
 
@@ -453,12 +426,11 @@ export function resolveSessionContinuationUnavailablePresentationV1(
  * Read-only and effect-free: it reserves nothing, writes nothing, and grants no
  * authority. A stale answer can only mislead a label.
  */
-export const SessionAgentTransitionBriefPreviewRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAgentTransitionBriefPreviewRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sessionId: z.string().trim().min(1),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     /** The divider's recorded cutoff — the pass's UPPER bound, exactly as the transition set it. */
-    sourceCutoffSeqInclusive: z.number().int().nonnegative(),
+    sourceCutoffSeqInclusive: z.number().check(z.int(), z.nonnegative()),
     /**
      * The divider's recorded native-return bound — the pass's exclusive LOWER
      * bound — carried through unchanged, and ABSENT for a fresh target because
@@ -471,7 +443,7 @@ export const SessionAgentTransitionBriefPreviewRequestV1Schema = lazyZodSchema((
      * re-derived: the record it came from is device-local and the next
      * departure overwrites it.
      */
-    returningAgentLastSeenSeqInclusive: z.number().int().nonnegative().optional(),
+    returningAgentLastSeenSeqInclusive: z.optional(z.number().check(z.int(), z.nonnegative())),
     /**
      * The boundary's two Agents, exactly as the divider records them.
      *
@@ -484,8 +456,7 @@ export const SessionAgentTransitionBriefPreviewRequestV1Schema = lazyZodSchema((
      */
     sourceAgentId: AgentIdV1Schema,
     targetAgentId: AgentIdV1Schema,
-  })
-  .strict());
+  }));
 export type SessionAgentTransitionBriefPreviewRequestV1 =
   z.infer<typeof SessionAgentTransitionBriefPreviewRequestV1Schema>;
 
@@ -509,8 +480,7 @@ export type SessionAgentTransitionBriefPreviewUnavailableReasonV1 =
   z.infer<typeof SessionAgentTransitionBriefPreviewUnavailableReasonV1Schema>;
 
 export const SessionAgentTransitionBriefPreviewV1Schema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z
-    .object({
+  z.strictObject({
       type: z.literal('rebuilt'),
       protocolVersion: z.literal(1),
       /**
@@ -518,22 +488,17 @@ export const SessionAgentTransitionBriefPreviewV1Schema = lazyZodSchema(() => z.
        * transition. Bounded by the same configured seed cap, so it cannot be
        * larger than what the transition itself would have sent.
        */
-      briefText: z.string().min(1).max(1_000_000),
-    })
-    .strict(),
+      briefText: z.string().check(z.minLength(1), z.maxLength(1_000_000)),
+    }),
   /** The pass ran and the source carried nothing replayable. */
-  z
-    .object({
+  z.strictObject({
       type: z.literal('empty'),
       protocolVersion: z.literal(1),
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       type: z.literal('unavailable'),
       reason: SessionAgentTransitionBriefPreviewUnavailableReasonV1Schema,
-    })
-    .strict(),
+    }),
 ]));
 export type SessionAgentTransitionBriefPreviewV1 =
   z.infer<typeof SessionAgentTransitionBriefPreviewV1Schema>;
@@ -549,13 +514,11 @@ export type SessionAgentTransitionBriefPreviewV1 =
  * It carries no acknowledgment flag, timer, TTL, operation id, or progress
  * phase: the existing draft envelope owns timestamps, revisions, and cleanup.
  */
-export const ComposerAgentContinuationIntentV1Schema = lazyZodSchema(() => z
-  .object({
+export const ComposerAgentContinuationIntentV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     mode: z.literal('same_session'),
     sourceAgentId: AgentIdV1Schema,
     selection: SessionAgentTransitionSelectionV1Schema,
-  })
-  .strict());
+  }));
 export type ComposerAgentContinuationIntentV1 =
   z.infer<typeof ComposerAgentContinuationIntentV1Schema>;

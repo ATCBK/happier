@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
@@ -919,6 +920,7 @@ export function createDefaultAndroidScrcpyServerProcessStarter(input: Readonly<{
                 stdio: ['ignore', 'pipe', 'pipe'],
                 ...(startInput.signal ? { signal: startInput.signal } : {}),
             });
+            observeProcessLaunch(child);
             // stdout carries the raw H.264 stream when `raw_stream=true`; do not attach a
             // diagnostic data listener here because that would drain bytes before capture reads them.
             child.stderr.on('data', (chunk: Buffer) => {

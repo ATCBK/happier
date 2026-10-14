@@ -74,7 +74,7 @@ async function readRegisteredWorktreePath(input: Readonly<{
     }
 }
 
-function resolveGitAdminPath(cwd: string, rawGitFileContents: string): string | null {
+export function resolveGitAdminPath(cwd: string, rawGitFileContents: string): string | null {
     const gitdirPrefix = 'gitdir:';
     if (!rawGitFileContents.startsWith(gitdirPrefix)) {
         return null;

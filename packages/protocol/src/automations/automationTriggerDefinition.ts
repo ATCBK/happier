@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { PluginMachineMaterializationRefV1Schema } from '../plugins/availability/materializationRefV1.js';
@@ -27,41 +27,41 @@ import { AutomationRunLifecycleTriggerSchema, AutomationRunLifecycleTriggerInput
 export * from './automationRunLifecycle.js';
 
 const AutomationScheduleSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('cron'),
     scheduleExpr: z.string(),
     everyMs: z.null(),
-    timezone: z.string().nullable(),
-  }).strict(),
-  z.object({
+    timezone: z.nullable(z.string()),
+  }),
+  z.strictObject({
     kind: z.literal('interval'),
     scheduleExpr: z.null(),
-    everyMs: z.number().int(),
-    timezone: z.string().nullable(),
-  }).strict(),
+    everyMs: z.number().check(z.int()),
+    timezone: z.nullable(z.string()),
+  }),
 ]));
 
-export const AutomationScheduleTriggerSchema = lazyZodSchema(() => z.object({
+export const AutomationScheduleTriggerSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('schedule'),
   schedule: AutomationScheduleSchema,
-}).strict());
+}));
 export type AutomationScheduleTrigger = z.infer<typeof AutomationScheduleTriggerSchema>;
 
-export const AutomationScheduleTriggerInputSchema = lazyZodSchema(() => AutomationScheduleTriggerSchema.extend({
+export const AutomationScheduleTriggerInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationScheduleTriggerSchema, {
   enabled: z.boolean(),
-}).strict());
+})));
 export type AutomationScheduleTriggerInput = z.infer<typeof AutomationScheduleTriggerInputSchema>;
 
 export const AutomationSessionLifecycleTriggerSchema =
-  lazyZodSchema(() => AutomationSessionLifecycleConfigurationSchema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationSessionLifecycleConfigurationSchema, {
     kind: z.literal('sessionLifecycle'),
-  }).strict());
+  })));
 export type AutomationSessionLifecycleTrigger = z.infer<
   typeof AutomationSessionLifecycleTriggerSchema
 >;
 
 export const AutomationSessionLifecycleTriggerInputSchema =
-  lazyZodSchema(() => AutomationSessionLifecycleTriggerSchema.extend({ enabled: z.boolean() }).strict());
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationSessionLifecycleTriggerSchema, { enabled: z.boolean() })));
 export type AutomationSessionLifecycleTriggerInput = z.infer<
   typeof AutomationSessionLifecycleTriggerInputSchema
 >;
@@ -81,28 +81,28 @@ export type AutomationSessionLifecycleRegistrationErrorCode = z.infer<
 >;
 
 export const AutomationPluginEventObservationTransportInputSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('checkpointedPull'),
     watcherMaterializationRef: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('socket'),
     /** The exact plugin materialization hosting the provider's observation session. */
     watcherMaterializationRef: PluginMachineMaterializationRefV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('durablePush'),
     webhookEndpointId: PluginWebhookEndpointIdV1Schema,
     endpointMaterializationRef: PluginMachineMaterializationRefV1Schema,
     webhookRoutingSourceInstanceId: AutomationEventSourceInstanceIdV1Schema,
     setup: PluginWebhookEndpointSetupV1Schema,
-  }).strict(),
+  }),
 ]));
 export type AutomationPluginEventObservationTransportInput = z.infer<
   typeof AutomationPluginEventObservationTransportInputSchema
 >;
 
-export const AutomationPluginEventDefinitionTriggerSchema = lazyZodSchema(() => z.object({
+export const AutomationPluginEventDefinitionTriggerSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('pluginEvent'),
   eventRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
   sourceInstanceId: AutomationEventSourceInstanceIdV1Schema,
@@ -110,43 +110,43 @@ export const AutomationPluginEventDefinitionTriggerSchema = lazyZodSchema(() => 
   sourceConfig: asProtocolZod(AutomationEventSourceConfigV1Schema),
   displayLabel: AutomationEventSourceDisplayLabelV1Schema,
   observationTransport: AutomationPluginEventObservationTransportInputSchema,
-  filter: AutomationEventFilterV1Schema.nullable(),
-  maximumObservationAgeMs: z.number().int().nonnegative().safe().nullable(),
-}).strict());
+  filter: z.nullable(AutomationEventFilterV1Schema),
+  maximumObservationAgeMs: z.nullable(z.number().check(z.int(), z.nonnegative(), z.int())),
+}));
 export type AutomationPluginEventDefinitionTrigger = z.infer<
   typeof AutomationPluginEventDefinitionTriggerSchema
 >;
 
 export const AutomationEncryptedTriggerDefinitionEnvelopeV1Schema =
-  ENCRYPTED_STORED_CONTENT_SCHEMA.superRefine((value, context) => {
+  ENCRYPTED_STORED_CONTENT_SCHEMA.check(z.superRefine((value, context) => {
     addAutomationStoredEnvelopeUtf8LimitIssue(
       value,
       context,
       'Stored Automation envelope exceeds its UTF-8 byte limit',
     );
-  });
+  }));
 export type AutomationEncryptedTriggerDefinitionEnvelopeV1 = z.infer<
   typeof AutomationEncryptedTriggerDefinitionEnvelopeV1Schema
 >;
 
 /** The private PR selector shared by comment and failed-check triggers. */
-export const AutomationPullRequestTriggerSchema = lazyZodSchema(() => z.object({
+export const AutomationPullRequestTriggerSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['prComment', 'ciFailed']),
-  pullRequest: z.object({
-    repository: z.string().min(1),
-    number: z.number().int().positive().safe(),
-  }).strict(),
-}).strict());
+  pullRequest: z.strictObject({
+    repository: z.string().check(z.minLength(1)),
+    number: z.number().check(z.int(), z.positive(), z.int()),
+  }),
+}));
 export type AutomationPullRequestTrigger = z.infer<typeof AutomationPullRequestTriggerSchema>;
 
-export const AutomationPullRequestEncryptedTriggerSchema = lazyZodSchema(() => z.object({
+export const AutomationPullRequestEncryptedTriggerSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['prComment', 'ciFailed']),
   triggerDefinitionEnvelope: AutomationEncryptedTriggerDefinitionEnvelopeV1Schema,
-}).strict());
+}));
 
 export const AutomationPullRequestTriggerInputSchema = lazyZodSchema(() => z.union([
-  AutomationPullRequestTriggerSchema.extend({ enabled: z.boolean() }).strict(),
-  AutomationPullRequestEncryptedTriggerSchema.extend({ enabled: z.boolean() }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationPullRequestTriggerSchema, { enabled: z.boolean() })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationPullRequestEncryptedTriggerSchema, { enabled: z.boolean() })),
 ]));
 export type AutomationPullRequestTriggerInput = z.infer<typeof AutomationPullRequestTriggerInputSchema>;
 
@@ -156,22 +156,22 @@ export type AutomationPullRequestTriggerInput = z.infer<typeof AutomationPullReq
  * client-chosen Automation/trigger identity and revision in the canonical
  * stored-content envelope.
  */
-export const AutomationPluginEventEncryptedDefinitionTriggerSchema = lazyZodSchema(() => z.object({
+export const AutomationPluginEventEncryptedDefinitionTriggerSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('pluginEvent'),
   eventRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
   sourceSelectorId: AutomationSourceSelectorIdV1Schema,
   sourceContractVersion: AutomationEventPositiveSafeIntegerV1Schema,
   observationTransport: AutomationPluginEventObservationTransportInputSchema,
   triggerDefinitionEnvelope: AutomationEncryptedTriggerDefinitionEnvelopeV1Schema,
-}).strict());
+}));
 export type AutomationPluginEventEncryptedDefinitionTrigger = z.infer<
   typeof AutomationPluginEventEncryptedDefinitionTriggerSchema
 >;
 
 export const AutomationPluginEventDefinitionTriggerInputSchema =
   lazyZodSchema(() => z.union([
-    AutomationPluginEventDefinitionTriggerSchema.extend({ enabled: z.boolean() }).strict(),
-    AutomationPluginEventEncryptedDefinitionTriggerSchema.extend({ enabled: z.boolean() }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationPluginEventDefinitionTriggerSchema, { enabled: z.boolean() })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationPluginEventEncryptedDefinitionTriggerSchema, { enabled: z.boolean() })),
   ]));
 export type AutomationPluginEventDefinitionTriggerInput = z.infer<
   typeof AutomationPluginEventDefinitionTriggerInputSchema

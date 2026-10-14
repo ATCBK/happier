@@ -15,6 +15,7 @@ import { workStatusWordStyle } from '@/components/work/status/workStatusTreatmen
 import { Typography } from '@/constants/Typography';
 import { useWorkTheme, WORK_HOST } from '@/components/work/map/WorkMapView';
 import { t } from '@/text';
+import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { SessionWorkStripPopoverContent } from './SessionWorkStripPopover';
 import { readWorkWorkingCount, type WorkSummary } from './workProjection';
@@ -83,9 +84,10 @@ export const SessionHeaderWorkStrip = React.memo((props: Readonly<{
     if (outstanding <= 0 || workTabOpen) return null;
 
     const workingCount = readWorkWorkingCount(props.summary);
+    const reportsPresentation = readSessionReportsPresentationV1({ working: workingCount, needsYou, stalled: props.summary.stalled });
     const working = workingCount > 0 ? t('sessionWork.strip.stillWorking', { count: workingCount }) : null;
     const attention = needsYou > 0 ? t('sessionWork.strip.needsYou', { count: needsYou }) : null;
-    const stalled = !working && !attention ? t('sessionWork.workerUpdate.state.stalled') : null;
+    const offline = reportsPresentation.bucket === 'offline' ? t('status.offline') : null;
 
     return (<>
         <View ref={anchorRef} collapsable={false}>
@@ -95,7 +97,7 @@ export const SessionHeaderWorkStrip = React.memo((props: Readonly<{
             hasPopup="dialog"
             accessibilityRole="button"
             accessibilityLabel={t('sessionWork.strip.a11y', {
-                summary: joinHappierFacts(working, attention, stalled),
+                summary: joinHappierFacts(working, attention, offline),
             })}
             onPress={onPress}
             style={({ focused, pressed, hovered }) => [
@@ -106,7 +108,7 @@ export const SessionHeaderWorkStrip = React.memo((props: Readonly<{
             ]}
         >
             <HappierFactLine numberOfLines={1} style={styles.text} theme={workTheme} host={WORK_HOST}
-                facts={[working, attention ? <Text testID={testId ? `${testId}:needs-you` : undefined} style={workStatusWordStyle('attention')}>{attention}</Text> : null, stalled]} />
+                facts={[working, attention ? <Text testID={testId ? `${testId}:needs-you` : undefined} style={workStatusWordStyle('attention')}>{attention}</Text> : null, offline]} />
             <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                 <Icon name="caret-down" size={12} color={theme.colors.text.secondary} />
             </View>
@@ -129,7 +131,7 @@ export const SessionHeaderWorkStrip = React.memo((props: Readonly<{
                             sessionId={props.sessionId}
                             serverId={props.serverId}
                             scopeId={props.scopeId}
-                            line={joinHappierFacts(working, attention, stalled)}
+                            line={joinHappierFacts(working, attention, offline)}
                             onOpenInSidebar={openInSidebar}
                             onClose={close}
                         />

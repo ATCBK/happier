@@ -170,6 +170,14 @@ authority.
 
 ## Configured Session actions (0.3 development)
 
+The `triage.actions` catalog is owned by
+[`settings/actions.ts`](../packages/plugins/triage/src/settings/actions.ts).
+Reads append missing built-in actions in default order, preserving configured
+rows and explicit disabled choices. Deleting a built-in stores that row with
+`enabled: false`; deleting a custom action removes it. An empty stored catalog
+therefore means no custom actions. The catalog Actions and direct UI transport
+use this same reader and writer.
+
 The client-targeted `happier.triage/actions/sessions/run-configured-v1` Action runs a catalog `actionId` through the same configured action/profile/prompt and Session owners as a mounted press. Its exact input and result declarations are [`configuredActionRunProtocol.ts`](../packages/plugins/triage/src/actions/configuredActionRunProtocol.ts), not a second agent-only workflow. Callers supply exact `entries` (`entryRef` and `sourceInstanceId`) and a declared `destination`; optional settled `drafts` retain the host's canonical launch-input admission.
 
 An incomplete start returns `recovery` when the existing single/bulk controller
@@ -185,6 +193,14 @@ These are invocation-local facts returned to the caller, not a durable retry
 record. A lost outer Action response supplies no recovery object and must not be
 treated as permission to start again. Prepared-workspace recovery obtains a fresh
 authorization when needed; it never echoes a spent authorization carrier.
+
+Every configured continuation checks the current catalog's offerability before
+dispatch, including mounted bulk retries and formal-review retries. Disabling
+or deleting the originating action prevents unstarted units and new review
+engines from starting. Settled and unknown outcomes remain receipts; refusal
+does not erase them or turn them into permission to replay. Review checks run
+after launch selection, so a row disabled while that selection is open cannot
+start a review when it closes.
 
 In current development source, agent/MCP/CLI contributed invocations route through the daemon's existing machine-scoped reverse RPC to an answering client, then through the ordinary Action executor and shared client dispatcher. The real invocation surface, exact contribution occurrence, cancellation and shared approval policy remain intact. A missing answering client fails closed before execution; loss of an issued acknowledgement is an unknown outcome, not permission to retry. This client dependency serves New Session authoring, input selection and navigation; it does not introduce a second Session creator.
 

@@ -14,7 +14,7 @@ import {
     type RevisionedSettingsDraftOrigin,
 } from '@/components/settings/identity/revisionedSettingsDraft';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -297,7 +297,7 @@ export const ManagedGitHubAppEditorContent = React.memo(function ManagedGitHubAp
         }
     }, [client, finishManifestSetup, manifestAppName, manifestForOrganization, manifestOrganization, owner, props.surface.mutationsAvailable, reportApprovalFailure, reportApprovalPending]);
 
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const copyCallbackUrl = React.useCallback(async (url: string) => {
         if (!await setClipboardStringSafe(url)) {
             await Modal.alertAsync(t('common.error'), t('items.failedToCopyToClipboard'));

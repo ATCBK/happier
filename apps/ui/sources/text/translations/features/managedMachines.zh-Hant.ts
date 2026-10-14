@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "清除帳號前請先查看這些資源。清除 Happier 資料不會在供應商端刪除它們。",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `他們還可以讀取此工作階段使用的登入資訊：${purposes}，以及此工作階段的 Happier 存取權限。`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service}（原生登入）`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `在 ${owner} 的 ${machine} 上執行`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier 會為 ${machine} 提供僅適用於此工作階段的登入憑證。`,
         fullSignIn: ({ machine }: { machine: string }) => `此工作階段執行期間，你的 Happier 登入憑證會儲存在 ${machine} 上。在那裡擁有終端機或代理程式存取權限的人可能會用它存取你的 Happier 帳號。`,

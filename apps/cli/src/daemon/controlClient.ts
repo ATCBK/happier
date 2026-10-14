@@ -1292,8 +1292,10 @@ export async function requestExecutionRunConnectedServiceRuntimeAuthRefresh(
 
 export async function checkExecutionRunConnectedServicesGenerationCurrent(
   request: ConnectedServiceRunGenerationCurrentRequest,
+  options: Readonly<Pick<DaemonControlRequestOptions, 'signal' | 'timeoutMs'>> = {},
 ): Promise<{ ok?: boolean; current?: boolean; error?: string }> {
   return await daemonPost(CONNECTED_SERVICE_RUN_GENERATION_CURRENT_PATH, request, {
+    ...options,
     authScope: 'connected-service-run-materialize',
   });
 }

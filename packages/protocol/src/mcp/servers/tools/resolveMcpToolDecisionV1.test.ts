@@ -4,7 +4,7 @@ import type { McpServerToolPolicyV1 } from '../settingsV1.js';
 import { projectMcpToolLaunchPolicyV1, resolveMcpToolDecisionV1 } from './resolveMcpToolDecisionV1.js';
 import { McpToolSettingsV1Schema, McpServerToolSettingsPatchV1Schema } from '../settingsV1.js';
 import { rehydrateCanonicalProtocolComposableSchema } from '../../../plugins/actions/protocolComposableSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 describe('MCP tool policy decision', () => {
   const modes: readonly AgentPermissionIntentV1[] = ['default', 'safe-yolo', 'read-only', 'plan', 'yolo'];

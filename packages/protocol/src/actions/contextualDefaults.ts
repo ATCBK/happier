@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Host-stamped values that a session-bound Action tool may omit from model input. */
-export const ActionContextualDefaultsSchema = lazyZodSchema(() => z.object({
-  sessionId: z.literal('current_session').optional(),
-  machineId: z.literal('current_session_machine').optional(),
-}).strict());
+export const ActionContextualDefaultsSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.optional(z.literal('current_session')),
+  machineId: z.optional(z.literal('current_session_machine')),
+}));
 
 export type ActionContextualDefaults = z.infer<typeof ActionContextualDefaultsSchema>;

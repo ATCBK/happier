@@ -1,13 +1,5 @@
-import {
-    parseSessionOwnerMetadataEnvelopeV1,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    SessionSharedMetadataV1Schema,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-} from "@happier-dev/protocol";
-import type {
-    SessionMetadataRecipientProjectionV1,
-    SessionOwnerMetadataEnvelopeV1,
-} from "@happier-dev/protocol";
+import { parseSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1, SessionSharedMetadataV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import type { SessionMetadataRecipientProjectionV1, SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { Prisma } from "@prisma/client";
 
 import {

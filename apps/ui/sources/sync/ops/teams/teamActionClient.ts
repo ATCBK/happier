@@ -143,10 +143,7 @@ export async function runTeamAction<TValue>(params: Readonly<{
     input: unknown;
     /** Parses the Action's declared output into the caller's exact type. */
     parse: (value: unknown) => TValue;
-    /**
-     * Legacy caller fact retained while credential operations migrate in their
-     * owning lane. It is deliberately non-authoritative for Action approval.
-     */
+    /** Completed UI confirmation; explicit Ask settings still govern admission. */
     approval?: 'surface_confirmed';
     signal?: AbortSignal;
     /**
@@ -167,6 +164,9 @@ export async function runTeamAction<TValue>(params: Readonly<{
         authority: 'present_user',
         serverId: params.scope.serverId,
         actionRequestId,
+        ...(params.approval === 'surface_confirmed'
+            ? { presentUserConfirmation: { actionId: params.actionId } }
+            : {}),
         ...(params.signal ? { signal: params.signal } : {}),
     });
 

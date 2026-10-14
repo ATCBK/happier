@@ -1,25 +1,12 @@
 import { randomUUID } from "node:crypto";
 import tweetnacl from "tweetnacl";
-import {
-    DirectRouteGrantScopeV1Schema,
-    DirectRouteGrantScopeV2Schema,
-    DirectRouteGrantPayloadV1Schema,
-    DirectRouteGrantPayloadV2Schema,
-    PEER_MEDIATION_RECEIPTS,
-    createDirectRouteGrantSigningInputV1,
-    createDirectRouteGrantSigningInputV2,
-    validateMachineRpcGrantAllowedMethods,
-    type AuthorizedPeerEndpointRouteKindV1,
-    type DirectRouteGrantPayloadV1,
-    type DirectRouteGrantSignatureV1,
-    type DirectRouteGrantPayloadV2,
-    type DirectRouteGrantScopeV1,
-    type DirectRouteGrantScopeV2,
-    type IrohPeerRouteBindingV2,
-    type PeerFlowKindV1,
-    type SignedDirectRouteGrantV1,
-    type SignedDirectRouteGrantV2,
-} from "@happier-dev/protocol";
+import { DirectRouteGrantScopeV1Schema, type DirectRouteGrantScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantScopesV1';
+import { DirectRouteGrantScopeV2Schema, DirectRouteGrantPayloadV2Schema, createDirectRouteGrantSigningInputV2, type DirectRouteGrantPayloadV2, type DirectRouteGrantScopeV2, type IrohPeerRouteBindingV2, type SignedDirectRouteGrantV2 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
+import { DirectRouteGrantPayloadV1Schema, createDirectRouteGrantSigningInputV1, type DirectRouteGrantPayloadV1, type DirectRouteGrantSignatureV1, type SignedDirectRouteGrantV1 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV1';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { validateMachineRpcGrantAllowedMethods } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
+import { type AuthorizedPeerEndpointRouteKindV1 } from '@happier-dev/protocol/machines/peer/mediation/routeKind';
+import { type PeerFlowKindV1 } from '@happier-dev/protocol/machines/peer/mediation/flowKind';
 
 import { FEATURE_ENV_KEYS } from "@/app/features/catalog/featureEnvSchema";
 import {

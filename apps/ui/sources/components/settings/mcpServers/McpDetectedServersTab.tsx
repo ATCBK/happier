@@ -15,7 +15,7 @@ import { t } from '@/text';
 
 import { formatDetectedWarning, resolveDetectedServerStatusLabel } from './mcpServerUi';
 import { SettingRow } from '@/components/settings/shell/SettingRow';
-import { MCP_ON_MACHINE_SETTINGS } from '@/components/settings/mcpServers/mcpSettings';
+import { MCP_FOUND_SETTINGS } from '@/components/settings/mcpServers/mcpSettings';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 
 /**
@@ -26,6 +26,7 @@ export const McpDetectedServersTab = React.memo(function McpDetectedServersTab(p
     selectedMachineId: string | null;
     selectedServerId: string | null;
     canExecute: boolean;
+    canImport: boolean;
     directory: string;
     onChangeDirectory: (value: string) => void;
     loading: boolean;
@@ -65,7 +66,7 @@ export const McpDetectedServersTab = React.memo(function McpDetectedServersTab(p
             >
                 <SettingRow
                     testID="settings.mcpServers.detect.directory"
-                    setting={MCP_ON_MACHINE_SETTINGS.settings.mcpServersDetectedDirectory}
+                    setting={MCP_FOUND_SETTINGS.settings.mcpServersDetectedDirectory}
                     showChevron={false}
                     accessoryLayout="adaptive"
                     rightElement={(
@@ -123,7 +124,7 @@ export const McpDetectedServersTab = React.memo(function McpDetectedServersTab(p
                                     size="small"
                                     display="secondary"
                                     title={t('settings.mcpServersImportAction')}
-                                    disabled={!props.canExecute}
+                                    disabled={!props.canImport}
                                     onPress={() => props.onImport(server)}
                                 />
                             )}

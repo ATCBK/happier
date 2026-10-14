@@ -1,0 +1,18 @@
+{
+  "provenance": {
+    "head": "cd2bb4d853a259ae00ebc3e5981224e3e4bb5380",
+    "path": "packages/protocol/src/promptLibrary/promptBundleSchemas.ts",
+    "status": "Relevant schema path clean at capture, 2026-10-13",
+    "capture": "Executed predecessor PromptBundleBodyV1Schema and validatePromptBundleBodyV1AgainstSchemaId with the relative refs/CON.txt neighbour. Transpiled the unchanged predecessor validator in memory; resolved zod and the equivalent base64 decoder from the current dependency graph because the remote sibling has no dependencies.",
+    "validation": { "ok": true }
+  },
+  "header": { "v": 1, "kind": "prompt_bundle.v2", "title": "Retained skill", "bundleSchemaId": "skills.skill_md_v1" },
+  "body": {
+    "v": 1,
+    "entries": [
+      { "path": "SKILL.md", "contentBase64": "LS0tCm5hbWU6IHJldGFpbmVkCmRlc2NyaXB0aW9uOiBSZXRhaW5lZCBza2lsbAotLS0KUmVhZCByZWZzL0NPTi50eHQuCg==", "contentKind": "utf8" },
+      { "path": "refs/CON.txt", "contentBase64": "UmV0YWluZWQgc3VwcG9ydGluZyBieXRlcw==", "contentKind": "utf8" }
+    ],
+    "createdAtMs": 1, "updatedAtMs": 1
+  }
+}

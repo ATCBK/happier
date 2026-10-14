@@ -83,4 +83,20 @@ describe('HomeHubSectionList (the column contract)', () => {
         expect(screen.getTextContent()).toBe('block:medium block:wide');
         expect(JSON.stringify(sections)).toBe(before);
     });
+    it('puts every block on the dashboard column except the composer, which keeps the reading column', async () => {
+        const { HomeHubSectionList } = await import('./HomeHubSectionList');
+        const { PageColumnProvider, usePageColumn } = await import('@/components/ui/lists/listPresentation');
+        function ColumnProbe(props: Readonly<{ id: string }>) {
+            return <>{`${props.id}@${usePageColumn()}`}</>;
+        }
+        const screen = await renderScreen(
+            <PageColumnProvider value="dashboard">
+                <HomeHubSectionList
+                    sections={[builtin('attention'), builtin('start'), widget('w1'), widget('w2')]}
+                    renderSection={(section) => <ColumnProbe id={section.id} />}
+                />
+            </PageColumnProvider>,
+        );
+        expect(screen.getTextContent()).toBe('attention@dashboard start@reading w1@dashboard w2@dashboard');
+    });
 });

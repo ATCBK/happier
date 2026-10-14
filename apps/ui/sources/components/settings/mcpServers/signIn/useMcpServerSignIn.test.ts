@@ -1,0 +1,301 @@
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
+import { QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/connect/configurationActionsV1';
+
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storageStore';
+
+const boundary = vi.hoisted(() => ({
+  execute: vi.fn(),
+  open: vi.fn(async () => true),
+}));
+vi.mock('react-native', async () =>
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
+);
+// The mounted Action front door and the system browser are the boundaries; the sign-in state runs for real.
+vi.mock('@/components/approvals/useMountedActionExecution', () => ({
+  useMountedActionExecution: () => ({
+    execute: boundary.execute,
+    ready: true,
+    isCurrent: () => true,
+    approval: {},
+  }),
+}));
+vi.mock('@/utils/url/openExternalUrl', () => ({
+  openExternalUrl: boundary.open,
+}));
+
+const { useMcpServerSignIn } = await import('./useMcpServerSignIn');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+
+const server = {
+  id: 'linear',
+  name: 'Linear',
+  transport: 'http',
+  env: {},
+  createdAt: 1,
+  updatedAt: 1,
+  remote: {
+    url: 'https://mcp.linear.app/mcp',
+    headers: {},
+    auth: { kind: 'oauth' },
+  },
+} as unknown as McpServerCatalogEntryV1;
+const online = [{ machineId: 'm1', name: 'nl2', online: true }];
+const offline = [{ machineId: 'm1', name: 'nl2', online: false }];
+const started = {
+  attemptId: 'attempt-1',
+  authorizationUrl: 'https://linear.app/oauth/authorize?state=attempt-1.n',
+  expiresAtMs: Date.now() + 600_000,
+  machineId: 'm1',
+};
+
+function grant(
+  status: 'connected' | 'needs_reauth',
+  credentialRevision: number,
+) {
+  return QualifiedConnectedAccountProfileV4Schema.parse({
+    ref: { service: MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1, accountId: 'linear' },
+    status,
+    authenticationModeId: 'oauth',
+    configurationReady: true,
+    configurationRevision: 'configuration-1',
+    kind: 'oauth',
+    revisionSemantics: 'revisioned',
+    credentialRevision: `csr_${String(credentialRevision).padStart(22, '0')}`,
+    providerIdentity: { email: 'leeroy@acme.dev' },
+    scopes: ['read', 'write'],
+  });
+}
+
+// Safe configuration Action output: the account-target read of the host MCP OAuth runtime's values.
+function configuration(resource = server.remote!.url, stepUpScopes: string[] = []) {
+  return CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1['connectedServices.configuration.get'].parse({
+    target: { kind: 'account', account: grant('connected', 1).ref, modeId: 'oauth' },
+    mode: { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback', pkce: 'required', outcomeReconciliation: 'none' },
+    configuration: { status: 'ready', revision: 'configuration-1', values: { serverId: server.id, resource, grantedScopes: ['read', 'write'], stepUpScopes }, configuredSecretFieldIds: [], missingFieldIds: [] },
+  });
+}
+function setGrants(grants: readonly unknown[]) {
+  const state = getStorage().getState();
+  getStorage().setState({
+    profile: { ...state.profile, connectedAccountsV4: grants },
+  } as never);
+}
+
+beforeEach(() => {
+  boundary.execute.mockReset();
+  boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.configuration.get'
+    ? { ok: true, result: configuration() } : undefined);
+  boundary.open.mockClear();
+  getStorage().setState({
+    settingsScope: { serverId: 'home', accountId: 'account' },
+    profileScope: { serverId: 'home', accountId: 'account' },
+  } as never);
+  setGrants([]);
+});
+afterEach(async () => {
+  await standardCleanup();
+});
+
+describe('useMcpServerSignIn', () => {
+  it('retains the originating Session through the existing external-connect return owner', async () => {
+    const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+    const home = await upsertServerProfile({ name: 'Sign-in Home', serverUrl: 'https://mcp-signin-return.test' });
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online, { returnTo: '/session/session-1?capabilities=open', scope: { serverId: home.id, accountId: 'account' } }));
+    await act(async () => { await hook.getCurrent().start(); });
+    expect(await TokenStorage.getPendingExternalConnect()).toMatchObject({
+      provider: 'mcp:attempt-1', serverId: home.id, returnTo: '/session/session-1?capabilities=open',
+    });
+    expect(hook.getCurrent().fact).toEqual({ state: 'signing' });
+    await TokenStorage.clearPendingExternalConnect();
+  });
+  it('loads safe grant configuration and drives the real scope recovery Action', async () => {
+    setGrants([grant('connected', 1)]);
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.configuration.get'
+      ? { ok: true, result: configuration(undefined, ['admin']) }
+      : { ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    expect(hook.getCurrent().view).toEqual({ state: 'needs_more_access', scope: 'admin' });
+    await act(async () => { await hook.getCurrent().start({ stepUp: true }); });
+    expect(boundary.execute).toHaveBeenCalledWith('mcp.servers.signIn.start', { serverId: server.id, stepUp: true });
+    expect(hook.getCurrent().view?.state).toBe('signing');
+  });
+
+  it('a live address edit cannot retain Connected for the old resource', async () => {
+    setGrants([grant('connected', 1)]);
+    const hook = await renderHook((current: McpServerCatalogEntryV1) => useMcpServerSignIn(current, online), { initialProps: server });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+    await hook.rerender({ ...server, remote: { ...server.remote!, url: 'https://new.example/mcp' } });
+    expect(hook.getCurrent().view).toEqual({ state: 'expired', reason: 'address_changed' });
+    expect(hook.getCurrent().fact).toEqual({ state: 'expired', reason: 'address_changed' });
+  });
+
+  it('shows typed sign-out as Revoked, then a new grant clears it', async () => {
+    setGrants([grant('connected', 1)]);
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.configuration.get'
+      ? { ok: true, result: configuration() }
+      : { ok: true, result: CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1['connectedServices.accounts.revoke'].parse({
+        status: 'revoked', account: grant('connected', 1).ref, remoteStatus: 'remoteUnsupported',
+        metadataCleanup: { status: 'cleanup-pending', reason: 'connected_metadata_cleanup_pending' },
+      }) });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { expect(await hook.getCurrent().signOut()).toBe(true); });
+    expect(hook.getCurrent().view).toEqual({ state: 'revoked' });
+    await act(async () => { setGrants([]); });
+    expect(hook.getCurrent().view).toEqual({ state: 'revoked' });
+    await act(async () => { setGrants([grant('connected', 2)]); });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+  });
+  it('does not carry a revoke receipt to a different Account with the same server id', async () => {
+    setGrants([grant('connected', 1)]);
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.configuration.get'
+      ? { ok: true, result: configuration() }
+      : { ok: true, result: CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1['connectedServices.accounts.revoke'].parse({
+        status: 'revoked', account: grant('connected', 1).ref, remoteStatus: 'remoteUnsupported',
+        metadataCleanup: { status: 'complete' },
+      }) });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { expect(await hook.getCurrent().signOut()).toBe(true); });
+    expect(hook.getCurrent().view?.state).toBe('revoked');
+    await act(async () => { getStorage().setState({
+      settingsScope: { serverId: 'other-home', accountId: 'other-account' },
+      profileScope: { serverId: 'other-home', accountId: 'other-account' },
+    }); });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+  });
+  it('signs in: opens the browser, waits, and becomes Connected when the grant lands', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    expect(hook.getCurrent().view).toEqual({ state: 'not_connected' });
+    await act(async () => {
+      await hook.getCurrent().start();
+    });
+    expect(boundary.execute).toHaveBeenCalledWith('mcp.servers.signIn.start', {
+      serverId: 'linear',
+    });
+    expect(boundary.open).toHaveBeenCalledWith(started.authorizationUrl);
+    expect(hook.getCurrent().view).toMatchObject({
+      state: 'signing',
+      authorizationUrl: started.authorizationUrl,
+    });
+    expect(hook.getCurrent().fact).toEqual({ state: 'signing' });
+    await act(async () => {
+      setGrants([grant('connected', 1)]);
+    });
+    expect(hook.getCurrent().view).toEqual({
+      state: 'connected',
+      identity: 'leeroy@acme.dev',
+      scopes: ['read', 'write'],
+      lastUsedAt: null,
+    });
+  });
+
+  it('a pasted answer finishes on the attempt machine; a refusal says it did not finish', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => {
+      await hook.getCurrent().start();
+    });
+    boundary.execute.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        status: 'rejected',
+        attemptId: 'attempt-1',
+        code: 'invalid_grant',
+      },
+    });
+    let accepted: boolean | undefined;
+    await act(async () => {
+      accepted = await hook
+        .getCurrent()
+        .complete({
+          code: 'c',
+          state: 'attempt-1.n',
+          iss: 'https://linear.app',
+        });
+    });
+    expect(boundary.execute).toHaveBeenLastCalledWith(
+      'connectedServices.authentication.completeOAuth',
+      expect.objectContaining({
+        machineId: 'm1',
+        attemptId: 'attempt-1',
+        completion: expect.objectContaining({
+          code: 'c',
+          iss: 'https://linear.app',
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(accepted).toBe(false);
+    expect(hook.getCurrent().view).toEqual({ state: 'did_not_finish' });
+  });
+
+  it('cancel reverses the attempt on its machine and returns to Not connected', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => {
+      await hook.getCurrent().start();
+    });
+    boundary.execute.mockResolvedValueOnce({
+      ok: true,
+      result: { status: 'cancelled', attemptId: 'attempt-1' },
+    });
+    await act(async () => {
+      await hook.getCurrent().cancel();
+    });
+    expect(boundary.execute).toHaveBeenLastCalledWith(
+      'connectedServices.authentication.cancel',
+      { machineId: 'm1', attemptId: 'attempt-1' },
+      expect.anything(),
+    );
+    expect(hook.getCurrent().view).toEqual({ state: 'not_connected' });
+  });
+
+  it('no machine online is said (and disables Sign in); an explicit retry still asks', async () => {
+    const hook = await renderHook(() => useMcpServerSignIn(server, offline));
+    expect(hook.getCurrent().view).toEqual({ state: 'no_machine_online' });
+    boundary.execute.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'no_machine_online',
+      error: 'no_machine_online',
+    });
+    await act(async () => {
+      await hook.getCurrent().start();
+    });
+    expect(boundary.execute).toHaveBeenCalledWith('mcp.servers.signIn.start', {
+      serverId: 'linear',
+    });
+    expect(hook.getCurrent().view).toEqual({ state: 'no_machine_online' });
+  });
+
+  it('reads expired and refused sign-ins, and a server without OAuth never speaks', async () => {
+    setGrants([grant('needs_reauth', 1)]);
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    expect(hook.getCurrent().view).toEqual({
+      state: 'expired',
+      reason: 'expired',
+    });
+    boundary.execute.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'client_refused',
+      error: 'client_refused',
+    });
+    await act(async () => {
+      await hook.getCurrent().start();
+    });
+    expect(hook.getCurrent().view).toEqual({ state: 'client_refused' });
+    const local = await renderHook(() =>
+      useMcpServerSignIn(
+        { ...server, transport: 'stdio', remote: undefined } as never,
+        online,
+      ),
+    );
+    expect(local.getCurrent().view).toBeNull();
+    expect(local.getCurrent().fact).toBeNull();
+  });
+});

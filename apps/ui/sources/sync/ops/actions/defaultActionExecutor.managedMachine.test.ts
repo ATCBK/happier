@@ -62,6 +62,7 @@ describe('managed native UI Action frontdoor', () => {
         });
         expect(await createDefaultActionExecutor().execute(actionId, input, {
             serverId: target.id, expectedAccountId: 'account-a', surface, authority: 'present_user',
+            ...(surface === 'ui' && actionId === 'machines.environment.apply' ? { presentUserConfirmation: { actionId } } : {}),
         })).toEqual({ ok: true, result: surface === 'voice' && actionId === 'machines.environment.apply'
             ? { kind: 'approval_request_created', actionId, artifactId: 'native-ask' } : output });
         expect(requests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'controller' }, input })]);
@@ -239,11 +240,11 @@ describe('managed native UI Action frontdoor', () => {
         const result = await executor.execute('approval.request.decide', { artifactId: stored[0].id, decision: 'approve' }, {
             serverId: target.id, expectedAccountId: 'account-a', surface: 'ui', authority: 'present_user',
         });
-        // Acquire's canonical live-only input custody independently refuses
-        // durable replay: an Artifact cannot reconstruct its admitted raw input.
-        expect(result).toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'approval_stale' } } });
+        // This Artifact has no exact-daemon replay route. The canonical replay
+        // owner refuses before dispatch instead of reconstructing live input.
+        expect(result).toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'approval_origin_unavailable' } } });
         expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(stored[0].id) ?? 'null'))).toMatchObject({
-            status: 'failed', decision: { kind: 'approve' }, execution: { errorCode: 'approval_stale' },
+            status: 'failed', decision: { kind: 'approve' }, execution: { errorCode: 'approval_origin_unavailable' },
         });
         expect(effects).toEqual([]);
     });

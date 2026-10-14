@@ -17,23 +17,28 @@ function createRadixHostComponent(tagName: string) {
  * and no Radix effect touches `document`.
  */
 export function createRadixCjsModuleMock() {
+    // CommonJS require returns the same exports on each read. Stable component
+    // types preserve the body and its effects when a real overlay rerenders.
+    const dialog = {
+        Root: createRadixHostComponent('DialogRoot'),
+        Portal: createRadixHostComponent('DialogPortal'),
+        Overlay: createRadixHostComponent('DialogOverlay'),
+        Content: createRadixHostComponent('DialogContent'),
+        Title: createRadixHostComponent('DialogTitle'),
+    };
+    const dismissableLayer = {
+        Root: createRadixHostComponent('DismissableLayer'),
+        Branch: createRadixHostComponent('DismissableLayerBranch'),
+        DismissableLayerBranch: createRadixHostComponent('DismissableLayerBranch'),
+    };
+    const focusScope = {
+        Root: createRadixHostComponent('FocusScope'),
+        FocusScope: createRadixHostComponent('FocusScope'),
+    };
     return {
-        requireRadixDialog: () => ({
-            Root: createRadixHostComponent('DialogRoot'),
-            Portal: createRadixHostComponent('DialogPortal'),
-            Overlay: createRadixHostComponent('DialogOverlay'),
-            Content: createRadixHostComponent('DialogContent'),
-            Title: createRadixHostComponent('DialogTitle'),
-        }),
-        requireRadixDismissableLayer: () => ({
-            Root: createRadixHostComponent('DismissableLayer'),
-            Branch: createRadixHostComponent('DismissableLayerBranch'),
-            DismissableLayerBranch: createRadixHostComponent('DismissableLayerBranch'),
-        }),
-        requireRadixFocusScope: () => ({
-            Root: createRadixHostComponent('FocusScope'),
-            FocusScope: createRadixHostComponent('FocusScope'),
-        }),
+        requireRadixDialog: () => dialog,
+        requireRadixDismissableLayer: () => dismissableLayer,
+        requireRadixFocusScope: () => focusScope,
     };
 }
 

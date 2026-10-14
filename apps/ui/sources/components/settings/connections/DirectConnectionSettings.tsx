@@ -5,6 +5,7 @@ import type { FeatureId } from '@happier-dev/protocol/features/catalog';
 
 import { ACCOUNT_SETTINGS } from '@/components/settings/account/accountSettings';
 import { SettingRow } from '@/components/settings/shell/SettingRow';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem, type SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoiceItem';
@@ -13,7 +14,6 @@ import {
     readDirectConnectionsEnabled,
     readMachineDirectConnectionChoice,
     withDirectConnectionsEnabled,
-    withMachineDirectConnectionChoice,
     type MachineDirectConnectionChoice,
 } from '@/sync/domains/settings/peerMediationPreferences';
 import { useSettingMutable } from '@/sync/domains/state/storage';
@@ -92,10 +92,12 @@ export function useMachineDirectConnectionSummary(machineId: string): string {
  * (`byMachineId`). Three short answers, all visible.
  */
 export const MachineDirectConnectionSection = React.memo(function MachineDirectConnectionSection(props: Readonly<{
+    serverId: string;
     machineId: string;
     machineName: string;
 }>) {
-    const [preferences, setPreferences] = usePeerMediationPreferences();
+    const [preferences] = usePeerMediationPreferences();
+    const { setSetting } = useSettingActionFeedback({ serverId: props.serverId });
     const serverDenies = useServerDeniesDirectConnections();
     const choice = serverDenies ? 'relay' : readMachineDirectConnectionChoice(preferences, props.machineId);
     const accountEnabled = readDirectConnectionsEnabled(preferences);
@@ -122,7 +124,7 @@ export const MachineDirectConnectionSection = React.memo(function MachineDirectC
                 options={serverDenies ? options.map((option) => ({ ...option, description: undefined })) : options}
                 value={choice}
                 disabled={serverDenies}
-                onChange={(next) => setPreferences(withMachineDirectConnectionChoice(preferences, props.machineId, next))}
+                onChange={(next) => { void setSetting({ anchor: 'machines.connection.direct', key: props.machineId }, next); }}
             />
         </ItemGroup>
     );

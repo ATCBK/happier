@@ -1,16 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import {
-    PET_PACKAGE_FORMAT_CODEX_ATLAS_V1,
-    PET_PACKAGE_LIMITS_V1,
-    type AccountPetCreateRequestV1,
-    type AccountPetCreateResponseV1,
-    type AccountPetDeleteResponseV1,
-    type AccountPetLibraryEntryV1,
-    type AccountPetListResponseV1,
-    type AccountPetSyncUnavailableResponseV1,
-    type PetAssetMediaTypeV1,
-} from "@happier-dev/protocol";
+import { PET_PACKAGE_FORMAT_CODEX_ATLAS_V1, PET_PACKAGE_LIMITS_V1 } from '@happier-dev/protocol/pets/constants';
+import { type AccountPetCreateRequestV1, type AccountPetCreateResponseV1, type AccountPetDeleteResponseV1, type AccountPetLibraryEntryV1, type AccountPetListResponseV1, type AccountPetSyncUnavailableResponseV1, type PetAssetMediaTypeV1 } from '@happier-dev/protocol/pets/accountLibrary';
 
 import type { PrivateFilesBackend } from "@/storage/privateFiles/privateFiles";
 

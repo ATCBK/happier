@@ -1,15 +1,121 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configuration } from '@/configuration';
 import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
 import { encodeRepositoryCheckpointScope } from '../checkpoints/refs';
-import { captureScmComparison, deleteCapturedScmComparison, readCapturedScmComparison } from './captureScmComparison';
+import { captureScmComparison, deleteCapturedScmComparison, prepareCapturedScmComparisonInvestigation, readCapturedScmComparison } from './captureScmComparison';
 
 describe('captured SCM comparison storage', () => {
   const directories: string[] = [];
   afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+
+  it('captures and materializes the same raw endpoint when replacement refs predate capture', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-raw-capture-' });
+    directories.push(fixture.rootPath);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' }).trim();
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Actual endpoint\n');
+    git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'actual endpoint');
+    const original = git('rev-parse', `HEAD:${fixture.trackedPath}`);
+    await writeFile(join(fixture.rootPath, 'replacement.txt'), 'Forged endpoint\n');
+    git('replace', original, git('hash-object', '-w', 'replacement.txt'));
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'commit', commit: 'HEAD' } });
+    try {
+      const diff = captured.comparison.inventory.files.find(file => file.path === fixture.trackedPath)?.evidence.unifiedDiff;
+      expect(diff).toContain('+Actual endpoint');
+      expect(diff).not.toContain('Forged endpoint');
+      const pinned = await prepareCapturedScmComparisonInvestigation({ cwd: fixture.rootPath,
+        comparisonId: captured.comparison.id, directory: join(fixture.rootPath, 'investigation') });
+      expect(await readFile(join(pinned.afterDirectory, fixture.trackedPath), 'utf8')).toBe('Actual endpoint\n');
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id }); }
+  });
+
+  it('refuses a redirected investigation root before materializing captured objects', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-pinned-root-' });
+    directories.push(fixture.rootPath);
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+    const outside = join(fixture.rootPath, 'outside');
+    await mkdir(outside);
+    const root = join(fixture.rootPath, 'owned-investigation');
+    await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      await expect(prepareCapturedScmComparisonInvestigation({ cwd: fixture.rootPath,
+        comparisonId: captured.comparison.id, directory: root })).rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+      expect(await readdir(outside)).toEqual([]);
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id }); }
+  });
+
+  it('refuses retained replacement-influenced evidence rather than combining it with raw endpoint files', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-retained-replacement-' });
+    directories.push(fixture.rootPath);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' }).trim();
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Actual endpoint\n');
+    git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'actual endpoint');
+    const sessionId = randomUUID();
+    const scope = { cwd: fixture.rootPath, sessionId };
+    const captured = await captureScmComparison({ ...scope, source: { kind: 'commit', commit: 'HEAD' } });
+    await writeFile(join(fixture.rootPath, 'replacement.txt'), 'Forged endpoint\n');
+    git('replace', git('rev-parse', `HEAD:${fixture.trackedPath}`), git('hash-object', '-w', 'replacement.txt'));
+    // Real pre-fix Git output, persisted through the existing storage boundary.
+    const legacyPatch = git('diff', '--no-ext-diff', '--no-textconv', '--no-color', '--raw', '--no-abbrev', '-z',
+      '--find-renames', '--find-copies', '--patch', '--binary', '--full-index', captured.comparison.endpoints.before!,
+      captured.comparison.endpoints.after!, '--', `:(literal)${fixture.trackedPath}`) + '\n';
+    expect(legacyPatch).toContain('+Forged endpoint');
+    const directory = join(configuration.activeServerDir, 'runtime', 'scm', 'comparisons', encodeRepositoryCheckpointScope(sessionId));
+    directories.push(directory);
+    const path = join(directory, `${captured.comparison.id}.json`);
+    const stored = JSON.parse(await readFile(path, 'utf8')) as { comparison: typeof captured.comparison };
+    const legacy = stored.comparison.inventory.files.find(file => file.path === fixture.trackedPath)!;
+    legacy.evidence = { state: 'available', unifiedDiff: legacyPatch.slice(legacyPatch.indexOf('diff --git ')) };
+    await writeFile(path, JSON.stringify(stored));
+    git('replace', '-d', git('rev-parse', `HEAD:${fixture.trackedPath}`));
+    try {
+      expect((await readCapturedScmComparison({ ...scope, comparisonId: captured.comparison.id })).files[0]?.unifiedDiff)
+        .toContain('Forged endpoint');
+      await expect(prepareCapturedScmComparisonInvestigation({ ...scope, comparisonId: captured.comparison.id,
+        directory: join(fixture.rootPath, 'investigation') })).rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+    } finally { await deleteCapturedScmComparison({ ...scope, comparisonId: captured.comparison.id }); }
+  });
+
+  it.each(['before', 'after'] as const)('investigates a valid retained capture with native zero diff context set %s capture', async when => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-retained-diff-context-' });
+    directories.push(fixture.rootPath);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' }).trim();
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'First\nOld\nLast\n');
+    git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'context');
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'First\nNew\nLast\n');
+    if (when === 'before') git('config', 'diff.context', '0');
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+    if (when === 'after') git('config', 'diff.context', '0');
+    try {
+      const pinned = await prepareCapturedScmComparisonInvestigation({ cwd: fixture.rootPath,
+        comparisonId: captured.comparison.id, directory: join(fixture.rootPath, 'investigation') });
+      expect(await readFile(join(pinned.beforeDirectory, fixture.trackedPath), 'utf8')).toBe('First\nOld\nLast\n');
+      expect(await readFile(join(pinned.afterDirectory, fixture.trackedPath), 'utf8')).toBe('First\nNew\nLast\n');
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id }); }
+  });
+
+  it('investigates a captured copy whose source also changes in the same staged endpoint', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-retained-copy-' });
+    directories.push(fixture.rootPath);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' }).trim();
+    const original = Array.from({ length: 100 }, (_, index) => `Line ${index}\n`).join('');
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), original);
+    git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'copy source');
+    await writeFile(join(fixture.rootPath, 'copy.txt'), original);
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), original.replace('Line 0\n', 'Changed\n'));
+    git('add', '.');
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+    expect(captured.comparison.inventory.files.find(file => file.path === 'copy.txt')?.changeKind).toBe('copied');
+    try {
+      const pinned = await prepareCapturedScmComparisonInvestigation({ cwd: fixture.rootPath,
+        comparisonId: captured.comparison.id, directory: join(fixture.rootPath, 'investigation') });
+      expect(await readFile(join(pinned.afterDirectory, 'copy.txt'), 'utf8')).toBe(original);
+      expect(await readFile(join(pinned.afterDirectory, fixture.trackedPath), 'utf8')).toContain('Changed');
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id }); }
+  });
 
   it('reads recursive stored extras, preserves identity constraints and canonically rewrites before owned pin deletion', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-stored-comparison-' });

@@ -3,6 +3,7 @@ import type {
     BrowserEventV1,
     BrowserPlatformV1,
     BrowserViewTargetV1,
+    ActionExecutorContext,
     FeatureDecision,
 } from '@happier-dev/protocol';
 import * as React from 'react';
@@ -504,6 +505,10 @@ export function BrowserSurfaceHost(props: Readonly<{
         ?? borrowedAccountLifetime ?? captureActiveServerAccountScopeLifetime(),
     [borrowedAccountLifetime, props.pluginAccountLifetime, resetKey]);
     const browserActionServerId = props.pluginBrowserActionContext?.serverId;
+    const browserActionTarget = React.useMemo<ActionExecutorContext['externalActionTarget']>(() => {
+        const machineId = props.pluginBrowserActionContext?.machineId?.trim();
+        return machineId ? { kind: 'machine', machineId } : undefined;
+    }, [props.pluginBrowserActionContext?.machineId]);
     // Approval can yield while the mounted policy/platform facts change. Read the current facts
     // at semantic dispatch, rather than letting the awaiting callback keep an old permission.
     const browserActionFactsRef = React.useRef({ unavailableReason, desktopWebViewAvailability,
@@ -632,8 +637,8 @@ export function BrowserSurfaceHost(props: Readonly<{
         serverId: browserActionAccountLifetime?.scope.serverId,
         expectedAccountId: browserActionAccountLifetime?.scope.accountId,
         defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
-        defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
-    }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
+        externalActionTarget: browserActionTarget,
+    }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, browserActionTarget]);
 
     const onOpenInSystemBrowser = React.useCallback((view: Readonly<{ browserSessionId: string; viewId: string }>) => executeBrowserAction(
         'browser.view.openExternal', { ...view, commandId: `browser_command:${view.viewId}:openExternal:${Date.now()}` }, {
@@ -641,8 +646,8 @@ export function BrowserSurfaceHost(props: Readonly<{
             serverId: browserActionAccountLifetime?.scope.serverId,
             expectedAccountId: browserActionAccountLifetime?.scope.accountId,
             defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
-            defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
-        }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
+            externalActionTarget: browserActionTarget,
+        }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, browserActionTarget]);
 
     const onCheckAgain = React.useCallback(async (target: Readonly<{ browserSessionId: string; viewId: string }>) => {
         const view = runtimeControlAdapter.readState()?.viewsById[target.viewId];
@@ -660,10 +665,10 @@ export function BrowserSurfaceHost(props: Readonly<{
             serverId: browserActionAccountLifetime?.scope.serverId,
             expectedAccountId: browserActionAccountLifetime?.scope.accountId,
             defaultSessionId: sessionId ?? undefined,
-            defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
+            externalActionTarget: browserActionTarget,
         });
     }, [executeBrowserAction, runtimeControlAdapter, browserActionAccountLifetime,
-        props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
+        props.pluginBrowserActionContext?.sessionId, browserActionTarget]);
 
     // B-2 cause-2: in-app render engines (iframe / RN WebView / Wry-desktop child view) own their
     // own page-load lifecycle. They feed it back here through the SAME canonical
@@ -850,18 +855,20 @@ export function BrowserSurfaceHost(props: Readonly<{
                 browserProfile={productModels?.browserProfile}
                 navigationEffect={surfaceState.navigationEffect}
                 supplementalDiagnostics={policy.diagnosticsEnabled ? productModels?.supplementalDiagnostics : null}
-                nowMs={props.nowMs}
-                testID={props.testID}
-            />
-            <BrowserPluginSurfacePlacements
-                focusedTarget={focusedView?.target}
-                platform={props.platform}
-                pluginUiProjection={props.pluginUiProjection}
-                projectionInteractionEnabled={props.pluginUiInteractionEnabled}
-                localServicePreviewState={props.localServicePreviewState}
-                executionMachineId={props.pluginBrowserActionContext?.machineId}
-                executionServerId={props.pluginBrowserActionContext?.serverId}
-                executionSessionId={props.pluginBrowserActionContext?.sessionId}
+                panels={(
+                    <BrowserPluginSurfacePlacements
+                        focusedTarget={focusedView?.target}
+                        platform={props.platform}
+                        pluginUiProjection={props.pluginUiProjection}
+                        projectionInteractionEnabled={props.pluginUiInteractionEnabled}
+                        localServicePreviewState={props.localServicePreviewState}
+                        executionMachineId={props.pluginBrowserActionContext?.machineId}
+                        executionServerId={props.pluginBrowserActionContext?.serverId}
+                        executionSessionId={props.pluginBrowserActionContext?.sessionId}
+                        nowMs={props.nowMs}
+                        testID={props.testID}
+                    />
+                )}
                 nowMs={props.nowMs}
                 testID={props.testID}
             />

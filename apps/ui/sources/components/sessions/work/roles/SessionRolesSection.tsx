@@ -7,6 +7,8 @@ import { readSessionRolesV1, type SessionRolesV1 } from '@happier-dev/protocol/p
 import type { RoleInstructionsOverrideV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
 import type { RoleEngineV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { resolveRoleRunsAsKindV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
+import { resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolvedRoleToArtifact } from '@/sync/domains/roles/roleCatalog';
 import { describeRoleRunsAs } from '@/components/roles/catalog/rolePresentation';
 
@@ -65,12 +67,28 @@ function SessionRolesContent(props: SessionRolesSectionProps) {
     const catalog = useRoleCatalog(serverId);
     const allRolesRef = React.useRef<View>(null);
     const [rolePopoverOpen, setRolePopoverOpen] = React.useState(false);
-    const overrides = Object.values(sessionRoles.overrides);
-    const sessionOnly = Object.values(sessionRoles.sessionRoles);
-    const enabledCount = catalog.entries.filter((entry) => entry.role.enabled).length + sessionOnly.length;
+    const inventory = React.useMemo(() => {
+        const catalogById = new Map(catalog.entries.map(entry => [entry.roleId, entry]));
+        const ids = new Set([...Object.keys(sessionRoles.overrides), ...Object.keys(sessionRoles.sessionRoles), ...catalogById.keys()]);
+        return [...ids].map(roleId => {
+            const entry = catalogById.get(roleId);
+            const snapshot = sessionRoles.sessionRoles[roleId];
+            const override = sessionRoles.overrides[roleId];
+            const resolved = resolveRoleSelectionV1({ roleId, settingsRoles: entry ? { [roleId]: entry.role } : {},
+                settingsOverrides: entry?.override ? { [roleId]: entry.override } : {}, sessionRoles });
+            const snapshotDiffers = snapshot && (!entry || !sameStrictJsonValue(resolvedRoleToArtifact(snapshot), resolvedRoleToArtifact(entry.role)));
+            return { roleId, override, snapshot, enabled: resolved.ok,
+                kind: override || (snapshotDiffers && entry) ? 'changed' as const : snapshotDiffers ? 'session' as const : null,
+                reset: override ? 'override' as const : 'snapshot' as const };
+        });
+    }, [catalog.entries, sessionRoles]);
+    const differences = inventory.filter(role => role.kind !== null);
+    const changedCount = differences.filter(role => role.kind === 'changed').length;
+    const addedCount = differences.filter(role => role.kind === 'session').length;
+    const enabledCount = inventory.filter(role => role.enabled).length;
     const summary = joinHappierFacts(...[
-        ...(overrides.length > 0 ? [t('roles.session.countChanged', { count: overrides.length })] : []),
-        ...(sessionOnly.length > 0 ? [t('roles.session.countAdded', { count: sessionOnly.length })] : []),
+        ...(changedCount > 0 ? [t('roles.session.countChanged', { count: changedCount })] : []),
+        ...(addedCount > 0 ? [t('roles.session.countAdded', { count: addedCount })] : []),
     ]);
 
     return (
@@ -82,25 +100,20 @@ function SessionRolesContent(props: SessionRolesSectionProps) {
             info={props.copiedAtSpawn ? t('roles.session.crossOwnerNote') : t('roles.session.info')}
             action={<AddSessionRoleButton sessionId={sessionId} serverId={serverId} sessionRoles={sessionRoles} entries={catalog.entries} />}
         >
-            {overrides.map((override) => (
+            {differences.map((role) => (
                 <SessionRoleDifferenceRow
-                    key={`override:${override.roleId}`}
+                    key={role.roleId}
                     sessionId={sessionId}
                     serverId={serverId}
-                    kind="changed"
-                    roleId={override.roleId}
-                    onEngineChange={(engine) => { void setSessionOverride(sessionId, { ...override, engine }, serverId); }}
-                />
-            ))}
-            {sessionOnly.map((role) => (
-                <SessionRoleDifferenceRow
-                    key={`session:${role.roleId}`}
-                    sessionId={sessionId}
-                    serverId={serverId}
-                    kind="session"
+                    kind={role.kind!}
+                    reset={role.reset}
                     roleId={role.roleId}
                     onEngineChange={(engine) => {
-                        void roleActions.addSessionRole(sessionId, role.roleId, { ...resolvedRoleToArtifact(role), engine }, { serverId }).then(settleSessionRoleWrite);
+                        if (role.override || role.kind === 'changed') {
+                            void setSessionOverride(sessionId, { ...role.override, roleId: role.roleId, engine }, serverId);
+                        } else if (role.snapshot) {
+                            void roleActions.addSessionRole(sessionId, role.roleId, { ...resolvedRoleToArtifact(role.snapshot), engine }, { serverId }).then(settleSessionRoleWrite);
+                        }
                     }}
                 />
             ))}
@@ -167,6 +180,7 @@ function SessionRoleDifferenceRow(props: Readonly<{
     sessionId: string;
     serverId?: string | null;
     kind: 'changed' | 'session';
+    reset: 'override' | 'snapshot';
     roleId: string;
     onEngineChange: (engine: RoleEngineV1) => void;
 }>) {
@@ -181,7 +195,7 @@ function SessionRoleDifferenceRow(props: Readonly<{
     // Touch has no hover: Reset stays visible there.
     const revealed = Platform.OS !== 'web' || hovered || focused;
     const reset = () => {
-        const write = props.kind === 'changed'
+        const write = props.reset === 'override'
             ? roleActions.clearSessionOverride(props.sessionId, props.roleId, { serverId: props.serverId })
             : roleActions.removeSessionRole(props.sessionId, props.roleId, { serverId: props.serverId });
         void write.then(settleSessionRoleWrite);

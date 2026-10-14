@@ -17,7 +17,7 @@ import {
 } from './metadata.js';
 import type { ClaudeExternalSessionSource } from './source.js';
 import type { AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
-import { searchClaudeExternalTranscript } from './transcript.js';
+import { ClaudeContentSearchYield, parseClaudeContentSearchProgress, searchClaudeExternalTranscript, type ClaudeContentSearchProgress } from './transcript.js';
 import { readClaudeJsonlFileSize } from './files.js';
 import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/sessions/external';
 
@@ -47,6 +47,7 @@ type ClaudeCandidateCursorV5 =
       scanPosition: ClaudeJsonlSessionScanPosition;
       scanned: number;
       search: ClaudeCandidateSearchContext;
+      contentProgress?: ClaudeContentSearchProgress;
     }>
   | Readonly<{
       v: 5;
@@ -90,11 +91,13 @@ function encodeCandidateCursor(cursor: ClaudeCandidateCursorV5): string {
           5,
           cursor.sourceGeneration,
           cursor.scanPosition.projectId,
-          cursor.scanPosition.sessionEntryOffset,
+          cursor.scanPosition.recent === undefined ? cursor.scanPosition.sessionEntryOffset
+            : [cursor.scanPosition.sessionEntryOffset, cursor.scanPosition.recent.updatedAtMs, cursor.scanPosition.recent.remoteSessionId],
           cursor.scanned,
           cursor.search.searchTerm,
           searchMode,
           cursor.search.searchTarget,
+          ...(cursor.contentProgress ? [cursor.contentProgress] : []),
         ]
       : [
           5,
@@ -117,7 +120,7 @@ function decodeCandidateCursor(
     const parsed = JSON.parse(
       Buffer.from(raw, 'base64url').toString('utf8'),
     ) as unknown;
-    if (!Array.isArray(parsed) || parsed.length !== 8 || parsed[0] !== 5)
+    if (!Array.isArray(parsed) || (parsed.length !== 8 && parsed.length !== 9) || parsed[0] !== 5)
       return null;
     const searchMode =
       parsed[6] === 'f' ? 'fast' : parsed[6] === 'l' ? 'full' : null;
@@ -132,8 +135,10 @@ function decodeCandidateCursor(
       searchMode,
       searchTarget: parsed[7],
     };
+    const contentProgress = parsed.length === 9 ? parseClaudeContentSearchProgress(parsed[8]) : undefined;
+    if (parsed.length === 9 && (!contentProgress || parsed[7] !== 'content')) return null;
     if (
-      parsed[1] === 'e' &&
+      parsed.length === 8 && parsed[1] === 'e' &&
       typeof parsed[2] === 'string' &&
       parsed[2].length > 0 &&
       typeof parsed[3] === 'string' &&
@@ -150,12 +155,15 @@ function decodeCandidateCursor(
         search,
       };
     }
+    const position = Array.isArray(parsed[3]) && parsed[3].length === 3 ? parsed[3] : [parsed[3]];
     return typeof parsed[1] === 'string' &&
       parsed[1].length > 0 &&
       typeof parsed[2] === 'string' &&
       parsed[2].length > 0 &&
-      Number.isSafeInteger(parsed[3]) &&
-      (parsed[3] as number) >= 0 &&
+      Number.isSafeInteger(position[0]) &&
+      (position[0] as number) >= 0 &&
+      (position.length === 1 || (parsed[7] === 'content' && Number.isSafeInteger(position[1]) && (position[1] as number) >= 0
+        && typeof position[2] === 'string' && position[2].length > 0)) &&
       Number.isSafeInteger(parsed[4]) &&
       (parsed[4] as number) >= 0
       ? {
@@ -164,10 +172,12 @@ function decodeCandidateCursor(
           sourceGeneration: parsed[1],
           scanPosition: {
             projectId: parsed[2],
-            sessionEntryOffset: parsed[3] as number,
+            sessionEntryOffset: position[0] as number,
+            ...(position.length === 3 ? { recent: { updatedAtMs: position[1] as number, remoteSessionId: position[2] as string } } : {}),
           },
           scanned: parsed[4] as number,
           search,
+          ...(contentProgress ? { contentProgress } : {}),
         }
       : null;
   } catch {
@@ -511,13 +521,17 @@ export async function listClaudeExternalSessionCandidates(
     decodedCursor?.kind === 'claudeCandidateIndexScan'
       ? decodedCursor.scanPosition
       : null;
-  const scanLimit = limit;
+  // Recency needs the native file metadata set, never its transcript bodies.
+  // Reuse that one inventory for this content page instead of restatting it
+  // for each hit-sized chunk. Returned hits keep the existing page budget.
+  const scanLimit = search.searchTarget === 'content' ? Number.POSITIVE_INFINITY : limit;
   const traversed = await pageClaudeJsonlSessionFiles({
     source: params.source,
     env: params.env,
     scanPosition,
     skip: 0,
     limit: scanLimit,
+    ...(search.searchTarget === 'content' ? { order: 'recent' as const } : {}),
     signal: params.signal,
   });
   let contentPartial = false;
@@ -560,11 +574,7 @@ export async function listClaudeExternalSessionCandidates(
   let fileStartedAtMs: number | undefined;
   let longestFileDurationMs = 0;
 
-  for (
-    let traversalIndex = 0;
-    traversalIndex < traversed.entries.length;
-    traversalIndex += 1
-  ) {
+  for (let traversalIndex = 0; traversalIndex < traversed.entries.length; traversalIndex += 1) {
     const session = traversed.entries[traversalIndex];
     if (!session) continue;
     throwIfAborted(params.signal);
@@ -580,7 +590,7 @@ export async function listClaudeExternalSessionCandidates(
       : encodeCandidateCursor({
           v: 5,
           kind: 'claudeCandidateIndexScan',
-          sourceGeneration: session.sourceGeneration,
+          sourceGeneration: traversed.sourceGeneration,
           scanPosition: { projectId: session.projectId, sessionEntryOffset: 0 },
           scanned: scannedBefore + traversalIndex,
           search,
@@ -644,25 +654,28 @@ export async function listClaudeExternalSessionCandidates(
           signal: params.signal,
           ripgrep: params.ripgrep!,
           control: contentFileSystem!,
+          ...(decodedCursor?.kind === 'claudeCandidateIndexScan' && traversalIndex === 0 && decodedCursor.contentProgress
+            ? { progress: decodedCursor.contentProgress } : {}),
         });
         contentFileSystem?.assertNotYielded();
         contentPartial ||= projection.partial;
         if (!projection.match) continue;
         candidate = {
-          ...(await buildCandidate({
+          ...buildMetadataCandidate({
             session,
             env: params.env,
-            includeTitle: true,
-            signal: params.signal,
-            fileSystem: contentFileSystem?.fileSystem,
-          })),
+          }),
+          ...(projection.title ? { title: projection.title } : {}),
           match: projection.match,
         };
       } catch (error) {
         if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
+        const before = decodeCandidateCursor(cursorBefore);
+        const continuation = error instanceof ClaudeContentSearchYield && before?.kind === 'claudeCandidateIndexScan'
+          ? encodeCandidateCursor({ ...before, contentProgress: error.progress }) : cursorBefore;
         if (
           params.resultBudget &&
-          !params.resultBudget.fits(page, cursorBefore, true, undefined)
+          !params.resultBudget.fits(page, continuation, true, undefined)
         ) {
           throw new ClaudeCandidateResultBudgetTooSmallError(
             'Claude candidate result byte budget cannot fit the continuation envelope.',
@@ -670,7 +683,7 @@ export async function listClaudeExternalSessionCandidates(
         }
         return {
           candidates: page,
-          nextCursor: cursorBefore,
+          nextCursor: continuation,
           contentCoverage: 'partial',
           searchIncomplete: true,
         };

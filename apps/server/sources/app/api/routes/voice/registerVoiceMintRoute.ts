@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { log } from "@/utils/logging/log";
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -92,11 +92,9 @@ export function registerVoiceMintRoute(
             rateLimit: false,
         },
         schema: {
-            body: z
-                .object({
-                    sessionId: voiceSessionCorrelationIdSchema.optional(),
-                })
-                .passthrough(),
+            body: z.looseObject({
+                    sessionId: z.optional(voiceSessionCorrelationIdSchema),
+                }),
             response: {
                 200: z.object({
                     allowed: z.boolean(),

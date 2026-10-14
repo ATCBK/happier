@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { MachineLiveStreamCaptureSourceKindV1 } from './captureV1.js';
 
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const NormalizedCoordinateSchema = lazyZodSchema(() => z.number().min(0).max(1));
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const NormalizedCoordinateSchema = lazyZodSchema(() => z.number().check(z.minimum(0), z.maximum(1)));
 
 export const MachineLiveStreamInputModeV1Schema = lazyZodSchema(() => z.enum(['none', 'shared', 'exclusive']));
 export const MACHINE_LIVE_STREAM_INPUT_CONTROL_KINDS_V1 = [
@@ -21,114 +21,110 @@ export const MACHINE_LIVE_STREAM_INPUT_CONTROL_KINDS_V1 = [
 ] as const;
 export const MachineLiveStreamInputControlKindV1Schema = lazyZodSchema(() => z.enum(MACHINE_LIVE_STREAM_INPUT_CONTROL_KINDS_V1));
 
-export const MachineLiveStreamControlLeaseV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamControlLeaseV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    leaseId: z.string().min(1),
-    streamId: z.string().min(1),
-    sourceId: z.string().min(1),
-    holderId: z.string().min(1),
+    leaseId: z.string().check(z.minLength(1)),
+    streamId: z.string().check(z.minLength(1)),
+    sourceId: z.string().check(z.minLength(1)),
+    holderId: z.string().check(z.minLength(1)),
     mode: z.literal('exclusive'),
     acquiredAtMs: NonNegativeIntSchema,
     expiresAtMs: PositiveIntSchema,
-  })
-  .passthrough());
+  }));
 
 const BaseSidebandControlSchema = lazyZodSchema(() => z.object({
   v: z.literal(1),
-  streamId: z.string().min(1),
-  sourceId: z.string().min(1),
-  eventId: z.string().min(1),
-  leaseId: z.string().min(1).optional(),
+  streamId: z.string().check(z.minLength(1)),
+  sourceId: z.string().check(z.minLength(1)),
+  eventId: z.string().check(z.minLength(1)),
+  leaseId: z.optional(z.string().check(z.minLength(1))),
 }));
 
 export const MachineLiveStreamControlSidebandV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  BaseSidebandControlSchema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('tap'),
     x: NormalizedCoordinateSchema,
     y: NormalizedCoordinateSchema,
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('long_press'),
     x: NormalizedCoordinateSchema,
     y: NormalizedCoordinateSchema,
-    durationMs: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    durationMs: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('swipe'),
     fromX: NormalizedCoordinateSchema,
     fromY: NormalizedCoordinateSchema,
     toX: NormalizedCoordinateSchema,
     toY: NormalizedCoordinateSchema,
-    durationMs: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    durationMs: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('drag'),
     fromX: NormalizedCoordinateSchema,
     fromY: NormalizedCoordinateSchema,
     toX: NormalizedCoordinateSchema,
     toY: NormalizedCoordinateSchema,
-    durationMs: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    durationMs: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('pinch'),
     centerX: NormalizedCoordinateSchema,
     centerY: NormalizedCoordinateSchema,
-    startDistance: z.number().positive(),
-    endDistance: z.number().positive(),
-    angle: z.number().optional(),
-    durationMs: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    startDistance: z.number().check(z.positive()),
+    endDistance: z.number().check(z.positive()),
+    angle: z.optional(z.number()),
+    durationMs: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('rotate'),
     centerX: NormalizedCoordinateSchema,
     centerY: NormalizedCoordinateSchema,
-    radius: z.number().positive(),
+    radius: z.number().check(z.positive()),
     startAngle: z.number(),
     endAngle: z.number(),
-    durationMs: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    durationMs: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('keyboard_text'),
     text: z.string(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('keyboard_key'),
-    key: z.string().min(1),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    key: z.string().check(z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('hardware_button'),
-    button: z.string().min(1),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    button: z.string().check(z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('orientation'),
     orientation: z.enum(['portrait', 'portraitUpsideDown', 'landscapeLeft', 'landscapeRight']),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('request_keyframe'),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('set_quality'),
-    maxBitrateBps: PositiveIntSchema.optional(),
-    maxFramesPerSecond: PositiveIntSchema.optional(),
-    maxWidth: PositiveIntSchema.optional(),
-    maxHeight: PositiveIntSchema.optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    maxBitrateBps: z.optional(PositiveIntSchema),
+    maxFramesPerSecond: z.optional(PositiveIntSchema),
+    maxWidth: z.optional(PositiveIntSchema),
+    maxHeight: z.optional(PositiveIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('pause_capture'),
-    reasonCode: z.string().min(1).optional(),
-  }).strict(),
-  BaseSidebandControlSchema.extend({
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSidebandControlSchema, {
     kind: z.literal('resume_capture'),
-  }).strict(),
+  })),
 ]));
 
-export const MachineLiveStreamControlSourceV1Schema = lazyZodSchema(() => z
-  .object({
-    sourceId: z.string().min(1),
+export const MachineLiveStreamControlSourceV1Schema = lazyZodSchema(() => z.looseObject({
+    sourceId: z.string().check(z.minLength(1)),
     inputMode: MachineLiveStreamInputModeV1Schema,
-  })
-  .passthrough());
+  }));
 
 export type MachineLiveStreamInputModeV1 = z.infer<typeof MachineLiveStreamInputModeV1Schema>;
 export type MachineLiveStreamInputControlKindV1 = z.infer<typeof MachineLiveStreamInputControlKindV1Schema>;

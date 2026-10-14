@@ -50,10 +50,12 @@ function resolvedSnapshot(input: Readonly<{
 }>): ServerMachineInventorySnapshotV1 {
     return {
         kind: 'resolved',
+        accountId: 'account-a',
         profileId: `profile-${input.serverIdentityId}`,
         serverIdentityId: input.serverIdentityId,
         serverName: input.serverName ?? input.serverIdentityId,
         observation: input.observation ?? 'live',
+        ...(input.observation === 'stale' ? {} : { settled: true }),
         machines: input.machines,
     };
 }

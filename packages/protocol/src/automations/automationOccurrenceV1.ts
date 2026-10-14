@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { hmac } from '@noble/hashes/hmac';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { sha256 } from '@noble/hashes/sha2';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
@@ -72,20 +72,20 @@ export const AUTOMATION_MANUAL_OCCURRENCE_KEY_DOMAIN_V1 =
 
 const UTF8_ENCODER = new TextEncoder();
 function boundedNfcString(maxUtf8Bytes: number, label: string) {
-  return z.string().trim().min(1).superRefine((value, context) => {
+  return z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
     if (value !== value.normalize('NFC')) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `${label} must be NFC-normalized`,
       });
     }
     if (UTF8_ENCODER.encode(value).byteLength > maxUtf8Bytes) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `${label} exceeds its UTF-8 byte limit`,
       });
     }
-  });
+  }));
 }
 
 const OCCURRENCE_ID_SCHEMA = AutomationEventSourceOrOccurrenceIdV1Schema;
@@ -98,23 +98,22 @@ export const AutomationConversationBindingIdV1Schema = boundedNfcString(
  * Materialization and generation are intentionally excluded: they are
  * currentness facts at admission, not rejoin identity across a rollover.
  */
-export const AutomationConversationAdmissionCallerIdentityV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationAdmissionCallerIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
   machineId: PluginMachineMaterializationMachineIdV1Schema,
-}).strict());
+}));
 export type AutomationConversationAdmissionCallerIdentityV1 = z.infer<
   typeof AutomationConversationAdmissionCallerIdentityV1Schema
 >;
-const BASE64_URL_SHA_256_SCHEMA = z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
-  .refine((value) => {
+const BASE64_URL_SHA_256_SCHEMA = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u), z.refine((value) => {
     try {
       const decoded = decodeBase64(value, 'base64url');
       return decoded.byteLength === 32 && encodeBase64(decoded, 'base64url') === value;
     } catch {
       return false;
     }
-  }, 'Expected one canonical unpadded base64url SHA-256 value');
+  }, 'Expected one canonical unpadded base64url SHA-256 value'));
 
 export const AutomationOccurrenceKeyV1Schema = BASE64_URL_SHA_256_SCHEMA.brand<
   'AutomationOccurrenceKeyV1'
@@ -152,7 +151,7 @@ export type AutomationOccurrenceEvidenceEqualityTagV1 = z.infer<
   typeof AutomationOccurrenceEvidenceEqualityTagV1Schema
 >;
 
-export const AutomationPluginEventOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationPluginEventOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('pluginEvent'),
   eventRef: asProtocolZod(PluginContributionIdentityV1Schema),
@@ -160,17 +159,17 @@ export const AutomationPluginEventOccurrenceEvidenceV1Schema = lazyZodSchema(() 
   occurrenceId: OCCURRENCE_ID_SCHEMA,
   occurredAt: AutomationOccurredAtV1Schema,
   payload: asProtocolZod(AutomationEventPayloadV1Schema),
-}).strict());
+}));
 export type AutomationPluginEventOccurrenceEvidenceV1 = z.infer<
   typeof AutomationPluginEventOccurrenceEvidenceV1Schema
 >;
 
 /** Exact due instant for one independently scheduled trigger occurrence. */
-export const AutomationScheduleOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationScheduleOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('schedule'),
   scheduledFor: AutomationOccurredAtV1Schema,
-}).strict());
+}));
 export type AutomationScheduleOccurrenceEvidenceV1 = z.infer<
   typeof AutomationScheduleOccurrenceEvidenceV1Schema
 >;
@@ -183,28 +182,28 @@ const SESSION_LIFECYCLE_OCCURRENCE_SHAPE = {
   occurredAt: AutomationOccurredAtV1Schema,
 } as const;
 export const AutomationSessionLifecycleOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('event', [
-  z.object({
+  z.strictObject({
     ...SESSION_LIFECYCLE_OCCURRENCE_SHAPE,
-    event: AutomationSessionLifecycleEventSchema.exclude(['userActionRequired', 'sessionStarted', 'sessionArchived']),
+    event: z.enum(AutomationSessionLifecycleEventSchema.options.filter((value): value is Exclude<(typeof AutomationSessionLifecycleEventSchema.options)[number], 'userActionRequired' | 'sessionStarted' | 'sessionArchived'> => !(['userActionRequired', 'sessionStarted', 'sessionArchived'] as readonly string[]).includes(value))),
     sourceTurnId: boundedNfcString(256, 'Source turn identifiers'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ...SESSION_LIFECYCLE_OCCURRENCE_SHAPE,
     event: z.literal('userActionRequired'),
     sourceTurnId: boundedNfcString(256, 'Source turn identifiers'),
     requestId: boundedNfcString(256, 'User-action request identifiers'),
     requestKind: AutomationSessionLifecycleRequestKindSchema,
-  }).strict(),
-  z.object({
+  }),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.strictObject({
     ...SESSION_LIFECYCLE_OCCURRENCE_SHAPE,
     event: z.literal('sessionStarted'),
-  }).strict(),
-  z.object({
+  })),
+  z.strictObject({
     ...SESSION_LIFECYCLE_OCCURRENCE_SHAPE,
     event: z.literal('sessionArchived'),
     /** Supplied only after the archive owner authenticates the Run publisher. */
-    originRunId: WorkflowRunIdV1Schema.optional(),
-  }).strict(),
+    originRunId: z.optional(WorkflowRunIdV1Schema),
+  }),
 ]));
 export type AutomationSessionLifecycleOccurrenceEvidenceV1 = z.infer<
   typeof AutomationSessionLifecycleOccurrenceEvidenceV1Schema
@@ -239,7 +238,7 @@ export function buildAutomationPluginEventOccurrenceEvidenceV1(params: Readonly<
   });
 }
 
-export const AutomationConversationOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationConversationOccurrenceEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('conversation'),
   bindingId: AutomationConversationBindingIdV1Schema,
@@ -248,8 +247,8 @@ export const AutomationConversationOccurrenceEvidenceV1Schema = lazyZodSchema(()
   caller: AutomationConversationAdmissionCallerIdentityV1Schema,
   input: PluginJsonValueV2Schema,
   replyContextIdentity: boundedNfcString(512, 'Reply-context identities'),
-  hostEvidence: AutomationConversationScopedTriggerEvidenceV1Schema.optional(),
-}).strict());
+  hostEvidence: z.optional(AutomationConversationScopedTriggerEvidenceV1Schema),
+}));
 export type AutomationConversationOccurrenceEvidenceV1 = z.infer<
   typeof AutomationConversationOccurrenceEvidenceV1Schema
 >;
@@ -326,19 +325,19 @@ export type AutomationOccurrenceEvidenceV1 = z.infer<
 export const AutomationOccurrenceEvidenceV1ReadSchema = createStoredReadSchema(AutomationOccurrenceEvidenceV1Schema);
 
 const AutomationOccurrenceEvidenceEqualityInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     accountId: asProtocolZod(AutomationHostIdentifierV1Schema),
     automationId: asProtocolZod(AutomationIdV1Schema),
     triggerId: AutomationTriggerIdSchema,
     occurrenceKey: AutomationOccurrenceKeyV1Schema,
     evidence: AutomationTriggerOccurrenceEvidenceV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     accountId: asProtocolZod(AutomationHostIdentifierV1Schema),
     automationId: asProtocolZod(AutomationIdV1Schema),
     occurrenceKey: AutomationOccurrenceKeyV1Schema,
     evidence: AutomationConversationOccurrenceEvidenceV1Schema,
-  }).strict(),
+  }),
 ]));
 
 function occurrenceKeyParts(input:

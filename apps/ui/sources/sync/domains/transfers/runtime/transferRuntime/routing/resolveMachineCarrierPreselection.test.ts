@@ -20,15 +20,27 @@ const features = FeaturesResponseSchema.parse({
 });
 
 describe('resolveMachineCarrierPreselection', () => {
-    it('keeps mandatory machine transfers unavailable in Standard mode', () => {
+    it('uses the encrypted server route in browser Standard mode', () => {
         const common = {
             applicationCarrierEligibility: 'standard_only' as const,
             serverFeatures: features,
             targetEndpoint: { endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test'] },
             host: { kind: 'browser' as const },
             finiteTransferApplicationSupported: true,
+            irohApplicationSupported: true,
         };
-        expect(resolveMachineCarrierPreselection(common)).toEqual({ kind: 'unavailable' });
+        expect(resolveMachineCarrierPreselection(common)).toEqual({ kind: 'server_rpc' });
+    });
+    it('uses the encrypted server route when a browser has no usable relay hints', () => {
+        for (const targetEndpoint of [null, { endpointId: 'a'.repeat(64) }, { endpointId: 'a'.repeat(64), relayUrls: [] }]) {
+            expect(resolveMachineCarrierPreselection({
+                serverFeatures: features,
+                targetEndpoint,
+                host: { kind: 'browser' },
+                finiteTransferApplicationSupported: true,
+                irohApplicationSupported: true,
+            })).toEqual({ kind: 'server_rpc' });
+        }
     });
     it('prefers Iroh when both current carrier feature bits and the application route are usable', () => {
         expect(resolveMachineCarrierPreselection({
@@ -39,7 +51,25 @@ describe('resolveMachineCarrierPreselection', () => {
             },
             host: { kind: 'browser' },
             finiteTransferApplicationSupported: true,
+            irohApplicationSupported: true,
         })).toMatchObject({ kind: 'iroh_peer', carrierKind: 'browser_stream' });
+    });
+    it('uses the Home when the browser cannot run the Iroh lifecycle', () => {
+        expect(resolveMachineCarrierPreselection({
+            serverFeatures: features,
+            targetEndpoint: { endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test'] },
+            host: { kind: 'browser', lifecycleAvailable: false },
+            finiteTransferApplicationSupported: true,
+            irohApplicationSupported: true,
+        })).toEqual({ kind: 'server_rpc' });
+    });
+    it('uses the Home when finite Iroh is disabled on an endpoint retained for other applications', () => {
+        expect(resolveMachineCarrierPreselection({
+            serverFeatures: features,
+            targetEndpoint: { endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test'] },
+            host: { kind: 'browser' }, finiteTransferApplicationSupported: true,
+            irohApplicationSupported: false,
+        })).toEqual({ kind: 'server_rpc' });
     });
 
     it('does not revive an undeclared daemon through RPC when Iroh is unavailable', () => {
@@ -48,6 +78,7 @@ describe('resolveMachineCarrierPreselection', () => {
             targetEndpoint: null,
             host: { kind: 'native', lifecycleAvailable: false },
             finiteTransferApplicationSupported: false,
+            irohApplicationSupported: false,
         })).toEqual({ kind: 'unavailable' });
     });
 
@@ -58,6 +89,7 @@ describe('resolveMachineCarrierPreselection', () => {
                 targetEndpoint,
                 host: { kind: 'native', lifecycleAvailable: false },
                 finiteTransferApplicationSupported: true,
+                irohApplicationSupported: true,
             })).toEqual({ kind: 'unavailable' });
         }
     });
@@ -105,7 +137,8 @@ describe('resolveMachineCarrierPreselection', () => {
             },
             host: { kind: 'browser' },
             finiteTransferApplicationSupported: true,
-        })).toEqual({ kind: 'unavailable' });
+            irohApplicationSupported: true,
+        })).toEqual({ kind: 'server_rpc' });
     });
 
     it('does not select Iroh when peer mediation is explicitly disabled', () => {
@@ -132,7 +165,8 @@ describe('resolveMachineCarrierPreselection', () => {
             },
             host: { kind: 'browser' },
             finiteTransferApplicationSupported: true,
-        })).toEqual({ kind: 'unavailable' });
+            irohApplicationSupported: true,
+        })).toEqual({ kind: 'server_rpc' });
     });
 
     it('fails closed when neither finite-transfer route is proven usable', () => {
@@ -141,6 +175,7 @@ describe('resolveMachineCarrierPreselection', () => {
             targetEndpoint: null,
             host: { kind: 'browser' },
             finiteTransferApplicationSupported: false,
+            irohApplicationSupported: false,
         })).toEqual({ kind: 'unavailable' });
     });
 
@@ -153,6 +188,7 @@ describe('resolveMachineCarrierPreselection', () => {
             },
             host: { kind: 'browser' },
             finiteTransferApplicationSupported: false,
+            irohApplicationSupported: false,
         })).toEqual({ kind: 'unavailable' });
     });
 });

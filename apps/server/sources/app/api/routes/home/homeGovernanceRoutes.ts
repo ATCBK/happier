@@ -1,26 +1,10 @@
-import {
-    HomeAccountDeleteResultV1Schema,
-    HomeAccountDetailV1Schema,
-    HomeAccountListInputV1Schema,
-    HomeAccountListResultV1Schema,
-    HomeAccountRoleSetInputV1Schema,
-    HomeAccountRowV1Schema,
-    HomeAccountSearchInputV1Schema,
-    HomeAccountSearchResultV1Schema,
-    HomeAccountTargetInputV1Schema,
-    HomeGovernanceClaimInputV1Schema,
-    HomeGovernanceClaimResultV1Schema,
-    HomeGovernanceErrorV1Schema,
-    HomeGovernanceEligibilityGetInputV1Schema,
-    HomeGovernanceEligibilityV1Schema,
-    HomeGovernanceGetInputV1Schema,
-    HomeGovernancePolicyProjectionV1Schema,
-    HomeGovernancePolicySetInputV1Schema,
-    HomeGovernanceProjectionV1Schema,
-    homeGovernanceErrorHttpStatusV1,
-    type AccountStatusV1,
-} from "@happier-dev/protocol";
-import { HomeAccountDeleteInputV1Schema, HomeEmptinessGetInputV1Schema, HomeEmptinessV1Schema } from "@happier-dev/protocol/home/governance";
+import { HomeAccountDeleteResultV1Schema, HomeAccountDetailV1Schema, HomeAccountListInputV1Schema, HomeAccountListResultV1Schema, HomeAccountRoleSetInputV1Schema, HomeAccountRowV1Schema, HomeAccountSearchInputV1Schema, HomeAccountSearchResultV1Schema, HomeAccountTargetInputV1Schema, HomeGovernanceErrorV1Schema, HomeGovernancePolicySetInputV1Schema, homeGovernanceErrorHttpStatusV1, type AccountStatusV1 } from '@happier-dev/protocol/home/governance';
+import { HomeGovernanceClaimInputV1Schema, HomeGovernanceClaimResultV1Schema } from '@happier-dev/protocol/home/governance/claim';
+import { HomeGovernanceEligibilityGetInputV1Schema, HomeGovernanceGetInputV1Schema } from '@happier-dev/protocol/home/governance/actionsV1';
+import { HomeGovernanceEligibilityV1Schema, HomeGovernancePolicyProjectionV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance/projection';
+import { HomeAccountDeleteInputV1Schema } from '@happier-dev/protocol/home/governance';
+import { HomeEmptinessGetInputV1Schema } from '@happier-dev/protocol/home/governance/actionsV1';
+import { HomeEmptinessV1Schema } from '@happier-dev/protocol/home/governance/projection';
 
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";

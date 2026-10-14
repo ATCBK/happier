@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 
 import { decodeBase64, encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
@@ -10,35 +10,35 @@ import { readRpcErrorCode, RPC_ERROR_CODES } from '../../rpc/errors.js';
 
 const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
 
-const SourceDataEncryptionKeyBase64Schema = lazyZodSchema(() => z.string().refine((value) => (
+const SourceDataEncryptionKeyBase64Schema = lazyZodSchema(() => z.string().check(z.refine((value) => (
   readCanonicalPaddedBase64DecodedLength(value) === ENCRYPTED_DATA_KEY_V1_BYTES
   && encodeBase64(decodeBase64(value, 'base64')) === value
-), { message: `Expected canonical Base64 of exactly ${ENCRYPTED_DATA_KEY_V1_BYTES} bytes` }));
+), { message: `Expected canonical Base64 of exactly ${ENCRYPTED_DATA_KEY_V1_BYTES} bytes` })));
 
 export const SESSION_FOLLOW_SOURCE_KEY_PREPARE_AUTHORIZATION_KIND_V1 = 'session.follow.sourceKey.prepare' as const;
 export const SESSION_FOLLOW_SOURCE_KEY_PREPARATION_REJECTION_CODE_V1 = 'SESSION_FOLLOW_SOURCE_KEY_PREPARATION_REJECTED' as const;
 
-export const SessionFollowSourceKeyPrepareAuthorizationV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowSourceKeyPrepareAuthorizationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal(SESSION_FOLLOW_SOURCE_KEY_PREPARE_AUTHORIZATION_KIND_V1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
     context.addIssue({ code: 'custom', path: ['sourceSessionId'], message: 'Follow requires distinct Sessions' });
   }
-}));
+})));
 export type SessionFollowSourceKeyPrepareAuthorizationV1 = z.infer<typeof SessionFollowSourceKeyPrepareAuthorizationV1Schema>;
 
-export const SessionFollowSourceKeyPrepareRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowSourceKeyPrepareRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
   sourceDataEncryptionKeyBase64: SourceDataEncryptionKeyBase64Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
     context.addIssue({ code: 'custom', path: ['sourceSessionId'], message: 'Follow requires distinct Sessions' });
   }
-}));
+})));
 export type SessionFollowSourceKeyPrepareRequestV1 = z.infer<typeof SessionFollowSourceKeyPrepareRequestV1Schema>;
 
 /**
@@ -72,10 +72,10 @@ export function buildSessionFollowSourceKeyPrepareRequestV1(params: Readonly<{
   };
 }
 
-export const SessionFollowSourceKeyPrepareResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowSourceKeyPrepareResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   outcome: z.literal('installed'),
-}).strict());
+}));
 export type SessionFollowSourceKeyPrepareResponseV1 = z.infer<typeof SessionFollowSourceKeyPrepareResponseV1Schema>;
 
 export const SESSION_FOLLOW_SOURCE_KEY_PREPARATION_WAITING_REASONS_V1 = Object.freeze([
@@ -93,12 +93,12 @@ export type SessionFollowSourceKeyPreparationWaitingReasonV1 = z.infer<
 
 /** Host-visible outcome after the durable Follow edge has already committed. */
 export const SessionFollowSourceKeyPreparationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('not_needed') }).strict(),
-  z.object({ kind: z.literal('prepared') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('not_needed') }),
+  z.strictObject({ kind: z.literal('prepared') }),
+  z.strictObject({
     kind: z.literal('waiting'),
     reason: SessionFollowSourceKeyPreparationWaitingReasonV1Schema,
-  }).strict(),
+  }),
 ]));
 export type SessionFollowSourceKeyPreparationResultV1 = z.infer<
   typeof SessionFollowSourceKeyPreparationResultV1Schema

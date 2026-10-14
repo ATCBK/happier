@@ -31,9 +31,13 @@ export async function machineWorkspaceFileList(
             machineId,
             method: RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST,
             payload,
+            preparePayload: (budgetMs) => ({ ...payload, budgetMs }),
             serverId: options?.serverId ?? null,
             accountId: options?.accountId ?? null,
             timeoutMs: options?.timeoutMs,
+            // The scan spends the remaining caller budget and returns partial
+            // results. A competing ACK timer would discard that terminal page.
+            operationTimeoutMs: null,
             ...(options?.signal ? { signal: options.signal } : {}),
         });
         const parsed = DaemonWorkspaceFileListResponseSchema.safeParse(response);

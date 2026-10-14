@@ -4,6 +4,8 @@ import type { Metadata } from '@happier-dev/session-core/state';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { hasDynamicModelListForSession, getSelectableModelIdsForSession, supportsFreeformModelSelectionForSession } from '@/sync/domains/models/modelOptions';
 import { readSessionModelsState, readSessionModesState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
 import {
@@ -63,7 +65,12 @@ export function describeEffectiveModelMode(params: {
     const hasExplicitSelection = selectedModelId.length > 0;
     const defaultModelId = normalizeModelId(core?.model?.defaultMode) || 'default';
     const effectiveModelId = hasExplicitSelection ? selectedModelId : defaultModelId;
-    const agentTargetKey = readAgentUniverseBackendTargetKey(agentId);
+    const sessionTarget = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({
+        session: { metadata: params.metadata },
+    }));
+    const agentTargetKey = sessionTarget
+        ? buildBackendTargetKeyV2(sessionTarget)
+        : readAgentUniverseBackendTargetKey(agentId);
     const appliedModelId = agentTargetKey === null ? null : readAppliedModelSelection({
         agentId,
         agentTargetKey,

@@ -28,6 +28,7 @@ import { t } from '@/text';
 import {
     composeAppShellInvocationSignal,
 } from './pluginUiInvocationHost';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 const styles = StyleSheet.create((theme) => ({
     body: { maxHeight: 520, padding: theme.space.s16, gap: theme.space.s16 },
@@ -511,7 +512,7 @@ export async function presentAppShellTransientInteraction(input: Readonly<{
                     title: request.title ?? t('tools.askUserQuestion.submit'),
                     testID: 'app-shell-question-dialog',
                     bodyScroll: 'auto',
-                    dimensions: { width: 520, maxHeightRatio: 0.85, size: 'dialog' },
+                    dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'dialog' },
                 },
                 closeOnBackdrop: true,
             });
@@ -542,7 +543,7 @@ export async function presentAppShellTransientInteraction(input: Readonly<{
                     kind: 'card',
                     ...(title === undefined ? {} : { title }),
                     testID: 'app-shell-transient-interaction-dialog',
-                    dimensions: { width: 420, maxHeightRatio: 0.7, size: 'dialog' },
+                    dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.7, size: 'dialog' },
                 },
                 closeOnBackdrop: true,
             });

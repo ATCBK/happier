@@ -10,6 +10,8 @@ export type OpenCodeMcpRegistration = Readonly<{
   originalName: string;
   projectedName: string;
   config: Readonly<Record<string, unknown>>;
+  resolveToolName?: (projectedName: string) => Promise<string | null>;
+  toolAliasPrefix?: string;
 }>;
 
 export type OpenCodeSessionMcpProjection = Readonly<{
@@ -20,8 +22,14 @@ export type OpenCodeSessionMcpProjection = Readonly<{
 
 export type OpenCodeRegisteredMcpServer = Readonly<{ directory: string; name: string }>;
 
-const OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH = 64;
-const OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH = 16;
+const OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH = 64;
+const OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH = 7;
+// Preserve the isolation prefix and its compact digest; the remaining model budget belongs to tools.
+const OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH = 'happier-session-'.length + OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH;
+
+export function readOpenCodeMcpToolNameBudget(projectedServerName: string): number {
+  return OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH - projectedServerName.length - 1;
+}
 
 export function sanitizeOpenCodeMcpName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -31,12 +39,13 @@ function projectOpenCodeMcpName(runtimeIdentity: string, originalName: string): 
   const candidate = sanitizeOpenCodeMcpName(`happier-session-${runtimeIdentity}--${originalName}`);
   if (candidate.length <= OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH) return candidate;
 
-  const digest = createHash('sha256')
+  const hash = createHash('sha256')
     .update(runtimeIdentity)
     .update('\0')
     .update(originalName)
-    .digest('hex')
-    .slice(0, OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH);
+    .digest('hex');
+  const digest = (parseInt(hash.slice(0, 10), 16) % 36 ** OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH)
+    .toString(36).padStart(OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH, '0');
   const prefixLength = OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH - digest.length - 1;
   return `${candidate.slice(0, prefixLength)}-${digest}`;
 }
@@ -115,6 +124,8 @@ function readOpenCodeMcpRegistrations(raw: unknown): readonly Readonly<{
 export function buildOpenCodeSessionMcpProjection(
   runtimeIdentity: string,
   raw: unknown,
+  resolveToolNames?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'],
+  toolAliasPrefix?: string,
 ): OpenCodeSessionMcpProjection {
   const identity = sanitizeOpenCodeMcpName(runtimeIdentity.trim());
   if (!identity) throw new Error('OpenCode MCP projection requires a runtime identity');
@@ -122,6 +133,15 @@ export function buildOpenCodeSessionMcpProjection(
     originalName: name,
     projectedName: projectOpenCodeMcpName(identity, name),
     config,
+    ...(resolveToolNames && toolAliasPrefix && name === 'happier' ? {
+      toolAliasPrefix,
+      resolveToolName: async (projectedName: string) => {
+        const projectedServerName = projectOpenCodeMcpName(identity, name);
+        const naming = await resolveToolNames({ serverName: name,
+          toolNameMaxLength: readOpenCodeMcpToolNameBudget(projectedServerName) });
+        return naming?.tools.find(tool => tool.projectedName === projectedName)?.originalName ?? null;
+      },
+    } : {}),
   }));
   return Object.freeze({
     registrations: Object.freeze(registrations),
@@ -132,25 +152,45 @@ export function buildOpenCodeSessionMcpProjection(
   });
 }
 
+function readOpenCodeProjectedMcpToolName<T extends Readonly<{ originalName: string; projectedName: string }>>(
+  rawToolName: string,
+  registrations: readonly T[],
+) {
+  const trimmed = rawToolName.trim();
+  const match = registrations.map(registration => ({ registration, alias: sanitizeOpenCodeMcpName(registration.projectedName) }))
+    .filter(({ alias }) => trimmed.startsWith(`${alias}_`))
+    .sort((left, right) => right.alias.length - left.alias.length)[0];
+  return match ? { registration: match.registration, suffix: trimmed.slice(match.alias.length + 1).trim() } : null;
+}
+
 export function canonicalizeOpenCodeProjectedMcpToolName(
   rawToolName: string,
   projection: Readonly<{ registrations: readonly Readonly<{ originalName: string; projectedName: string }>[] }>,
   policy?: AgentSessionOpenRequest['mcpToolPolicy'],
 ): string {
-  const trimmed = rawToolName.trim();
-  const match = projection.registrations
-    .map((registration) => ({ registration, alias: sanitizeOpenCodeMcpName(registration.projectedName) }))
-    .filter(({ alias }) => trimmed.startsWith(`${alias}_`))
-    .sort((left, right) => right.alias.length - left.alias.length)[0];
-  if (!match) return rawToolName;
-  const suffix = trimmed.slice(match.alias.length + 1).trim();
-  const knownTools = Object.prototype.hasOwnProperty.call(policy ?? {}, match.registration.originalName)
-    ? Object.keys(policy![match.registration.originalName]!.tools).filter((name) => sanitizeOpenCodeMcpName(name) === suffix)
+  const parsed = readOpenCodeProjectedMcpToolName(rawToolName, projection.registrations);
+  if (!parsed) return rawToolName;
+  const { registration, suffix } = parsed;
+  const knownTools = Object.prototype.hasOwnProperty.call(policy ?? {}, registration.originalName)
+    ? Object.keys(policy![registration.originalName]!.tools).filter(name => sanitizeOpenCodeMcpName(name) === suffix)
     : [];
   if (knownTools.length > 1) return rawToolName;
-  return suffix
-    ? `mcp__${match.registration.originalName}__${knownTools[0] ?? suffix}`
-    : rawToolName;
+  return suffix ? `mcp__${registration.originalName}__${knownTools[0] ?? suffix}` : rawToolName;
+}
+
+/** Resolve only transport aliases; ordinary tools retain their local canonical path. */
+export function resolveOpenCodeProjectedMcpToolName(
+  rawToolName: string,
+  projection: OpenCodeSessionMcpProjection,
+  policy?: AgentSessionOpenRequest['mcpToolPolicy'],
+): string | Promise<string> {
+  const parsed = readOpenCodeProjectedMcpToolName(rawToolName, projection.registrations);
+  const registration = parsed?.registration;
+  if (parsed && registration?.resolveToolName && registration.toolAliasPrefix && parsed.suffix.startsWith(registration.toolAliasPrefix)) {
+    return registration.resolveToolName(parsed.suffix).then(original =>
+      original === null ? rawToolName : `mcp__${registration.originalName}__${original}`);
+  }
+  return canonicalizeOpenCodeProjectedMcpToolName(rawToolName, projection, policy);
 }
 
 export async function registerOpenCodeMcpServers(params: Readonly<{

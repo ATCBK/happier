@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
 import {
@@ -11,33 +11,27 @@ import {
 import type { MachineLiveStreamControlSidebandV1 } from '../../machines/peer/mediation/stream/controlV1.js';
 import type { RuntimeActionSpecFamily } from './common.js';
 
-const RuntimeSimulatorQualityScalarInputSchema = lazyZodSchema(() => z
-  .object({
-    simulatorId: z.string().trim().min(1).max(256),
-    streamId: z.string().trim().min(1).max(256),
-    sourceId: z.string().trim().min(1).max(256),
-    value: z.number().positive(),
-  })
-  .passthrough());
+const RuntimeSimulatorQualityScalarInputSchema = lazyZodSchema(() => z.looseObject({
+    simulatorId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    streamId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    sourceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    value: z.number().check(z.positive()),
+  }));
 
 type DevicesSimulatorRuntimeActionId = Extract<RuntimeActionIdV1, `devices.simulator.${string}`>;
 
 function simulatorEventSchema<const TType extends SimulatorPreviewActionTypeV1>(type: TType) {
-  return SimulatorPreviewActionV1Schema.and(
-    z.object({ type: z.literal(type) }).passthrough(),
-  );
+  return z.intersection(SimulatorPreviewActionV1Schema, z.looseObject({ type: z.literal(type) }));
 }
 
 function simulatorEventWithControlKindSchema<
   const TType extends SimulatorPreviewActionTypeV1,
   const TKind extends MachineLiveStreamControlSidebandV1['kind'],
 >(type: TType, kind: TKind) {
-  return SimulatorPreviewActionV1Schema.and(
-    z.object({
+  return z.intersection(SimulatorPreviewActionV1Schema, z.looseObject({
       type: z.literal(type),
-      control: z.object({ kind: z.literal(kind) }).passthrough(),
-    }).passthrough(),
-  );
+      control: z.looseObject({ kind: z.literal(kind) }),
+    }));
 }
 
 export const SIMULATOR_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActionIdV1, string>>> = Object.freeze({
@@ -86,7 +80,7 @@ export const SIMULATOR_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'devices.simulator.input.pinch': simulatorEventWithControlKindSchema('simulator.control.send', 'pinch'),
   'devices.simulator.input.rotate': simulatorEventWithControlKindSchema('simulator.control.send', 'rotate'),
   'devices.simulator.sideband.request': simulatorEventSchema('simulator.sideband.request'),
-} as const satisfies Readonly<Record<DevicesSimulatorRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<DevicesSimulatorRuntimeActionId, z.ZodMiniType>>);
 
 export const SIMULATOR_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'devices.simulator.list': SimulatorPreviewSnapshotV1Schema,
@@ -107,7 +101,7 @@ export const SIMULATOR_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'devices.simulator.input.pinch': SimulatorPreviewActionResultV1Schema,
   'devices.simulator.input.rotate': SimulatorPreviewActionResultV1Schema,
   'devices.simulator.sideband.request': SimulatorPreviewActionResultV1Schema,
-} as const satisfies Readonly<Record<DevicesSimulatorRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<DevicesSimulatorRuntimeActionId, z.ZodMiniType>>);
 
 export const SIMULATOR_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record<RuntimeActionIdV1, string>>> = Object.freeze({
   'devices.simulator.list': 'See the phone and tablet simulators available on a machine.',

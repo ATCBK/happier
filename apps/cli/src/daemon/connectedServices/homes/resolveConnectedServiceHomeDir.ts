@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
-import { ConnectedServiceAuthGroupIdSchema, ConnectedServiceIdSchema, ConnectedServiceProfileIdSchema, type ConnectedAccountServiceKey } from '@happier-dev/protocol';
+import { ConnectedServiceAuthGroupIdSchema, ConnectedServiceIdSchema, ConnectedServiceProfileIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import type { ConnectedAccountServiceKey } from '@happier-dev/protocol';
 import { readBuiltInLegacyConnectedServiceIdForQualifiedService } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 

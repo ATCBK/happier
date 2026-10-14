@@ -2,7 +2,8 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture, createStorageStoreMock, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import type { Session, ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
 

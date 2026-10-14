@@ -1,5 +1,6 @@
 import { listSessionAddressesForSessionIdFromLocalState, type SessionAddressLookupQueryState, type SessionAddressLookupState } from '@/sync/domains/session/resolveSessionAddressFromLocalState';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 type SessionRouteServerScopeParams = Readonly<Record<string, unknown>>;
 
@@ -20,7 +21,7 @@ export type SessionRouteServerScope = Readonly<{
     buildHref: (sessionId: string, options?: Readonly<{
         suffix?: string;
         query?: Readonly<Record<string, SessionRouteHrefQueryValue>>;
-    }>) => string;
+    }>) => `/session/${string}`;
 }>;
 
 function normalizeRouteParam(value: unknown): string | null {
@@ -36,7 +37,8 @@ function normalizeRouteParam(value: unknown): string | null {
 
 export function readSessionRouteServerId(params: SessionRouteServerScopeParams | null | undefined): string | null {
     if (!params) return null;
-    return normalizeRouteParam(params.serverId);
+    const serverId = normalizeRouteParam(params.serverId);
+    return serverId ? resolveServerProfileScopeIdForIdentifier(serverId) : null;
 }
 
 export function mergeSessionRouteServerScopeParams<T extends Record<string, unknown>>(
@@ -53,10 +55,10 @@ export function mergeSessionRouteServerScopeParams<T extends Record<string, unkn
     };
 }
 
-export function buildScopedSessionRouteHref(params: BuildScopedSessionRouteHrefParams): string {
+export function buildScopedSessionRouteHref(params: BuildScopedSessionRouteHrefParams): `/session/${string}` {
     const normalizedSessionId = String(params.sessionId ?? '').trim();
     const normalizedSuffix = typeof params.suffix === 'string' ? params.suffix : '';
-    const pathname = `/session/${encodeURIComponent(normalizedSessionId)}${normalizedSuffix}`;
+    const pathname: `/session/${string}` = `/session/${encodeURIComponent(normalizedSessionId)}${normalizedSuffix}`;
     const searchParams = new URLSearchParams();
     const normalizedServerId = normalizeRouteParam(params.serverId);
     if (normalizedServerId) {

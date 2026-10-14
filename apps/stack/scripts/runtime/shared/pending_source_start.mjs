@@ -88,15 +88,20 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
   await mkdir(directory, { recursive: true });
   await withJsonOwnerFileLock(async () => {
     const current = await readJsonIfExists(markerPath);
+    const sameRequest = inheritedRequestId && current?.requestId === requestId;
+    const ownerStatus = current ? observePidLiveness(current.pid).status : 'dead';
     // A delegated half participates in the existing start; its publication and
     // cleanup must not replace or retire the parent's preparation custody.
-    if (inheritedRequestId && current?.requestId === requestId) return;
+    if (sameRequest && ownerStatus === 'alive') return;
     if (inheritedRequestId && current && !replacePending
-      && observePidLiveness(current.pid).status !== 'dead') throw supersededError();
-    await writeJsonAtomic(markerPath, { requestId, pid: process.pid, phase: 'preparing' });
+      && ownerStatus !== 'dead') throw supersededError();
+    // A dead worker's retry takes custody of the same request and its pins.
+    await writeJsonAtomic(markerPath, { ...(sameRequest ? current : {}), requestId, pid: process.pid, phase: 'preparing' });
     ownsMarker = true;
   }, { lockPath });
   let closed = false;
+  let backgroundController;
+  const backgroundPreparations = new Set();
   let lastPhase;
   const checkCurrent = async () => {
     if (closed || controller.signal.aborted) return;
@@ -136,6 +141,14 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
       await retainPendingSourcePreparation({ stackBaseDir, requestId, preparationDir, signal: controller.signal });
     },
     abort(reason) { controller.abort(reason); },
+    prepareInBackground(prepare) {
+      backgroundController ??= new AbortController();
+      const signal = AbortSignal.any([controller.signal, backgroundController.signal]);
+      const task = Promise.resolve().then(() => prepare(signal));
+      backgroundPreparations.add(task);
+      task.then(() => backgroundPreparations.delete(task), () => backgroundPreparations.delete(task));
+      return task;
+    },
     // A completed serving path may be admitted before the rest of startup.
     // Keep the same request and its retained preparations until final publish.
     publishPreparation: publishCurrent,
@@ -148,6 +161,8 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
       });
     },
     async dispose() {
+      backgroundController?.abort();
+      await Promise.allSettled([...backgroundPreparations]);
       close();
       await withJsonOwnerFileLock(removeOwnMarker, { lockPath });
     },

@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import { ToolHappyMetaV2Schema, ToolHappierMetaV2Schema } from './meta.js';
@@ -12,21 +13,21 @@ import {
 
 describe('AgentTeam tool schemas', () => {
   it('preserves classic JSON Schema projection and open tool-envelope composition', () => {
-    const input = z.object({
-      _happier: ToolHappierMetaV2Schema.optional(),
-      _happy: ToolHappyMetaV2Schema.optional(),
-      _raw: z.unknown().optional(),
-      team_name: z.string().optional(), teamName: z.string().optional(),
-      description: z.string().optional(),
-      lead_agent_id: z.string().optional(), leadAgentId: z.string().optional(),
-    }).passthrough();
+    const input = z.looseObject({
+      _happier: z.optional(ToolHappierMetaV2Schema),
+      _happy: z.optional(ToolHappyMetaV2Schema),
+      _raw: z.optional(z.unknown()),
+      team_name: z.optional(z.string()), teamName: z.optional(z.string()),
+      description: z.optional(z.string()),
+      lead_agent_id: z.optional(z.string()), leadAgentId: z.optional(z.string()),
+    });
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(zodSchemaToJsonSchemaObject(AgentTeamCreateInputV2Schema, { target }))
         .toEqual(zodSchemaToJsonSchemaObject(input, { target }));
-      expect(zodSchemaToJsonSchemaObject(AgentTeamCreateInputV2Schema.extend({ confirmed: z.boolean().optional() }), { target }))
-        .toEqual(zodSchemaToJsonSchemaObject(input.extend({ confirmed: z.boolean().optional() }), { target }));
+      expect(zodSchemaToJsonSchemaObject(lazyZodSchema(() => z.extend(AgentTeamCreateInputV2Schema, { confirmed: z.optional(z.boolean()) })), { target }))
+        .toEqual(zodSchemaToJsonSchemaObject(z.extend(input, { confirmed: z.optional(z.boolean()) }), { target }));
     }
-    expect(AgentTeamCreateInputV2Schema.extend({ confirmed: z.boolean().default(true) })
+    expect(lazyZodSchema(() => z.extend(AgentTeamCreateInputV2Schema, { confirmed: z._default(z.boolean(), true) }))
       .parse({ team_name: 'probe', nativeField: 1 }))
       .toEqual({ team_name: 'probe', confirmed: true, nativeField: 1 });
     expect(AgentTeamCreateInputV2Schema.shape.team_name.parse(undefined)).toBeUndefined();
@@ -45,7 +46,7 @@ describe('AgentTeam tool schemas', () => {
   it('rejects invalid stable AgentTeamCreate input fields', () => {
     expect(() => AgentTeamCreateInputV2Schema.parse({
       team_name: 42,
-    })).toThrow(z.ZodError);
+    })).toThrow(z.core.$ZodError);
   });
 
   it('parses stable AgentTeamSendMessage input fields', () => {
@@ -68,7 +69,7 @@ describe('AgentTeam tool schemas', () => {
     });
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(parsed.error).toBeInstanceOf(z.ZodError);
+      expect(parsed.error).toBeInstanceOf(z.core.$ZodError);
       expect(parsed.error.issues).toMatchObject([{ code: 'invalid_type', path: ['tool_use_result', 'status'] }]);
     }
   });

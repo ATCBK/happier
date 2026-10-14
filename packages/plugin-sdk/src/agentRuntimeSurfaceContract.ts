@@ -589,6 +589,9 @@ type _McpToolPolicyUsesTheCanonicalProtocolProjection = AssertTrue<
 type _SessionAndRunMcpPolicyUseOneCarrier = AssertTrue<
   Equal<AgentSessionOpenRequest['mcpToolPolicy'], AgentExecutionRunOpenRequest['mcpToolPolicy']>
 >;
+type _SessionAndRunMcpStartupPolicyUseOneCarrier = AssertTrue<
+  Equal<AgentSessionOpenRequest['mcpServersStrictMode'], AgentExecutionRunOpenRequest['mcpServersStrictMode']>
+>;
 type _ConfigurationUpdateMcpPolicyUsesTheOpenCarrier = AssertTrue<
   Equal<AgentSessionConfigurationUpdate['mcpToolPolicy'], AgentSessionOpenRequest['mcpToolPolicy']>
 >;
@@ -711,8 +714,8 @@ type _SessionMcpServerMustStayDataOnly = AssertTrue<
   Equal<keyof AgentSessionMcpServer, 'id' | 'name' | 'transport'>
 >;
 
-type _SessionMcpServiceMustExposeOnlyServerResolution = AssertTrue<
-  Equal<keyof AgentSessionMcpService, 'resolveServers'>
+type _SessionMcpServiceMustExposeOnlyScopedResolution = AssertTrue<
+  Equal<keyof AgentSessionMcpService, 'resolveServers' | 'resolveToolNaming'>
 >;
 
 type _SessionHookServiceMustExposeOnlyTheExistingLifecycleOwner = AssertTrue<

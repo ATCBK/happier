@@ -6,7 +6,7 @@ import {
 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { projectExternalActionPendingResetStartReadPurposeDigestV1, type ExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
-import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 
 /** One exact Pending purpose for both signed Action proof and direct route admission. */

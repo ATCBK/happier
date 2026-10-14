@@ -428,6 +428,9 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     theme: initialEditorTheme.monacoThemeName,
                     readOnly: initialReadOnly,
                     minimap: { enabled: false },
+                    // No ruler marks beside the text: the cursor's tick reads as a stray dark box in a framed editor.
+                    hideCursorInOverviewRuler: true,
+                    overviewRulerBorder: false,
                     scrollBeyondLastLine: false,
                     wordWrap: initialWrapLines ? 'on' : 'off',
                     lineNumbers: initialShowLineNumbers ? 'on' : 'off',

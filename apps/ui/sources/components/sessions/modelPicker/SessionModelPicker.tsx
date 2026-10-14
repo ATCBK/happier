@@ -11,7 +11,7 @@ import type {
 } from '@happier-dev/protocol/teams';
 
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
-import { ProviderApprovalPendingBanner } from '@/components/settings/providers/ProviderPageParts';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
@@ -75,6 +75,8 @@ export type SessionModelPickerExperimentalConfirmationController = Readonly<{
         commitSelection: () => void,
     ) => Promise<boolean>;
     pending: boolean;
+    /** The model the waiting confirmation is for; the picker names it beside the approval it waits on. */
+    pendingModelName?: string | null;
     pendingApproval?: ProviderPendingApproval | null;
     error: ProviderErrorV1 | null;
     retry: (() => Promise<boolean>) | null;
@@ -295,9 +297,11 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
     const experimentalApprovalHref = props.experimentalConfirmation?.pending
         ? props.experimentalConfirmation.pendingApproval?.href ?? null
         : null;
+    const experimentalPendingModelName = props.experimentalConfirmation?.pendingModelName ?? null;
     const experimentalApproval = React.useMemo(() => experimentalApprovalHref ? {
+        modelName: experimentalPendingModelName,
         onOpen: () => router.pushRetainingCurrent(experimentalApprovalHref as never),
-    } : null, [experimentalApprovalHref, router]);
+    } : null, [experimentalApprovalHref, experimentalPendingModelName, router]);
     const hostNativeSourceLabel = React.useContext(SessionModelNativeSourceLabelContext);
     const hostApplyTiming = React.useContext(SessionModelApplyTimingContext);
     const nativeSourceLabel = props.nativeSourceLabel ?? hostNativeSourceLabel;
@@ -584,10 +588,13 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                         />
                     ))}
                     {experimentalApproval ? (
-                        <ProviderApprovalPendingBanner
+                        <ActionApprovalPendingNotice
                             testID="model-picker-experimental-approval"
                             presentation="line"
-                            onOpen={experimentalApproval.onOpen}
+                            summary={experimentalApproval.modelName}
+                            message={t('settingsProvidersCollection.approvalPendingTitle')}
+                            openLabel={t('settingsProvidersCollection.openApproval')}
+                            onOpenApproval={experimentalApproval.onOpen}
                         />
                     ) : null}
                     {props.experimentalConfirmation?.error ? (

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PLUGIN_COLLECTION_LIMITS_V1 } from './collectionLimitsV1.js';
@@ -18,12 +18,7 @@ const PLUGIN_COLLECTION_MEMBER_NAME_V1_PATTERN = /^[a-z][A-Za-z0-9]*(?:-[A-Za-z0
  * stay on `PluginContributionLocalIdSchema`; this only names members within a
  * declared Collection contract.
  */
-export const PluginCollectionMemberNameV1Schema = lazyZodSchema(() => z.string()
-  .max(MAX_PLUGIN_IDENTIFIER_BYTES)
-  .regex(
-    PLUGIN_COLLECTION_MEMBER_NAME_V1_PATTERN,
-    'Collection member names must start lower-case, use ASCII alphanumerics, and use only single internal hyphens.',
-  ));
+export const PluginCollectionMemberNameV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(MAX_PLUGIN_IDENTIFIER_BYTES), z.regex(PLUGIN_COLLECTION_MEMBER_NAME_V1_PATTERN, 'Collection member names must start lower-case, use ASCII alphanumerics, and use only single internal hyphens.')));
 export type PluginCollectionMemberNameV1 = z.infer<typeof PluginCollectionMemberNameV1Schema>;
 
 /**
@@ -31,11 +26,11 @@ export type PluginCollectionMemberNameV1 = z.infer<typeof PluginCollectionMember
  * chain. The executable callback is candidate code and is deliberately not a
  * Protocol or manifest field.
  */
-export const PluginCollectionMigrationDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionMigrationDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginCollectionMemberNameV1Schema,
-  fromSchemaVersion: z.number().int().min(1),
-  toSchemaVersion: z.number().int().min(1),
-}).strict());
+  fromSchemaVersion: z.number().check(z.int(), z.minimum(1)),
+  toSchemaVersion: z.number().check(z.int(), z.minimum(1)),
+}));
 export type PluginCollectionMigrationDeclarationV1 = z.infer<
   typeof PluginCollectionMigrationDeclarationV1Schema
 >;
@@ -46,10 +41,10 @@ export type PluginCollectionMigrationDeclarationV1 = z.infer<
  * contribution family; a renderer or another executable family naming the
  * same export does not become a Collection migration owner.
  */
-export const PluginCollectionMigrationArtifactReferenceV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionMigrationArtifactReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   artifactId: asProtocolZod(PluginContributionLocalIdSchema),
   exportName: z.literal('collectionMigrations'),
-}).strict());
+}));
 export type PluginCollectionMigrationArtifactReferenceV1 = z.infer<
   typeof PluginCollectionMigrationArtifactReferenceV1Schema
 >;
@@ -88,12 +83,11 @@ export function resolvePluginCollectionMigrationChainV1(input: Readonly<{
  * Collection field references are root-object members. Keep their grammar on
  * the schema owner so author input and persisted reconstruction cannot drift.
  */
-export const PluginCollectionSchemaV1Schema: z.ZodType<PluginJsonSchemaV2> = lazyZodSchema(() => PluginJsonSchemaV2Schema.superRefine(
-  (schema, context) => {
+export const PluginCollectionSchemaV1Schema: z.ZodMiniType<PluginJsonSchemaV2> = lazyZodSchema(() => PluginJsonSchemaV2Schema.check(z.superRefine((schema, context) => {
     for (const field of Object.keys(schema.properties ?? {})) {
       if (!PluginCollectionMemberNameV1Schema.safeParse(field).success) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['properties', field],
           message: 'Collection schema properties must use the Collection-member grammar.',
         });
@@ -102,30 +96,29 @@ export const PluginCollectionSchemaV1Schema: z.ZodType<PluginJsonSchemaV2> = laz
     for (const [position, field] of (schema.required ?? []).entries()) {
       if (!PluginCollectionMemberNameV1Schema.safeParse(field).success) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['required', position],
           message: 'Required Collection schema fields must use the Collection-member grammar.',
         });
       }
     }
-  },
-));
+  })));
 
 export const PluginCollectionScalarKindV1Schema = lazyZodSchema(() => z.enum(['string', 'finiteNumber', 'boolean', 'instant']));
 export type PluginCollectionScalarKindV1 = z.infer<typeof PluginCollectionScalarKindV1Schema>;
 
-export const PluginCollectionFiniteNumberV1Schema = lazyZodSchema(() => z.number().finite());
+export const PluginCollectionFiniteNumberV1Schema = lazyZodSchema(() => z.number());
 const MAX_COLLECTION_PROJECTED_STRING_UTF8_BYTES = 4 * 1024;
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
-export const PluginCollectionProjectedStringV1Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+export const PluginCollectionProjectedStringV1Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   if (utf8ByteLength(value) > MAX_COLLECTION_PROJECTED_STRING_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Projected string exceeds the 4 KiB limit.' });
+    context.addIssue({ code: "custom", message: 'Projected string exceeds the 4 KiB limit.' });
   }
-}));
+})));
 
 export const PluginCollectionProjectedScalarValueV1Schema = lazyZodSchema(() => z.union([
   z.null(),
@@ -134,26 +127,26 @@ export const PluginCollectionProjectedScalarValueV1Schema = lazyZodSchema(() => 
   PluginCollectionFiniteNumberV1Schema,
 ]));
 
-const StringParameterSchema = lazyZodSchema(() => z.object({
+const StringParameterSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('string'),
-  maxUtf8Bytes: z.number().int().min(1).max(256),
-  enum: z.array(z.string().min(1).max(256)).min(1).max(64).optional(),
-}).strict().superRefine((value, context) => {
+  maxUtf8Bytes: z.number().check(z.int(), z.minimum(1), z.maximum(256)),
+  enum: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.minLength(1), z.maxLength(64))),
+}).check(z.superRefine((value, context) => {
   if (value.enum && new Set(value.enum).size !== value.enum.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['enum'], message: 'String enum values must be unique.' });
+    context.addIssue({ code: "custom", path: ['enum'], message: 'String enum values must be unique.' });
   }
-}));
-const FiniteNumberParameterSchema = lazyZodSchema(() => z.object({
+})));
+const FiniteNumberParameterSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('finiteNumber'),
-  minimum: PluginCollectionFiniteNumberV1Schema.optional(),
-  maximum: PluginCollectionFiniteNumberV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  minimum: z.optional(PluginCollectionFiniteNumberV1Schema),
+  maximum: z.optional(PluginCollectionFiniteNumberV1Schema),
+}).check(z.superRefine((value, context) => {
   if (value.minimum !== undefined && value.maximum !== undefined && value.minimum > value.maximum) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['maximum'], message: 'maximum must not be below minimum.' });
+    context.addIssue({ code: "custom", path: ['maximum'], message: 'maximum must not be below minimum.' });
   }
-}));
-const BooleanParameterSchema = lazyZodSchema(() => z.object({ kind: z.literal('boolean') }).strict());
-const InstantParameterSchema = lazyZodSchema(() => z.object({ kind: z.literal('instant') }).strict());
+})));
+const BooleanParameterSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('boolean') }));
+const InstantParameterSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('instant') }));
 
 export const PluginCollectionUiQueryParameterV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   StringParameterSchema,
@@ -164,106 +157,100 @@ export const PluginCollectionUiQueryParameterV1Schema = lazyZodSchema(() => z.di
 export type PluginCollectionUiQueryParameterV1 = z.infer<typeof PluginCollectionUiQueryParameterV1Schema>;
 
 export const PluginCollectionUiQueryValueV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('literal'),
     value: z.union([z.null(), z.boolean(), z.string(), PluginCollectionFiniteNumberV1Schema]),
-  }).strict(),
-  z.object({ kind: z.literal('parameter'), parameterId: PluginCollectionMemberNameV1Schema }).strict(),
+  }),
+  z.strictObject({ kind: z.literal('parameter'), parameterId: PluginCollectionMemberNameV1Schema }),
 ]));
 export type PluginCollectionUiQueryValueV1 = z.infer<typeof PluginCollectionUiQueryValueV1Schema>;
 
-export const PluginCollectionIndexFieldV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionIndexFieldV1Schema = lazyZodSchema(() => z.strictObject({
   field: PluginCollectionMemberNameV1Schema,
-  direction: z.enum(['asc', 'desc']).default('asc'),
-}).strict());
+  direction: z._default(z.enum(['asc', 'desc']), 'asc'),
+}));
 export type PluginCollectionIndexFieldV1 = z.infer<typeof PluginCollectionIndexFieldV1Schema>;
 
-export const PluginCollectionIndexV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionIndexV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginCollectionMemberNameV1Schema,
-  fields: z.array(PluginCollectionIndexFieldV1Schema).min(1).max(4),
-}).strict().superRefine((value, context) => {
+  fields: z.array(PluginCollectionIndexFieldV1Schema).check(z.minLength(1), z.maxLength(4)),
+}).check(z.superRefine((value, context) => {
   if (new Set(value.fields.map((field) => field.field)).size !== value.fields.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['fields'], message: 'Index fields must be unique.' });
+    context.addIssue({ code: "custom", path: ['fields'], message: 'Index fields must be unique.' });
   }
-}));
+})));
 export type PluginCollectionIndexV1 = z.infer<typeof PluginCollectionIndexV1Schema>;
 
-export const PluginCollectionUiQueryDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionUiQueryDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginCollectionMemberNameV1Schema,
   indexId: PluginCollectionMemberNameV1Schema,
-  parameters: z.record(PluginCollectionMemberNameV1Schema, PluginCollectionUiQueryParameterV1Schema).default({}),
-  prefix: z.array(PluginCollectionUiQueryValueV1Schema).max(4).default([]),
-  range: z.object({
-    lower: PluginCollectionUiQueryValueV1Schema.optional(),
-    upper: PluginCollectionUiQueryValueV1Schema.optional(),
-  }).strict().refine(
-    (value) => value.lower !== undefined || value.upper !== undefined,
-    'A range needs a lower or upper bound.',
-  ).optional(),
+  parameters: z._default(z.record(PluginCollectionMemberNameV1Schema, PluginCollectionUiQueryParameterV1Schema), {}),
+  prefix: z._default(z.array(PluginCollectionUiQueryValueV1Schema).check(z.maxLength(4)), []),
+  range: z.optional(z.strictObject({
+    lower: z.optional(PluginCollectionUiQueryValueV1Schema),
+    upper: z.optional(PluginCollectionUiQueryValueV1Schema),
+  }).check(z.refine((value) => value.lower !== undefined || value.upper !== undefined, 'A range needs a lower or upper bound.'))),
   order: z.enum(['asc', 'desc']),
-  pageSize: z.number().int().min(1).max(200),
-  projectedFields: z.array(PluginCollectionMemberNameV1Schema).min(1).max(16),
-}).strict().superRefine((value, context) => {
+  pageSize: z.number().check(z.int(), z.minimum(1), z.maximum(200)),
+  projectedFields: z.array(PluginCollectionMemberNameV1Schema).check(z.minLength(1), z.maxLength(16)),
+}).check(z.superRefine((value, context) => {
   if (new Set(value.projectedFields).size !== value.projectedFields.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectedFields'], message: 'Projected fields must be unique.' });
+    context.addIssue({ code: "custom", path: ['projectedFields'], message: 'Projected fields must be unique.' });
   }
-}));
+})));
 export type PluginCollectionUiQueryDescriptorV1 = z.infer<typeof PluginCollectionUiQueryDescriptorV1Schema>;
 
-const PluginCollectionSamePluginRelationV1Schema = lazyZodSchema(() => z.object({
+const PluginCollectionSamePluginRelationV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginCollectionMemberNameV1Schema,
   kind: z.literal('collection'),
   field: PluginCollectionMemberNameV1Schema,
   collectionId: asProtocolZod(PluginContributionLocalIdSchema),
   required: z.boolean(),
-  unique: z.boolean().optional(),
+  unique: z.optional(z.boolean()),
   onDelete: z.enum(['restrict', 'nullify']),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.required && value.onDelete === 'nullify') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['onDelete'],
       message: 'Required collection relations cannot nullify.',
     });
   }
-}));
-const PluginCollectionHostRelationV1Schema = lazyZodSchema(() => z.object({
+})));
+const PluginCollectionHostRelationV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginCollectionMemberNameV1Schema,
   kind: z.literal('host'),
   field: PluginCollectionMemberNameV1Schema,
   hostKind: z.enum(['account', 'machine', 'session', 'message', 'artifact', 'connectedAccount']),
-}).strict());
+}));
 export const PluginCollectionRelationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   PluginCollectionSamePluginRelationV1Schema,
   PluginCollectionHostRelationV1Schema,
 ]));
 export type PluginCollectionRelationV1 = z.infer<typeof PluginCollectionRelationV1Schema>;
 
-export const PluginCollectionIndexPrefixQuotaV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionIndexPrefixQuotaV1Schema = lazyZodSchema(() => z.strictObject({
   indexId: PluginCollectionMemberNameV1Schema,
-  prefix: z.array(PluginCollectionProjectedScalarValueV1Schema).min(1).max(4),
-  maxRows: z.number().int().positive().max(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountRows),
-}).strict());
+  prefix: z.array(PluginCollectionProjectedScalarValueV1Schema).check(z.minLength(1), z.maxLength(4)),
+  maxRows: z.number().check(z.int(), z.positive(), z.maximum(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountRows)),
+}));
 export type PluginCollectionIndexPrefixQuotaV1 = z.infer<typeof PluginCollectionIndexPrefixQuotaV1Schema>;
 
-export const PluginCollectionQuotaRequestV1Schema = lazyZodSchema(() => z.object({
-  maxRows: z.number().int().positive().max(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountRows).optional(),
-  maxCollectionEncodedBytes: z.number().int().positive().max(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountEncodedBytes).optional(),
-  maxRowEncodedBytes: z.number().int().positive().max(PLUGIN_COLLECTION_LIMITS_V1.maximumStoredRowEncodedBytes).optional(),
-  maxRowsByIndexPrefix: z.array(PluginCollectionIndexPrefixQuotaV1Schema).min(1).max(8).optional(),
-}).strict().refine(
-  (value) => value.maxRows !== undefined
+export const PluginCollectionQuotaRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  maxRows: z.optional(z.number().check(z.int(), z.positive(), z.maximum(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountRows))),
+  maxCollectionEncodedBytes: z.optional(z.number().check(z.int(), z.positive(), z.maximum(PLUGIN_COLLECTION_LIMITS_V1.maximumAccountEncodedBytes))),
+  maxRowEncodedBytes: z.optional(z.number().check(z.int(), z.positive(), z.maximum(PLUGIN_COLLECTION_LIMITS_V1.maximumStoredRowEncodedBytes))),
+  maxRowsByIndexPrefix: z.optional(z.array(PluginCollectionIndexPrefixQuotaV1Schema).check(z.minLength(1), z.maxLength(8))),
+}).check(z.refine((value) => value.maxRows !== undefined
     || value.maxCollectionEncodedBytes !== undefined
     || value.maxRowEncodedBytes !== undefined
-    || value.maxRowsByIndexPrefix !== undefined,
-  'A collection quota request must name at least one limit.',
-));
+    || value.maxRowsByIndexPrefix !== undefined, 'A collection quota request must name at least one limit.')));
 export type PluginCollectionQuotaRequestV1 = z.infer<typeof PluginCollectionQuotaRequestV1Schema>;
 
-export const PluginCollectionProjectedScalarFieldRefV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionProjectedScalarFieldRefV1Schema = lazyZodSchema(() => z.strictObject({
   field: PluginCollectionMemberNameV1Schema,
   kind: PluginCollectionScalarKindV1Schema,
-}).strict());
+}));
 export type PluginCollectionProjectedScalarFieldRefV1 = z.infer<
   typeof PluginCollectionProjectedScalarFieldRefV1Schema
 >;
@@ -277,19 +264,19 @@ export type PluginCollectionProjectedScalarFieldRefV1 = z.infer<
 export { PluginCollectionSchemaVersionV1Schema, type PluginCollectionSchemaVersionV1 } from './collectionContractRefV1.js';
 
 /** Static, descriptor-only contribution. Runtime collection registration is intentionally absent. */
-export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   schemaVersion: PluginCollectionSchemaVersionV1Schema,
   schema: PluginCollectionSchemaV1Schema,
-  rowIdField: PluginCollectionMemberNameV1Schema.default('id'),
-  serverReadable: z.array(PluginCollectionMemberNameV1Schema).min(1).max(16),
-  indexes: z.array(PluginCollectionIndexV1Schema).max(8),
-  uiQueries: z.array(PluginCollectionUiQueryDescriptorV1Schema).max(16).default([]),
-  relations: z.array(PluginCollectionRelationV1Schema).max(16).default([]),
-  quota: PluginCollectionQuotaRequestV1Schema.optional(),
-  readableSchemaVersions: z.array(PluginCollectionSchemaVersionV1Schema).max(32).optional(),
-  migrations: z.array(PluginCollectionMigrationDeclarationV1Schema).max(32).default([]),
-  migrationArtifact: PluginCollectionMigrationArtifactReferenceV1Schema.optional(),
+  rowIdField: z._default(PluginCollectionMemberNameV1Schema, 'id'),
+  serverReadable: z.array(PluginCollectionMemberNameV1Schema).check(z.minLength(1), z.maxLength(16)),
+  indexes: z.array(PluginCollectionIndexV1Schema).check(z.maxLength(8)),
+  uiQueries: z._default(z.array(PluginCollectionUiQueryDescriptorV1Schema).check(z.maxLength(16)), []),
+  relations: z._default(z.array(PluginCollectionRelationV1Schema).check(z.maxLength(16)), []),
+  quota: z.optional(PluginCollectionQuotaRequestV1Schema),
+  readableSchemaVersions: z.optional(z.array(PluginCollectionSchemaVersionV1Schema).check(z.maxLength(32))),
+  migrations: z._default(z.array(PluginCollectionMigrationDeclarationV1Schema).check(z.maxLength(32)), []),
+  migrationArtifact: z.optional(PluginCollectionMigrationArtifactReferenceV1Schema),
   /**
    * The declared fields whose stored value is a mode-derived identity tag, so
    * the value the plugin can re-derive depends on the Account's encryption
@@ -300,22 +287,22 @@ export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z
    * the plugin's private components needed to recompute it. Declaring the set
    * is what lets the Account transition owner refuse rather than strand.
    */
-  identityFields: z.array(PluginCollectionMemberNameV1Schema).max(16).default([]),
-}).strict().superRefine((value, context) => {
+  identityFields: z._default(z.array(PluginCollectionMemberNameV1Schema).check(z.maxLength(16)), []),
+}).check(z.superRefine((value, context) => {
   if (new Set(value.serverReadable).size !== value.serverReadable.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['serverReadable'], message: 'Server-readable fields must be unique.' });
+    context.addIssue({ code: "custom", path: ['serverReadable'], message: 'Server-readable fields must be unique.' });
   }
   const indexIds = new Set<string>();
   value.indexes.forEach((index, indexPosition) => {
     if (indexIds.has(index.id)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['indexes', indexPosition, 'id'], message: 'Index ids must be unique.' });
+      context.addIssue({ code: "custom", path: ['indexes', indexPosition, 'id'], message: 'Index ids must be unique.' });
     }
     indexIds.add(index.id);
   });
   const queryIds = new Set<string>();
   value.uiQueries.forEach((query, queryPosition) => {
     if (queryIds.has(query.id)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['uiQueries', queryPosition, 'id'], message: 'UI query ids must be unique.' });
+      context.addIssue({ code: "custom", path: ['uiQueries', queryPosition, 'id'], message: 'UI query ids must be unique.' });
     }
     queryIds.add(query.id);
   });
@@ -323,16 +310,16 @@ export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z
   const relationFields = new Set<string>();
   value.relations.forEach((relation, relationPosition) => {
     if (relationIds.has(relation.id)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['relations', relationPosition, 'id'], message: 'Relation ids must be unique.' });
+      context.addIssue({ code: "custom", path: ['relations', relationPosition, 'id'], message: 'Relation ids must be unique.' });
     }
     relationIds.add(relation.id);
     if (relationFields.has(relation.field)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['relations', relationPosition, 'field'], message: 'Relation fields must be unique.' });
+      context.addIssue({ code: "custom", path: ['relations', relationPosition, 'field'], message: 'Relation fields must be unique.' });
     }
     relationFields.add(relation.field);
   });
   if (new Set(value.identityFields).size !== value.identityFields.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['identityFields'], message: 'Identity fields must be unique.' });
+    context.addIssue({ code: "custom", path: ['identityFields'], message: 'Identity fields must be unique.' });
   }
   const identityAddressableFields = new Set<string>([
     value.rowIdField,
@@ -341,14 +328,14 @@ export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z
   value.identityFields.forEach((field, position) => {
     if (!identityAddressableFields.has(field)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['identityFields', position],
         message: 'Identity fields must name the row-id field or a declared index field.',
       });
     }
   });
   if (value.readableSchemaVersions && new Set(value.readableSchemaVersions).size !== value.readableSchemaVersions.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['readableSchemaVersions'], message: 'Readable schema versions must be unique.' });
+    context.addIssue({ code: "custom", path: ['readableSchemaVersions'], message: 'Readable schema versions must be unique.' });
   }
   const readableSchemaVersions = [...new Set([
     value.schemaVersion,
@@ -364,14 +351,14 @@ export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z
   const migrationIds = new Set<string>();
   value.migrations.forEach((migration, position) => {
     if (migrationIds.has(migration.id)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['migrations', position, 'id'], message: 'Migration ids must be unique.' });
+      context.addIssue({ code: "custom", path: ['migrations', position, 'id'], message: 'Migration ids must be unique.' });
     }
     migrationIds.add(migration.id);
     const fromSchemaVersion = migrationSchemaVersions[position];
     const toSchemaVersion = migrationSchemaVersions[position + 1];
     if (migration.fromSchemaVersion !== fromSchemaVersion || migration.toSchemaVersion !== toSchemaVersion) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['migrations', position],
         message: 'Migrations must be the ordered adjacent edges for declared readable schema versions.',
       });
@@ -379,19 +366,19 @@ export const PluginAccountCollectionContributionV1Schema = lazyZodSchema(() => z
   });
   if (value.migrations.length !== migrationSchemaVersions.length - 1) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['migrations'],
       message: 'Migrations must cover every ordered adjacent declared readable schema-version edge exactly once.',
     });
   }
   if (value.migrations.length === 0 && value.migrationArtifact !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['migrationArtifact'],
       message: 'A Collection without migrations must not declare a migration Artifact.',
     });
   }
-}));
+})));
 export type PluginAccountCollectionContributionV1 = z.infer<
   typeof PluginAccountCollectionContributionV1Schema
 >;

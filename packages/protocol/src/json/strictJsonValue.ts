@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { cloneNativeJsonValueForTransport, cloneStrictPluginJsonValue } from '../plugins/contributions/strictJsonValue.js';
 
@@ -70,14 +70,13 @@ export function sameStrictJsonValue(left: unknown, right: unknown): boolean {
   return true;
 }
 
-export const StrictJsonValueSchema = lazyZodSchema(() => z.unknown().transform((value, context): JsonValue => {
+export const StrictJsonValueSchema = lazyZodSchema(() => z.pipe(z.unknown(), z.transform((value, context): JsonValue => {
   try {
     return normalizeStrictJsonValue(value);
   } catch (error) {
-    context.addIssue({
+    context.issues.push({
       code: 'custom',
-      message: error instanceof Error ? error.message : 'Invalid strict JSON value',
-    });
+      message: error instanceof Error ? error.message : 'Invalid strict JSON value', input: context.value });
     return z.NEVER;
   }
-}));
+})));

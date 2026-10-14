@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 type ServerProtocolSchema<TValue> = Readonly<{
     safeParse(value: unknown):
@@ -11,14 +11,13 @@ type ServerProtocolSchema<TValue> = Readonly<{
  * Parsing and normalization remain owned by the validator-neutral Protocol
  * value; this adapter adds no second schema semantics.
  */
-export function asServerProtocolZod<TValue>(schema: ServerProtocolSchema<TValue>): z.ZodType<TValue> {
-    return z.unknown().transform((value, context): TValue => {
+export function asServerProtocolZod<TValue>(schema: ServerProtocolSchema<TValue>): z.ZodMiniType<TValue> {
+    return z.pipe(z.unknown(), z.transform((value, context): TValue => {
         const parsed = schema.safeParse(value);
         if (parsed.success) return parsed.data;
-        context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "Value does not match the canonical Protocol schema.",
-        });
+        context.issues.push({
+            code: "custom",
+            message: "Value does not match the canonical Protocol schema.", input: context.value });
         return z.NEVER as TValue;
-    });
+    }));
 }

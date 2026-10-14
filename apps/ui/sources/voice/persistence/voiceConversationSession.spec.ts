@@ -21,6 +21,7 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionRunnerRuntimeStatusFixture } from '@/dev/testkit/fixtures/sessionRunnerRuntimeFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { restoreServerAccountForTest, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -30,14 +31,21 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import type { StorageState } from '@/sync/store/types';
 
 vi.mock('socket.io-client', async importOriginal =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 type MachineContributionRegistryProjectionDescribeFn =
   typeof import('@/sync/ops/machineContributionRegistryProjection').machineContributionRegistryProjectionDescribe;
-type MachineSpawnTrustedHiddenSystemSessionFn =
-  typeof import('@/sync/ops/machines').machineSpawnTrustedHiddenSystemSession;
+type WireSpawnFixtureInput = Omit<ReturnType<typeof SessionSpawnNewInputV2Schema.parse>, 'directory'> & {
+  directory: string; machineId: string; serverId: string;
+  backendTarget: { kind: 'backend'; backendId: string }; userAttemptId: string | undefined;
+};
+type MachineSpawnTrustedHiddenSystemSessionFn = (
+  input: WireSpawnFixtureInput,
+  marker: NonNullable<ReturnType<typeof SessionSpawnNewInputV2Schema.parse>['agentSessionStartupInstructionsV1']>,
+) => ReturnType<typeof import('@/sync/ops/machines').machineSpawnTrustedHiddenSystemSession>;
 // Mutable external fixtures cover retained/malformed rows; actual wire schemas and readers remain real.
 type TestState = {
   authoringMemory?: { recentMachinePaths: { machineId: string; path: string }[] };
@@ -47,7 +55,7 @@ type TestState = {
   sessions: Record<string, any>;
   sessionListRowsByServerId?: Record<string, Record<string, any>>;
   ordinarySessionListMembershipByServerId?: Record<string, string[]>;
-  sessionListIndexByServerId?: Record<string, any>;
+  sessionListIndexByServerId?: StorageState['sessionListIndexByServerId'];
   concurrentSessionListCacheByServerId?: Record<string, any>;
 };
 let state: TestState;
@@ -63,6 +71,7 @@ const metadataPatchResponse = vi.fn<(sessionId: string) => Promise<void>>();
 const sessionDetailResponse = vi.fn();
 let sessionOrganizationFailure: Error | null = null;
 const sessionRpcResponse = vi.fn();
+let runnerObservedAtMs = 2000;
 const globalVoiceStartupInstructionsMarker = Object.freeze({
   v: 1 as const,
   id: GLOBAL_VOICE_AGENT_STARTUP_INSTRUCTIONS_ID,
@@ -79,7 +88,7 @@ function sessionCreationCorrespondence(input: Pick<ReturnType<typeof SessionSpaw
     recipe: {
       execution: { machineId: input.executionTarget.machineId, directory: input.directory },
       organization: { folderId: null, tagIds: [] }, agentTarget: input.agentTarget,
-      modelSelection: null, profileId: null, requestedPermissionMode: input.permissionMode ?? null, agentModeId: null,
+      modelSelection: input.modelSelection ?? null, profileId: null, requestedPermissionMode: input.permissionMode ?? null, agentModeId: null,
       configuration: null, connectedServices: input.connectedServices ?? null, capabilitySelection: null,
       transcriptStorage: input.transcriptStorage ?? 'persisted', terminal: null,
       agentSessionStartupInstructionsMarkerV1: input.agentSessionStartupInstructionsV1
@@ -100,13 +109,15 @@ function rejectNextMetadataCommitForSession(sessionId: string, error: Error): vo
   });
 }
 
+const voiceFixtureMetadataDefaults = { path: '/voice', host: 'voice.test', flavor: 'codex' };
+
 function sessionWireRecord(session: ReturnType<typeof createSessionFixture>) {
   return SessionCurrentProjectionRecordV1Schema.parse({
     id: session.id, seq: session.seq ?? 1, createdAt: session.createdAt ?? 1,
     updatedAt: session.updatedAt, active: session.active,
     activeAt: session.presence === 'online' ? Date.now() : session.activeAt ?? 1,
     archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: 0,
-    metadata: session.metadata ? JSON.stringify({ path: '/voice', host: 'voice.test', ...session.metadata,
+    metadata: session.metadata ? JSON.stringify({ ...voiceFixtureMetadataDefaults, ...session.metadata,
       ...(session.permissionMode ? { permissionMode: session.permissionMode } : {}) }) : JSON.stringify(null),
     metadataVersion: session.metadataVersion ?? 1,
     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionFixture().access!.capabilities },
@@ -235,6 +246,10 @@ installDisconnectedServerSocketBoundary(socket => {
 });
 // Synthetic daemon responses sit below the real scoped transport, Action and catalogs.
 async function dispatchMachineRpc(request: { method: string; payload: unknown; machineId: string; serverId?: string }) {
+    if (request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET) {
+      const payload = request.payload as { sessionId: string };
+      return createSessionRunnerRuntimeStatusFixture({ sessionId: payload.sessionId, machineId: request.machineId, wrapperPid: 122, observedAtMs: runnerObservedAtMs });
+    }
     if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
       const response = await projectionResponse(request.machineId, { serverId: request.serverId });
       return response.supported ? { protocolVersion: 1, projection: response.projection } : { error: 'RPC_METHOD_NOT_FOUND', errorCode: 'RPC_METHOD_NOT_FOUND' };
@@ -269,6 +284,7 @@ const restoreActionExecutorModuleLoader = await installRealActionExecutorModuleL
 await loadSyncSingletonForTests();
 afterAll(() => restoreActionExecutorModuleLoader());
 afterEach(async () => {
+  runnerObservedAtMs = 2000;
   await connection?.dispose();
   vi.restoreAllMocks();
 });
@@ -277,7 +293,7 @@ async function restoreAccount() {
   sessionOrganizationFailure = null;
   connection = await restoreServerAccountForTest({
     serverUrl: 'https://voice-conversation.example.test', accountId: 'account-1',
-    credentialScope: 'restored-home', request: respondToServerRequest,
+    credentialScope: 'restored-home', activation: 'switch', request: respondToServerRequest,
   });
   homeId = connection.home.id;
   state.settingsScope = { serverId: homeId, accountId: 'account-1' };
@@ -285,7 +301,7 @@ async function restoreAccount() {
 async function loadConversationSession() {
   const normalize = (id: string, session: Parameters<typeof createSessionFixture>[0]) =>
     createSessionFixture({ ...session, id, serverId: homeId,
-      metadata: session?.metadata ? { path: '/voice', host: 'voice.test', ...session.metadata } : null });
+      metadata: session?.metadata ? { ...voiceFixtureMetadataDefaults, ...session.metadata } : null });
   for (const [id, session] of Object.entries(state.sessions)) state.sessions[id] = normalize(id, session);
   for (const rows of Object.values(state.sessionListRowsByServerId ?? {})) {
     for (const [id, session] of Object.entries(rows)) rows[id] = normalize(id, session);
@@ -298,7 +314,9 @@ async function loadConversationSession() {
   }
   const { sync } = await import('@/sync/sync');
   await sync.refreshMachines();
-  storage.setState({ ...structuredClone(state), settings: settingsParse(state.settings), profileScope: { serverId: homeId, accountId: 'account-1' } });
+  storage.setState({ ...structuredClone(state), authoringMemory: {
+    ...storage.getState().authoringMemory, ...state.authoringMemory,
+  }, settings: settingsParse(state.settings), profileScope: { serverId: homeId, accountId: 'account-1' } });
   return import('./voiceConversationSession');
 }
 const { createBundledConversationRuntimeHostLease } = await import('@/voice/registry/bundledConversationRuntimeHost');
@@ -1829,7 +1847,7 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       const nextIndexByServerId = {
         ...(state.sessionListIndexByServerId ?? {}),
         [homeId]: [
-          { type: 'session', sessionId: 'late-session', serverId: homeId, serverName: 'Server 1' },
+          { type: 'session' as const, sessionId: 'late-session', serverId: homeId, serverName: 'Server 1' },
         ],
       };
       state = {
@@ -1929,6 +1947,120 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     await restoreAccount();
     listResponse.mockClear();
     sessionDetailResponse.mockClear();
+  });
+
+  it('inherits the coding root Agent, model and connected account instead of Account defaults', async () => {
+    state.settings.voice.providers.local_conversation.config.agent.chatModelSource = 'session';
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'claude-root-account' },
+    } };
+    state.sessions['root-session'] = { id: 'root-session', active: true, updatedAt: 5, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local',
+      flavor: 'claude', modelOverrideV1: { v: 1, modelId: 'pending-unapplied-model', updatedAt: 20 }, connectedServices,
+      sessionAppliedModelV1: { v: 1, provider: 'claude', modelId: 'last-accepted-model', updatedAt: 10,
+        selection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'last-accepted-model' } },
+      sessionModelsV1: { v: 1, agentId: 'claude', updatedAt: 30, currentModelId: 'claude-haiku-4-5',
+        availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku' }],
+        activeSelectionV1: { v: 1, source: 'runtime_apply',
+          selection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+          runner: { pid: 123, processStartTimeMs: 1000 },
+        },
+      },
+    } };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForSessionRoot({
+      sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
+    })).resolves.toBe('voice-root-session');
+    expect(spawnRequests).toHaveBeenCalledWith(expect.objectContaining({
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+      modelSelection: expect.objectContaining({ ref: expect.objectContaining({ modelId: 'claude-haiku-4-5', providerConnectionId: null }) }),
+      connectedServices,
+    }));
+  });
+
+  it('reuses the creation key for unchanged root model selections observed at different times', async () => {
+    state.settings.voice.providers.local_conversation.config.agent.chatModelSource = 'session';
+    state.sessions['root-session'] = { id: 'root-session', active: true, updatedAt: 5, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local', flavor: 'claude',
+      connectedServices: { v: 2, bindingsByServiceId: {
+        'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'root-account' },
+      } },
+      sessionModelsV1: { v: 1, agentId: 'claude', updatedAt: 30, currentModelId: 'claude-haiku-4-5',
+        availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku' }],
+        activeSelectionV1: { v: 1, source: 'runtime_apply',
+          selection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+          runner: { pid: 123, processStartTimeMs: 1000 },
+        },
+      },
+    } };
+    spawnResponse.mockResolvedValue({ type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' });
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    for (const observedAtMs of [2000, 3000]) {
+      runnerObservedAtMs = observedAtMs;
+      await expect(ensureVoiceConversationSessionForSessionRoot({
+        sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
+      })).rejects.toMatchObject({ code: 'VOICE_CONVERSATION_SPAWN_PENDING' });
+    }
+    const first = spawnRequests.mock.calls[0]?.[0];
+    const retry = spawnRequests.mock.calls[1]?.[0];
+    expect(first.modelSelection.updatedAt).toBe(2000);
+    expect(retry.modelSelection.updatedAt).toBe(3000);
+    expect(retry.modelSelection.ref).toEqual(first.modelSelection.ref);
+    expect(retry.creationKey).toBe(first.creationKey);
+  });
+
+  it.each(['Agent', 'connected account'])('refuses to reuse a scoped carrier with another %s', async mismatch => {
+    const rootBinding = { v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'root-account' },
+    } };
+    state.sessions['root-session'] = { id: 'root-session', active: true, updatedAt: 5, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local', flavor: 'claude',
+      connectedServices: rootBinding,
+    } };
+    state.sessions['wrong-agent-carrier'] = { id: 'wrong-agent-carrier', active: false, updatedAt: 10, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local',
+      flavor: mismatch === 'Agent' ? 'codex' : 'claude',
+      connectedServices: mismatch === 'Agent' ? rootBinding : { v: 2, bindingsByServiceId: {
+        'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'another-account' },
+      } },
+      voiceConversationScopeV1: { v: 1, kind: 'session_root', sessionRootId: 'root-session' },
+      systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+    } };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForSessionRoot({
+      sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
+    })).resolves.toBe('voice-root-session');
+    expect(spawnRequests).toHaveBeenCalledWith(expect.objectContaining({
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    }));
+  });
+
+  it('keeps a root external Agent contribution qualified through carrier creation', async () => {
+    const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.voice', localId: 'assistant' } };
+    state.sessions['root-session'] = { id: 'root-session', active: true, updatedAt: 5, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local',
+      runtimeDescriptorV1: { v: 1, agentId: 'acme.voice/assistant', agent: {} },
+      sessionCreationCorrespondenceV1: sessionCreationCorrespondence({ agentTarget,
+        executionTarget: { serverId: homeId, machineId: 'machine-target' },
+        directory: { kind: 'path', path: '/Users/test/workspace/rebound' },
+      }),
+    } };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForSessionRoot({
+      sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
+    })).resolves.toBe('voice-root-session');
+    expect(spawnRequests).toHaveBeenCalledWith(expect.objectContaining({ agentTarget }));
+  });
+
+  it('fails closed when a coding root does not declare an Agent', async () => {
+    state.sessions['root-session'] = { id: 'root-session', active: true, updatedAt: 5, metadata: {
+      machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local', flavor: 'unknown-agent',
+    } };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForSessionRoot({
+      sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
+    })).rejects.toMatchObject({ code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+    expect(spawnRequests).not.toHaveBeenCalled();
   });
 
   it('refuses a root Session from an unmounted Home instead of spawning against the same id here', async () => {
@@ -2046,7 +2178,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
   });
 
   it('keeps hydration and lookup on the root Home when focus moves to another Home mid-refresh', async () => {
-    // Both Homes hold the SAME candidate session id. Home `server-2` already has a hydrated,
+    // Both Homes hold the SAME candidate session id. The other Home has a hydrated,
     // non-hidden row for it, so a lookup that re-reads focus after the await would skip
     // hydration and resolve the wrong Session; the root Home's row is still unhydrated.
     const visibilityCalls: Array<{ sessionId: string; serverId: string | null }> = [];
@@ -2078,17 +2210,22 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
         },
       };
     });
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    // Retire the real Account bootstrap list before installing the user's focus
+    // change. Otherwise bootstrap can switch Home before this Start is admitted.
+    const { sync } = await import('@/sync/sync');
+    await sync.refreshSessions({ awaitSessionListHydration: true });
     listResponse.mockImplementation(async () => {
       // The user switches Home while the authoritative list is still loading.
       const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-      await upsertAndActivateServer({ serverUrl: 'https://voice-other.example.test', name: 'Other Home' });
+      const otherHome = await upsertAndActivateServer({ serverUrl: 'https://voice-other.example.test', name: 'Other Home' });
       state.sessionListRowsByServerId ??= {};
       state.sessionListRowsByServerId[homeId] ??= {};
       state.sessionListRowsByServerId[homeId]['voice-root-session'] = {
         id: 'voice-root-session', active: false, updatedAt: 10, metadataVersion: 1, metadata: null,
       } as any;
-      state.sessionListRowsByServerId['server-2'] ??= {};
-      state.sessionListRowsByServerId['server-2']['voice-root-session'] = {
+      state.sessionListRowsByServerId[otherHome.id] ??= {};
+      state.sessionListRowsByServerId[otherHome.id]['voice-root-session'] = {
         id: 'voice-root-session', active: true, updatedAt: 99, metadataVersion: 1,
         metadata: { path: '/other/home/project' },
       } as any;
@@ -2097,18 +2234,21 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
       return { sessionIds: ['voice-root-session'], nextCursor: null, hasNext: false, source: 'v2' };
     });
 
-    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
-
     // Reuse/spawn is the incumbent case's contract; this one owns the Home binding, so it only
     // requires the attempt to settle.
+    let settlementFailureName: string | null = null;
     await ensureVoiceConversationSessionForSessionRoot({
       sessionRootAddress: { serverId: homeId, sessionId: 'root-session' },
-    }).catch(() => null);
+    }).catch((error: unknown) => {
+      settlementFailureName = error instanceof Error
+        ? `${error.name}:${/^voice_[a-z_]+$/.test(error.message) ? error.message : 'non_voice_failure'}`
+        : 'unknown';
+    });
 
     // The candidate is still hydrated, and against the root Home rather than the newly focused
-    // one: reading focus after the await would have consulted `server-2`'s already-hydrated row
+    // one: reading focus after the await would have consulted the other Home's hydrated row
     // and skipped this candidate entirely.
-    expect(visibilityCalls).toContainEqual({ sessionId: 'voice-root-session', serverId: homeId });
+    expect(visibilityCalls, `settlement failure: ${settlementFailureName}`).toContainEqual({ sessionId: 'voice-root-session', serverId: homeId });
     expect(visibilityCalls.every((call) => call.serverId === homeId)).toBe(true);
   });
 

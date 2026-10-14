@@ -17,7 +17,7 @@ import type { ExternalAgentObservationSnapshotV1 } from '@happier-dev/protocol/s
 import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import type { SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
-import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { compareSessionMetadataRevisions, readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { isSessionAccessRecipient } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { isSessionListRenderableOwnerProjection } from './sessionListRenderableSessionProjection';
 import { computeHasUnreadActivity } from "@happier-dev/session-core/messages";
@@ -765,10 +765,15 @@ export function preserveSessionListRenderableStaleFields(
 
     const preserveMetadata =
         next.metadataUnavailable !== true
-        && next.metadata == null
         && previous?.metadata != null
         && readSessionMetadataLayoutVersion(next.metadataLayoutVersion)
-            === readSessionMetadataLayoutVersion(previous.metadataLayoutVersion);
+            === readSessionMetadataLayoutVersion(previous.metadataLayoutVersion)
+        && (next.metadata == null || compareSessionMetadataRevisions({
+            incomingLayoutVersion: next.metadataLayoutVersion,
+            incomingMetadataVersion: next.metadataVersion,
+            storedLayoutVersion: previous.metadataLayoutVersion,
+            storedMetadataVersion: previous.metadataVersion,
+        }) < 0);
     const preserveMetadataUnavailable =
         !preserveMetadata
         && next.metadata == null

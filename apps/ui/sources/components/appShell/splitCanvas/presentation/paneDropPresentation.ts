@@ -2,6 +2,7 @@ import type { EntityDropAdmissionV1, EntityDropEffectV1, EntityDropPreviewV1, En
 
 import type { EntityDragDropSnapshot } from '@/components/ui/treeDragDrop/entityDragDropTypes';
 import { t } from '@/text';
+import { PANE_DROP_UNCHANGED_CODES } from '@/components/ui/treeDragDrop/entityDropNoChange';
 
 import type { SplitCanvasDropTarget } from '../model/splitCanvasTypes';
 
@@ -34,14 +35,6 @@ const PANE_EFFECT_KINDS: Readonly<Record<string, PaneEffectKind>> = {
     'session.canvas.tabs.reorder': 'move',
 };
 
-/**
- * A tab carried over its own pane: releasing leaves it where it is (lab C2s "Same pane, same place").
- * The shared outcome vocabulary reads these as quiet "Already here", never as a refusal.
- */
-export const PANE_DROP_UNCHANGED_CODES: ReadonlySet<string> = new Set([
-    'already_here', 'workspace_tab_already_here',
-    'workspace_tab_cannot_split_own_pane', 'canvas_tab_cannot_split_own_pane',
-]);
 const GONE_CODES: ReadonlySet<string> = new Set([
     'workspace_scope_unavailable', 'workspace_group_unavailable', 'workspace_tab_not_found',
     'canvas_scope_changed', 'canvas_leaf_not_found', 'canvas_tab_not_found',

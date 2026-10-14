@@ -6,6 +6,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 
@@ -22,18 +23,21 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
     machineRpcWithServerScope: machineRpc,
 }));
 
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
-import { forgetPluginUiProjectionAdmissionSnapshots, readPluginUiProjectionAdmissionSnapshot } from '@/sync/domains/plugins/ui/projectionWarmCache';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
-import { resolvePluginUiText } from '@/sync/domains/plugins/ui/i18n';
-import { usePluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
-import { getPreferredLanguage } from '@/text';
-import { clearDaemonMergedProjectionCacheForTests } from './loadDaemonMergedProjectionInputs';
-import { useDaemonMergedProjectionInputs } from './useDaemonMergedProjectionInputs';
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { prepareWarmCacheEncryptionKey } = await import('@/sync/domains/state/warmCacheEncryptionKey');
+const { forgetPluginUiProjectionAdmissionSnapshots, readPluginUiProjectionAdmissionSnapshot } = await import('@/sync/domains/plugins/ui/projectionWarmCache');
+const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { resolvePluginUiText } = await import('@/sync/domains/plugins/ui/i18n');
+const { usePluginUiProjectionCurrentness } = await import('@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness');
+const { getPreferredLanguage } = await import('@/text');
+const { clearDaemonMergedProjectionCacheForTests } = await import('./loadDaemonMergedProjectionInputs');
+const { useDaemonMergedProjectionInputs } = await import('./useDaemonMergedProjectionInputs');
 
 const accountScope = { serverId: 'server-1', accountId: 'account-locale-mounted' };
 
@@ -67,6 +71,8 @@ function applyRemoteLanguage(preferredLanguage: 'en' | 'fr', version: number) {
 
 describe('mounted locale-narrowed daemon projection readers', () => {
     beforeEach(async () => {
+        await homes.reset();
+        accountScope.serverId = await homes.addHome({ name: 'Locale Home', serverUrl: 'https://locale.example.test', accountId: accountScope.accountId });
         await prepareWarmCacheEncryptionKey();
         retireActiveServerAccountScopeLifetime();
         clearDaemonMergedProjectionCacheForTests();
@@ -76,7 +82,7 @@ describe('mounted locale-narrowed daemon projection readers', () => {
             settings: { ...settingsDefaults }, endpointStatus: 'online',
             machines: { 'machine-1': createMachineFixture({ activeAt: Date.now() }) },
         });
-        publishAppliedActiveServerSnapshot({ serverId: accountScope.serverId, serverUrl: 'https://locale.example.test', generation: 1 });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         applyRemoteLanguage('en', 1);
         machineRpc.mockReset();
         machineRpc.mockImplementation(async ({ payload }: { payload: { locale: string } }) => ({
@@ -85,11 +91,12 @@ describe('mounted locale-narrowed daemon projection readers', () => {
         }));
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
         publishAppliedActiveServerRuntimeAvailability(false);
         retireActiveServerAccountScopeLifetime();
         clearDaemonMergedProjectionCacheForTests();
+        await homes.reset();
     });
 
     it('refreshes mounted successful readers after a remote language update and preserves unrelated-setting identities', async () => {
@@ -98,7 +105,7 @@ describe('mounted locale-narrowed daemon projection readers', () => {
             merged: useDaemonMergedProjectionInputs({ machineId: 'machine-1' }),
         }));
         await vi.waitFor(() => {
-            expect(hook.getCurrent().currentness.phase).toBe('current');
+            expect(hook.getCurrent().currentness).toEqual(expect.objectContaining({ phase: 'current' }));
             expect(hook.getCurrent().merged.phase).toBe('ready');
         });
         expect(translatedTitle(hook.getCurrent().currentness.pluginUiProjection)).toBe('Hello');
@@ -124,7 +131,7 @@ describe('mounted locale-narrowed daemon projection readers', () => {
         const frenchUi = hook.getCurrent().currentness.pluginUiProjection;
         const requests = machineRpc.mock.calls.length;
         await act(async () => storage.getState().applySettingsForScope(accountScope, {
-            ...storage.getState().settings, viewInline: !storage.getState().settings.viewInline,
+            ...storage.getState().settings, analyticsOptOut: !storage.getState().settings.analyticsOptOut,
         }, 3));
         await flushHookEffects();
         expect(hook.getCurrent().merged.inputs).toBe(frenchInputs);

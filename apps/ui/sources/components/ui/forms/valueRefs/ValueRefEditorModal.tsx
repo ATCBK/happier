@@ -56,6 +56,8 @@ export function getValueRefEditorModalTitle(kind: ValueRefKind): string {
 export type ValueRefEditorModalProps = CustomModalInjectedProps & Readonly<{
     kind: ValueRefKind;
     initialKey: string;
+    /** The name is declared elsewhere: shown, not edited. */
+    lockKey?: boolean;
     initialValueRef: ValueRefV1;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
@@ -150,6 +152,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
                         value={keyText}
                         autoCapitalize="none"
                         autoCorrect={false}
+                        editable={props.lockKey !== true}
                         onChangeText={setKeyText}
                         placeholder={props.kind === 'env' ? t('settings.mcpServersEnvKeyPlaceholder') : t('settings.mcpServersHeaderKeyPlaceholder')}
                         placeholderTextColor={theme.colors.input.placeholder}

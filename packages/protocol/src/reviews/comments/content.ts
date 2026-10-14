@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -53,87 +53,87 @@ const ReviewCommentAnchorKindV1Schema = lazyZodSchema(() => z.enum([
   'symlink',
 ]));
 
-export const ReviewCommentAnchorIndexV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentAnchorIndexV1Schema = lazyZodSchema(() => z.strictObject({
   kind: ReviewCommentAnchorKindV1Schema,
-  filePath: z.string().min(1).optional(),
-  folderPath: z.string().min(1).optional(),
-}).strict());
+  filePath: z.optional(z.string().check(z.minLength(1))),
+  folderPath: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ReviewCommentAnchorIndexV1 = z.infer<typeof ReviewCommentAnchorIndexV1Schema>;
 
-const ReviewCommentStructuralEditV1Schema = lazyZodSchema(() => ReviewCommentEditV1Schema.pick({
+const ReviewCommentStructuralEditV1Schema = lazyZodSchema(() => z.pick(ReviewCommentEditV1Schema, {
   editId: true,
   editedAt: true,
   editedBy: true,
 }));
 
-const ReviewCommentStructuralTransitionV1Schema = lazyZodSchema(() => ReviewCommentTransitionV1Schema.omit({
+const ReviewCommentStructuralTransitionV1Schema = lazyZodSchema(() => z.omit(ReviewCommentTransitionV1Schema, {
   reason: true,
   evidence: true,
 }));
 
-const ReviewCommentStructuralTombstoneV1Schema = lazyZodSchema(() => ReviewCommentTombstoneV1Schema.omit({
+const ReviewCommentStructuralTombstoneV1Schema = lazyZodSchema(() => z.omit(ReviewCommentTombstoneV1Schema, {
   reason: true,
 }));
 
-export const ReviewCommentStructuralV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentStructuralV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  id: z.string().min(1),
-  accountId: z.string().min(1),
+  id: z.string().check(z.minLength(1)),
+  accountId: z.string().check(z.minLength(1)),
   ...ReviewCommentScopeV1Schema.shape,
-  workspaceId: z.string().min(1).optional(),
-  sessionId: z.string().min(1).optional(),
-  runId: z.string().min(1).optional(),
-  engineId: z.string().min(1).optional(),
-  findingId: z.string().min(1).optional(),
+  workspaceId: z.optional(z.string().check(z.minLength(1))),
+  sessionId: z.optional(z.string().check(z.minLength(1))),
+  runId: z.optional(z.string().check(z.minLength(1))),
+  engineId: z.optional(z.string().check(z.minLength(1))),
+  findingId: z.optional(z.string().check(z.minLength(1))),
   findingIdentity: ReviewCommentV1Schema.shape.findingIdentity,
   findingSeverity: ReviewCommentV1Schema.shape.findingSeverity,
   reviewedFingerprint: ReviewCommentV1Schema.shape.reviewedFingerprint,
   anchorIndex: ReviewCommentAnchorIndexV1Schema,
-  bodyVersion: z.number().int().positive(),
+  bodyVersion: z.number().check(z.int(), z.positive()),
   editHistory: z.array(ReviewCommentStructuralEditV1Schema),
   author: ReviewCommentActorRefV1Schema,
   state: ReviewCommentStateV1Schema,
   reviewTriageStatus: ReviewCommentV1Schema.shape.reviewTriageStatus,
-  flags: z.object({
-    stale: z.boolean().optional(),
-    outdated: z.boolean().optional(),
-    muted: z.boolean().optional(),
-    redacted: z.boolean().optional(),
-    disputed: z.boolean().optional(),
-  }).strict(),
-  dispositions: z.record(z.string().min(1), ReviewCommentDispositionV1Schema),
-  parentCommentId: z.string().min(1).optional(),
-  threadId: z.string().min(1),
+  flags: z.strictObject({
+    stale: z.optional(z.boolean()),
+    outdated: z.optional(z.boolean()),
+    muted: z.optional(z.boolean()),
+    redacted: z.optional(z.boolean()),
+    disputed: z.optional(z.boolean()),
+  }),
+  dispositions: z.record(z.string().check(z.minLength(1)), ReviewCommentDispositionV1Schema),
+  parentCommentId: z.optional(z.string().check(z.minLength(1))),
+  threadId: z.string().check(z.minLength(1)),
   transitionHistory: z.array(ReviewCommentStructuralTransitionV1Schema),
-  tombstone: ReviewCommentStructuralTombstoneV1Schema.optional(),
-  fingerprintIndex: z.object({
-    normalizedMessageHash: z.string().min(1),
-  }).strict().optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  serverRevision: z.number().int().positive(),
-}).strict().superRefine(validateReviewCommentScopeV1));
+  tombstone: z.optional(ReviewCommentStructuralTombstoneV1Schema),
+  fingerprintIndex: z.optional(z.strictObject({
+    normalizedMessageHash: z.string().check(z.minLength(1)),
+  })),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+  serverRevision: z.number().check(z.int(), z.positive()),
+}).check(z.superRefine(validateReviewCommentScopeV1)));
 export type ReviewCommentStructuralV1 = z.infer<typeof ReviewCommentStructuralV1Schema>;
 
-export const ReviewCommentSensitiveContentV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentSensitiveContentV1Schema = lazyZodSchema(() => z.strictObject({
   anchor: ReviewCommentAnchorV1Schema,
   snapshot: ReviewCommentSnapshotV1Schema,
   body: z.string(),
-  edits: z.array(ReviewCommentEditV1Schema.extend({
+  edits: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ReviewCommentEditV1Schema, {
     previousBody: z.string(),
-    nextBody: z.string().min(1),
-  }).strict()),
-  evidence: z.array(ReviewCommentEvidenceV1Schema).optional(),
+    nextBody: z.string().check(z.minLength(1)),
+  }))),
+  evidence: z.optional(z.array(ReviewCommentEvidenceV1Schema)),
   transitions: z.array(ReviewCommentTransitionV1Schema),
-  tombstone: ReviewCommentTombstoneV1Schema.optional(),
-  fingerprint: ReviewCommentFingerprintV1Schema.optional(),
-  linkedRefs: z.array(ReviewCommentLinkedRefV1Schema).optional(),
-  suggestedFix: ReviewCommentSuggestedFixV1Schema.optional(),
-  metadata: ReviewCommentMetadataV1Schema.optional(),
-}).strict());
+  tombstone: z.optional(ReviewCommentTombstoneV1Schema),
+  fingerprint: z.optional(ReviewCommentFingerprintV1Schema),
+  linkedRefs: z.optional(z.array(ReviewCommentLinkedRefV1Schema)),
+  suggestedFix: z.optional(ReviewCommentSuggestedFixV1Schema),
+  metadata: z.optional(ReviewCommentMetadataV1Schema),
+}));
 export type ReviewCommentSensitiveContentV1 = z.infer<typeof ReviewCommentSensitiveContentV1Schema>;
 
-export const ReviewCommentLegacySplitSensitiveSourceV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentLegacySplitSensitiveSourceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   layout: z.literal('legacy_split_v1'),
   sourceMode: z.enum(['plain', 'e2ee']),
@@ -141,25 +141,25 @@ export const ReviewCommentLegacySplitSensitiveSourceV1Schema = lazyZodSchema(() 
   snapshotEnvelope: StoredJsonContentEnvelopeSchema,
   bodyEnvelope: StoredJsonContentEnvelopeSchema,
   edits: z.array(ReviewCommentEditV1Schema),
-  evidence: z.array(ReviewCommentEvidenceV1Schema).optional(),
+  evidence: z.optional(z.array(ReviewCommentEvidenceV1Schema)),
   transitions: z.array(ReviewCommentTransitionV1Schema),
-  tombstone: ReviewCommentTombstoneV1Schema.optional(),
-  fingerprint: ReviewCommentFingerprintV1Schema.optional(),
-  linkedRefs: z.array(ReviewCommentLinkedRefV1Schema).optional(),
-  suggestedFix: ReviewCommentSuggestedFixV1Schema.optional(),
-  metadata: ReviewCommentMetadataV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  tombstone: z.optional(ReviewCommentTombstoneV1Schema),
+  fingerprint: z.optional(ReviewCommentFingerprintV1Schema),
+  linkedRefs: z.optional(z.array(ReviewCommentLinkedRefV1Schema)),
+  suggestedFix: z.optional(ReviewCommentSuggestedFixV1Schema),
+  metadata: z.optional(ReviewCommentMetadataV1Schema),
+}).check(z.superRefine((value, ctx) => {
   const expectedKind = value.sourceMode === 'e2ee' ? 'encrypted' : 'plain';
   if (value.snapshotEnvelope.t !== expectedKind) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['snapshotEnvelope'],
       message: 'Legacy Review Comment snapshot source must match source mode',
     });
   }
   if (value.bodyEnvelope.t !== expectedKind) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['bodyEnvelope'],
       message: 'Legacy Review Comment body source must match source mode',
     });
@@ -174,45 +174,45 @@ export const ReviewCommentLegacySplitSensitiveSourceV1Schema = lazyZodSchema(() 
         : envelope.success && envelope.data.t === 'encrypted';
       if (!matches) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['edits', editIndex, field],
           message: `Legacy Review Comment ${field} source must match source mode`,
         });
       }
     });
   });
-}));
+})));
 export type ReviewCommentLegacySplitSensitiveSourceV1 = z.infer<
   typeof ReviewCommentLegacySplitSensitiveSourceV1Schema
 >;
 
 export const ReviewCommentSensitiveMigrationSourceV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     layout: z.literal('canonical_v1'),
     envelope: StoredJsonContentEnvelopeSchema,
-  }).strict(),
+  }),
   ReviewCommentLegacySplitSensitiveSourceV1Schema,
 ]));
 export type ReviewCommentSensitiveMigrationSourceV1 = z.infer<
   typeof ReviewCommentSensitiveMigrationSourceV1Schema
 >;
 
-export const ReviewCommentSensitiveBindingV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentSensitiveBindingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  accountId: z.string().min(1),
+  accountId: z.string().check(z.minLength(1)),
   ...ReviewCommentScopeV1Schema.shape,
-  commentId: z.string().min(1),
-  serverRevision: z.number().int().positive(),
-  bodyVersion: z.number().int().positive(),
-}).strict().superRefine(validateReviewCommentScopeV1));
+  commentId: z.string().check(z.minLength(1)),
+  serverRevision: z.number().check(z.int(), z.positive()),
+  bodyVersion: z.number().check(z.int(), z.positive()),
+}).check(z.superRefine(validateReviewCommentScopeV1)));
 export type ReviewCommentSensitiveBindingV1 = z.infer<typeof ReviewCommentSensitiveBindingV1Schema>;
 
-export const ReviewCommentSensitivePayloadV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentSensitivePayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ReviewCommentSensitiveBindingV1Schema,
   content: ReviewCommentSensitiveContentV1Schema,
-}).strict());
+}));
 export type ReviewCommentSensitivePayloadV1 = z.infer<typeof ReviewCommentSensitivePayloadV1Schema>;
 
 export type ReviewCommentSplitV1 = Readonly<{
@@ -233,11 +233,11 @@ export type ReviewCommentOpenResultV1 =
       envelope: StoredJsonContentEnvelope;
     }>;
 
-export const StoredReviewCommentV1Schema = lazyZodSchema(() => z.object({
+export const StoredReviewCommentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   structural: ReviewCommentStructuralV1Schema,
   sensitiveEnvelope: StoredJsonContentEnvelopeSchema,
-}).strict());
+}));
 export type StoredReviewCommentV1 = z.infer<typeof StoredReviewCommentV1Schema>;
 
 function anchorIndex(anchor: ReviewCommentV1['anchor']): ReviewCommentAnchorIndexV1 {
@@ -641,53 +641,53 @@ export const ReviewCommentMutationActionIdV1Schema = lazyZodSchema(() => z.enum(
 export type ReviewCommentMutationActionIdV1 = z.infer<typeof ReviewCommentMutationActionIdV1Schema>;
 
 const ReviewCommentEventRequestTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('create') }).strict(),
-  z.object({ kind: z.literal('comment'), commentId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('parent'), parentCommentId: z.string().min(1) }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('create') }),
+  z.strictObject({ kind: z.literal('comment'), commentId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('parent'), parentCommentId: z.string().check(z.minLength(1)) }),
+  z.strictObject({
     kind: z.literal('bulk'),
-    commentIds: z.array(z.string().min(1)).min(1),
-  }).strict(),
+    commentIds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
+  }),
 ]));
 
 const ReviewCommentEventExpectedCurrentnessV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('create') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('create') }),
+  z.strictObject({
     kind: z.literal('comment'),
-    expectedServerRevision: z.number().int().positive(),
-  }).strict(),
-  z.object({
+    expectedServerRevision: z.number().check(z.int(), z.positive()),
+  }),
+  z.strictObject({
     kind: z.literal('edit'),
-    expectedServerRevision: z.number().int().positive(),
-    expectedBodyVersion: z.number().int().positive(),
-  }).strict(),
-  z.object({
+    expectedServerRevision: z.number().check(z.int(), z.positive()),
+    expectedBodyVersion: z.number().check(z.int(), z.positive()),
+  }),
+  z.strictObject({
     kind: z.literal('transition'),
-    expectedServerRevision: z.number().int().positive(),
+    expectedServerRevision: z.number().check(z.int(), z.positive()),
     expectedState: ReviewCommentStateV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('reply'),
-    expectedParentServerRevision: z.number().int().positive(),
-  }).strict(),
-  z.object({
+    expectedParentServerRevision: z.number().check(z.int(), z.positive()),
+  }),
+  z.strictObject({
     kind: z.literal('bulk_transition'),
     expectedState: ReviewCommentStateV1Schema,
-    expectedServerRevisions: z.record(z.string().min(1), z.number().int().positive()),
-  }).strict(),
+    expectedServerRevisions: z.record(z.string().check(z.minLength(1)), z.number().check(z.int(), z.positive())),
+  }),
 ]));
 
-export const ReviewCommentEventRequestBindingV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentEventRequestBindingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  accountId: z.string().min(1),
+  accountId: z.string().check(z.minLength(1)),
   ...ReviewCommentScopeV1Schema.shape,
   actionId: ReviewCommentMutationActionIdV1Schema,
   eventKind: ReviewCommentEventKindV1Schema,
   actor: ReviewCommentActorRefV1Schema,
-  clientMutationId: z.string().min(1),
+  clientMutationId: z.string().check(z.minLength(1)),
   target: ReviewCommentEventRequestTargetV1Schema,
   expectedCurrentness: ReviewCommentEventExpectedCurrentnessV1Schema,
-}).strict().superRefine(validateReviewCommentScopeV1));
+}).check(z.superRefine(validateReviewCommentScopeV1)));
 export type ReviewCommentEventRequestBindingV1 = z.infer<
   typeof ReviewCommentEventRequestBindingV1Schema
 >;
@@ -741,12 +741,12 @@ export function buildReviewCommentEventRequestBindingV1(params: Readonly<{
       expectedParentServerRevision: requiredBindingPositiveInteger(params.input, 'expectedParentServerRevision'),
     };
   } else if (actionId === 'reviews.comments.bulkTransition') {
-    const commentIds = z.array(z.string().min(1)).min(1).parse(params.input.commentIds);
+    const commentIds = z.array(z.string().check(z.minLength(1))).check(z.minLength(1)).parse(params.input.commentIds);
     target = { kind: 'bulk', commentIds };
     expectedCurrentness = {
       kind: 'bulk_transition',
       expectedState: ReviewCommentStateV1Schema.parse(params.input.expectedState),
-      expectedServerRevisions: z.record(z.string().min(1), z.number().int().positive())
+      expectedServerRevisions: z.record(z.string().check(z.minLength(1)), z.number().check(z.int(), z.positive()))
         .parse(params.input.expectedServerRevisions),
     };
   } else {
@@ -782,36 +782,36 @@ export function buildReviewCommentEventRequestBindingV1(params: Readonly<{
   });
 }
 
-export const ReviewCommentEventSensitivePayloadV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentEventSensitivePayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   requestBinding: ReviewCommentEventRequestBindingV1Schema,
   details: z.record(z.string(), z.unknown()),
-}).strict());
+}));
 export type ReviewCommentEventSensitivePayloadV1 = z.infer<typeof ReviewCommentEventSensitivePayloadV1Schema>;
 
-export const ReviewCommentEventSensitiveBindingV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentEventSensitiveBindingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  eventId: z.string().min(1),
-  commentId: z.string().min(1),
-  accountId: z.string().min(1),
+  eventId: z.string().check(z.minLength(1)),
+  commentId: z.string().check(z.minLength(1)),
+  accountId: z.string().check(z.minLength(1)),
   ...ReviewCommentScopeV1Schema.shape,
   eventKind: ReviewCommentEventKindV1Schema,
   actor: ReviewCommentActorRefV1Schema,
-  createdAt: z.number().int().nonnegative(),
-  serverRevision: z.number().int().positive(),
-  bulkActionId: z.string().min(1).optional(),
-  clientMutationId: z.string().min(1).optional(),
-  authorDeviceId: z.string().min(1).optional(),
-  clientLamport: z.number().int().nonnegative().optional(),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  serverRevision: z.number().check(z.int(), z.positive()),
+  bulkActionId: z.optional(z.string().check(z.minLength(1))),
+  clientMutationId: z.optional(z.string().check(z.minLength(1))),
+  authorDeviceId: z.optional(z.string().check(z.minLength(1))),
+  clientLamport: z.optional(z.number().check(z.int(), z.nonnegative())),
   requestBinding: ReviewCommentEventRequestBindingV1Schema,
-}).strict().superRefine(validateReviewCommentScopeV1));
+}).check(z.superRefine(validateReviewCommentScopeV1)));
 export type ReviewCommentEventSensitiveBindingV1 = z.infer<typeof ReviewCommentEventSensitiveBindingV1Schema>;
 
-export const BoundReviewCommentEventSensitiveEnvelopeV1Schema = lazyZodSchema(() => z.object({
+export const BoundReviewCommentEventSensitiveEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ReviewCommentEventSensitiveBindingV1Schema,
   sensitive: StoredJsonContentEnvelopeSchema,
-}).strict());
+}));
 export type BoundReviewCommentEventSensitiveEnvelopeV1 = z.infer<
   typeof BoundReviewCommentEventSensitiveEnvelopeV1Schema
 >;
@@ -913,7 +913,7 @@ export function buildReviewCommentMutationEventEnvelopeV1(params: Readonly<{
       randomBytes: (length: number) => Uint8Array;
     }>
 )): StoredJsonContentEnvelope {
-  const scope = ReviewCommentScopeV1Schema.superRefine(validateReviewCommentScopeV1).parse({
+  const scope = lazyZodSchema(() => ReviewCommentScopeV1Schema.check(z.superRefine(validateReviewCommentScopeV1))).parse({
     projectId: params.input.projectId,
     workspace: params.input.workspace,
   });
@@ -1040,28 +1040,28 @@ export function classifyReviewCommentEventSensitiveMigrationLayoutV1(
     : 'legacy_split_v1';
 }
 
-export const ReviewCommentAccountEncryptionMigrationInventoryEventV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentAccountEncryptionMigrationInventoryEventV1Schema = lazyZodSchema(() => z.strictObject({
   event: ReviewCommentEventV1Schema,
   sensitiveEnvelope: BoundReviewCommentEventSensitiveEnvelopeV1Schema,
   sourceLayout: ReviewCommentEventSensitiveMigrationLayoutV1Schema,
-}).strict());
+}));
 export type ReviewCommentAccountEncryptionMigrationInventoryEventV1 = z.infer<
   typeof ReviewCommentAccountEncryptionMigrationInventoryEventV1Schema
 >;
 
-export const ReviewCommentAccountEncryptionMigrationInventoryItemV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentAccountEncryptionMigrationInventoryItemV1Schema = lazyZodSchema(() => z.strictObject({
   structural: ReviewCommentStructuralV1Schema,
   sensitiveSource: ReviewCommentSensitiveMigrationSourceV1Schema,
   events: z.array(ReviewCommentAccountEncryptionMigrationInventoryEventV1Schema),
-}).strict());
+}));
 export type ReviewCommentAccountEncryptionMigrationInventoryItemV1 = z.infer<
   typeof ReviewCommentAccountEncryptionMigrationInventoryItemV1Schema
 >;
 
-export const ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema = lazyZodSchema(() => z.object({
+export const ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   items: z.array(ReviewCommentAccountEncryptionMigrationInventoryItemV1Schema),
-}).strict());
+}));
 export type ReviewCommentAccountEncryptionMigrationInventoryResponseV1 = z.infer<
   typeof ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema
 >;

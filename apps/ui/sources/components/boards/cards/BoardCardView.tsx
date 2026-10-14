@@ -219,30 +219,30 @@ const styles = StyleSheet.create((theme) => ({
     },
     lifted: shadowLevelStyle(theme.colors.shadowLevels[4]),
     content: {
-        gap: theme.margins.xs,
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.md,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     // The action's own line carries the card's bottom inset.
-    contentAboveAction: { paddingBottom: theme.margins.sm },
+    contentAboveAction: { paddingBottom: theme.space.s8 },
     // The mark sits on the title's first line, so a two-line name in a status column keeps it level.
     titleRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     mark: {
-        height: Typography.rowTitle().lineHeight,
+        height: Typography.variant('label', 'semiBold').lineHeight,
         justifyContent: 'center',
     },
     title: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         flex: 1,
         minWidth: 0,
     },
     word: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         alignSelf: 'center',
         color: theme.colors.text.secondary,
         flexShrink: 1,
@@ -252,30 +252,30 @@ const styles = StyleSheet.create((theme) => ({
     metaRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingLeft: 24,
+        paddingLeft: theme.space.s24,
         minWidth: 0,
     },
     kind: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
         minWidth: 0,
     },
     context: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
     },
     body: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
-        paddingLeft: 24,
-        paddingTop: 4,
+        paddingLeft: theme.space.s24,
+        paddingTop: theme.space.s4,
     },
     quiet: {
         color: theme.colors.text.tertiary,
     },
     // Trailing, like the lab's card actions: the body reads first, the action closes the card.
-    action: { alignItems: 'flex-end', paddingHorizontal: theme.margins.lg, paddingBottom: theme.margins.md },
+    action: { alignItems: 'flex-end', paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s12 },
 }));

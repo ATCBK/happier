@@ -1,10 +1,9 @@
 import fastify, { errorCodes, type FastifyBodyParser, type FastifyInstance } from "fastify";
 import type { FastifyCorsOptions } from "@fastify/cors";
-import {
-    ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
-    SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1,
-    SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
-} from "@happier-dev/protocol";
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import { ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { log, logger } from "@/utils/logging/log";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { onShutdown } from "@/utils/process/shutdown";
@@ -98,6 +97,7 @@ export const DEFAULT_API_CORS_MAX_AGE_SECONDS = 600;
 export const API_CORS_ALLOWED_HEADERS = [
     'authorization',
     'content-type',
+    AUTHORITY_CEILING_HEADER_V1,
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     'idempotency-key',
     V2_SESSION_LIST_SERVER_TIMING_REQUEST_HEADER,

@@ -12,6 +12,11 @@ import {
   withCliDistBuildLock,
 } from './cliDistBuildLock.mjs';
 import { withWorkspaceBundleLock } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
+import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
+
+// These temporary locks model independent publishers, rather than the routed
+// test runner's charged publication context.
+withPatchedProcessEnv(test, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
 
 test('default CLI dist lock budget covers long current-byte workspace publishers', () => {
   assert.ok(
@@ -98,6 +103,20 @@ test('withCliDistBuildLock permits reentry only with the current owner lease', a
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('an admitted CLI dist caller refuses a foreign publication lease without entering its writer', async (t) => {
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '0' });
+  const root = await mkdtemp(join(tmpdir(), 'hstack-cli-dist-lock-admitted-'));
+  const lockPath = join(root, 'cli-dist-build.lock');
+  try {
+    await withWorkspaceBundleLock(async () => {
+      await assert.rejects(withCliDistBuildLock(
+        async () => { assert.fail('an admitted caller cannot enter a foreign publisher'); },
+        { lockPath, env: {} },
+      ), { code: 'EWORKSPACEBUNDLELOCKBUSY' });
+    }, { lockPath });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('withCliDistBuildLock reclaims a fresh lock from a dead owner pid immediately', async () => {
@@ -218,9 +237,10 @@ test('withCliDistBuildLock reports wait progress while a live owner holds the lo
   const root = await mkdtemp(join(tmpdir(), 'hstack-cli-dist-lock-wait-'));
   const lockPath = join(root, 'cli-dist-build.lock');
   const waitEvents = [];
+  let holder;
 
   try {
-    const holder = withCliDistBuildLock(
+    holder = withCliDistBuildLock(
       async () => {
         await delay(40);
         return 'held';
@@ -266,6 +286,7 @@ test('withCliDistBuildLock reports wait progress while a live owner holds the lo
 
     await holder;
   } finally {
+    await Promise.allSettled([holder]);
     await rm(root, { recursive: true, force: true });
   }
 });

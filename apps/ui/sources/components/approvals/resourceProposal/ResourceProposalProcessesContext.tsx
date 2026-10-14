@@ -141,10 +141,10 @@ const styles = StyleSheet.create((theme) => ({
   head: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s16,
     paddingTop: 14,
-    paddingBottom: 4,
+    paddingBottom: theme.space.s4,
   },
   headText: {
     ...Typography.default('semiBold'),
@@ -162,9 +162,9 @@ const styles = StyleSheet.create((theme) => ({
     fontVariant: ['tabular-nums'],
   },
   meter: {
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s12,
   },
   caption: {
     ...Typography.default(),

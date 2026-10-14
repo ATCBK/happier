@@ -1,16 +1,9 @@
-import {
-    AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1,
-    AuthEntryProjectionV1Schema,
-    type AuthEntryProjectionV1,
-    type AuthEntryProviderPresentationV1,
-    type AuthEntryProviderUnavailableReasonV1,
-    type AuthEntryRequestV1,
-    type TeamEntryUnavailableReasonV1,
-    type TeamInvitationPreviewV1,
-} from '@happier-dev/protocol';
-import { normalizeAuthMethodId, readServerEnabledBit } from '@happier-dev/protocol';
+import { AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1, AuthEntryProjectionV1Schema, type AuthEntryProjectionV1, type AuthEntryProviderPresentationV1, type AuthEntryProviderUnavailableReasonV1, type AuthEntryRequestV1, type TeamEntryUnavailableReasonV1 } from '@happier-dev/protocol/auth/entry';
+import { type TeamInvitationPreviewV1 } from '@happier-dev/protocol/teams/invitation';
+import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
-import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol';
+import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 
 import {
     resolveEffectiveHomeAuthMethods,

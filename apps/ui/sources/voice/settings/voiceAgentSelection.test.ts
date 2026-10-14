@@ -7,6 +7,7 @@ import { createProviderModelProjectionFixture, createProviderModelProjectionGrou
 import { resolveVoiceAgentCatalogSelectionV1, voiceAgentCatalogSelectionValueV1 } from '@happier-dev/protocol/voice/settings/voiceAgentSelection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 const externalChoice = {
     kind: 'catalog',
@@ -44,7 +45,7 @@ describe('atomic Voice Agent selection', () => {
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
         const pending = writeLocalConversationVoiceSettings(voiceSettingsDefaults, { ...local, agent: {
             ...local.agent,
-            providerChat: { status: 'needs_selection', providerConnectionId: 'voice-openai-compatible-chat',
+            providerChat: { status: 'needs_selection', providerConnectionId: ProviderConnectionIdSchema.parse('voice-openai-compatible-chat'),
                 chatModelId: 'legacy-chat', commitModelId: 'legacy-commit' },
         } });
         const next = applyVoiceAgentSelection(pending, { kind: 'legacy_provider_chat', agentId: 'opencode' });
@@ -58,7 +59,7 @@ describe('atomic Voice Agent selection', () => {
         { authorized: true, confirmed: true, expected: 'configured' },
     ] as const)('uses the incumbent model picker admission for BOTH imported Chat models: %o', ({ authorized, confirmed, expected }) => {
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
-        const connectionId = 'voice-openai-compatible-chat';
+        const connectionId = ProviderConnectionIdSchema.parse('voice-openai-compatible-chat');
         const agentTargetKey = 'agent:happier.agent.opencode/opencode';
         const pending = writeLocalConversationVoiceSettings(voiceSettingsDefaults, { ...local, agent: {
             ...local.agent,

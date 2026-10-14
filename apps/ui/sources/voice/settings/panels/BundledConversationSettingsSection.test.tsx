@@ -135,6 +135,12 @@ describe('BundledConversationSettingsSection', () => {
     });
   }
   function config() { return account.settings.voice.providers[providerId]?.config; }
+  function configField(provider: unknown, key: string): unknown {
+    if (!provider || typeof provider !== 'object' || !('config' in provider)) return undefined;
+    const value = provider.config;
+    return value && typeof value === 'object' && !Array.isArray(value) && key in value
+      ? Reflect.get(value, key) : undefined;
+  }
   function observeAdmissionMetadata() {
     const identity = deriveVoiceCredentialBindingIdentityV1({ pluginId: provider.entry.pluginId, contribution: provider.entry.declaration });
     if (!identity) throw new Error('Expected declared ElevenLabs credential identity');
@@ -185,9 +191,9 @@ describe('BundledConversationSettingsSection', () => {
         scopeSame: baseline ? areAccountSettingsScopesEqual(baseline.scope, current.scope) : null,
         providerSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.provider, current.provider) : null,
         providerSchemaVersionSame: baseline ? baseline.provider?.schemaVersion === current.provider?.schemaVersion : null,
-        providerBillingModeSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.provider?.config.billingMode, current.provider?.config.billingMode) : null,
-        providerAgentIdSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.provider?.config.agentId, current.provider?.config.agentId) : null,
-        providerTtsSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.provider?.config.tts, current.provider?.config.tts) : null,
+        providerBillingModeSame: baseline ? areAccountSettingsJsonValuesEqual(configField(baseline.provider, 'billingMode'), configField(current.provider, 'billingMode')) : null,
+        providerAgentIdSame: baseline ? areAccountSettingsJsonValuesEqual(configField(baseline.provider, 'agentId'), configField(current.provider, 'agentId')) : null,
+        providerTtsSame: baseline ? areAccountSettingsJsonValuesEqual(configField(baseline.provider, 'tts'), configField(current.provider, 'tts')) : null,
         bindingSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.binding, current.binding) : null,
         savedReferenceSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.saved, current.saved) : null,
         secretSame: baseline ? areAccountSettingsJsonValuesEqual(baseline.secret, current.secret) : null,

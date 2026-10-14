@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The opaque persisted Account Settings document carried by the storage and
@@ -9,5 +9,5 @@ import { z } from 'zod';
  * Keeping this leaf separate prevents envelope/action contracts from loading
  * the full effective-settings catalog during module initialization.
  */
-export const AccountSettingsPersistedObjectSchema = lazyZodSchema(() => z.object({}).passthrough());
+export const AccountSettingsPersistedObjectSchema = lazyZodSchema(() => z.looseObject({}));
 export type AccountSettingsPersistedObject = z.infer<typeof AccountSettingsPersistedObjectSchema>;

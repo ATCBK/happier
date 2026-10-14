@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { ExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { readExecutionRunChildChoice, type ExecutionRunChildSelection } from './executionRunChildChoice';
+import type { ExecutionRunChildSelection } from './executionRunChildChoice';
 
 type PendingChoice = Readonly<{
     choice: ExecutionRunChildChoiceV1;
@@ -10,14 +9,14 @@ type PendingChoice = Readonly<{
 
 /**
  * The child chooser's state. A refused start offers a choice only with host proof that no Run was
- * created; every new attempt consumes the previous choice first, so an unknown-effect or lost
- * start never keeps a replay chooser. The launcher's own start path performs each attempt.
+ * created (`readExecutionRunChildChoice`); every new attempt consumes the previous choice first, so
+ * an unknown-effect or lost start never keeps a replay chooser. The launcher's own start path
+ * performs each attempt.
  */
 export function useExecutionRunChildChoice() {
     const [pending, setPending] = React.useState<PendingChoice | null>(null);
     const begin = React.useCallback(() => setPending(null), []);
-    const offer = React.useCallback((result: ActionExecuteResult, retry: PendingChoice['retry']) => {
-        const choice = readExecutionRunChildChoice(result);
+    const offer = React.useCallback((choice: ExecutionRunChildChoiceV1 | null, retry: PendingChoice['retry']) => {
         setPending(choice ? { choice, retry } : null);
         return choice !== null;
     }, []);

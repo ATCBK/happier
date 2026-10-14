@@ -1,10 +1,10 @@
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION, CHANNEL_STATE_INDEX_ID, CHANNEL_DELIVERIES_INDEX_ID, CHANNEL_STATE_RECORD_KIND } from '../collections.js';
 import { assertChannelsTestCollectionQueryLimit } from './collectionQueryBound.js';
 
-export type StoredRow = Readonly<{
+export type StoredRow<TValue extends Record<string, unknown> = Record<string, unknown>> = Readonly<{
   rowId: string;
   revision: number;
-  value: Record<string, unknown>;
+  value: TValue;
   deleted?: boolean;
 }>;
 
@@ -50,8 +50,8 @@ function assertDeclaredCollectionIndex(index: string | undefined): void {
   }
 }
 
-export class MemoryCollection {
-  readonly rows = new Map<string, StoredRow>();
+export class MemoryCollection<TValue extends Record<string, unknown> = Record<string, unknown>> {
+  readonly rows = new Map<string, StoredRow<TValue>>();
   private conflictNextDelete: boolean;
   private conflictNextBatch: boolean;
   private forgetCount = 0;
@@ -70,14 +70,14 @@ export class MemoryCollection {
     this.conflictNextBatch = options.conflictNextBatch === true;
   }
 
-  async get(rowId: string): Promise<StoredRow | null> {
+  async get(rowId: string): Promise<StoredRow<TValue> | null> {
     const row = this.rows.get(rowId);
     return row?.deleted === true ? null : row ?? null;
   }
 
-  async put(value: Record<string, unknown>, input: Readonly<{
+  async put(value: TValue, input: Readonly<{
     expectedRevision: number | 'absent';
-  }>): Promise<StoredRow> {
+  }>): Promise<StoredRow<TValue>> {
     const rowId = value.id;
     if (typeof rowId !== 'string') throw new Error('row id is required');
     const current = this.rows.get(rowId);
@@ -194,7 +194,7 @@ export class MemoryCollection {
       }
       if (operation.kind === 'assert') continue;
       if (operation.kind === 'put') {
-        const value = operation.value as Record<string, unknown>;
+        const value = operation.value as TValue;
         const row = { rowId, revision: (current?.revision ?? 0) + 1, value, deleted: false };
         next.set(rowId, row);
         results.push({ rowId, revision: row.revision, deleted: false });

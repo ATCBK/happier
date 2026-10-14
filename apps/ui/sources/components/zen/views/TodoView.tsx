@@ -3,6 +3,7 @@ import { View, Pressable } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Icon } from '@/components/ui/icons/Icon';
 import { TaskStatusPill } from './TaskSessionStatusPill';
 
@@ -37,7 +38,7 @@ export const TodoView = React.memo<TodoViewProps>((props) => {
             backgroundColor: theme.colors.surface.elevated,
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 12
+            paddingHorizontal: theme.space.s12
         }}>
             <Pressable
                 onPress={(e) => {
@@ -54,23 +55,23 @@ export const TodoView = React.memo<TodoViewProps>((props) => {
                     backgroundColor: props.done ? theme.colors.state.success.foreground : 'transparent',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    marginRight: 12
+                    marginRight: theme.space.s12
                 }}
             >
                 {props.done && (
                     <Icon name="check" size={16} color={theme.colors.button.primary.tint} />
                 )}
             </Pressable>
-            <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                 <Text
                     style={{
-                        paddingLeft: 4,
-                        paddingRight: 4,
+                        paddingLeft: theme.space.s4,
+                        paddingRight: theme.space.s4,
                         paddingTop: 0,
                         paddingBottom: 0,
                         alignSelf: 'center',
                         color: props.done ? theme.colors.text.secondary : theme.colors.text.primary,
-                        fontSize: 18,
+                        ...Typography.variant('heading', 'regular'),
                         flexGrow: 1,
                         flexShrink: 1,
                         textDecorationLine: props.done ? 'line-through' : 'none',

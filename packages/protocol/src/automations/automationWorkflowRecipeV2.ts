@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
@@ -18,18 +19,18 @@ import {
 
 const UTF8_ENCODER = new TextEncoder();
 
-export const AutomationStoredWorkflowDefinitionV2Schema = lazyZodSchema(() => z.object({
-  workspace: z.object({
-    directory: z.string().min(1),
-    workspaceRefId: preservedBoundedNfcString(191, 'Workspace reference ids').optional(),
-  }).strict(),
+export const AutomationStoredWorkflowDefinitionV2Schema = lazyZodSchema(() => z.strictObject({
+  workspace: z.strictObject({
+    directory: z.string().check(z.minLength(1)),
+    workspaceRefId: zMini.optional(preservedBoundedNfcString(191, 'Workspace reference ids')),
+  }),
   executionTarget: WorkflowRunExecutionTargetV1Schema,
-  inputs: WorkflowResolvedInputsV1Schema.optional(),
-  visibleTeamId: preservedBoundedNfcString(191, 'Team ids').nullable().optional(),
-  roleOverrides: WorkflowRoleOverridesV1Schema.optional(),
-  inlineDefinition: WorkflowDefinitionV1Schema.optional(),
-  onComplete: z.object({ kind: z.literal('originating_session') }).strict().optional(),
-}).strict());
+  inputs: zMini.optional(WorkflowResolvedInputsV1Schema),
+  visibleTeamId: zMini.optional(zMini.nullable(preservedBoundedNfcString(191, 'Team ids'))),
+  roleOverrides: zMini.optional(WorkflowRoleOverridesV1Schema),
+  inlineDefinition: zMini.optional(WorkflowDefinitionV1Schema),
+  onComplete: z.optional(z.strictObject({ kind: z.literal('originating_session') })),
+}));
 export type AutomationStoredWorkflowDefinitionV2 = z.infer<typeof AutomationStoredWorkflowDefinitionV2Schema>;
 export type WorkflowTriggerContextV1 = AutomationStoredWorkflowDefinitionV2;
 export const AutomationStoredWorkflowDefinitionV2ReadSchema = createStoredReadSchema(AutomationStoredWorkflowDefinitionV2Schema);
@@ -42,13 +43,13 @@ export const AutomationStoredWorkflowDefinitionV2ReadSchema = createStoredReadSc
  * context and an inline target's definition. Workflow references resolve live
  * at claim and are never copied into this payload.
  */
-function createAutomationStoredWorkflowDefinitionRecipeV2Schema(definitionSchema: z.ZodType) {
-  return z.object({
+function createAutomationStoredWorkflowDefinitionRecipeV2Schema(definitionSchema: z.ZodMiniType) {
+  return z.strictObject({
     v: z.literal(2),
-    templateVersion: z.number().int().nonnegative().safe(),
+    templateVersion: z.number().check(z.int(), z.nonnegative(), z.int()),
     workflow: AutomationStoredContentEnvelopeV1Schema,
     triggerEvidence: z.null(),
-  }).strict().superRefine((value, context) => {
+  }).check(z.superRefine((value, context) => {
     addAutomationStoredEnvelopeUtf8LimitIssue(
       value,
       context,
@@ -56,21 +57,21 @@ function createAutomationStoredWorkflowDefinitionRecipeV2Schema(definitionSchema
     );
     if (value.workflow.t === 'plain' && !definitionSchema.safeParse(value.workflow.v).success) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['workflow'],
         message: 'Automation workflow definition is invalid',
       });
     }
-  });
+  }));
 }
 
 // Writes admit the canonical plain payload. Stored reads re-read the opaque plain payload through
 // the tolerant definition reader, so an extra stored field is dropped instead of hiding the recipe.
 export const AutomationStoredWorkflowDefinitionRecipeV2Schema = defineStoredReadProjection(
   createAutomationStoredWorkflowDefinitionRecipeV2Schema(AutomationStoredWorkflowDefinitionV2Schema),
-  () => createStoredReadSchema(
+  () => z.pipe(createStoredReadSchema(
     createAutomationStoredWorkflowDefinitionRecipeV2Schema(AutomationStoredWorkflowDefinitionV2ReadSchema),
-  ).transform((recipe) => recipe.workflow.t === 'plain'
+  ), z.transform((recipe) => recipe.workflow.t === 'plain'
     ? {
       ...recipe,
       workflow: AutomationStoredContentEnvelopeV1Schema.parse({
@@ -78,7 +79,7 @@ export const AutomationStoredWorkflowDefinitionRecipeV2Schema = defineStoredRead
         v: AutomationStoredWorkflowDefinitionV2ReadSchema.parse(recipe.workflow.v),
       }),
     }
-    : recipe),
+    : recipe)),
 );
 export type AutomationStoredWorkflowDefinitionRecipeV2 = z.infer<
   typeof AutomationStoredWorkflowDefinitionRecipeV2Schema

@@ -1,7 +1,7 @@
 import type { UsageActionPorts } from '@happier-dev/protocol/actions/executor/usageActions';
 import type { UsageQueryBatchResult } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
-import { decodeUsageQueryResource, getUsageQueryResourceStore, readUiUsageModelPrices, type UsageQueryAccountContext } from '@/sync/api/account/usageQueryResource';
+import { decodeUsageQueryResource, getUsageQueryResourceStore, readUiQuota, readUiUsageModelPrices, type UsageQueryAccountContext } from '@/sync/api/account/usageQueryResource';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { HappyError } from '@/utils/errors/errors';
 
@@ -25,6 +25,25 @@ export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pic
   };
   return {
     prices: { get: context => prices(false, context), refresh: context => prices(true, context) },
+    readQuota: async (input, context) => {
+      context.signal?.throwIfAborted();
+      account.assertCurrent();
+      try {
+        // Calendar selections require their exact retained B, not the query's
+        // accounting-ready snapshot while independent quota reads progress.
+        const value = await readUiQuota(account, input, context.signal);
+        context.signal?.throwIfAborted();
+        account.assertCurrent();
+        return value;
+      } catch (error) {
+        account.assertCurrent();
+        context.signal?.throwIfAborted();
+        if (error instanceof Error && 'code' in error && typeof error.code === 'string' && error.code) {
+          return { ok: false, errorCode: error.code, error: error.code };
+        }
+        throw error;
+      }
+    },
     query: async (input, context) => {
       context.signal?.throwIfAborted();
       account.assertCurrent();

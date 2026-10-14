@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -59,9 +60,9 @@ export function SearchTextInFilesSpecimen() {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    cell: { marginTop: 28, gap: 4, maxWidth: 900 },
-    cellTitle: { fontSize: 13, fontWeight: '600', color: theme.colors.text.primary },
-    cellDescription: { fontSize: 12.5, lineHeight: 17, color: theme.colors.text.secondary, marginBottom: 6 },
+    cell: { marginTop: 28, gap: theme.space.s4, maxWidth: 900 },
+    cellTitle: { ...Typography.variant('body', 'semiBold'),  color: theme.colors.text.primary },
+    cellDescription: { fontSize: 12.5, lineHeight: 17, color: theme.colors.text.secondary, marginBottom: theme.space.s6 },
     panel: {
         height: 520,
         overflow: 'hidden',

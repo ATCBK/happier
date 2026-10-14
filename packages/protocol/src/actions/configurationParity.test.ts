@@ -6,18 +6,21 @@ import { listActionSpecsForCatalogSurface, serializeActionSpec } from './actionC
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 
 describe('client Action placement and CLI availability', () => {
-  it('excludes client-owned Actions from CLI discovery without hiding their Agent declarations', () => {
+  it('projects declared client CLI support without hiding Agent declarations', () => {
     const cliIds = new Set(listActionSpecsForCatalogSurface({ surface: 'cli' }).map((spec) => spec.id));
     const agentIds = new Set(listActionSpecsForCatalogSurface({ surface: 'agent' }).map((spec) => spec.id));
     const clientSpecs = listActionSpecs().filter((spec) => spec.executionPlacement === 'client');
     const commandIds = new Set(listActionCliCommandDeclarations().map(({ spec }) => spec.id));
     expect(clientSpecs.length).toBeGreaterThan(0);
+    expect(clientSpecs.some(spec => spec.surfaces.cli && spec.cli !== undefined)).toBe(true);
+    expect(clientSpecs.some(spec => !spec.surfaces.cli && spec.cli === undefined)).toBe(true);
     for (const spec of clientSpecs) {
-      expect(serializeActionSpec(spec).surfaces.cli, spec.id).toBe(false);
-      expect(cliIds.has(spec.id), spec.id).toBe(false);
-      expect(commandIds.has(spec.id), spec.id).toBe(false);
+      const cliAvailable = spec.surfaces.cli && spec.cli !== undefined;
+      expect(serializeActionSpec(spec).surfaces.cli, spec.id).toBe(cliAvailable);
+      expect(cliIds.has(spec.id), spec.id).toBe(cliAvailable);
+      expect(commandIds.has(spec.id), spec.id).toBe(Boolean(spec.cli?.commands.length));
       expect(resolveActionSurfaceAvailability({ actionId: spec.id, surface: 'cli' }), spec.id).toMatchObject({
-        available: false, reason: 'unsupported_surface',
+        available: cliAvailable, reason: cliAvailable ? 'available' : 'unsupported_surface',
       });
       if (spec.surfaces.agent) expect(agentIds.has(spec.id), spec.id).toBe(true);
     }

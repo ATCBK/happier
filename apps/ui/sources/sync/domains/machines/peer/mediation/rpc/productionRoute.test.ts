@@ -93,7 +93,7 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
 }));
 
 vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit');
+    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     const store = createStorageStoreMock({});
     return createStorageModuleStub({
         storage: Object.assign(store, {

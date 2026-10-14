@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { LocalServiceActionKindV1Schema } from '../../../local/services/actions/v1.js';
 import { LocalServiceLaunchTargetSourceV1Schema } from '../../../local/services/launcher/v1.js';
@@ -25,16 +25,14 @@ export const DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES = 20;
 export const DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS = 5_000;
 export const DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS = 10_000;
 
-export const LocalServicePreviewDiagnosticsCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    supportedReasonCodes: z.array(LocalServicePreviewDiagnosticReasonCodeV1Schema).optional().default([]),
-    pmsProjection: z.boolean().optional().default(false),
-    publicPreviewProjection: z.boolean().optional().default(false),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default(['observability_unavailable']),
-  })
-  .strict());
+export const LocalServicePreviewDiagnosticsCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    supportedReasonCodes: z._default(z.optional(z.array(LocalServicePreviewDiagnosticReasonCodeV1Schema)), []),
+    pmsProjection: z._default(z.optional(z.boolean()), false),
+    publicPreviewProjection: z._default(z.optional(z.boolean()), false),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), ['observability_unavailable']),
+  }));
 export type LocalServicePreviewDiagnosticsCapabilities = z.infer<
   typeof LocalServicePreviewDiagnosticsCapabilitiesSchema
 >;
@@ -60,41 +58,22 @@ function normalizePositiveInt(raw: unknown, fallback: number): number {
   return normalized > 0 ? normalized : fallback;
 }
 
-export const LocalServicePreviewCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    hostOriginAvailable: z.boolean().optional().default(false),
-    pathModeAvailable: z.boolean().optional().default(false),
-    pmsRelayReady: z.boolean().optional().default(false),
-    pmsStreamingReady: z.boolean().optional().default(false),
-    webSocketSupport: z.boolean().optional().default(false),
-    streamingSseSupport: z.boolean().optional().default(false),
-    compressionPolicy: z.enum(['identity', 'decode_reencode']).optional().default('identity'),
-    cookiePolicy: z.enum(['drop', 'isolate', 'rewrite']).optional().default('drop'),
-    maxRequestBodyBytes: z
-      .preprocess(
-        (raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES),
-        z.number().int().positive(),
-      )
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES),
-    maxResponseBodyBytes: z
-      .preprocess(
-        (raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES),
-        z.number().int().positive(),
-      )
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES),
-    tokenTtlMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS),
-    diagnostics: LocalServicePreviewDiagnosticsCapabilitiesSchema.optional().default(
-      DEFAULT_LOCAL_SERVICE_PREVIEW_DIAGNOSTICS_CAPABILITIES,
-    ),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const LocalServicePreviewCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    hostOriginAvailable: z._default(z.optional(z.boolean()), false),
+    pathModeAvailable: z._default(z.optional(z.boolean()), false),
+    pmsRelayReady: z._default(z.optional(z.boolean()), false),
+    pmsStreamingReady: z._default(z.optional(z.boolean()), false),
+    webSocketSupport: z._default(z.optional(z.boolean()), false),
+    streamingSseSupport: z._default(z.optional(z.boolean()), false),
+    compressionPolicy: z._default(z.optional(z.enum(['identity', 'decode_reencode'])), 'identity'),
+    cookiePolicy: z._default(z.optional(z.enum(['drop', 'isolate', 'rewrite'])), 'drop'),
+    maxRequestBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES),
+    maxResponseBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES),
+    tokenTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS),
+    diagnostics: z._default(z.optional(LocalServicePreviewDiagnosticsCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_PREVIEW_DIAGNOSTICS_CAPABILITIES),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type LocalServicePreviewCapabilities = z.infer<typeof LocalServicePreviewCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_PREVIEW_CAPABILITIES: LocalServicePreviewCapabilities = {
@@ -114,20 +93,18 @@ export const DEFAULT_LOCAL_SERVICE_PREVIEW_CAPABILITIES: LocalServicePreviewCapa
   disabledReasons: [],
 };
 
-export const LocalServicePublicCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    allowedModes: z.array(LocalServicePublicExposureModeV1Schema).optional().default([]),
-    maxTtlMs: z.number().int().positive().optional(),
-    maxConcurrentExposures: z.number().int().positive().optional(),
-    dnsTlsHostModeAvailable: z.boolean().optional().default(false),
-    webSocketSupport: z.boolean().optional().default(false),
-    auditEnabled: z.boolean().optional().default(false),
-    abuseControlsEnabled: z.boolean().optional().default(false),
-    rateLimitProfileIds: z.array(z.string().trim().min(1).max(128)).optional().default([]),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default(['disabled_by_server_policy']),
-  })
-  .strict());
+export const LocalServicePublicCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    allowedModes: z._default(z.optional(z.array(LocalServicePublicExposureModeV1Schema)), []),
+    maxTtlMs: z.optional(z.number().check(z.int(), z.positive())),
+    maxConcurrentExposures: z.optional(z.number().check(z.int(), z.positive())),
+    dnsTlsHostModeAvailable: z._default(z.optional(z.boolean()), false),
+    webSocketSupport: z._default(z.optional(z.boolean()), false),
+    auditEnabled: z._default(z.optional(z.boolean()), false),
+    abuseControlsEnabled: z._default(z.optional(z.boolean()), false),
+    rateLimitProfileIds: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)))), []),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), ['disabled_by_server_policy']),
+  }));
 export type LocalServicePublicCapabilities = z.infer<typeof LocalServicePublicCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_PUBLIC_CAPABILITIES: LocalServicePublicCapabilities = {
@@ -141,31 +118,14 @@ export const DEFAULT_LOCAL_SERVICE_PUBLIC_CAPABILITIES: LocalServicePublicCapabi
   disabledReasons: ['disabled_by_server_policy'],
 };
 
-export const LocalServicePageTitleCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    timeoutMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS),
-    maxBodyBytes: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES),
-    concurrency: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY),
-    successTtlMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS),
-    failureTtlMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS),
-  })
-  .strict());
+export const LocalServicePageTitleCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    timeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS),
+    maxBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES),
+    concurrency: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY),
+    successTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS),
+    failureTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS),
+  }));
 export type LocalServicePageTitleCapabilities = z.infer<typeof LocalServicePageTitleCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CAPABILITIES: LocalServicePageTitleCapabilities = {
@@ -177,25 +137,17 @@ export const DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CAPABILITIES: LocalServicePageTitl
   failureTtlMs: DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS,
 };
 
-export const LocalServiceInventoryCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    supportedPlatforms: z.array(z.enum(['darwin', 'linux', 'windows'])).optional().default([]),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-    refreshIntervalMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS),
-    staleAfterMs: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS),
-    processProvenance: z.boolean().optional().default(false),
-    workspaceProvenance: z.boolean().optional().default(false),
-    classifier: z.boolean().optional().default(false),
-    pageTitleEnrichment: LocalServicePageTitleCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CAPABILITIES),
-    redactsProcessArgs: z.boolean().optional().default(true),
-  })
-  .strict());
+export const LocalServiceInventoryCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    supportedPlatforms: z._default(z.optional(z.array(z.enum(['darwin', 'linux', 'windows']))), []),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+    refreshIntervalMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS),
+    staleAfterMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS),
+    processProvenance: z._default(z.optional(z.boolean()), false),
+    workspaceProvenance: z._default(z.optional(z.boolean()), false),
+    classifier: z._default(z.optional(z.boolean()), false),
+    pageTitleEnrichment: z._default(z.optional(LocalServicePageTitleCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CAPABILITIES),
+    redactsProcessArgs: z._default(z.optional(z.boolean()), true),
+  }));
 export type LocalServiceInventoryCapabilities = z.infer<typeof LocalServiceInventoryCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_INVENTORY_CAPABILITIES: LocalServiceInventoryCapabilities = {
@@ -210,34 +162,21 @@ export const DEFAULT_LOCAL_SERVICE_INVENTORY_CAPABILITIES: LocalServiceInventory
   redactsProcessArgs: true,
 };
 
-export const LocalServiceManagedCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    supportedRestartPolicies: z.array(z.enum(['never'])).optional().default(['never']),
-    portRange: z
+export const LocalServiceManagedCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    supportedRestartPolicies: z._default(z.optional(z.array(z.enum(['never']))), ['never']),
+    portRange: z._default(z.optional(z
       .object({
-        start: z
-          .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START), z.number().int().min(1).max(65_535))
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START),
-        end: z
-          .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END), z.number().int().min(1).max(65_535))
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END),
-      })
-      .optional()
-      .default({
+        start: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START),
+        end: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END),
+      })), {
         start: DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START,
         end: DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END,
       }),
-    maxServicesPerOwner: z
-      .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER), z.number().int().positive())
-      .optional()
-      .default(DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER),
-    localNameDomain: z.string().trim().min(1).optional().default('localhost'),
-    previewRegistrationAvailable: z.boolean().optional().default(false),
-  })
-  .strict());
+    maxServicesPerOwner: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER),
+    localNameDomain: z._default(z.optional(z.string().check(z.trim(), z.minLength(1))), 'localhost'),
+    previewRegistrationAvailable: z._default(z.optional(z.boolean()), false),
+  }));
 export type LocalServiceManagedCapabilities = z.infer<typeof LocalServiceManagedCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_MANAGED_CAPABILITIES: LocalServiceManagedCapabilities = {
@@ -252,54 +191,26 @@ export const DEFAULT_LOCAL_SERVICE_MANAGED_CAPABILITIES: LocalServiceManagedCapa
   previewRegistrationAvailable: false,
 };
 
-export const LocalServiceLauncherCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    supportedSources: z.array(LocalServiceLaunchTargetSourceV1Schema).optional().default([]),
-    scriptDiscovery: z
-      .object({
-        enabled: z.boolean().optional().default(false),
-        maxDepth: z
-          .preprocess(
-            (raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH),
-            z.number().int().positive(),
-          )
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH),
-        maxScripts: z
-          .preprocess(
-            (raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS),
-            z.number().int().positive(),
-          )
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS),
-      })
-      .strict()
-      .optional()
-      .default({
+export const LocalServiceLauncherCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    supportedSources: z._default(z.optional(z.array(LocalServiceLaunchTargetSourceV1Schema)), []),
+    scriptDiscovery: z._default(z.optional(z.strictObject({
+        enabled: z._default(z.optional(z.boolean()), false),
+        maxDepth: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH),
+        maxScripts: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS),
+      })), {
         enabled: false,
         maxDepth: DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH,
         maxScripts: DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS,
       }),
-    recentHistory: z
-      .object({
-        enabled: z.boolean().optional().default(false),
-        maxEntries: z
-          .preprocess(
-            (raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES),
-            z.number().int().positive(),
-          )
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES),
-      })
-      .strict()
-      .optional()
-      .default({
+    recentHistory: z._default(z.optional(z.strictObject({
+        enabled: z._default(z.optional(z.boolean()), false),
+        maxEntries: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES),
+      })), {
         enabled: false,
         maxEntries: DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES,
       }),
-    launchActionsEnabled: z.boolean().optional().default(false),
-  })
-  .strict());
+    launchActionsEnabled: z._default(z.optional(z.boolean()), false),
+  }));
 export type LocalServiceLauncherCapabilities = z.infer<typeof LocalServiceLauncherCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_LAUNCHER_CAPABILITIES: LocalServiceLauncherCapabilities = {
@@ -316,35 +227,21 @@ export const DEFAULT_LOCAL_SERVICE_LAUNCHER_CAPABILITIES: LocalServiceLauncherCa
   launchActionsEnabled: false,
 };
 
-export const LocalServiceActionCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    supportedKinds: z
-      .array(LocalServiceActionKindV1Schema)
-      .optional()
-      .default(['copy_url', 'open_preview', 'forget']),
-    terminate: z
-      .object({
-        enabled: z.boolean().optional().default(false),
-        gracefulTimeoutMs: z
-          .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS), z.number().int().positive())
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS),
-        verificationTimeoutMs: z
-          .preprocess((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS), z.number().int().positive())
-          .optional()
-          .default(DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS),
-        forceAllowed: z.boolean().optional().default(false),
-      })
-      .strict()
-      .optional()
-      .default({
+export const LocalServiceActionCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    supportedKinds: z._default(z.optional(z
+      .array(LocalServiceActionKindV1Schema)), ['copy_url', 'open_preview', 'forget']),
+    terminate: z._default(z.optional(z.strictObject({
+        enabled: z._default(z.optional(z.boolean()), false),
+        gracefulTimeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS),
+        verificationTimeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS),
+        forceAllowed: z._default(z.optional(z.boolean()), false),
+      })), {
         enabled: false,
         gracefulTimeoutMs: DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS,
         verificationTimeoutMs: DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS,
         forceAllowed: false,
       }),
-  })
-  .strict());
+  }));
 export type LocalServiceActionCapabilities = z.infer<typeof LocalServiceActionCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_ACTION_CAPABILITIES: LocalServiceActionCapabilities = {
@@ -357,16 +254,14 @@ export const DEFAULT_LOCAL_SERVICE_ACTION_CAPABILITIES: LocalServiceActionCapabi
   },
 };
 
-export const LocalServiceCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    inventory: LocalServiceInventoryCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_INVENTORY_CAPABILITIES),
-    managed: LocalServiceManagedCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_MANAGED_CAPABILITIES),
-    launcher: LocalServiceLauncherCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_LAUNCHER_CAPABILITIES),
-    actions: LocalServiceActionCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_ACTION_CAPABILITIES),
-    preview: LocalServicePreviewCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_PREVIEW_CAPABILITIES),
-    publicPreview: LocalServicePublicCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_PUBLIC_CAPABILITIES),
-  })
-  .strict());
+export const LocalServiceCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    inventory: z._default(z.optional(LocalServiceInventoryCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_INVENTORY_CAPABILITIES),
+    managed: z._default(z.optional(LocalServiceManagedCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_MANAGED_CAPABILITIES),
+    launcher: z._default(z.optional(LocalServiceLauncherCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_LAUNCHER_CAPABILITIES),
+    actions: z._default(z.optional(LocalServiceActionCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_ACTION_CAPABILITIES),
+    preview: z._default(z.optional(LocalServicePreviewCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_PREVIEW_CAPABILITIES),
+    publicPreview: z._default(z.optional(LocalServicePublicCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_PUBLIC_CAPABILITIES),
+  }));
 export type LocalServiceCapabilities = z.infer<typeof LocalServiceCapabilitiesSchema>;
 
 export const DEFAULT_LOCAL_SERVICE_CAPABILITIES: LocalServiceCapabilities = {

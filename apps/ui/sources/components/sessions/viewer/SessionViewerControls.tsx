@@ -26,6 +26,7 @@ import { Popover } from '@/components/ui/popover';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { CORE_CAPSULE_HOST, useCoreCapsuleColors } from '@/components/ui/status/capsuleHost';
 import { StatusDot } from '@/components/ui/status/StatusDot';
+import { CompanionNoDragRegion } from '@/components/companion/interaction/CompanionNoDragRegion';
 import { t } from '@/text';
 
 import { useOptionalSessionViewerController } from './SessionViewerController';
@@ -122,8 +123,8 @@ export function SessionViewerControls(
   const sourceLabel = (source: SessionViewerSource) =>
     t(
       source === 'computer'
-        ? 'computerUse.viewer.sourceComputer'
-        : 'computerUse.viewer.sourceBrowser',
+        ? 'computerUse.presentation.sourceComputer'
+        : 'computerUse.presentation.sourceBrowser',
     );
   const choosePickerTarget = () => {
     // Desktop anchors the picker to the switch; a phone keeps the picker's own bottom sheet.
@@ -151,18 +152,18 @@ export function SessionViewerControls(
   }
   if (!controller.phone && !expanded && props.frame) {
     menuItems.push(
-      { id: 'tl', title: t('computerUse.viewer.moveTopLeft') },
-      { id: 'tr', title: t('computerUse.viewer.moveTopRight') },
-      { id: 'bl', title: t('computerUse.viewer.moveBottomLeft') },
-      { id: 'br', title: t('computerUse.viewer.moveBottomRight') },
-      { id: 'larger', title: t('computerUse.viewer.larger') },
-      { id: 'smaller', title: t('computerUse.viewer.smaller') },
+      { id: 'tl', title: t('computerUse.presentation.moveTopLeft') },
+      { id: 'tr', title: t('computerUse.presentation.moveTopRight') },
+      { id: 'bl', title: t('computerUse.presentation.moveBottomLeft') },
+      { id: 'br', title: t('computerUse.presentation.moveBottomRight') },
+      { id: 'larger', title: t('computerUse.presentation.larger') },
+      { id: 'smaller', title: t('computerUse.presentation.smaller') },
     );
   }
   if (!controller.phone) {
     menuItems.push({
       id: 'dock',
-      title: t('computerUse.viewer.dockView'),
+      title: t('computerUse.presentation.dockView'),
       testID: 'session-viewer-menu-dock',
     });
   }
@@ -189,6 +190,7 @@ export function SessionViewerControls(
 
   return (
     <View style={stylesheet.row}>
+      <CompanionNoDragRegion>
       <View ref={sourceAnchorRef}>
         <HappierControlCapsule
           host={CORE_CAPSULE_HOST}
@@ -199,7 +201,7 @@ export function SessionViewerControls(
             presentation="plain"
             compact
             segmentSizing="content"
-            accessibilityLabel={t('computerUse.viewer.sourceA11y')}
+            accessibilityLabel={t('computerUse.presentation.sourceA11y')}
             testIDPrefix="session-viewer-source"
             activeTabId={props.source}
             onSelectTab={(source) => {
@@ -224,6 +226,7 @@ export function SessionViewerControls(
           />
         </HappierControlCapsule>
       </View>
+      </CompanionNoDragRegion>
       {machineName ? (
         <View style={stylesheet.identity} testID="session-viewer-machine">
           <HappierIdentityCapsule
@@ -244,6 +247,7 @@ export function SessionViewerControls(
         </View>
       ) : null}
       <View style={stylesheet.grow} />
+      <CompanionNoDragRegion>
       <HappierControlCapsule
         host={CORE_CAPSULE_HOST}
         onLayout={measure('buttons')}
@@ -256,13 +260,13 @@ export function SessionViewerControls(
             iconName={expanded ? 'arrows-in' : 'arrows-out'}
             accessibilityLabel={t(
               expanded
-                ? 'computerUse.viewer.restoreView'
-                : 'computerUse.viewer.expandView',
+                ? 'computerUse.presentation.restoreView'
+                : 'computerUse.presentation.expandView',
             )}
             tooltip={t(
               expanded
-                ? 'computerUse.viewer.restoreView'
-                : 'computerUse.viewer.expandView',
+                ? 'computerUse.presentation.restoreView'
+                : 'computerUse.presentation.expandView',
             )}
             onPress={() => {
               void requestSemantic({
@@ -284,8 +288,8 @@ export function SessionViewerControls(
                   variant="plain"
                   {...buttonTarget('middle')}
                   iconName="dots-three"
-                  accessibilityLabel={t('computerUse.viewer.viewOptions')}
-                  tooltip={t('computerUse.viewer.viewOptions')}
+                  accessibilityLabel={t('computerUse.presentation.viewOptions')}
+                  tooltip={t('computerUse.presentation.viewOptions')}
                   onPress={toggle}
                 />
               )}
@@ -296,14 +300,15 @@ export function SessionViewerControls(
             variant="plain"
             {...buttonTarget('last')}
             iconName="x"
-            accessibilityLabel={t('computerUse.viewer.closeView')}
-            accessibilityHint={t('computerUse.viewer.closeHint')}
-            tooltip={t('computerUse.viewer.closeView')}
+            accessibilityLabel={t('computerUse.presentation.closeView')}
+            accessibilityHint={t('computerUse.presentation.closeHint')}
+            tooltip={t('computerUse.presentation.closeView')}
             onPress={() => {
               void requestSemantic({ kind: 'viewer.close' });
             }}
           />
       </HappierControlCapsule>
+      </CompanionNoDragRegion>
       {picker ? (
         <Popover
           open

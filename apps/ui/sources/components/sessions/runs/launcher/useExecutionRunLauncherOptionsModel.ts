@@ -1,5 +1,5 @@
 import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
-import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
@@ -22,7 +22,7 @@ import { resolveExecutionRunActionAllowedPermissionModes } from '@/sync/domains/
 import { resolveExecutionRunActionDefaultPermissionMode } from '@/sync/domains/actions/resolveExecutionRunActionDefaultPermissionMode';
 import { toExecutionRunActionPermissionMode } from '@/sync/domains/actions/executionRunActionPermissionMode';
 
-import { resolveExecutionRunLauncherActionId, type ExecutionRunIntent } from './executionRunLauncherModel';
+import { resolveExecutionRunLauncherActionId, resolveExecutionRunTargetFieldPath, type ExecutionRunIntent } from './executionRunLauncherModel';
 import { resolveExecutionRunLauncherBackendChoices, resolveInitialExecutionRunBackendTargetKey } from './resolveExecutionRunLauncherBackendChoices';
 import { doesExecutionRunProfileMatchSelectedBackends, resolveExecutionRunLauncherProfileChoices } from './resolveExecutionRunLauncherProfileChoices';
 import { resolveExecutionRunPermissionAgentId } from './resolveExecutionRunPermissionAgentId';
@@ -88,7 +88,7 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
         if (sourceId === 'review.engines.available' || sourceId === 'execution.backends.enabled') return backendOptions;
         return field.options ?? [];
     }, [backendOptions]);
-    const targetFieldPath = params.intent === 'review' ? 'engineIds' : 'backendTargetKeys';
+    const targetFieldPath = resolveExecutionRunTargetFieldPath(params.intent);
     const targetField = fields.find((field) => field.path === targetFieldPath) ?? null;
     const selectedValues = React.useMemo(() => {
         const raw = getValueAtPath(params.actionInput, targetFieldPath);
@@ -150,6 +150,15 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
             return next;
         });
     }, [catalogReady, params.setActionInput, requestedProfileId, selectedProfileChoice, selectedProfileMatchesSelectedBackend]);
+
+    // A model belongs to the Agent it was chosen for; choosing another Agent drops it.
+    const draftModelSelection = ProviderBoundModelRefSchema.safeParse(params.actionInput.modelSelection);
+    const draftModelAgentTargetKey = draftModelSelection.success && draftModelSelection.data ? draftModelSelection.data.agentTargetKey : null;
+    React.useEffect(() => {
+        if (!draftModelAgentTargetKey || !selectedBackendChoice) return;
+        if (backendTargetKeysMatch(draftModelAgentTargetKey, selectedBackendChoice.backendTarget)) return;
+        params.setActionInput(({ modelSelection: _modelSelection, ...rest }) => rest);
+    }, [draftModelAgentTargetKey, params.setActionInput, selectedBackendChoice]);
 
     const permissionModeOptions = React.useMemo(() => {
         const agentId = resolveExecutionRunPermissionAgentId({ selectedBackendChoices, fallbackAgentId: params.fallbackAgentId });

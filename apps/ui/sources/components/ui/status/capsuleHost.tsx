@@ -86,7 +86,7 @@ function CapsuleDock(props: React.ComponentProps<NonNullable<HappierCapsuleHost[
 }
 
 function CapsuleText(props: React.ComponentProps<HappierCapsuleHost['Text']>): React.ReactElement {
-    const role = props.role === 'title' ? Typography.rowTitle() : props.role === 'meta' ? Typography.rowMeta() : null;
+    const role = props.role === 'title' ? Typography.variant('label', 'semiBold') : props.role === 'meta' ? Typography.variant('meta') : null;
     return (
         <Text
             numberOfLines={props.numberOfLines}

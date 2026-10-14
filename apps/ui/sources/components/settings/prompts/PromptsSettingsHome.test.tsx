@@ -31,7 +31,7 @@ afterEach(async () => {
 });
 
 describe('PromptsSettingsHome', () => {
-    it('includes library entries for prompts and skills plus the remaining settings sections when enabled', async () => {
+    it('keeps prompt destinations and removes the retired skills, assets and registry entries', async () => {
         const { PromptsSettingsHome } = await import('./PromptsSettingsHome');
 
         const screen = await renderScreen(<PromptsSettingsHome />);
@@ -45,18 +45,15 @@ describe('PromptsSettingsHome', () => {
         const registriesItem = screen.findByTestId('settings-prompts-registries');
 
         expect(promptsItem).toBeTruthy();
-        expect(skillsItem).toBeTruthy();
+        expect(skillsItem).toBeFalsy();
         expect(foldersItem).toBeTruthy();
         expect(templatesItem).toBeTruthy();
         expect(stacksItem).toBeTruthy();
-        expect(assetsItem).toBeTruthy();
-        expect(registriesItem).toBeTruthy();
+        expect(assetsItem).toBeFalsy();
+        expect(registriesItem).toBeFalsy();
 
         await screen.pressByTestIdAsync('settings-prompts-library-prompts');
         expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/docs');
-
-        await screen.pressByTestIdAsync('settings-prompts-library-skills');
-        expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/skills');
 
         await screen.pressByTestIdAsync('settings-prompts-folders');
         expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/folders');
@@ -66,11 +63,5 @@ describe('PromptsSettingsHome', () => {
 
         await screen.pressByTestIdAsync('settings-prompts-stacks');
         expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/stacks/coding');
-
-        await screen.pressByTestIdAsync('settings-prompts-assets');
-        expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/assets');
-
-        await screen.pressByTestIdAsync('settings-prompts-registries');
-        expect(promptLibrarySettingsRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/registries');
     });
 });

@@ -104,7 +104,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   label: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     flexShrink: 1,
   },
@@ -113,7 +113,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   value: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     marginLeft: 'auto',
     flexShrink: 0,
@@ -125,7 +125,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

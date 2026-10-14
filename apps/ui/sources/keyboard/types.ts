@@ -133,6 +133,7 @@ export type KeyboardCommandSettingsTitleKey = Extract<
     | 'settingsKeyboard.commands.workflowSave'
     | 'settingsKeyboard.commands.workspaceTabNew'
     | 'settingsKeyboard.commands.workspaceTabClose'
+    | 'settingsKeyboard.commands.workspaceTabCloseAll'
     | 'settingsKeyboard.commands.workspaceTabReopen'
     | `settingsKeyboard.commands.workspaceTabSelect${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`
     | 'settingsKeyboard.commands.terminalJump'

@@ -1,14 +1,19 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { SelectionList } from '@/components/ui/selectionList';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
-import { MachineSelector } from './MachineSelector';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 installNewSessionComponentsCommonModuleMocks();
+
+let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
+beforeEach(async () => { home = await createPlainArtifactHomeFixture('https://machine-selector.test'); });
+afterEach(async () => { await home?.dispose(); home = undefined; });
+const { MachineSelector } = await import('./MachineSelector');
 
 function machine(id: string, active: boolean): Machine {
     return { id, seq: 1, createdAt: 1, updatedAt: 1, active, activeAt: active ? Date.now() : 0,
@@ -17,6 +22,22 @@ function machine(id: string, active: boolean): Machine {
 }
 
 describe('MachineSelector', () => {
+    it('folds offline-only workflow destinations through the real list model, while keeping locked rows named', async () => {
+        const online = machine('online', true);
+        const offline = [machine('studio', false), machine('server', false)];
+        const locked: Machine = { ...machine('locked', false), availability: { kind: 'locked', reason: 'recipient_key_pending' } };
+        const screen = await renderScreen(<MachineSelector purpose="workflow" machines={[online, ...offline, locked]}
+            selectedMachine={null} onSelect={() => {}} showFavorites={false} showRecent={false} showSearch={false}
+            showCliGlyphs={false} testIdPrefix="targets" />);
+        const options = () => (screen.tree.findByType(SelectionList).props as React.ComponentProps<typeof SelectionList>)
+            .rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+        expect(options().map(option => option.id)).toEqual(['online', 'locked', 'offline:all']);
+        const fold = options().find(option => option.id === 'offline:all')!;
+        expect(fold.label).toContain('offlineMachines');
+        await act(async () => { fold.onSelect?.(); });
+        expect(options().map(option => option.id)).toEqual(['online', 'locked', 'offline:all', 'studio', 'server']);
+        expect(options().filter(option => offline.some(machine => machine.id === option.id)).every(option => option.disabled)).toBe(true);
+    });
     it.each(['list', 'dropdown'] as const)('refuses shared workflow destinations in the %s activation path', async (presentation) => {
         const shared: Machine = { ...machine('shared', true), isShared: true, access: {
             custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use',

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runNodeCaptureSync } from './testkit/core/run_node_capture.mjs';
+import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
 
 async function ensureMinimalMonorepo({ monoRoot }) {
   await mkdir(join(monoRoot, 'apps', 'ui'), { recursive: true });
@@ -52,12 +52,12 @@ test('hstack stack start <ephemeral> --background --json stays a dry-run and doe
       HAPPIER_STACK_ENV_FILE: envPath,
     };
 
-    const res = runNodeCaptureSync(
+    const res = await runNodeCapture(
       [join(rootDir, 'scripts', 'stack.mjs'), 'start', stackName, '--background', '--json'],
-      { cwd: rootDir, env, timeout: 5_000 },
+      { cwd: rootDir, env },
     );
 
-    assert.equal(res.status, 0, `expected exit 0, got ${res.status}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
     const parsed = JSON.parse(String(res.stdout).trim());
     assert.equal(parsed?.mode, 'start');
     assert.equal(parsed?.launchMode, 'source');

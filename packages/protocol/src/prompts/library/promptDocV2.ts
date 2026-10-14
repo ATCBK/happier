@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { HAPPIER_GUIDE_MARKDOWN, HAPPIER_GUIDE_TITLE } from './happierGuideInstructionsV1.js';
 import { ArtifactOrganizationHeaderV1Schema } from '../../artifacts/artifactOrganizationV1.js';
 import { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from '../../artifacts/artifactRevisionV1.js';
@@ -7,9 +7,9 @@ import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignm
 
 /** Public operands cannot assert provenance; only this known static starter derives built_in. */
 export const PromptDocCreateActionInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ title: z.string().min(1), markdown: z.string(), ...PromptLibrarySaveOrganizationFieldsV1,
-    favorite: z.boolean().optional() }).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }),
-  z.object({ starter: z.literal('happier_guide') }).strict(),
+  z.strictObject({ title: z.string().check(z.minLength(1)), markdown: z.string(), ...PromptLibrarySaveOrganizationFieldsV1,
+    favorite: z.optional(z.boolean()) }).check(z.refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' })),
+  z.strictObject({ starter: z.literal('happier_guide') }),
 ]));
 export type PromptDocCreateActionInputV1 = z.infer<typeof PromptDocCreateActionInputV1Schema>;
 
@@ -26,10 +26,9 @@ export const PromptDocBodyV1Schema = lazyZodSchema(() => z
   .object({
     v: z.literal(1),
     markdown: z.string(),
-    createdAtMs: z.number().int().min(0),
-    updatedAtMs: z.number().int().min(0),
-  })
-  .strip());
+    createdAtMs: z.number().check(z.int(), z.minimum(0)),
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }));
 
 export type PromptDocBodyV1 = z.infer<typeof PromptDocBodyV1Schema>;
 
@@ -37,12 +36,11 @@ export const PromptDocArtifactHeaderV1Schema = lazyZodSchema(() => z
   .object({
     v: z.literal(1),
     kind: z.literal('prompt_doc.v2'),
-    title: z.string().min(1),
+    title: z.string().check(z.minLength(1)),
     ...ArtifactOrganizationHeaderV1Schema.shape,
-    origin: z.enum(['built_in', 'user', 'imported']).optional(),
-    locked: z.boolean().optional(),
-    favorite: z.boolean().optional(),
-  })
-  .strip());
+    origin: z.optional(z.enum(['built_in', 'user', 'imported'])),
+    locked: z.optional(z.boolean()),
+    favorite: z.optional(z.boolean()),
+  }));
 
 export type PromptDocArtifactHeaderV1 = z.infer<typeof PromptDocArtifactHeaderV1Schema>;

@@ -160,7 +160,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     description: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

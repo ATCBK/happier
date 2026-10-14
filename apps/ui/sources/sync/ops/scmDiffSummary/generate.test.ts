@@ -1,13 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ExecutionRunPublicState, ScmComparison, ScmDiffSummaryGenerateInput, ScmDiffSummaryGenerateOutput, ScmDiffSummaryGenerateSuccess, TurnChangeSet } from '@happier-dev/protocol';
+import { createActionExecutor, ExecutionRunGetResponseSchema, type ActionExecutorDeps, type ExecutionRunPublicState, type ScmComparison, type ScmDiffSummaryGenerateInput, type ScmDiffSummaryGenerateOutput, type ScmDiffSummaryGenerateSuccess, type TurnChangeSet } from '@happier-dev/protocol';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getScmDiffSummaryOperationState, type ScmDiffSummaryGenerateRpc } from './generate';
 import { createScmDiffSummaryOperationsWithTransport as createScmDiffSummaryOperations } from '@/dev/testkit/harness/scmActionTransport';
+import { getPreferredLanguage } from '@/text';
+import { createUiScmAction } from '@/sync/ops/actions/scmActionDeps';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 
 // Execution-run RPCs are network boundaries; keep all domain and envelope logic real.
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
     sessionExecutionRunGet: vi.fn(),
 }));
+
+const machineRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(machineRpc);
+});
+const { createUiExecutionRunActionDeps } = await import('@/sync/ops/actions/executionRunActionDeps');
 
 const input = { cwd: '/repo', source: { kind: 'turnCheckpoint' }, turnId: 'turn_1', checkpointReceiptId: 'receipt_1' } satisfies ScmDiffSummaryGenerateInput;
 const backendTarget = { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } as const;
@@ -43,6 +55,79 @@ const finalCheckpointParams = { ...params,
 } satisfies Parameters<ReturnType<typeof createScmDiffSummaryOperations>['prefetch']>[0];
 
 describe('SCM diff summary operations', () => {
+    it.each([
+        ['invalid_parameters', 'invalidRequest', 'walkthrough.generationFailure.invalidRequest', 'reviewRequest'],
+        ['MODEL_UNAVAILABLE', 'modelUnavailable', 'walkthrough.generationFailure.modelUnavailable', 'chooseModel'],
+        ['target_unavailable', 'machineUnavailable', 'walkthrough.generationFailure.machineUnavailable', 'reconnectMachine'],
+    ] as const)('retains the Machine refusal %s through Action admission and the generation view model', async (errorCode, reason, messageKey, nextAction) => {
+        // Only Machine RPC is substituted; the producer, SCM transport, Action output owner and state stay real.
+        machineRpc.mockResolvedValue({ ok: false, errorCode, error: errorCode });
+        const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'scm.diffSummary.generate': ['ui'] } });
+        const actionExecutor = createActionExecutor({ isActionApprovalRequired: (actionId, context, input) =>
+            isApprovalRequiredByActionsSettings(actionId, actionsSettings, context, undefined, undefined, input),
+            scmActionExecute: createUiScmAction(),
+        } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+        const ops = createScmDiffSummaryOperations({ actionExecutor });
+        const result = await ops.generateFromUserAction({ ...params, sessionId: undefined, machineId: 'machine' });
+        expect(result).toMatchObject({ ok: false, errorCode, viewModel: { status: 'failed',
+            error: { code: errorCode, reason, messageKey, nextAction, nextActionKey: expect.any(String) } } });
+    });
+    it('publishes canonical starting state before the generation Action settles', async () => {
+        let resolve!: (output: ScmDiffSummaryGenerateOutput) => void;
+        const ops = createScmDiffSummaryOperations({ generateSummary: () => new Promise(done => { resolve = done; }), nowMs: () => 123 });
+        const admission = ops.generateFromUserAction({ ...params, key: 'admitting' });
+        await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
+        expect(getScmDiffSummaryOperationState(ops.getState(), 'admitting')).toMatchObject({ status: 'starting', executionRunId: null });
+        resolve(pending);
+        expect(await admission).toMatchObject({ ok: true, runId: 'run_1', viewModel: { status: 'running' } });
+    });
+
+    it('observes Machine output through the shared Run Action and caller-owned wait lifecycle', async () => {
+        machineRpc.mockImplementation(async (request) => {
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+                'tool.executionRuns': { ok: true, checkedAt: 1, data: { protocolVersion: 2, features: { detachedScope: true } } },
+            } };
+            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return ExecutionRunGetResponseSchema.parse({ run,
+                structuredMeta: { kind: 'scm_diff_summary.v1', payload: complete } });
+            throw new Error(`Unregistered Run method: ${String(request.method)}`);
+        });
+        const scope = { serverId: 'native-home', accountId: 'native-account' };
+        // Only external Machine RPC is substituted; Action and transport selection stay real.
+        const actionExecutor = createActionExecutor({ isActionApprovalRequired: () => false,
+            ...createUiExecutionRunActionDeps(scope),
+        } satisfies Partial<ActionExecutorDeps> as unknown as ActionExecutorDeps);
+        const ops = createScmDiffSummaryOperations({ actionExecutor });
+        const key = ops.loadSavedResult({ machineId: 'native-machine', scope,
+            result: { resultId: 'result_1', revision: 0, canUndo: false, output: pending } })!;
+        const controller = new AbortController();
+        const waitForOutput = { kind: 'review_walkthrough' as const, comparisonId: comparison.id, resultId: 'result_1', afterRevision: 0 };
+        const refreshed = await ops.refreshRun({ machineId: 'native-machine', scope, key, runId: run.runId,
+            waitForOutput, waitForInputId: 'native-input', signal: controller.signal });
+        expect(refreshed.ok, refreshed.ok ? undefined : refreshed.error).toBe(true);
+        expect(refreshed.viewModel.summaryMarkdown).toBe('Host summary');
+        expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'native-machine', serverId: scope.serverId,
+            method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, operationTimeoutMs: null, signal: controller.signal,
+            payload: { runId: run.runId, includeStructured: true, waitForInputId: 'native-input', waitForOutput } }));
+    });
+    it('sends the opt-in investigation preference through real Action admission while retaining explicit caller intent', async () => {
+        const requests: ScmDiffSummaryGenerateInput[] = [];
+        const ops = createScmDiffSummaryOperations({ generateSummary: async (_sessionId, request) => { requests.push(request); return pending; } });
+        await ops.generateFromUserAction(params);
+        await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.investigateSurroundingFiles': true } });
+        await ops.generateFromUserAction({ ...params, input: { ...input, investigateSurroundingFiles: false },
+            settings: { 'scm.diffSummary.investigateSurroundingFiles': true } });
+        expect(requests.map(request => request.investigateSurroundingFiles)).toEqual([false, true, false]);
+    });
+    it('sends the resolved prose language through real Action admission and separates its request', async () => {
+        const requests: ScmDiffSummaryGenerateInput[] = [];
+        const ops = createScmDiffSummaryOperations({ generateSummary: async (_sessionId, request) => { requests.push(request); return pending; } });
+        const french = await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.outputLanguage': 'fr' } });
+        const german = await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.outputLanguage': 'de' } });
+        await ops.generateFromUserAction(params);
+        expect(requests.map(request => request.outputLanguage)).toEqual(['fr', 'de', getPreferredLanguage()]);
+        expect(french.key).not.toBe(german.key);
+    });
     it('rejects captured evidence from another checkout, source or pinned comparison', async () => {
         const requested = { cwd: '/repo', source: { kind: 'workingTree' as const }, comparisonId: 'a'.repeat(64) };
         const basis = { ...comparison, id: requested.comparisonId, source: requested.source };
@@ -133,10 +218,12 @@ describe('SCM diff summary operations', () => {
     it('keeps the actual late generation receipt without publishing into a retired Account', async () => {
         let current = true;
         let resolve!: (output: ScmDiffSummaryGenerateOutput) => void;
+        const scope = { serverId: 'retired-home', accountId: 'retired-account' };
         const ops = createScmDiffSummaryOperations({ generateSummary: () => new Promise((done) => { resolve = done; }) });
-        const admission = ops.generateFromUserAction({ ...params, shouldContinue: () => current });
+        const admission = ops.generateFromUserAction({ ...params, scope, shouldContinue: () => current });
         await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
         current = false;
+        ops.retireScope(scope);
         resolve(pending);
         expect(await admission).toMatchObject({ ok: true, runId: pending.runId });
         expect(ops.getState()).toEqual({ entriesByKey: {} });
@@ -177,9 +264,10 @@ describe('SCM diff summary operations', () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
         const ops = createScmDiffSummaryOperations({ generateSummary: generate, nowMs: () => 100 });
         const result = await ops.generateFromUserAction({ ...params, key: 'summary-key', serverId: ' server_1 ' });
-        expect(generate).toHaveBeenCalledWith('session_1', {
+        expect(generate).toHaveBeenCalledWith('session_1', expect.objectContaining({
             ...input, sessionId: 'session_1', modelSelector: { backendTargetKey: buildBackendTargetKeyV2(backendTarget) },
-        }, { serverId: 'server_1' });
+            outputLanguage: getPreferredLanguage(),
+        }), { serverId: 'server_1' });
         expect(result).toMatchObject({ ok: true, runId: 'run_1', viewModel: {
             status: 'running', executionRunId: 'run_1', comparison, outputs: pending.outputs, resultId: 'result_1', summaryMarkdown: null,
         } });
@@ -255,10 +343,20 @@ describe('SCM diff summary operations', () => {
         expect(generate).toHaveBeenCalledTimes(3);
     });
 
-    it('respects disabled generation and opt-in durable-checkpoint-only prefetch', async () => {
+    it('presents the generation owner refusal and uses opt-in durable-checkpoint-only prefetch', async () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
+        generate.mockResolvedValueOnce({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: 'Explain changes is off' });
         const ops = createScmDiffSummaryOperations({ generateSummary: generate });
-        expect(await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.enabled': false } })).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED' });
+        // A person's own Start is refused like every other admission, retained as the typed failure the view presents ...
+        expect(await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.enabled': false } })).toMatchObject({
+            ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
+            viewModel: { status: 'failed', error: { reason: 'disabled', nextAction: 'enableExplain' } },
+        });
+        expect(generate).toHaveBeenCalledTimes(1);
+        // ... while background prefetch with Explain changes off asks for nothing and publishes no failure.
+        const quiet = await ops.prefetch({ ...params, key: 'background-key', settings: { 'scm.diffSummary.enabled': false, 'scm.diffSummary.prefetch': true } });
+        expect(quiet).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED' });
+        expect(Object.keys(ops.getState().entriesByKey)).toHaveLength(1);
         expect(await ops.prefetch(params)).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_PREFETCH_DISABLED' });
         expect(await ops.prefetch({ ...params, input: { cwd: '/repo', source: { kind: 'workingTree' } }, settings: { 'scm.diffSummary.prefetch': true } })).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_PREFETCH_SOURCE_UNSUPPORTED' });
         expect(generate).not.toHaveBeenCalled();

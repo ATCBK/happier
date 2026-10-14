@@ -636,10 +636,11 @@ describe('concurrent session cache supervised sockets', () => {
     });
 
     it('leaves the reachability owner\'s offline fact in place when the refresh it interrupted fails', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: new Headers(),
-        }));
+        let reachable = true;
+        runtimeFetchSpy.mockImplementation(async () => {
+            if (!reachable) throw new Error('secondary Home offline');
+            return Response.json({ ok: true });
+        });
         const fakeSocket = createSocketStub();
         ioSpy.mockReturnValue(fakeSocket);
         getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
@@ -677,6 +678,7 @@ describe('concurrent session cache supervised sockets', () => {
         fakeSocket.emitServerEvent('update', { body: { t: 'update-session' } });
         await vi.waitFor(() => expect(failInterruptedRefresh).not.toBeNull());
 
+        reachable = false;
         reachability.reportServerUnreachable('https://stack-b.example.test', new Error('socket unreachable'));
         await vi.waitFor(() => {
             expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
@@ -789,11 +791,10 @@ describe('concurrent session cache supervised sockets', () => {
                 lastUsedAt: 1,
             }],
             activeServerId: 'server-a',
-            activeInventoryLoaded: true,
             activeMachines: [],
             machineListByServerId: storage.getState().machineListByServerId,
             machineListStatusByServerId: storage.getState().machineListStatusByServerId,
-            accountId: 'focused-account',
+            accountScopesByServerId: new Map([['server-b', { serverId: 'server-b', accountId: 'focused-account' }]]),
             loadWarmEntries: () => ({}),
         })).toEqual([
             expect.objectContaining({ kind: 'resolved', observation: 'stale' }),
@@ -811,7 +812,8 @@ describe('concurrent session cache supervised sockets', () => {
         expect(schedulePushTokenReconciliationSpy).toHaveBeenCalledTimes(1);
         expect(Object.keys(storage.getState().sessionListRowsByServerId['server-b'] ?? {})).toEqual(['session-b']);
         expect(storage.getState().machineListByServerId['server-b']?.map((machine) => machine.id)).toEqual(['machine-b']);
-        expect(scheduleMachineListDisplayWarmCacheSaveSpy).not.toHaveBeenCalled();
+        expect(storage.getState().sessionListRowsByServerId['server-b']).toBe(currentRows);
+        expect(storage.getState().machineListByServerId['server-b']).toBe(currentMachines);
 
         stopConcurrentSessionCacheSync();
     });

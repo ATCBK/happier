@@ -85,7 +85,10 @@ describe('registerMachineTerminalRpcHandlers real PTY QA', () => {
       readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: null }, source: 'stored', metadataVersion: 1 }) });
     const registration: MachineTerminalRpcRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { env: { ...process.env, HAPPIER_DAEMON_TERMINAL_ENABLED: '1', HAPPIER_DAEMON_TERMINAL_SHELL: '/bin/sh' },
-        workingDirectory: root, projectFiniteRuntime: async () => ({ serverId: 'home', machineId: 'machine', accountId: 'bob',
+        workingDirectory: root,
+        accountReadRuntime: async () => ({ serverId: 'home', machineId: 'machine', accountId: 'bob',
+          credentials: { token: 'bob-private-test-port', encryption: null }, serverHttpBaseUrl: 'https://home.example' }),
+        projectFiniteRuntime: async () => ({ serverId: 'home', machineId: 'machine', accountId: 'bob',
           credentials: { token: 'bob-private-test-port', encryption: null }, serverHttpBaseUrl: 'https://home.example',
           terminalSessions: registration.getSessionManager(), operationRuntime, workerAdmission,
           resolveWorkspaceExecutionConfig: async () => null, nativeIo: { resolveTool: async () => null },

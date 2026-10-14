@@ -16,6 +16,8 @@ import { SelectionList } from '@/components/ui/selectionList';
 import { AuthProvider } from '@/auth/context/AuthContext';
 import { SessionAuthoringConnectedServicesField } from './SessionAuthoringConnectedServicesField';
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -26,12 +28,17 @@ it('authors a connected pick during unread inheritance and preserves controlled 
     const bridge = await loadSyncSingletonForTests();
     const previous = storage.getState();
     const accountId = 'authoring-purpose';
-    const http = createHomeHubArtifactHttpBoundary(accountId);
     const features = buildServerFeaturesResponse();
     features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
     const consumer = { pluginId: 'happier.agent.codex', localId: 'codex' };
     const service = { pluginId: consumer.pluginId, localId: 'openai-codex' };
     const serviceKey = 'happier.agent.codex/openai-codex';
+    const profile = AccountProfileSchema.parse({ id: accountId,
+        connectedAccountsV4: [{ revisionSemantics: 'legacy_unfenced', ref: { service, accountId: 'work' },
+            status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
+            credentialRevision: null, kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {} }],
+    });
+    const http = createHomeHubArtifactHttpBoundary(accountId, profile);
     const declarations = [{ purpose: 'primary', service }] satisfies readonly PluginProjectedAgentConnectedAccountPurposeV2[];
     const value = { v: 1 as const, bindings: [{ purpose: { consumer, purpose: 'primary' },
         target: { kind: 'account' as const, account: { service, accountId: 'work' } } }] };
@@ -46,11 +53,7 @@ it('authors a connected pick during unread inheritance and preserves controlled 
             return http.request(input, init);
         } });
     const scope = { serverId: connection.home.id, accountId };
-    storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: accountId,
-        connectedAccountsV4: [{ revisionSemantics: 'legacy_unfenced', ref: { service, accountId: 'work' },
-            status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
-            credentialRevision: null, kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {} }],
-    }) });
+    storage.setState({ profileScope: scope, profile });
     installConnectedAccountDescriptorProjection({ scopeKey: 'authoring-purpose', status: 'ready', descriptors: [{
         id: service.localId, serviceId: service.localId, pluginId: service.pluginId, provenance: 'first_party', sourceKind: 'bundled', title: 'Codex',
         authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', scopes: ['openid'],

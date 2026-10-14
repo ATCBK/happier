@@ -53,7 +53,7 @@ describe.runIf(process.env.HAPPIER_MEASURE_PLUGIN_UI_LOAD === '1')('Plugin UI so
                 },
                 graph: {
                     artifactId: 'triage-entity-drag-drop-native', tier: 'reactNative', entry: relativePath,
-                    files: record.files.map(({ bytes: _bytes, ...file }) => file), digest: artifactDigest,
+                    files: [{ relativePath, digest: fileDigest, byteSize: bytes.byteLength }], digest: artifactDigest,
                     builtWith: { bundler: 'esbuild', version: '0.27.2' }, hostUiApiRange: '^1.0.0',
                     executable: { exports: ['activate'] },
                 },

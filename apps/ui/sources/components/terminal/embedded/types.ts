@@ -11,6 +11,8 @@ export type EmbeddedTerminalDetectedUrl = Readonly<{
 
 export type EmbeddedTerminalPaneController = Readonly<{
     status: EmbeddedTerminalPaneStatus;
+    /** A borrowed view of a process another lifecycle owns: it reads output, it never types, resets or restarts. */
+    readOnly?: boolean;
     error: string | null;
     detectedUrl: EmbeddedTerminalDetectedUrl;
     onInput: (data: string) => void;

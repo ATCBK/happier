@@ -43,12 +43,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     action: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
     page: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 2,
     },

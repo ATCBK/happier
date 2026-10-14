@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { callSocketRpc, emitWithAckCancellable, type SocketRpcAckScope } from './callSocketRpc.js';
 import { readRpcRequestDisposition } from './rpcDisposition.js';
 import { socketRpcCodec, type SocketRpcContent } from './socketRpcCodec.js';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 function cipher(): SocketRpcContent {
   const key = randomBytes(32);
@@ -189,7 +189,36 @@ it('fails a mismatched Session Action origin before issue and never retries a re
   expect(requests).toEqual([]);
   const rejected = await call({ ...authorization, sessionId: 's' }).catch((error: unknown) => error);
   expect(rejected).toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
+  expect(readRpcRequestDisposition(rejected)).toBe('notSent');
   expect(requests).toEqual([{ ...authorization, sessionId: 's' }]);
+});
+it('preserves an explicitly uncertain relay acknowledgement as outcomeUnknown', async () => {
+  const socket = await setup();
+  server.sockets.sockets.forEach(remote => remote.once('rpc-call', (_payload, ack) => {
+    ack({ ok: false, error: 'Target changed after submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+  }));
+  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'spawn',
+    params: {}, content: { mode: 'plain' } }).catch((error: unknown) => error);
+  expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+});
+it('distinguishes an unsealed pre-execution refusal from response decryption failure', async () => {
+  const socket = await setup();
+  const responses = [
+    { error: 'Request binding unavailable', errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED },
+    'invalid-encrypted-response',
+  ];
+  server.sockets.sockets.forEach(remote => remote.on('rpc-call', (_payload, ack) => {
+    ack({ ok: true, result: responses.shift() });
+  }));
+  const content = cipher();
+  const invoke = () => callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'spawn', params: {}, content })
+    .catch((error: unknown) => error);
+  const refusal = await invoke();
+  const undecodable = await invoke();
+  expect(refusal).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+  expect(undecodable).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+  expect(readRpcRequestDisposition(refusal)).toBe('notSent');
+  expect(readRpcRequestDisposition(undecodable)).toBe('outcomeUnknown');
 });
 it('cancels an issued call and marks the unresolved outcome', async () => {
   const socket = await setup();

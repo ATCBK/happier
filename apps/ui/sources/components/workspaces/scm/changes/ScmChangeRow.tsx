@@ -5,6 +5,7 @@ import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import { describeScmChangeKind, resolveScmChangeToneColor } from '@/scm/scmChangeKind';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import type { ThemeStyleScales } from '@/theme/themeStyleScales';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { InlineRepoPathLabel } from '@/components/ui/path/InlineRepoPathLabel';
@@ -21,7 +22,7 @@ const CHANGE_STATS_MIN_COLUMN_WIDTH = 38;
 const CHANGE_STATS_CHARACTER_WIDTH = 7;
 const CHANGE_STATS_COLUMN_EXTRA_WIDTH = 4;
 
-type Theme = Readonly<{
+type Theme = Pick<ThemeStyleScales, 'space'> & Readonly<{
     colors: Readonly<{
         surface?: Readonly<{
             base?: string;
@@ -203,12 +204,12 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                 ? (theme.colors.surface?.inset ?? theme.colors.surface?.base ?? theme.colors.text.secondary)
                 : (theme.colors.surface?.base ?? theme.colors.text.secondary);
         return {
-            paddingHorizontal: 12,
+            paddingHorizontal: theme.space.s12,
             paddingVertical,
             ...(minHeight !== undefined ? { minHeight } : null),
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 10,
+            gap: theme.space.s10,
             backgroundColor: bg,
             borderBottomWidth: props.showDivider ? Platform.select({ ios: 0.33, default: 1 }) : 0,
             borderBottomColor: theme.colors.border?.default ?? theme.colors.text.secondary,
@@ -271,9 +272,8 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     findRanges={props.findRanges?.path}
                     detailFindRanges={props.findRanges?.rename}
                     pathTextStyle={{
-                        fontSize: 12,
+                        ...Typography.variant('meta'),
                         color: theme.colors.text.secondary,
-                        ...Typography.default(),
                     }}
                     nameTextStyle={{
                         fontSize: handset ? 15 : 13,
@@ -293,28 +293,26 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                         flex: 0,
                         flexBasis: 'auto',
                         flexShrink: 1,
-                        fontSize: 13,
+                        ...Typography.variant('body'),
                         color: theme.colors.text.secondary,
-                        ...Typography.default(),
                     }}
                     nameTextStyle={{
-                        fontSize: 13,
+                        ...Typography.variant('body', 'semiBold'),
                         color: theme.colors.text.primary ?? theme.colors.text.secondary,
-                        ...Typography.default('semiBold'),
                     }}
                 />
             )}
 
             {props.proposalNote ? (
-                <Text testID="scm-change-row-proposal-note" numberOfLines={1} style={{ flexShrink: 0, fontSize: 12, color: theme.colors.state.active.foreground, ...Typography.default('semiBold') }}>
+                <Text testID="scm-change-row-proposal-note" numberOfLines={1} style={{ flexShrink: 0, ...Typography.variant('meta', 'semiBold'), color: theme.colors.state.active.foreground,  }}>
                     {props.proposalNote}
                 </Text>
             ) : null}
             {props.pathAccessory}
 
             {props.tag ? (
-                <View testID="scm-change-row-tag" style={{ flexShrink: 0, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, backgroundColor: theme.colors.surface?.inset ?? theme.colors.surface?.base }}>
-                    <Text style={{ fontSize: 11, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>{findText(props.tag, props.findRanges?.tag)}</Text>
+                <View testID="scm-change-row-tag" style={{ flexShrink: 0, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s2, borderRadius: 5, backgroundColor: theme.colors.surface?.inset ?? theme.colors.surface?.base }}>
+                    <Text style={{ ...Typography.variant('micro', 'semiBold'), color: theme.colors.text.secondary,  }}>{findText(props.tag, props.findRanges?.tag)}</Text>
                 </View>
             ) : null}
 
@@ -367,7 +365,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
             ) : null}
 
             {!props.onPress ? <View testID={props.testID ?? `scm-change-row-${testIdSafePath}`} accessibilityLabel={accessibilityLabel}
-                style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }}>{rowContent}</View> : isWeb ? (
+                style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}>{rowContent}</View> : isWeb ? (
                 <ViewWithClick
                     testID={props.testID ?? `scm-change-row-${testIdSafePath}`}
                     accessibilityRole="button"
@@ -384,7 +382,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     }
                     tabIndex={0}
                     onKeyDown={onKeyDown as any}
-                    style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                    style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}
                 >
                     {rowContent}
                 </ViewWithClick>
@@ -394,7 +392,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityLabel}
                     onPress={props.onPress}
-                    style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                    style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}
                 >
                     {rowContent}
                 </Pressable>

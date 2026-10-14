@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createClaudePredecessorMessageMetaShape } from '../../agents/claude/predecessorMessageMeta.js';
 
 import { createSentFromSchema } from '../../sentFrom.js';
@@ -44,15 +44,15 @@ const SESSION_USER_MESSAGE_DELIVERY_INTENTS = new Set<SessionUserMessageDelivery
 ]);
 
 /** Optional segment details are best-effort; only the version and kind identify a segment. */
-export const SessionMessageStreamSegmentV1Schema = lazyZodSchema(() => z.object({
+export const SessionMessageStreamSegmentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   segmentKind: z.enum(['assistant', 'thinking']),
-  segmentLocalId: z.string().min(1).nullish().catch(undefined),
-  segmentState: z.enum(['streaming', 'complete', 'interrupted']).nullish().catch(undefined),
-  startedAtMs: z.number().nullish().catch(undefined),
-  updatedAtMs: z.number().nullish().catch(undefined),
-  interruptedReason: z.string().optional().catch(undefined),
-}).strict());
+  segmentLocalId: z.catch(z.nullish(z.string().check(z.minLength(1))), undefined),
+  segmentState: z.catch(z.nullish(z.enum(['streaming', 'complete', 'interrupted'])), undefined),
+  startedAtMs: z.catch(z.nullish(z.number()), undefined),
+  updatedAtMs: z.catch(z.nullish(z.number()), undefined),
+  interruptedReason: z.catch(z.optional(z.string()), undefined),
+}));
 
 export const SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY = 'happierDeliveryIntentV1';
 export const SESSION_TOOL_ANSWER_DELIVERY_KIND = 'tool-answer-delivery.v1';
@@ -97,69 +97,66 @@ export function withSessionUserMessageDeliveryIntentMeta(
 export function createSessionMessageMetaSchema(zod: typeof z) {
   const sessionMediaMessageMetaV1Schema = createSessionMediaMessageMetaV1Schema(zod);
   const happierEnvelopeSchema = zod.union([
-    sessionMediaMessageMetaV1Schema.safeExtend({
+    z.safeExtend(sessionMediaMessageMetaV1Schema, {
       resources: HappierMetaEnvelopeSchema.shape.resources,
       conversationTurnOriginV1: HappierMetaEnvelopeSchema.shape.conversationTurnOriginV1,
     }),
-    HappierMetaEnvelopeSchema.passthrough().refine((value) => value.kind !== SESSION_MEDIA_MESSAGE_META_KIND_V1),
+    lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(HappierMetaEnvelopeSchema).check(z.refine((value) => value.kind !== SESSION_MEDIA_MESSAGE_META_KIND_V1))),
   ]);
-  return zod
-    .object({
+  return zod.looseObject({
       ...createClaudePredecessorMessageMetaShape(zod),
-      sentFrom: createSentFromSchema(zod).optional(),
+      sentFrom: z.optional(createSentFromSchema(zod)),
       /**
        * High-level origin of the message, used by agents to avoid treating
        * self-sent client traffic as a "new prompt" event.
        *
        * Forward-compatible: unknown strings are allowed.
        */
-      source: zod.union([zod.enum(['ui', 'cli']), zod.string()]).optional(),
-      permissionMode: createSessionPermissionModeSchema(zod).optional(),
-      model: zod.string().nullable().optional(),
+      source: zod.optional(zod.union([zod.enum(['ui', 'cli']), zod.string()])),
+      permissionMode: z.optional(createSessionPermissionModeSchema(zod)),
+      model: zod.optional(zod.nullable(zod.string())),
       // Preserve invalid presence as well as valid intent: the model-selection
       // owner must refuse it instead of seeing absence and using legacy model.
-      [SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY]: zod.unknown().optional(),
-      fallbackModel: zod.string().nullable().optional(),
-      customSystemPrompt: zod.string().nullable().optional(),
-      appendSystemPrompt: zod.string().nullable().optional(),
-      allowedTools: zod.array(zod.string()).nullable().optional(),
-      disallowedTools: zod.array(zod.string()).nullable().optional(),
-      displayText: zod.string().optional(),
-      forkVisualOriginV1: SessionForkVisualOriginV1Schema.optional().catch(undefined),
-      [SESSION_MESSAGE_PROVENANCE_META_KEY]: SessionMessageProvenanceSchema.optional(),
-      [SESSION_INPUT_REQUEST_META_KEY]: SessionInputRequestSchema.optional(),
-      [SESSION_INPUT_AUTHORITY_META_KEY]: SessionInputAuthoritySchema.optional(),
-      happier: happierEnvelopeSchema.optional(),
-      happierMedia: sessionMediaMessageMetaV1Schema.optional(),
-      [SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY]: zod.unknown().optional(),
-      happierStreamSegmentV1: SessionMessageStreamSegmentV1Schema.optional().catch(undefined),
-      happierStreamKey: zod.unknown().optional(),
-      happierSidechainStreamKey: zod.unknown().optional(),
-      happierSyntheticNoResponseV1: zod.unknown().optional(),
-      happierUnsupportedContentV1: zod.unknown().optional(),
+      [SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY]: zod.optional(zod.unknown()),
+      fallbackModel: zod.optional(zod.nullable(zod.string())),
+      customSystemPrompt: zod.optional(zod.nullable(zod.string())),
+      appendSystemPrompt: zod.optional(zod.nullable(zod.string())),
+      allowedTools: zod.optional(zod.nullable(zod.array(zod.string()))),
+      disallowedTools: zod.optional(zod.nullable(zod.array(zod.string()))),
+      displayText: zod.optional(zod.string()),
+      forkVisualOriginV1: z.catch(z.optional(SessionForkVisualOriginV1Schema), undefined),
+      [SESSION_MESSAGE_PROVENANCE_META_KEY]: z.optional(SessionMessageProvenanceSchema),
+      [SESSION_INPUT_REQUEST_META_KEY]: z.optional(SessionInputRequestSchema),
+      [SESSION_INPUT_AUTHORITY_META_KEY]: z.optional(SessionInputAuthoritySchema),
+      happier: zod.optional(happierEnvelopeSchema),
+      happierMedia: z.optional(sessionMediaMessageMetaV1Schema),
+      [SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY]: zod.optional(zod.unknown()),
+      happierStreamSegmentV1: z.catch(z.optional(SessionMessageStreamSegmentV1Schema), undefined),
+      happierStreamKey: zod.optional(zod.unknown()),
+      happierSidechainStreamKey: zod.optional(zod.unknown()),
+      happierSyntheticNoResponseV1: zod.optional(zod.unknown()),
+      happierUnsupportedContentV1: zod.optional(zod.unknown()),
       // These optional source projections must not make otherwise readable transcript text unparsed.
       // Their input admission remains at the structured-input/browser/Run owners.
-      [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: HappierStructuredInputV1Schema.optional().catch(undefined),
-      [HAPPIER_VENDOR_PLUGIN_MENTIONS_METADATA_KEY]: zod.array(VendorPluginMentionV1Schema).optional().catch(undefined),
-      [HAPPIER_SKILL_MENTIONS_METADATA_KEY]: zod.array(SkillMentionV1Schema).optional().catch(undefined),
-      happierBrowserContext: BrowserContextMessageMetaV1Schema.optional().catch(undefined),
-      happierExecutionRunInputTurnV1: ExecutionRunInputTurnV1Schema.optional().catch(undefined),
+      [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: z.catch(z.optional(HappierStructuredInputV1Schema), undefined),
+      [HAPPIER_VENDOR_PLUGIN_MENTIONS_METADATA_KEY]: zod.catch(zod.optional(zod.array(VendorPluginMentionV1Schema)), undefined),
+      [HAPPIER_SKILL_MENTIONS_METADATA_KEY]: zod.catch(zod.optional(zod.array(SkillMentionV1Schema)), undefined),
+      happierBrowserContext: z.catch(z.optional(BrowserContextMessageMetaV1Schema), undefined),
+      happierExecutionRunInputTurnV1: z.catch(z.optional(ExecutionRunInputTurnV1Schema), undefined),
       // Legacy attachment/native identity carriers are decoded by their existing source owners.
-      happierAttachments: zod.unknown().optional(),
-      opencodeMessageId: zod.unknown().optional(),
-      opencodeRemoteSessionId: zod.unknown().optional(),
-      remoteSessionId: zod.unknown().optional(),
-      providerSessionId: zod.unknown().optional(),
-      sidechainId: zod.unknown().optional(),
-      sidechain_id: zod.unknown().optional(),
-      isSidechain: zod.unknown().optional(),
-      is_sidechain: zod.unknown().optional(),
-      isThinking: zod.unknown().optional(),
-      runtimeEventKind: zod.unknown().optional(),
-      runtimeIssueCode: zod.unknown().optional(),
-    })
-    .passthrough()
-    .superRefine((value, ctx) => {
+      happierAttachments: zod.optional(zod.unknown()),
+      opencodeMessageId: zod.optional(zod.unknown()),
+      opencodeRemoteSessionId: zod.optional(zod.unknown()),
+      remoteSessionId: zod.optional(zod.unknown()),
+      providerSessionId: zod.optional(zod.unknown()),
+      sidechainId: zod.optional(zod.unknown()),
+      sidechain_id: zod.optional(zod.unknown()),
+      isSidechain: zod.optional(zod.unknown()),
+      is_sidechain: zod.optional(zod.unknown()),
+      isThinking: zod.optional(zod.unknown()),
+      runtimeEventKind: zod.optional(zod.unknown()),
+      runtimeIssueCode: zod.optional(zod.unknown()),
+    }).check(zod.superRefine((value, ctx) => {
       if (
         value[SESSION_INPUT_REQUEST_META_KEY] !== undefined
         && value[SESSION_INPUT_AUTHORITY_META_KEY] !== undefined
@@ -170,7 +167,7 @@ export function createSessionMessageMetaSchema(zod: typeof z) {
           message: 'Input request and admitted authority metadata cannot coexist',
         });
       }
-    });
+    }));
 }
 
 export const SessionMessageMetaSchema = createSessionMessageMetaSchema(z);

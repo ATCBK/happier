@@ -665,7 +665,7 @@ function OwnerComposition(
 
 const styles = StyleSheet.create((theme) => ({
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   confirm: {
@@ -689,7 +689,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   stoppedText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     flexShrink: 1,
     color: theme.colors.text.secondary,
   },

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
 
 import {
   generateBundledPluginUiArtifacts,
+  resolveBundledPluginUiArtifactsInputPaths,
   resolveBundledPluginUiArtifactsOutputPath,
 } from './generateBundledPluginUiArtifacts.mjs';
 
@@ -41,7 +42,9 @@ async function createFixture() {
     version: '0.0.0',
   }, null, 2)}\n`);
   await writeFile(join(packageRoot, '.happier-plugin', 'plugin.json'), `${JSON.stringify({
-    id: 'happier.fixture',
+    schemaVersion: 2, id: 'happier.fixture', version: '0.0.0', displayName: 'Fixture', runtime: { apiVersion: 1 },
+    contributes: { ui: { renderers: [{ id: 'fixture', kind: 'reactNative', artifact: 'fixture-card' }],
+      views: [{ id: 'fixture', container: 'appPage', target: { kind: 'app' }, renderer: 'fixture', title: 'Fixture' }] } },
   }, null, 2)}\n`);
   await writeFile(join(artifactRoot, relativePath), bytes);
   await writeFile(join(artifactRoot, 'ui-artifacts.json'), `${JSON.stringify({
@@ -101,9 +104,10 @@ async function addFixtureBrand(fixture) {
   const bytes = await readFile(resolve(packageRoot, '../../packages/plugins/inspector/assets/brand.png'));
   await mkdir(join(pluginRoot, 'assets'), { recursive: true });
   await writeFile(join(pluginRoot, 'assets/brand.png'), bytes);
+  const existing = JSON.parse(await readFile(join(pluginRoot, '.happier-plugin/plugin.json'), 'utf8'));
   const manifest = {
-    id: 'happier.fixture', displayName: 'Fixture', brand: { iconResourceId: 'brand-icon', monochrome: true },
-    contributes: { resources: [{ id: 'brand-icon', kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' }] },
+    ...existing, brand: { iconResourceId: 'brand-icon', monochrome: true },
+    contributes: { ...existing.contributes, resources: [{ id: 'brand-icon', kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' }] },
   };
   await writeFile(join(pluginRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
   return { bytes, manifest };
@@ -126,6 +130,15 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     );
     assert.match(output, /pluginId: "happier\.fixture"/);
     assert.match(output, /artifactId: "fixture-card"/);
+    const graph = JSON.parse(output.match(/    artifactGraph: .*\*\/ \((.+)\),/)[1]);
+    assert.equal(graph.artifactId, 'fixture-card');
+    assert.equal(graph.digest, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries[0].digest);
+    const declaration = JSON.parse(output.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
+    assert.equal(declaration.pluginId, 'happier.fixture');
+    assert.equal(declaration.packageName, '@happier-dev/plugins-fixture');
+    assert.equal(declaration.entriesById['reactNativeBundle:happier.fixture:fixture'].artifactGraph.digest, graph.digest);
+    assert.equal(declaration.entriesById['surfacePlacement:happier.fixture:fixture'].availability.state, 'available');
+    assert.match(output, /uiDeclaration: BUNDLED_PLUGIN_UI_APP_DECLARATION_0,/);
     assert.doesNotMatch(output, /platform:/);
 
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'check' });
@@ -137,6 +150,19 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }
+});
+
+test('UI declaration text containing require syntax does not become an app asset import', async () => {
+  const fixture = await createFixture();
+  try {
+    const path = join(fixture.repoRoot, 'packages/plugins/fixture/.happier-plugin/plugin.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest.contributes.ui.views[0].title = 'How require("react") works';
+    await writeFile(path, JSON.stringify(manifest));
+    await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, artifactRoots: { fixture: fixture.artifactRoot } });
+    const output = resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot);
+    assert.ok(resolveBundledPluginUiArtifactsInputPaths(output)?.includes(join(fixture.artifactRoot, fixture.relativePath)));
+  } finally { await rm(fixture.repoRoot, { recursive: true, force: true }); }
 });
 
 test('the UI byte publisher projects declared packaged brand marks, including packages without UI entries', async () => {
@@ -235,9 +261,11 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
       await writeFile(join(fixtureDir, filename), await readFile(join(contractDir, filename)));
     }
     const ambientPath = join(fixtureDir, 'asset-boundaries.d.ts');
+    // Compile against the actual Protocol declarations; only the native asset
+    // module is synthetic in this disposable output tree.
+    await symlink(resolve(packageRoot, '../../node_modules'), join(fixture.repoRoot, 'node_modules'), 'dir');
     await writeFile(ambientPath, [
       "declare module 'expo-asset' { export class Asset { static fromModule(id: number): number; } }",
-      "declare module '@happier-dev/protocol/plugins/ui' { export type PluginUiArtifactDigestV1 = `sha256:${string}`; }",
       "declare module '*.bundle' { const asset: number; export = asset; }",
       '',
     ].join('\n'));
@@ -253,7 +281,7 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
     ].join('\n'));
     const compiler = resolve(packageRoot, '..', '..', 'scripts', 'workspaces', 'runTypeScriptCli.mjs');
     const compilerArguments = [
-      compiler, '--allowJs', '--checkJs', '--noEmit', '--strict', '--skipLibCheck',
+      compiler, '--ignoreConfig', '--allowJs', '--checkJs', '--noEmit', '--strict', '--skipLibCheck',
       '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022',
       outputPath, consumerPath, ambientPath,
     ];
@@ -269,7 +297,7 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
     );
     await rm(outputPath);
     await execFileAsync(process.execPath, [
-      compiler, '--noEmit', '--strict', '--skipLibCheck',
+      compiler, '--ignoreConfig', '--noEmit', '--strict', '--skipLibCheck',
       '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022',
       consumerPath, ambientPath,
     ]);
@@ -300,7 +328,10 @@ test('unchanged Plugin UI artifact inputs preserve the generated compiler input'
       dependencies: { ...uiPackageJson.dependencies, '@happier-dev/plugins-fixture': '0.0.1' },
     }));
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
-    assert.match(await readFile(outputPath, 'utf8'), /releaseVersion: "0\.0\.1"/);
+    const changedOutput = await readFile(outputPath, 'utf8');
+    assert.match(changedOutput, /releaseVersion: "0\.0\.1"/);
+    const declaration = JSON.parse(changedOutput.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
+    assert.equal(declaration.entriesById['reactNativeBundle:happier.fixture:fixture'].pluginVersion, '0.0.1');
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }

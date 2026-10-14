@@ -6,13 +6,15 @@ import { SessionDraftContextUnavailableError } from '@/sync/ops/sessionDrafts/se
 
 import { openSessionStoredContent, sealSessionStoredContent, type SessionContentEncryption } from '@happier-dev/sync-client';
 
+type SessionDraftContext =
+    | Readonly<{ mode: 'plain' }>
+    | Readonly<{ mode: 'e2ee'; encryption: SessionContentEncryption | null }>
+    | null;
+
 type SessionDraftCipherOptions = Readonly<{
     accountMode: 'plain' | 'e2ee';
     accountCryptoMaterial: AccountScopedCryptoMaterial | null;
-    getSessionContext(sessionId: string):
-        | Readonly<{ mode: 'plain' }>
-        | Readonly<{ mode: 'e2ee'; encryption: SessionContentEncryption | null }>
-        | null;
+    getSessionContext(sessionId: string): SessionDraftContext | Promise<SessionDraftContext>;
     randomBytes(length: number): Uint8Array;
 }>;
 
@@ -53,7 +55,7 @@ export function createSessionDraftCipher(options: SessionDraftCipherOptions): Se
                         }),
                     };
             }
-            const context = options.getSessionContext(address.sessionId);
+            const context = await options.getSessionContext(address.sessionId);
             if (!context) throw new SessionDraftContextUnavailableError();
             const sealed = await sealSessionStoredContent(context, payload);
             if (sealed.status === 'locked') throw new SessionDraftContextUnavailableError();
@@ -76,7 +78,7 @@ export function createSessionDraftCipher(options: SessionDraftCipherOptions): Se
                 });
                 return opened ? parseBoundPayload(address, opened.value, content.v ?? 1) : null;
             }
-            const context = options.getSessionContext(address.sessionId);
+            const context = await options.getSessionContext(address.sessionId);
             if (!context) throw new SessionDraftContextUnavailableError();
             // Drafts retain their existing unavailable-context exception contract.
             if (context.mode === 'e2ee' && !context.encryption) throw new SessionDraftContextUnavailableError();

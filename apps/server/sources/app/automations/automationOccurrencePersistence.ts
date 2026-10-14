@@ -1,9 +1,6 @@
-import {
-    AutomationOccurrenceEvidenceV1Schema,
-    AutomationStoredContentEnvelopeV1Schema,
-    createCanonicalJsonSigningInput,
-    type AutomationOccurrenceEvidenceV1,
-} from "@happier-dev/protocol";
+import { AutomationOccurrenceEvidenceV1Schema, type AutomationOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { AutomationStoredContentEnvelopeV1Schema } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import type { Prisma } from "@prisma/client";
 
 import type { Tx } from "@/storage/inTx";

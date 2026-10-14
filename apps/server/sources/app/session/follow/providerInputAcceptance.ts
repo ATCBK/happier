@@ -1,4 +1,4 @@
-import { isSessionFollowWakeEventLocalId } from '@happier-dev/protocol';
+import { isSessionFollowWakeEventLocalId } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 import type { Tx } from '@/storage/inTx';
 

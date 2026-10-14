@@ -74,7 +74,7 @@ export const installReviewSections = {
 
 export const sourceAdministration = {
     title: 'Sources & registries',
-    subtitle: 'Choose where this machine discovers exact npm packages and how it reaches their registries.',
+    subtitle: 'Where Happier finds plugins to browse: built-in registries, ones your plugins add, and your own.',
     communityTitle: 'Community npm',
     communitySubtitle: 'Built in · unreviewed discovery of eligible Happier plugins on public npm, not arbitrary npm packages.',
     configuredTitle: 'Marketplace sources',

@@ -31,6 +31,7 @@ export async function publishSessionPublisherClose(params: Readonly<{
                 activeAt: params.closed.activeAt.getTime(),
                 ...(params.closed.projection ?? {}),
                 ...(params.closed.turnProjection ?? {}),
+                ...params.closed.pendingRequestProjection,
             },
             session,
             accountId,

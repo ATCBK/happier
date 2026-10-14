@@ -19,7 +19,7 @@ import {
   readCurrentRunnerAgentRuntimeDaemonServiceAuthority,
   type AgentRuntimeDaemonServiceAuthorityExpectedInput,
 } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { buildDaemonControlHttpHeaders } from '@/daemon/controlHttp';
+import { buildDaemonControlHttpHeaders, readDaemonControlHttpResponse } from '@/daemon/controlHttp';
 import {
   createNativeAgentSessionEffectBoundaryError,
   NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE,
@@ -729,9 +729,11 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     await readAgentRuntimeDaemonServiceAuthority(input.authority);
   if (!authority) return unavailableResponse();
 
-  const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(
-    input.createRequest(authority.capability),
-  );
+  const issuedRequest = input.createRequest(authority.capability);
+  const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ ...issuedRequest,
+    context: { ...issuedRequest.context, ...(input.authority.executionRunSnapshotId
+      ? { executionRunSnapshotId: input.authority.executionRunSnapshotId } : {}) },
+  });
   if (request.context.token !== authority.capability) {
     return unavailableResponse();
   }
@@ -746,16 +748,14 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     : input.signal ?? timeoutSignal ?? undefined;
 
   try {
-    const response = await fetch(
-      `http://127.0.0.1:${authority.httpPort}${AGENT_RUNTIME_DAEMON_SERVICES_PATH}`,
-      {
-        method: 'POST',
-        headers: buildDaemonControlHttpHeaders(authority.capability),
-        body: JSON.stringify(request),
-        ...(signal ? { signal } : {}),
-      },
-    );
-    const rawBody = await response.text();
+    const response = await readDaemonControlHttpResponse({
+      httpPort: authority.httpPort,
+      path: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+      headers: buildDaemonControlHttpHeaders(authority.capability),
+      body: request,
+      ...(signal ? { signal } : {}),
+    });
+    const rawBody = response.body;
     if (
       response.status === 401
       || response.status === 403

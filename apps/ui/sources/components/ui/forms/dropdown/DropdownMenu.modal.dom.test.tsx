@@ -26,6 +26,48 @@ vi.mock('react-native-keyboard-controller', () => ({
 import { BaseModal } from '@/modal/components/BaseModal';
 import { DropdownMenu } from './DropdownMenu';
 
+it('keeps focus on a discovery operation while its models arrive in an open searchable menu', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 100, width: 200, height: 40, top: 100, left: 100, right: 300, bottom: 140, toJSON: () => ({}),
+    });
+    function Harness() {
+        const [discovered, setDiscovered] = React.useState(false);
+        return <DropdownMenu open search closeOnSelect={false} onOpenChange={() => {}} selectedId="alpha"
+            onSelect={() => setDiscovered(true)}
+            items={[
+                ...(discovered ? [{ id: 'arriving', title: 'Arriving model', testID: 'arriving-model-option' }] : []),
+                { id: 'alpha', title: 'Alpha' },
+                { id: 'discover', title: 'Find models', testID: 'persistent-discovery-option',
+                    rightElement: discovered ? <span>Loading</span> : undefined },
+            ]}
+            trigger={() => <button>Choose</button>} />;
+    }
+    try {
+        await act(async () => root.render(<Harness />));
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="persistent-discovery-option"]')).not.toBeNull());
+        const operation = document.querySelector<HTMLElement>('[data-testid="persistent-discovery-option"]')!;
+        await act(async () => {
+            operation.focus();
+            operation.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+        });
+        await act(async () => {
+            operation.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+            operation.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }));
+            operation.click();
+        });
+        expect(document.querySelector('[data-testid="arriving-model-option"]')).not.toBeNull();
+        expect(document.querySelector('[data-testid="persistent-discovery-option"]')).toBe(operation);
+        expect(document.activeElement).toBe(operation);
+    } finally {
+        await act(async () => root.unmount());
+        measure.mockRestore();
+        container.remove();
+    }
+});
+
 it.each([false, true])('keeps keyboard focus on the selected row or search field (search=%s)', async (search) => {
     const container = document.createElement('div');
     document.body.append(container);

@@ -149,12 +149,11 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     try { resolvedScope = await args.readScope(); }
     catch (error) {
       args.signal?.throwIfAborted();
-      if (!entries.some(({ entry }) => entry.required)
-        && (!(error instanceof PromptStackPreparationError) || error.reason === 'unavailable')) {
-        return { blocks: [], admittedEntries: entries.map(({ entry, layer }) => ({
+      if (!(error instanceof PromptStackPreparationError) || error.reason === 'unavailable') {
+        throw new PromptStackPreparationError('unavailable', undefined, entries.map(({ entry, layer }) => ({
           entryId: entry.id, layer, scope: null, ref: { ...entry.ref },
           outcome: 'unavailable', reason: 'unavailable', revision: null,
-        })) };
+        })));
       }
       if (error instanceof PromptStackPreparationError) throw error;
       throw new PromptStackPreparationError('unavailable');
@@ -164,7 +163,6 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
   const scope = resolvedScope ? { ...resolvedScope } : null;
   let preparing: PromptStackAdmittedEntryIdentityV1 | null = null;
   let observedRevision: PromptLibraryStoredArtifact['revision'] | null = null;
-  let optionalReadFailure: PromptStackPreparationReason | null = null;
   const reads = new Map<string, Promise<PromptLibraryStoredArtifact | null>>();
   const headers = new Map<string, Promise<Readonly<{ header: Readonly<Record<string, unknown>> | null }> | null>>();
   const read = async <T>(ref: PromptArtifactRefV1, load: () => Promise<T>): Promise<T> => {
@@ -186,9 +184,9 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     try { return await pending; }
     catch (error) {
       args.signal?.throwIfAborted();
+      // Optional legacy entries tolerate definitive absence, never an outage.
       if (!entry.required && error instanceof PromptStackPreparationError
-        && (error.reason === 'not_found' || error.reason === 'unavailable')) {
-        optionalReadFailure = error.reason;
+        && error.reason === 'not_found') {
         return null;
       }
       throw error;
@@ -199,7 +197,6 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && scope ? { serverId: scope.serverId } : {}) };
       preparing = { entryId: entry.id, layer, scope, ref };
       observedRevision = null;
-      optionalReadFailure = null;
       const key = JSON.stringify([ref.serverId ?? null, ref.artifactId]);
       if (args.memoryEnabled === false) {
         if (!args.readArtifactHeader) throw new PromptStackPreparationError('unavailable', ref);
@@ -208,7 +205,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
         const header = await readEntry(pending, entry);
         if (!header) {
           if (entry.required) throw new PromptStackPreparationError('not_found', ref);
-          admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: optionalReadFailure ?? 'not_found', revision: null });
+          admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
           continue;
         }
         if (omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) continue;
@@ -218,7 +215,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       const artifact = await readEntry(pending, entry);
       if (!artifact) {
         if (entry.required) throw new PromptStackPreparationError('not_found', ref);
-        admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: optionalReadFailure ?? 'not_found', revision: null });
+        admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
         continue;
       }
       observedRevision = { ...artifact.revision };

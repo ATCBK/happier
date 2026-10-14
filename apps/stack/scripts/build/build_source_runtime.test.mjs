@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat } from 'node:fs/promises';
 import { existsSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -13,6 +13,7 @@ import { beginPendingSourceStart } from '../runtime/shared/pending_source_start.
 import { prepareSourceRuntimeReload } from '../runtime/launch/prepareSourceRuntimeReload.mjs';
 import { prepareSourceComponent, resolveSourceComponentWatchPaths } from '../utils/dev/devReloadCoordinator.mjs';
 import { runSourceBuildCommand } from '../utils/proc/runSourceBuildCommand.mjs';
+import { applyServerHostDatabaseProviderEnv } from '../utils/server/apply_runtime_server_database_env.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
 import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
 import { runServerRuntimeMigration } from '../runtime/launch/runServerRuntimeMigration.mjs';
@@ -23,6 +24,108 @@ import { isJsonOwnerFileLockActive } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { readWorkspaceBuildInputs } from '../utils/fs/workspaceBuildInputs.mjs';
 import { captureBuildInputFiles } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
+import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
+import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
+import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('development server starts the retained coherent graph while source and workspace publication advance', { timeout: 30000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-dev-server-skew-', registerCleanup: false });
+  const children = [];
+  t.after(async () => {
+    for (const child of children) {
+      child.kill('SIGTERM');
+      await child.completion;
+    }
+    await setBundleReadOnly(fixture.root, false);
+    await fixture.cleanup();
+  });
+  const repoDir = fixture.path('repo');
+  const serverDir = join(repoDir, 'apps/server');
+  const protocolDir = join(repoDir, 'packages/protocol');
+  await Promise.all(['sources', 'scripts', 'node_modules'].map(dir => mkdir(join(serverDir, dir), { recursive: true })));
+  await mkdir(join(protocolDir, 'src'), { recursive: true });
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@happier-dev/server', type: 'module',
+    dependencies: { '@happier-dev/protocol': '0.0.0' }, scripts: { start: 'node --experimental-strip-types sources/main.ts' } }));
+  await writeFile(join(serverDir, 'tsconfig.json'), '{}');
+  await writeFile(join(serverDir, 'scripts/migrate.full.deploy.ts'), 'export const migration = true;');
+  await writeFile(join(protocolDir, 'package.json'), JSON.stringify({ name: '@happier-dev/protocol', type: 'module',
+    exports: { '.': { 'happier-source': './src/index.ts', default: './dist/index.js' } } }));
+  await writeFile(join(protocolDir, 'src/index.ts'), 'export const value = "green-v1";');
+  await mkdir(join(protocolDir, 'dist'));
+  await writeFile(join(protocolDir, 'dist/index.js'), 'export const value = "old-dist";');
+  await mkdir(join(serverDir, 'node_modules/@happier-dev'), { recursive: true });
+  await symlink(protocolDir, join(serverDir, 'node_modules/@happier-dev/protocol'), process.platform === 'win32' ? 'junction' : 'dir');
+  const entry = join(serverDir, 'sources/main.ts');
+  const serverSource = `import {createServer} from 'node:http'; import {value} from '@happier-dev/protocol';
+    createServer((_req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({status:'ok',service:'happier-server',value}));}).listen(Number(process.env.PORT),'127.0.0.1');`;
+  await writeFile(entry, serverSource);
+  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(serverDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
+  await installSourcePreparationInputs(repoDir, 'server');
+  const native = process.platform === 'linux' ? await installSourceAdmissionFixture(fixture.root) : null;
+  const build = native?.build ?? buildSourceRuntimeBundle;
+  const env = { ...(native?.env ?? process.env), HAPPIER_DB_PROVIDER: 'postgres',
+    DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture',
+    HAPPIER_STACK_SHARED_DB_SOURCE_STACK: '', HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: '' };
+  const stackBaseDir = fixture.path('stacks/server');
+  const first = await build({ repoDir, stackBaseDir, component: 'server', serverComponent: 'happier-server', dbProvider: 'postgres', env });
+  assert.equal(first.serverComponent, 'happier-server');
+  assert.equal(first.dbProvider, 'postgres');
+  await writeFile(entry, 'import {missingNewExport} from "@happier-dev/protocol"; export const broken = missingNewExport();');
+  const { pickNextFreeTcpPort } = await import('../utils/net/ports.mjs');
+  const port = await pickNextFreeTcpPort(32000);
+  let started;
+  await withJsonOwnerFileLock(async () => {
+    const retained = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, component: 'server',
+      serverComponent: 'happier-server', dbProvider: 'postgres', env, devStartup: true,
+      reuseSelected: 'if-available', signal: t.signal });
+    assert.equal(retained.entrypoint, first.entrypoint);
+    await withWorkspaceBundleLock(async () => {
+      started = await startDevServer({ serverComponentName: 'happier-server', serverDir,
+        sourceRuntimeOptions: { repoDir, stackBaseDir, signal: t.signal }, autostart: { baseDir: stackBaseDir },
+        baseEnv: { ...env, HAPPIER_STACK_MANAGED_INFRA: '0', HAPPIER_STACK_PRISMA_MIGRATE: '0',
+          HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '0' },
+        serverPort: port, internalServerUrl: `http://127.0.0.1:${port}`, publicServerUrl: `http://127.0.0.1:${port}`,
+        serverAlreadyRunning: false, restart: false, admitPriorBuildsImmediately: true, children, quiet: true },
+      { assertServerPortOwnedBySpawnedProcessGroupImpl: async () => null });
+      assert.equal(started.bootstrapSource, 'source-bundle');
+      assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).value, 'green-v1');
+    }, { lockPath: join(repoDir, '.project/tmp/cli-dist-build.lock') });
+  }, { lockPath: join(stackBaseDir, '../source-bundles/publication.lock') });
+  assert.equal(first.entrypoint, JSON.parse(await readFile(join(stackBaseDir, 'source-runtime/selected-server.json'), 'utf8')).entrypoint);
+  const ref = { current: started.serverProc };
+  const liveFixturePids = () => children.filter(child => child.exitCode === null && child.signalCode === null).map(child => child.pid);
+  const executor = createDevServerReloadExecutor({ enabled: true, stackMode: false,
+    serverComponentName: 'happier-server', serverDir, serverEnv: started.serverEnv, serverPort: port,
+    serverProcRef: ref, children, sourceRuntimeOptions: { repoDir, stackBaseDir, signal: t.signal },
+    sourceRuntimeLaunchSpec: started.sourceRuntimeLaunchSpec }, {
+    // Replace OS ownership/termination observations only; compilation, reload
+    // planning, readiness and HTTP traffic use the actual production path.
+    listListenPidsImpl: async () => liveFixturePids(),
+    listListenPidsWithStatusImpl: async () => ({ status: 'ok', supported: true, pids: liveFixturePids() }),
+    getProcessGroupIdImpl: async pid => pid,
+    killProcessGroupOwnedByStackImpl: async pid => {
+      const child = children.find(value => value.pid === pid);
+      assert.ok(child, 'only this fixture owns termination authority');
+      child.kill('SIGTERM'); await child.completion;
+      return { killed: true };
+    },
+  });
+  await t.test('a failed capture retains the serving generation and selection', async () => {
+    await assert.rejects(executor.build(), /Source preparation failed/);
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).value, 'green-v1');
+    assert.equal(JSON.parse(await readFile(join(stackBaseDir, 'source-runtime/selected-server.json'), 'utf8')).entrypoint, first.entrypoint);
+  });
+  await t.test('reload builds a coherent replacement before retiring the serving generation', async () => {
+    await writeFile(entry, serverSource);
+    await writeFile(join(protocolDir, 'src/index.ts'), 'export const value = "green-v2";');
+    await executor.build();
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).value, 'green-v1');
+    await executor.restart();
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).value, 'green-v2');
+    assert.match(await readFile(join(protocolDir, 'dist/index.js'), 'utf8'), /old-dist/);
+  });
+});
 
 async function createSourcePluginUiFixture(t, directories) {
   const fixture = await createTempFixture(t, { prefix: 'happier-plugin-ui-isolation-', registerCleanup: false });
@@ -168,7 +271,9 @@ test('source plugin UI preparation reuses unchanged plugins and rebuilds only ch
   assert.deepEqual(compiled, ['beta'], 'damaged output must rebuild even when its inputs did not change');
 });
 
-test('stack run/start source preparation leaves dependencies available while waiting for native admission', {
+for (const startup of [false, true]) test(startup
+  ? 'stack run/start source preparation bypasses validation capacity admission on its runtime host'
+  : 'validation source preparation leaves dependencies available while waiting for native admission', {
   skip: process.platform !== 'linux', timeout: 30000,
 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-stack-source-dependency-order-', registerCleanup: false });
@@ -229,8 +334,17 @@ esac
     await fixture.cleanup();
   });
   preparation = prepare({ repoDir, stackBaseDir: fixture.path('stacks/consumer'), component: 'server', env,
+    ...(startup ? {} : { devStartup: false }),
     pending, signal: AbortSignal.any([pending.signal, t.signal]) });
   void preparation.catch(() => {});
+  if (startup) {
+    const outcome = await Promise.race([preparation.then(built => ({ built })), observed.then(() => ({ queued: true }))]);
+    assert.equal(outcome.queued, undefined, 'QA runtime startup must not enter validation capacity admission');
+    assert.equal((await import(pathToFileURL(outcome.built.entrypoint))).ready, true);
+    assert.ok(phases.some(value => value.phase === 'building' && value.component === 'server'));
+    assert.deepEqual(await readdir(join(native.admissionRoot, 'waiters')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)), []);
+    return;
+  }
   await observed;
   assert.equal(JSON.parse(await readFile(fixture.path('stacks/consumer/source-runtime/start.pending.json'), 'utf8')).phase, 'queued');
   await withDependencyRefreshLock({ installDir: repoDir, env, signal: t.signal }, async () => {});
@@ -528,6 +642,58 @@ async function createReloadDaemonRepo(fixture, source) {
   return repoDir;
 }
 
+test('QA startup reads last green without producer custody and prepares current source in background',
+  { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-qa-last-green-', registerCleanup: false });
+  const native = await installSourceAdmissionFixture(fixture.root);
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = 1;');
+  const locator = join(repoDir, 'apps/cli/src/plugins/projection/registry/sources');
+  await mkdir(locator, { recursive: true });
+  const compiled = fixture.path('compiled');
+  await writeFile(join(locator, 'generatedBundledPluginManifests.ts'),
+    `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(compiled)}, 'compiled'); export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=[];`);
+  const cancellation = new AbortController();
+  const options = { repoDir, stackBaseDir: fixture.path('stacks/qa'), component: 'daemon', env: native.env,
+    signal: AbortSignal.any([cancellation.signal, t.signal]) };
+  let startup;
+  let pending;
+  const observer = watch(fixture.root);
+  t.after(async () => {
+    cancellation.abort(); observer.close();
+    await Promise.allSettled([startup]);
+    await pending?.dispose();
+    await makeFixtureWritable(fixture.root); await fixture.cleanup();
+  });
+  const first = await native.build(options);
+  await rm(compiled);
+  const backgroundCompiled = new Promise((resolve, reject) => {
+    observer.on('error', reject);
+    observer.on('change', (_event, name) => { if (name === 'compiled') resolve(); });
+  });
+  await writeFile(join(repoDir, 'apps/cli/src/index.ts'), 'export const ready = 2;');
+  let queued;
+  const producerEntered = new Promise(resolve => { queued = resolve; });
+  pending = await beginPendingSourceStart({ stackBaseDir: options.stackBaseDir,
+    onPhase: phase => { if (phase.phase === 'queued') queued(); } });
+  await withDependencyRefreshLock({ installDir: repoDir, env: native.env, signal: options.signal }, async () => {
+    startup = native.build({ ...options, preparation: pending });
+    void startup.catch(() => {});
+    const outcome = await Promise.race([startup.then(built => ({ built })), producerEntered.then(() => ({ queued: true }))]);
+    assert.equal(outcome.queued, undefined, 'a warm QA startup must read its selected graph without entering the producer path');
+    assert.equal(outcome.built.entrypoint, first.entrypoint);
+    assert.equal((await import(pathToFileURL(outcome.built.entrypoint))).ready, 1);
+  });
+  await pending.publish(async () => {});
+  await backgroundCompiled;
+  const reload = await beginPendingSourceStart({ stackBaseDir: options.stackBaseDir });
+  try {
+    const current = await native.build({ ...options, pending: reload });
+    assert.equal((await import(pathToFileURL(current.entrypoint))).ready, 2);
+    assert.equal(JSON.parse(await readFile(join(options.stackBaseDir, 'source-runtime/selected-daemon.json'), 'utf8')).entrypoint,
+      first.entrypoint, 'background preparation must not activate a new QA graph');
+  } finally { await reload.dispose(); }
+});
+
 test('source daemon rejects a broken command loader before publishing its bundle', async context => {
   const fixture = await createTempFixture(context, { prefix: 'hstack-source-reload-loader-' });
   const repoDir = await createReloadDaemonRepo(fixture, 'throw new ReferenceError("reload-command-loader-broken");');
@@ -539,6 +705,10 @@ test('source daemon rejects a broken command loader before publishing its bundle
 for (const activate of [false, true]) {
 test(`source reload preparation ${activate ? 'selects only after activation' : 'keeps the incumbent when activation is cancelled'}`, async t => {
   const graph = await reloadFixtureGraph(t, 'export {};');
+  // Preparation may borrow the incumbent's plugin UI inventory. Seed a real
+  // completed incumbent; the missing selection belongs to refusal coverage.
+  graph.old.entrypoint = graph.daemon.entrypoint;
+  await writeFile(graph.selectedPath, JSON.stringify(graph.old));
   const repoDir = await createReloadDaemonRepo(graph.fixture, 'export const ready = true;');
   let decide;
   const activation = new Promise(resolve => { decide = resolve; });
@@ -579,6 +749,9 @@ async function runCaptureSourceEntrypoint(entrypoint) {
 
 test('source reload reuses completed runtime products while deferring selection until smoke and activation', async t => {
   const graph = await reloadFixtureGraph(t, 'export {};');
+  // This cold preparation has no incumbent yet. The shared fixture's missing
+  // incumbent belongs to refusal tests; the first build below selects a real one.
+  await rm(graph.selectedPath);
   const repoDir = await createReloadDaemonRepo(graph.fixture, 'export const ready = 1;');
   const serverDir = join(repoDir, 'apps/server');
   await mkdir(join(serverDir, 'sources'), { recursive: true });
@@ -626,6 +799,58 @@ test('source reload reuses completed runtime products while deferring selection 
     'reload has no private runtime rebuild path');
 });
 
+test('source reload and required startup reuse agree on a shared Postgres provider', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-shared-postgres-', registerCleanup: false });
+  t.after(async () => { await makeFixtureWritable(fixture.root); await fixture.cleanup(); });
+  const repoDir = fixture.path('repo');
+  const serverDir = join(repoDir, 'apps/server');
+  await Promise.all(['sources', 'scripts', 'node_modules'].map(path => mkdir(join(serverDir, path), { recursive: true })));
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@happier-dev/server', type: 'module' }));
+  await writeFile(join(serverDir, 'tsconfig.json'), '{}');
+  await writeFile(join(serverDir, 'sources/main.light.ts'), 'export const ready = true;');
+  await writeFile(join(serverDir, 'scripts/migrate.full.deploy.ts'), 'export const migration = true;');
+  await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'), 'export async function runSqliteMigrationDeploy() {}');
+  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(serverDir, 'node_modules/esbuild'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  await installSourcePreparationInputs(repoDir, 'server');
+
+  const sourceEnvPath = fixture.path('producer/env');
+  await mkdir(dirname(sourceEnvPath), { recursive: true });
+  await writeFile(sourceEnvPath, [
+    'HAPPIER_DB_PROVIDER=postgres',
+    'DATABASE_URL=postgresql://fixture:fixture-password@private-host/dev',
+    'HANDY_MASTER_SECRET=fixture-only-master-secret',
+    `HAPPIER_SERVER_LIGHT_DATA_DIR=${fixture.path('producer/server-light')}`,
+  ].join('\n'));
+
+  // Exercise real preparation, canonical Postgres smoke skip and activation.
+  // The smoke suite separately proves sqlite/pglite isolated health admission.
+  const stackBaseDir = fixture.path('stacks/consumer');
+  const env = { ...process.env,
+    HAPPIER_STACK_REPO_DIR: repoDir,
+    HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light',
+    HAPPIER_STACK_DAEMON: '0',
+    HAPPIER_DB_PROVIDER: 'sqlite',
+    HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'producer',
+    HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: sourceEnvPath,
+  };
+  await prepareSourceRuntimeReload({ stackName: 'consumer', stackBaseDir, repoDir,
+    args: ['--no-daemon', '--no-ui'], env, onHost: true });
+
+  const selection = JSON.parse(await readFile(join(stackBaseDir, 'source-runtime/selected-server.json'), 'utf8'));
+  const selectedBundle = JSON.parse(await readFile(resolve(dirname(selection.entrypoint), '../../../source-bundle.json'), 'utf8'));
+  const startupEnv = { ...env };
+  const requestedProvider = applyServerHostDatabaseProviderEnv({
+    serverComponentName: 'happier-server-light', env: startupEnv,
+  });
+  const reused = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, component: 'server',
+    serverComponent: 'happier-server-light', dbProvider: requestedProvider, env: startupEnv, reuseSelected: true });
+  assert.equal(requestedProvider, 'postgres');
+  assert.equal(selectedBundle.dbProvider, requestedProvider);
+  assert.equal(reused.entrypoint, selection.entrypoint, 'required startup reuse consumes the prepared selection without a mismatch');
+});
+
 async function reloadFixtureGraph(t, source) {
   const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-selection-', registerCleanup: false });
   const stackBaseDir = fixture.path('stacks/qa');
@@ -650,6 +875,9 @@ async function reloadFixtureGraph(t, source) {
 
 test('completed source runtime lookup keeps publication custody through adoption', async t => {
   const graph = await reloadFixtureGraph(t, 'export {};');
+  // This is a cold-build/adoption test, not a broken-incumbent recovery test.
+  // The shared reload fixture intentionally seeds a nonexistent incumbent.
+  await rm(graph.selectedPath);
   const repoDir = await createReloadDaemonRepo(graph.fixture, 'export const ready = 1;');
   const options = { repoDir, stackBaseDir: graph.stackBaseDir, component: 'daemon' };
   const first = await buildSourceRuntimeBundle(options);
@@ -743,7 +971,7 @@ async function reloadServerGraph(graph, source) {
   const runtimeDir = join(outputDir, 'apps/server');
   await mkdir(join(runtimeDir, 'sources'), { recursive: true });
   const server = { identity: 'server-candidate', runtimeDir, serverDir: runtimeDir,
-    entrypoint: join(runtimeDir, 'sources/main.mjs'), env: { HAPPIER_DB_PROVIDER: 'sqlite' },
+    entrypoint: join(runtimeDir, 'sources/main.mjs'), dbProvider: 'sqlite', env: { HAPPIER_DB_PROVIDER: 'sqlite' },
     migration: { mode: 'disabled' } };
   await writeFile(server.entrypoint, source);
   await writeFile(join(outputDir, 'source-bundle.json'), JSON.stringify(server));
@@ -1292,9 +1520,16 @@ test('source daemon owns a usable public author SDK closure without workspace di
   assert.match(await readFile(join(nestedRuntime.runtimeDir, 'authoring/node_modules/@happier-dev/plugin-sdk/dist/index.d.ts'), 'utf8'),
     /canonicalMarker = "current-source"/, 'private current-build declarations remain valid even when output is inside the checkout');
   await writeFile(join(protocolDir, 'src/index.ts'), 'export const marker = "moving-source";');
-  const author = await import(pathToFileURL(join(sdkRoot, 'dist/index.js')).href);
+  // Earlier source-tool tests register a workspace loader for this process.
+  // Authors consume the emitted SDK in their own process, without that loader
+  // redirecting its bare imports back into the canonical checkout.
+  const { stdout: authorOutput } = await promisify(execFile)(process.execPath,
+    ['--input-type=module', '--eval', `import * as author from ${JSON.stringify(pathToFileURL(join(sdkRoot, 'dist/index.js')).href)};
+      console.log(JSON.stringify({marker:author.marker,echo:author.echo('author-value'),canonicalAlias:author.canonicalAlias}));`],
+    { env: { ...process.env, ...runtime.env } });
+  const author = JSON.parse(authorOutput);
   assert.equal(author.marker, 'current-source');
-  assert.equal(author.echo('author-value'), 'author-value');
+  assert.equal(author.echo, 'author-value');
   assert.equal(author.canonicalAlias, 'package-alias');
   await assert.rejects(access(join(sdkDir, 'dist')), {code:'ENOENT'});
   assert.match(await readFile(join(protocolDir, 'dist/index.js'), 'utf8'), /stale-dist/);
@@ -1482,7 +1717,7 @@ test('concurrent stacks share one read-only source bundle and retain selected bu
   const second = await build({repoDir, stackBaseDir: stacks[0], component:'daemon',env:buildEnv});
   assert.notEqual(second.entrypoint, results[0].entrypoint);
   await access(results[0].entrypoint); // Other stack still selects this bundle.
-  await writeFile(join(cliDir, 'src/index.ts'), 'export const ready = 3; console.log("ready"); setInterval(()=>{},1000);');
+  await writeFile(join(cliDir, 'src/index.ts'), 'export const ready = 3; if (!process.argv.includes("--help")) { console.log("ready"); setInterval(()=>{},1000); }');
   const third = await build({repoDir, stackBaseDir: stacks[0], component:'daemon',env:buildEnv});
   if (process.platform === 'win32') await access(second.entrypoint); // No authoritative process observation: retain.
   else await assert.rejects(access(second.entrypoint), {code:'ENOENT'});
@@ -1920,7 +2155,7 @@ test('source bundle freezes source exports and a lazy entry without consuming di
     const token=process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN;
     const root=process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT;
     const admissionClass=token && root ? readFileSync(join(root,'owners',token.replace(':','-'),'class'),'utf8').trim() : null;
-    writeFileSync(${JSON.stringify(admissionEvidence)},JSON.stringify({pid:process.pid,admissionClass}));
+    writeFileSync(${JSON.stringify(admissionEvidence)},JSON.stringify({pid:process.pid,admissionClass,token}));
     export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=[];
   `);
   // The builder escalates an authenticated parent reservation in place.
@@ -1930,7 +2165,13 @@ test('source bundle freezes source exports and a lazy entry without consuming di
   const result = await buildSourceRuntimeBundle({ repoDir, outputDir: join(repoDir, 'output'), component: 'daemon', env:buildEnv });
   const admitted = JSON.parse(await readFile(admissionEvidence, 'utf8'));
   assert.notEqual(admitted.pid, process.pid, 'source preparation is finite, not part of the long-lived caller');
-  if (process.platform === 'linux') assert.equal(admitted.admissionClass, 'source-bundle');
+  if (process.platform === 'linux') {
+    assert.equal(typeof admitted.admissionClass, 'string');
+    assert.ok(resolveHeavyweightMemoryFloorKiB(admitted.admissionClass)
+      >= resolveHeavyweightMemoryFloorKiB('source-bundle'), 'the reservation must cover the source bundle envelope');
+    if (buildEnv.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN) assert.equal(admitted.token,
+      buildEnv.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN, 'finite source preparation reuses its authenticated containing reservation');
+  }
   await writeFile(join(packageDir, 'src/index.ts'), "export const value = 'changed';\n");
   await writeFile(join(cliDir, 'src/lazy.ts'), "throw new Error('moving source was loaded');\n");
   await writeFile(join(unscopedDir, 'src/index.ts'), "throw new Error('moving unscoped source was loaded');\n");

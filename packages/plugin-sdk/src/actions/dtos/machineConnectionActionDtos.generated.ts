@@ -374,9 +374,7 @@ export type MachineConnectionActionResultById = {
         supported: true;
         response: {
             ok: true;
-            result?: string | number | boolean | readonly JsonValue[] | {
-                readonly [key: string]: JsonValue;
-            } | null | undefined;
+            result?: JsonValue | undefined;
         } | {
             ok: false;
             error: {

@@ -1842,14 +1842,17 @@ describe('plugin invocation ActionsService', () => {
         });
     });
 
-    it('returns a host-stamped exact target execution origin only for the contributed-Action origin call', async () => {
+    it.each(['materialization', 'source'] as const)('returns a host-stamped exact %s target execution origin only for the contributed-Action origin call', async (kind) => {
         const executionOrigin = Object.freeze({
             serverIdentityId: 'srv_action_origin_fixture',
-            materializationRef: Object.freeze({
+            ...(kind === 'materialization' ? { materializationRef: Object.freeze({
                 pluginId: 'acme.target',
                 machineId: 'machine-target',
                 materializationId: 'materialization-target-current',
-            }),
+            }) } : { sourceRef: Object.freeze({
+                pluginId: 'acme.target', machineId: 'machine-target',
+                sourceCustody: { kind: 'development' as const, registeredRootId: 'target-source-root' },
+            }) }),
         });
         const invokeContributedAction = vi.fn<InvokeContributedAction>(async () => ({
             status: 'executed' as const,
@@ -1877,6 +1880,7 @@ describe('plugin invocation ActionsService', () => {
         await expect(service.executeWithExecutionOrigin(
             { pluginId: 'acme.target', localId: 'publish' },
             { title: 'Ready' },
+            { expectedExecutionOrigin: executionOrigin },
         )).resolves.toEqual({
             result: { accepted: true },
             executionOrigin,
@@ -1886,6 +1890,7 @@ describe('plugin invocation ActionsService', () => {
             input: { title: 'Ready' },
             surface: 'plugin',
             captureExecutionOrigin: true,
+            expectedExecutionOrigin: executionOrigin,
             caller: {
                 kind: 'plugin',
                 pluginId: 'acme.caller',

@@ -39,13 +39,25 @@ describe('decideSessionMessageDelivery row actions', () => {
         });
     });
 
-    it('uses steer_if_active only when the live capability says steering is available', () => {
-        expect(decideSessionMessageDelivery({ configuredMode: 'agent_queue', session: steerable, nowMs: now })).toMatchObject({
+    it.each(['agent_queue', 'server_pending'] as const)('honors busy steering with %s only when the live capability is available', (configuredMode) => {
+        expect(decideSessionMessageDelivery({ configuredMode, session: steerable, nowMs: now })).toMatchObject({
             requestedAction: { v: 1, kind: 'steer_if_active' },
         });
         expect(decideSessionMessageDelivery({
-            configuredMode: 'agent_queue',
+            configuredMode,
             session: { ...steerable, agentState: { capabilities: { inFlightSteerSupported: true, inFlightSteerAvailable: false } } },
+            nowMs: now,
+        })).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' } });
+        expect(decideSessionMessageDelivery({
+            configuredMode,
+            explicitMode: 'server_pending',
+            session: steerable,
+            nowMs: now,
+        })).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' } });
+        expect(decideSessionMessageDelivery({
+            configuredMode,
+            busySteerSendPolicy: 'server_pending',
+            session: steerable,
             nowMs: now,
         })).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' } });
     });

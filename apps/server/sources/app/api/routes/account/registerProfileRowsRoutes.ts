@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
     ProfileRowMutationV1Schema, ProfileRowMutationResponseV1Schema, ProfileRowReadResponseV1Schema,
@@ -14,7 +14,7 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { inTx } from '@/storage/inTx';
 import { listProfileRowsInTx, readProfileReferenceGuardInTx, readProfileRowInTx, mutateProfileRows, convertProfileProviders } from '@/app/account/profiles/profileRows';
 
-const invalidParams = z.object({ error: z.literal('invalid-params') }).strict();
+const invalidParams = z.strictObject({ error: z.literal('invalid-params') });
 
 /** Closed Profile semantics share the reserved-row owner, never public arbitrary-key KV. */
 export function registerProfileRowsRoutes(app: Fastify): void {
@@ -31,7 +31,7 @@ export function registerProfileRowsRoutes(app: Fastify): void {
     }, async (request, reply) => reply.send(await inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
     app.get(PROFILE_ROWS_ROUTE_V1, {
         preHandler: app.authenticate, config,
-        schema: { querystring: z.object({ cursor: z.string().refine(value => parseProfilePhysicalKey(value) !== null, 'Invalid Profile cursor').optional(), limit: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+        schema: { querystring: z.strictObject({ cursor: z.optional(z.string().check(z.refine(value => parseProfilePhysicalKey(value) !== null, 'Invalid Profile cursor'))), limit: z.optional(z.coerce.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER))) }),
             response: { 200: asServerProtocolZod(ProfileRowsListResponseV1Schema), 400: invalidParams } },
     }, async (request, reply) => reply.send(await inTx(tx => listProfileRowsInTx(tx, { accountId: request.userId,
         ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),

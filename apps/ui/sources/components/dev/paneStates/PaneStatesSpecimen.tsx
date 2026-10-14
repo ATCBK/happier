@@ -17,10 +17,10 @@ import { Typography } from '@/constants/Typography';
  */
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    content: { padding: 24, gap: 28 },
-    block: { gap: 12 },
-    rowTitle: { ...Typography.default('semiBold'), fontSize: 14, color: theme.colors.text.primary },
-    caption: { ...Typography.default(), fontSize: 12, color: theme.colors.text.secondary },
+    content: { padding: theme.space.s24, gap: 28 },
+    block: { gap: theme.space.s12 },
+    rowTitle: {  ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
+    caption: {  ...Typography.variant('meta'), color: theme.colors.text.secondary },
     grid: { flexDirection: 'row', gap: 22, flexWrap: 'wrap' },
     frame: {
         height: 440,
@@ -31,11 +31,11 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     frameFlex: { flexGrow: 1, flexBasis: 380, minWidth: 320 },
-    frameHeader: { ...Typography.default('semiBold'), fontSize: 14, color: theme.colors.text.primary, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 },
+    frameHeader: {  ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s16, paddingBottom: theme.space.s12 },
     frameBody: { flex: 1, minHeight: 0 },
-    rows: { paddingVertical: 8 },
-    row: { ...Typography.default(), fontSize: 13, lineHeight: 18, color: theme.colors.text.primary, paddingHorizontal: 16, paddingVertical: 11 },
-    section: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.secondary, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4 },
+    rows: { paddingVertical: theme.space.s8 },
+    row: {  ...Typography.variant('body'),  color: theme.colors.text.primary, paddingHorizontal: theme.space.s16, paddingVertical: 11 },
+    section: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingTop: 14, paddingBottom: theme.space.s4 },
 }));
 
 const noop = () => {};
@@ -46,7 +46,7 @@ function SkeletonBody() {
     const { theme } = useUnistyles();
     const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
     return (
-        <View style={{ paddingTop: 8 }}>
+        <View style={{ paddingTop: theme.space.s8 }}>
             <HappierSkeletonRows rows={4} theme={pluginTheme} />
         </View>
     );

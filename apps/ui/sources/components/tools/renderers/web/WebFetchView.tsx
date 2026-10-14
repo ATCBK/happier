@@ -78,14 +78,14 @@ export const WebFetchView = React.memo<ToolViewProps>(({ tool, detailLevel, mess
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 10,
+        gap: theme.space.s10,
     },
     header: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     url: {
         flex: 1,

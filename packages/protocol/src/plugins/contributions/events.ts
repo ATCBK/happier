@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginEventAutomationDeclarationV1Schema } from '../../automations/automationEventDeclarationV1.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
@@ -20,59 +21,56 @@ const PluginContributionLocalIdZodSchema = asProtocolZod(PluginContributionLocal
 const PluginContributionReferenceV2ZodSchema = asProtocolZod(PluginContributionReferenceV2Schema);
 const RESERVED_HOST_EVENT_IDS_V1 = new Set<string>(HOST_EVENT_IDS_V1);
 
-const ReservedRuntimeEventIdSchema = lazyZodSchema(() => PluginContributionLocalIdZodSchema.refine(
-  (id) => !RESERVED_HOST_EVENT_IDS_V1.has(`@happier/runtime/${id}`),
-  'Plugin events cannot use canonical agent runtime event ids',
-));
+const ReservedRuntimeEventIdSchema = lazyZodSchema(() => PluginContributionLocalIdZodSchema.check(zMini.refine((id) => !RESERVED_HOST_EVENT_IDS_V1.has(`@happier/runtime/${id}`), 'Plugin events cannot use canonical agent runtime event ids')));
 
 const HostEventSubscriptionTargetV1Schema = lazyZodSchema(() => z.union([
-  RuntimeHostEventTargetV1Schema.extend({
+  zMini.extend(RuntimeHostEventTargetV1Schema, {
     kind: z.literal('host'),
   }),
-  AutomationHostEventTargetV1Schema.extend({
+  zMini.extend(AutomationHostEventTargetV1Schema, {
     kind: z.literal('host'),
   }),
 ]));
 
 export const EventSubscriptionTargetV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('plugin'),
     event: PluginContributionReferenceV2ZodSchema,
-  }).strict(),
+  }),
   HostEventSubscriptionTargetV1Schema,
 ]));
 export type EventSubscriptionTargetV1 = z.input<typeof EventSubscriptionTargetV1Schema>;
 
 export const PluginEventContributionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     id: ReservedRuntimeEventIdSchema,
     kind: z.literal('event'),
     title: PluginLocalizedStringV2Schema,
-    description: PluginLocalizedStringV2Schema.optional(),
-    payloadSchema: PluginJsonSchemaV2Schema.optional(),
-    automation: PluginEventAutomationDeclarationV1Schema.optional(),
-    metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-  }).strict().superRefine((value, context) => {
+    description: zMini.optional(PluginLocalizedStringV2Schema),
+    payloadSchema: zMini.optional(PluginJsonSchemaV2Schema),
+    automation: zMini.optional(PluginEventAutomationDeclarationV1Schema),
+    metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+  }).check(z.superRefine((value, context) => {
     // An Automation authors filters, payload mappings and run inputs against
     // the Event payload. Admitting an eligible Event with no published payload
     // contract offers the author a source whose occurrences have no describable
     // shape, so eligibility and the payload contract are declared together.
     if (value.automation !== undefined && value.payloadSchema === undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payloadSchema'],
         message: 'An Automation-eligible Event must publish a payload schema',
       });
     }
-  }),
-  z.object({
+  })),
+  z.strictObject({
     id: PluginContributionLocalIdZodSchema,
     kind: z.literal('subscription'),
     target: EventSubscriptionTargetV1Schema,
-    filterSchema: PluginJsonSchemaV2Schema.optional(),
-    priority: z.number().int().optional(),
-    metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-  }).strict(),
+    filterSchema: zMini.optional(PluginJsonSchemaV2Schema),
+    priority: z.optional(z.number().check(z.int())),
+    metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+  }),
 ]));
 export type PluginEventContributionV1 = z.input<typeof PluginEventContributionV1Schema>;
 export type ParsedPluginEventContributionV1 = z.output<typeof PluginEventContributionV1Schema>;

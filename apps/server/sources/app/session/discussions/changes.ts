@@ -1,4 +1,4 @@
-import { SESSION_DISCUSSION_CHANGE_HINT_V1 } from "@happier-dev/protocol";
+import { SESSION_DISCUSSION_CHANGE_HINT_V1 } from '@happier-dev/protocol/sessions/discussions';
 
 import {
     refreshTrackedSessionAccountBadgePushes,

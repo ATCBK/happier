@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { AutomationTriggerIdSchema } from '@happier-dev/protocol';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { createWorkflowActionExecutor } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
 import { createWorkflowDefinitionActions } from '@happier-dev/protocol/actions/executor/workflowDefinitions';
 import { createAccountWorkflowTriggerActions } from '@happier-dev/protocol/actions/executor/workflowTriggerAccountHost';
@@ -34,8 +35,11 @@ describe('Workflow trigger removal through the Action and retained SQLite owners
                     return row ? toAutomationDefinitionDetailApiDto(row, witness) : null;
                 },
                 create: async (input) => toAutomationDefinitionDetailApiDto(await createAutomation({ accountId, input }), witness),
-                reconcile: async (automationId, input) => toAutomationDefinitionDetailApiDto(
-                    await reconcileAutomationDefinition({ accountId, automationId, input }), witness),
+                reconcile: async (automationId, input) => {
+                    const row = await reconcileAutomationDefinition({ accountId, automationId, input });
+                    if (!row) throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
+                    return toAutomationDefinitionDetailApiDto(row, witness);
+                },
                 delete: async (automationId) => {
                     await beforeDelete?.();
                     const deleted = await deleteAutomation({ accountId, automationId });
@@ -50,16 +54,17 @@ describe('Workflow trigger removal through the Action and retained SQLite owners
         const definitions = createWorkflowDefinitionActions({ artifactStore: {
             read: unusedArtifact, list: unusedArtifact, create: unusedArtifact, update: unusedArtifact, delete: unusedArtifact,
         }, encodeListCursor: row => row.artifactId, assertDefinitionWriteAllowed: unusedArtifact });
+        // This fixture binds only Workflow transport; unrelated external host ports are never invoked.
         return createActionExecutor({ workflowAction: createWorkflowActionExecutor({
             isWorkflowFeatureEnabled: () => true, definitions, triggers,
             runs: { execute: async () => { throw new Error('Unexpected Run Action'); } },
-        }) });
+        }) } as ActionExecutorDeps);
     }
 
     async function fixture(withTrigger = false) {
         const account = await db.account.create({ data: { id: randomUUID(), encryptionMode: 'plain' } });
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: '{}' } });
-        const triggerId = randomUUID();
+        const triggerId = AutomationTriggerIdSchema.parse(randomUUID());
         const automation = await createAutomation({ accountId: account.id, input: {
             automationId: randomUUID(), name: 'Retained Manual', enabled: true,
             executionRecipe: createAutomationWorkflowRecipeFixture({ templateVersion: 1, directory: '/tmp', prompt: 'READY' }),
@@ -86,6 +91,7 @@ describe('Workflow trigger removal through the Action and retained SQLite owners
     it('deletes a disabled empty Manual set while keeping its historical Run and unrelated set', async () => {
         const f = await fixture();
         const run = await runAutomationNow({ accountId: f.accountId, automationId: f.automationId });
+        if (!run) throw new Error('Expected retained Automation Run');
         const live = await updateAutomation({ accountId: f.accountId, automationId: f.automationId, input: { enabled: false } });
         const before = await db.automationRun.findUniqueOrThrow({ where: { id: run.id } });
         const unrelated = await fixture();

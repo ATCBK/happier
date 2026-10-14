@@ -11,9 +11,9 @@ import { ensurePrivateConnectedServiceMaterializedRoot } from '@/daemon/connecte
 import { readMcpServersSettingsFromAccountSettings } from '../servers/readMcpServersSettingsFromAccountSettings';
 import { MCP_REQUEST_AUTH_PURPOSE, type McpRequestAuthCapability, type McpRequestAuthPort } from './mcpRequestAuth';
 
-/** Captured by the authenticated daemon Session owner, never supplied by the runner. */
+/** Captured by the authenticated daemon operation owner, never supplied by the runner. */
 export type McpRequestAuthIssuanceContext = Readonly<{
-  parentSessionId: string;
+  parentSessionId?: string;
   materializationBaseDir: string;
   readAccountSettingsSnapshot(): ActiveAccountSettingsSnapshot | null;
   establishedOwner: Pick<QualifiedConnectedAccountEstablishedRuntimeOwner, 'readMaterialSnapshot'>;
@@ -39,14 +39,15 @@ export async function issueMcpRequestAuthCapability(
     try {
       await context.assertCurrent(requestSignal);
       const server = readMcpServersSettingsFromAccountSettings(context.readAccountSettingsSnapshot()).servers.find(row => row.id === input.serverId);
-      if (!server || server.transport === 'stdio' || server.remote.auth?.kind !== 'oauth'
-        || canonicalMcpOAuthResourceUrlV1(server.remote.url) !== resource) return false;
+      const remote = server?.remote;
+      if (!server || server.transport === 'stdio' || !remote || remote.auth?.kind !== 'oauth'
+        || canonicalMcpOAuthResourceUrlV1(remote.url) !== resource) return false;
       const grant = await context.establishedOwner.readMaterialSnapshot({ account, signal: requestSignal });
       const storedResource = grant.configuration?.values.resource;
       if (typeof storedResource !== 'string' || canonicalMcpOAuthResourceUrlV1(storedResource) !== resource
         || !await grant.isCurrent()) return false;
       if (input.executionRun) {
-        if (!context.readExecutionRunAuthority) return false;
+        if (!context.parentSessionId || !context.readExecutionRunAuthority) return false;
         const proof = SessionExecutionRunBrokerAuthorityRequestV1Schema.parse({ v: 1, executionRunId: input.executionRun.runId,
           expectedOccurrenceId: input.executionRun.occurrenceId });
         const current = SessionExecutionRunBrokerAuthorityResponseV1Schema.parse(await context.readExecutionRunAuthority(proof, requestSignal));

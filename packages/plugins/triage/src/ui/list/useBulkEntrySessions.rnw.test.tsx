@@ -17,6 +17,9 @@ import {
 import { TESTKIT_OBSERVED_REVISION, testkitConfiguredInstance } from '../../sessions/testkit/entrySessionTestkit.test-support.js';
 import { testkitLocator } from '../../corpus/testkit/observations.test-support.js';
 import type { TriageStartEntrySessionInputV1 } from '../../actions/entrySessionProtocol.js';
+import { readTriageActionsForSurface } from '../../actions/actionsCatalog.js';
+import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../../settings/actions.js';
+import { createTestkitAccountKv } from '../../settings/testkit/accountKv.test-support.js';
 
 /** Only host transport handlers are substituted; the public client and provider run for real. */
 type BoundaryHost = Readonly<{
@@ -159,6 +162,7 @@ function MountedController(): React.ReactElement | null {
 }
 
 async function mount(host: BoundaryHost): Promise<void> {
+    const catalog = createTestkitAccountKv({ [TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1]: { v: 1, actions: [action(null)] } });
     await act(async () => {
         fixture = await createPluginUiTestkit({
             identity: { instanceId: 'bulk-controller-fixture', mountNonce: 'bulk-controller-mount' },
@@ -171,9 +175,9 @@ async function mount(host: BoundaryHost): Promise<void> {
             } }),
             adapter: createPluginUiRnwSemanticSurfaceAdapter(),
             handlers: {
-                executeAction: async ({ action, input, signal, selectedActionInput }) => (
-                    await host.executeAction(action, input, { signal, selectedActionInput }) as JsonValue
-                ),
+                executeAction: async ({ action, input, signal, selectedActionInput }) => action === 'actions/read-v1'
+                    ? await readTriageActionsForSurface({ v: 1 }, { catalog: catalog.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) })
+                    : await host.executeAction(action, input, { signal, selectedActionInput }) as JsonValue,
                 ...(host.selectActionInput === undefined ? {} : {
                     selectActionInput: async ({ request }) => (
                         await host.selectActionInput!(request) as SelectActionInputResult

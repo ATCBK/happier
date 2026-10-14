@@ -1,10 +1,21 @@
-import { Asset } from 'expo-asset';
+import type { Asset } from 'expo-asset';
 import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
+import type { PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plugins/ui';
+import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+
+export type PluginHostBundledUiDeclaration = Readonly<{
+    pluginId: string;
+    pluginVersion: string;
+    /** Canonical package custody locator from the app dependency inventory. */
+    packageName: string;
+    displayName: string;
+    entriesById: PluginDeclaredUiEntriesV1;
+}>;
 
 /**
  * The immutable app-package projection of one Plugin UI Artifact. Availability
- * remains the owner of selection and currentness; this projection only names
- * bytes that the app binary already contains.
+ * remains the owner of selection and currentness; this projection retains the
+ * app's first-party UI declarations beside bytes it already contains.
  */
 export type BundledPluginUiAppArtifactFile = Readonly<{
     relativePath: string;
@@ -17,6 +28,8 @@ export type BundledPluginUiAppArtifact = Readonly<{
     tier: 'hostedWeb' | 'reactNative';
     digest: PluginUiArtifactDigestV1;
     releaseVersion: string;
+    artifactGraph?: PluginUiArtifactsManifestEntryV2;
+    uiDeclaration?: PluginHostBundledUiDeclaration;
     files: readonly BundledPluginUiAppArtifactFile[];
 }>;
 

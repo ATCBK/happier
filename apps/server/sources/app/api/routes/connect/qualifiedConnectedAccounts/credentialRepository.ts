@@ -1,27 +1,14 @@
 import { randomBytes } from "node:crypto";
 
 import type { Prisma } from "@prisma/client";
-import {
-    type ManagedResourceDependencyV1, type ManagedResourceDispositionV1,
-    CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-    ConnectedServiceCredentialHealthV1Schema,
-    StoredJsonContentEnvelopeSchema,
-    isStoredJsonContentEnvelopeModeCompatible,
-    QualifiedConnectedAccountConfigurationTargetV4Schema,
-    QualifiedConnectedAccountCredentialMetadataV4Schema,
-    QualifiedConnectedAccountRefSchema,
-    QualifiedConnectedAccountServiceRefSchema,
-    QualifiedConnectedAccountProfileV4Schema,
-    PluginContributionLocalIdSchema,
-    type QualifiedConnectedAccountConfigurationSnapshotV4,
-    type QualifiedConnectedAccountConfigurationTargetV4,
-    type QualifiedConnectedAccountCredentialMetadataV4,
-    type QualifiedConnectedAccountRef,
-    type QualifiedConnectedAccountServiceRef,
-    type QualifiedConnectedAccountProfileV4,
-    type ConnectedServiceCredentialHealthV1,
-    type StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
+import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
+import { ConnectedServiceCredentialHealthV1Schema, type ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { StoredJsonContentEnvelopeSchema, isStoredJsonContentEnvelopeModeCompatible, type StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { QualifiedConnectedAccountConfigurationTargetV4Schema, QualifiedConnectedAccountCredentialMetadataV4Schema, QualifiedConnectedAccountServiceRefSchema, QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
+import { type QualifiedConnectedAccountConfigurationSnapshotV4, type QualifiedConnectedAccountConfigurationTargetV4, type QualifiedConnectedAccountCredentialMetadataV4, type QualifiedConnectedAccountServiceRef, type QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 

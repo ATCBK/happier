@@ -5,8 +5,6 @@ import { RootLayoutRouteContexts } from "./rootLayoutRouteContexts";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Stack } from 'expo-router';
 
-import { storage } from '@/sync/domains/state/storageStore';
-import { profileDefaults } from '@/sync/domains/profiles/profile';
 
 import { createRootLayoutFeaturesResponse, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -17,15 +15,6 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
 };
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-
-type LinkedProvider = {
-    id: string;
-    login: string;
-    displayName: string;
-    avatarUrl: string;
-    profileUrl: string;
-    showOnProfile: boolean;
-};
 
 const routerMockState = vi.hoisted(() => ({
     push: vi.fn(),
@@ -48,17 +37,6 @@ vi.mock('expo-router/build/fork/getPathFromState', async () => {
     const { loadInstalledExpoPathSerializer } = await import('@/dev/testkit/runtime/installedExpoPathSerializer');
     return loadInstalledExpoPathSerializer();
 });
-
-function createGithubLinkedProvider(): LinkedProvider {
-    return {
-        id: 'github',
-        login: 'user',
-        displayName: 'User',
-        avatarUrl: 'https://example.com/avatar.png',
-        profileUrl: 'https://github.com/user',
-        showOnProfile: true,
-    };
-}
 
 async function stubRootLayoutFeaturesFetch() {
     await seedPersistedHomeProfilesForTests({ activeServerId: 'friends-home', profiles: [{ id: 'friends-home', serverUrl: 'https://friends.example.test', name: 'Friends', createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' }] });
@@ -106,57 +84,21 @@ afterEach(() => {
 });
 
 describe('RootLayout', () => {
-    const scenarios: Array<{
-        expectedOpacity: number;
-        linkedProviders: LinkedProvider[];
-        name: string;
-        username: string | null;
-    }> = [
-        {
-            name: 'dims friends add button when identity is not ready',
-            linkedProviders: [],
-            username: null,
-            expectedOpacity: 0.5,
-        },
-        {
-            name: 'dims friends add button when GitHub is connected but username is missing',
-            linkedProviders: [createGithubLinkedProvider()],
-            username: null,
-            expectedOpacity: 0.5,
-        },
-        {
-            name: 'shows friends add button when GitHub is connected and username is set',
-            linkedProviders: [createGithubLinkedProvider()],
-            username: 'user',
-            expectedOpacity: 1,
-        },
-    ];
-
-    for (const scenario of scenarios) {
-        it(scenario.name, async () => {
-            await stubRootLayoutFeaturesFetch();
-            storage.getState().applyProfile({
-                ...profileDefaults,
-                username: scenario.username,
-                linkedProviders: scenario.linkedProviders,
-            });
-
-            const tree = await renderRootLayout();
-            try {
-                const friendsManage = getFriendsManageScreen(tree);
-                expect(friendsManage).toBeTruthy();
-
-                const options = friendsManage?.props?.options?.({ navigation: { navigate: vi.fn() } });
-                expect(typeof options?.headerRight).toBe('function');
-
-                const node = options.headerRight();
-                expect(node).not.toBeNull();
-                expect(node.props?.style?.opacity).toBe(scenario.expectedOpacity);
-            } finally {
-                await tree?.unmount();
-            }
-        });
-    }
+    it('declares Friends management only through the shared root options, with Add friend left to its page', async () => {
+        await stubRootLayoutFeaturesFetch();
+        const tree = await renderRootLayout();
+        try {
+            const { createRootStackRouteOptions } = await import('@/components/navigation/root/rootStackRouteOptions');
+            const friendsManage = getFriendsManageScreen(tree);
+            expect(friendsManage).toBeTruthy();
+            const options = friendsManage?.props?.options;
+            expect(options).toMatchObject({ headerShown: true });
+            expect(options.headerRight).toBeUndefined();
+            expect(options).toEqual(createRootStackRouteOptions('auto')['friends/manage']);
+        } finally {
+            await tree?.unmount();
+        }
+    });
 
     it('registers the session navigator for tool and execution-run sub-pages', async () => {
         await stubRootLayoutFeaturesFetch();

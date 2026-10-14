@@ -29,7 +29,8 @@ import { useNewSessionPanelPropsForCreationProfile } from '@/components/sessions
 import { useResolveNewSessionOrdinaryEntryRoute } from '@/components/sessions/new/navigation/newSessionOrdinaryEntryRoute';
 import { isNewSessionDraftLaunchInCustody } from '@/components/sessions/new/modules/newSessionDraftLaunchCustody';
 import { NewSessionDraftComposerActions } from '@/components/sessions/drafts/NewSessionDraftComposerActions';
-import { deleteNewSessionDraftAfterConfirmation } from '@/components/sessions/drafts/deleteNewSessionDraftAfterConfirmation';
+import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { buildSessionDraftSyncStatusBadge } from '@/components/sessions/drafts/sessionDraftStatusPresentation';
 import {
     SessionDraftConflictResolution,
@@ -37,8 +38,7 @@ import {
 } from '@/components/sessions/drafts/SessionDraftConflictResolution';
 import { ComposerAuxiliaryFrame } from '@/components/sessions/shell/view/ComposerAuxiliaryFrame';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
-import { Modal } from '@/modal';
-import { readAllActionOperations, useAllActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
+import { useAllActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
 import { parseNewSessionCheckoutDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import {
     clearNewSessionOrdinaryEntryDraftIdExact,
@@ -49,15 +49,10 @@ import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSe
 import {
     getSessionDraftSnapshot,
     subscribeSessionDraft,
-    deleteSessionDraft,
-    deleteSessionDraftWithScopedRuntime,
     type SessionDraftSnapshot,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { useServerCredentialAccountScopeBindings, useServerCredentialAccountScopeResolution, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useServerCredentialAccountScopeBindings, useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { createServerFetchAtEndpoint } from '@/sync/http/client';
-import { runWithSessionDraftRepositoryScopedRuntime } from '@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { t } from '@/text';
 import { SessionDraftHydrationBoundary } from '@/components/sessions/drafts/SessionDraftHydrationBoundary';
@@ -293,15 +288,12 @@ export function NewSessionScreen(props: NewSessionScreenProps) {
                 <ItemLoadStateRows state={{ kind: 'loading' }} rows={2} lines={1} accessibilityLabel={t('common.loading')} />
             </GlassSurface>
         ) : undefined}>
-        <NewSessionScreenReady {...props} activeDraftScope={activeDraftScope} draftScope={draftScope}
-            requestedDraftScopeBinding={requestedDraftScopeBinding} onDraftIdentityResolved={onDraftIdentityResolved} />
+        <NewSessionScreenReady {...props} draftScope={draftScope} onDraftIdentityResolved={onDraftIdentityResolved} />
     </SessionDraftHydrationBoundary>;
 }
 
 function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
-    activeDraftScope: ServerAccountScope | null;
     draftScope: ServerAccountScope | null;
-    requestedDraftScopeBinding: ServerCredentialAccountScopeBinding | null;
     onDraftIdentityResolved: (draftId: string) => void;
 }>) {
     const { router, openDraft } = useNewSessionHostNavigation();
@@ -312,22 +304,8 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         machineId?: string;
         directory?: string;
     }>();
-    const { activeDraftScope, draftScope, requestedDraftScopeBinding, onDraftIdentityResolved } = props;
-    const requestedDraftProfile = React.useMemo(
-        () => draftScope && requestedDraftScopeBinding
-            ? getServerProfileById(draftScope.serverId)
-            : null,
-        [draftScope, requestedDraftScopeBinding],
-    );
-    const requestedDraftActiveRequest = React.useMemo(
-        () => requestedDraftProfile && draftScope
-            ? createServerFetchAtEndpoint({
-                endpointUrl: requestedDraftProfile.serverUrl,
-                serverId: draftScope.serverId,
-            })
-            : null,
-        [draftScope, requestedDraftProfile],
-    );
+    const { draftScope, onDraftIdentityResolved } = props;
+    const draftAction = useMountedActionExecution(draftScope, { openOnRequest: true });
     const resolveOrdinaryEntry = useResolveNewSessionOrdinaryEntryRoute();
     const [ordinaryEntryDraftId, setOrdinaryEntryDraftId] = useSettingMutable('newSessionOrdinaryEntryDraftId');
     const draftIdentity = React.useMemo(() => {
@@ -382,39 +360,10 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
     }, [openDraft, resolveOrdinaryEntry]);
     const deleteDraft = React.useCallback(async () => {
         if (!draftScope || launchInCustody) return;
-        const deleted = await deleteNewSessionDraftAfterConfirmation({
-            confirm: () => Modal.confirm(
-                t('sessionDrafts.delete.confirmTitle'),
-                t('sessionDrafts.delete.confirmDescription'),
-                { confirmText: t('common.delete'), cancelText: t('common.cancel'), destructive: true },
-            ),
-            readCurrentDraftDeletionDisposition: () => {
-                const currentDraft = getSessionDraftSnapshot(draftScope, draftAddress);
-                if (!currentDraft) return 'missing';
-                return isNewSessionDraftLaunchInCustody({
-                    accountId: draftScope.accountId,
-                    launchUserAttemptId: currentDraft.localSupplement.launchUserAttemptId,
-                    operations: readAllActionOperations(),
-                }) ? 'launch-custody' : 'deletable';
-            },
-            deleteDraft: () => {
-                if (activeDraftScope && areServerAccountScopesEqual(activeDraftScope, draftScope)) {
-                    return deleteSessionDraft({ scope: draftScope, address: draftAddress });
-                }
-                if (!requestedDraftScopeBinding || !requestedDraftActiveRequest) return Promise.resolve(false);
-                return runWithSessionDraftRepositoryScopedRuntime({
-                    binding: requestedDraftScopeBinding,
-                    activeRequest: requestedDraftActiveRequest,
-                    operation: ({ runtime, isCurrent }) => deleteSessionDraftWithScopedRuntime({
-                        scope: draftScope,
-                        address: draftAddress,
-                        runtime,
-                        isCurrent,
-                    }),
-                }).then((deleted) => deleted === true);
-            },
-        });
-        if (!deleted) return;
+        const outcome = await draftAction.execute('session.draft.delete', { draftId: draftIdentity.draftId });
+        if (!outcome.ok || !draftAction.isCurrent()) return;
+        const deleted = AppShellActionOutputSchemas['session.draft.delete'].safeParse(outcome.result);
+        if (!deleted.success || deleted.data.status !== 'deleted') return;
         const pointerDelta = clearNewSessionOrdinaryEntryDraftIdExact(
             { newSessionOrdinaryEntryDraftId: ordinaryEntryDraftId },
             draftIdentity.draftId,
@@ -422,15 +371,13 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         if (pointerDelta) setOrdinaryEntryDraftId(pointerDelta.newSessionOrdinaryEntryDraftId);
         openDraft(resolveOrdinaryEntry({ forceFresh: true }), 'replace');
     }, [
-        activeDraftScope,
-        draftAddress,
+        draftAction.execute,
+        draftAction.isCurrent,
         draftIdentity.draftId,
         draftScope,
         launchInCustody,
         openDraft,
         ordinaryEntryDraftId,
-        requestedDraftActiveRequest,
-        requestedDraftScopeBinding,
         resolveOrdinaryEntry,
         setOrdinaryEntryDraftId,
     ]);

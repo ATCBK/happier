@@ -201,8 +201,8 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     content: {
-        padding: 16,
-        gap: 12,
+        padding: theme.space.s16,
+        gap: theme.space.s12,
         alignItems: 'flex-start',
     },
     caption: {
@@ -213,7 +213,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     popover: {
         width: '100%',

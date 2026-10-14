@@ -1,44 +1,44 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PluginSessionResourceTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('session'),
-    idPath: z.string().trim().min(1).optional(),
-  }).strict(),
-  z.object({
+    idPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  z.strictObject({
     kind: z.literal('message'),
-    idPath: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    idPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('structuredMessage'),
-    kindPath: z.string().trim().min(1).optional(),
-    idPath: z.string().trim().min(1).optional(),
-  }).strict(),
-  z.object({
+    kindPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    idPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  z.strictObject({
     kind: z.literal('sessionResource'),
-    resourceKind: z.string().trim().min(1),
-    resourceIdPath: z.string().trim().min(1).optional(),
-  }).strict(),
-  z.object({
+    resourceKind: z.string().check(z.trim(), z.minLength(1)),
+    resourceIdPath: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  z.strictObject({
     kind: z.literal('machine'),
-    idPath: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    idPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('workspace'),
-    idPath: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    idPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('accessEndpoint'),
-    endpointIdPath: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    endpointIdPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('localService'),
-    idPath: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    idPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('pluginState'),
-    keyPath: z.string().trim().min(1),
-  }).strict(),
+    keyPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
 ]));
 export type PluginSessionResourceTargetV1 = z.infer<typeof PluginSessionResourceTargetV1Schema>;

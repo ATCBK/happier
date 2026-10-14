@@ -3,7 +3,7 @@ import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/se
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { storage } from '@/sync/domains/state/storage';
+import type { storage as sessionStorage } from '@/sync/domains/state/storage';
 import type { HomeGovernanceHarness } from './homeGovernanceHarness';
 import { createSessionFixture } from '../fixtures/sessionFixtures';
 import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
@@ -12,7 +12,7 @@ import { installDisconnectedServerSocketBoundary } from './serverAccountConnecti
 export function installSessionActionRpcBoundary(respond: (
     request: SocketRpcRequestPayload,
     context: Readonly<{ signal: AbortSignal }>,
-) => unknown) {
+) => unknown): SocketRpcRequestPayload[] {
     const requests: SocketRpcRequestPayload[] = [];
     installDisconnectedServerSocketBoundary(socket => {
         const pending = new Map<string, AbortController>();
@@ -60,10 +60,10 @@ export function installSessionActionRpcBoundary(respond: (
 /** Hydrates the same plain Account Session from local state and its genuine HTTP projection. */
 export function installSessionActionFixture(params: Readonly<{
     homes: HomeGovernanceHarness;
-    storage: typeof storage;
+    storage: typeof sessionStorage;
     serverId: string;
     session: Partial<Session> & Pick<Session, 'id'>;
-}>) {
+}>): Session {
     const { homes, storage, serverId } = params;
     const session = createSessionFixture({ serverId, active: true,
         metadata: { path: '/repo', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine_1',

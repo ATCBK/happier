@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { AutomationPluginEventDefinitionTriggerSchema } from './automationTriggerDefinition.js';
@@ -6,23 +6,23 @@ import { AutomationEventPayloadV1Schema } from './automationEventJsonBoundsV1.js
 import { AutomationOccurredAtV1Schema } from './automationOccurredAtV1.js';
 import { evaluateAutomationEventFilterV1, isAutomationEventObservationFreshV1 } from './automationEventV1.js';
 
-const DiagnosticSourceV1Schema = lazyZodSchema(() => AutomationPluginEventDefinitionTriggerSchema.pick({
+const DiagnosticSourceV1Schema = lazyZodSchema(() => z.pick(AutomationPluginEventDefinitionTriggerSchema, {
   eventRef: true, sourceInstanceId: true, sourceContractVersion: true,
 }));
-export const AutomationEventTestInputV1Schema = lazyZodSchema(() => z.object({
-  trigger: DiagnosticSourceV1Schema.extend({
+export const AutomationEventTestInputV1Schema = lazyZodSchema(() => z.strictObject({
+  trigger: z.nullable((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DiagnosticSourceV1Schema, {
     filter: AutomationPluginEventDefinitionTriggerSchema.shape.filter,
     maximumObservationAgeMs: AutomationPluginEventDefinitionTriggerSchema.shape.maximumObservationAgeMs,
-  }).strict().nullable(),
-  observation: DiagnosticSourceV1Schema.extend({
+  }))),
+  observation: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DiagnosticSourceV1Schema, {
     occurredAt: AutomationOccurredAtV1Schema,
-    observationReceivedAt: z.number().int().nonnegative().safe(),
+    observationReceivedAt: z.number().check(z.int(), z.nonnegative(), z.int()),
     payload: asProtocolZod(AutomationEventPayloadV1Schema),
-  }).strict(),
-}).strict());
-export const AutomationEventTestResultV1Schema = lazyZodSchema(() => z.object({
+  })),
+}));
+export const AutomationEventTestResultV1Schema = lazyZodSchema(() => z.strictObject({
   result: z.enum(['matched', 'noMatch', 'sourceMismatch', 'tooOld', 'invalid']),
-}).strict());
+}));
 export type AutomationEventTestInputV1 = z.infer<typeof AutomationEventTestInputV1Schema>;
 export type AutomationEventTestResultV1 = z.infer<typeof AutomationEventTestResultV1Schema>;
 

@@ -189,6 +189,14 @@ const FRESH_RING_FADE_MS = 600;
  * and the Companion. The structure is `HappierWidgetFrame` (plugin-ui); this adapter supplies
  * Happier's theme, text owner, glyphs, the W1 state bodies and the arrival ring.
  */
+/** The room a rendered viewport holds right now, read from the DOM (web only); null until it has one. */
+function readViewportRoom(node: unknown): WidgetBodyPresentation['geometry'] | null {
+    const measure = (node as { getBoundingClientRect?: () => { width: number; height: number } } | null)?.getBoundingClientRect;
+    if (typeof measure !== 'function') return null;
+    const { width, height } = measure.call(node);
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? { width, height } : null;
+}
+
 export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFrameProps) {
     const reducedMotion = useReducedMotionPreference();
     const { theme } = useUnistyles();
@@ -222,6 +230,18 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     const widgetPresentation = React.useMemo(() => props.widgetPresentation
         ? { ...props.widgetPresentation, ...(geometry ? { geometry } : {}) } : inheritedPresentation,
         [props.widgetPresentation, geometry, inheritedPresentation]);
+    // A widget lays itself out from its measured room (columns, strips, plot height). On the web a layout event
+    // reaches it only after the first paint, and a busy page can hold that event for seconds, so the first commit
+    // reads the room itself: nothing paints in a layout it is about to leave.
+    const viewportRef = React.useRef<View | null>(null);
+    const viewportContentRef = React.useRef<View | null>(null);
+    React.useLayoutEffect(() => {
+        if (Platform.OS !== 'web' || geometry !== undefined) return;
+        // A fixed body's viewport is the scroll area that holds its content row.
+        const content = viewportContentRef.current as unknown as Element | null;
+        const room = readViewportRoom(viewportRef.current ?? content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
+        if (room) setGeometry(room);
+    }, [geometry, props.testID]);
     const inset = resolveHappierWidgetFrameInsetPx(props.frameStyle);
     // Inside a group nothing clips (A6): a grid cell keeps its rows' room and grows; a phone's stack is its content.
     const bodyHeight = props.bodyHeight ?? (props.grouped ? phone ? 'content' : 'grow' : 'fixed');
@@ -377,7 +397,8 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             } : undefined}
             renderText={renderText}
             footer={footerNode}
-            fill={props.widgetPresentation ? false : props.fill}
+            // A card with a footprint keeps its rows' height; inside a group its cell is the band's, so it fills it.
+            fill={props.widgetPresentation && !props.grouped ? false : props.fill ?? props.grouped}
             bodyStyle={props.bodyStyle}
             accessibilityLabel={props.accessibilityLabel
                 ?? (typeof props.source === 'string' && typeof props.title === 'string' ? `${props.title}, ${props.source}` : undefined)}
@@ -388,9 +409,10 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 <WidgetPresentationProvider value={widgetPresentation}>
                 {props.widgetPresentation && bodyHeight !== 'fixed' ? (
                     // Nothing clips or scrolls here: the body is measured (its size and width still
-                    // reach it) and the frame takes the height that results.
-                    <View testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
-                        style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, minWidth: 0 }}>
+                    // reach it) and the frame takes the height that results. A frame stretched by its band
+                    // (a group's shorter column) hands the extra height to this viewport, so the body fills it.
+                    <View ref={viewportRef} testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
+                        style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, flexGrow: 1, minWidth: 0 }}>
                         <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                     </View>
                 ) : props.widgetPresentation ? (
@@ -399,7 +421,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                         style={{ height: props.viewportHeight ?? rows * rowHeight, minWidth: 0,
                             ...(bodyFadeMask ? { maskImage: bodyFadeMask.maskImage, WebkitMaskImage: bodyFadeMask.WebkitMaskImage } : {}) }}
                         contentContainerStyle={{ minHeight: '100%' }}>
-                        <View testID={`${props.testID}.viewportContent`} onLayout={onFixedContentLayout} style={styles.fixedBodyContent}>
+                        <View ref={viewportContentRef} testID={`${props.testID}.viewportContent`} onLayout={onFixedContentLayout} style={styles.fixedBodyContent}>
                             <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                         </View>
                     </HappierScrollArea>

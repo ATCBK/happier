@@ -1,14 +1,14 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 
-const KeysetCursorPayloadV1Schema = lazyZodSchema(() => z.object({
+const KeysetCursorPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  q: z.string().min(1),
-  p: z.array(z.union([z.string(), z.number()])).min(1).max(4),
-}).strict());
+  q: z.string().check(z.minLength(1)),
+  p: z.array(z.union([z.string(), z.number()])).check(z.minLength(1), z.maxLength(4)),
+}));
 
 export const KEYSET_CURSOR_MAX_LENGTH_V1 = 512;
 const KEYSET_CURSOR_ENCODER = new TextEncoder();

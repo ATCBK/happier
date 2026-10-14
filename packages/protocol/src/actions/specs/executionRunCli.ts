@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BackendTargetKeySchema,
@@ -31,8 +31,8 @@ import {
 } from '../executionRunActionPermissionMode.js';
 import { actionCliDerivedDefault, type ActionCliProjection } from '../actionCliProjection.js';
 
-const SessionSelectorSchema = lazyZodSchema(() => z.string().trim().min(1));
-const RunIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SessionSelectorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const RunIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 /** Existing friendly defaults, shared by the compiled command and workflow adapters. */
 export function defaultExecutionRunPermissionMode(
@@ -92,27 +92,21 @@ export function readExecutionRunCliBackendTarget(raw: string): BackendTargetRefV
   }
 }
 
-const ExecutionRunCliAgentSchema = lazyZodSchema(() => z.string().trim().min(1).refine(
-  (value) => readExecutionRunCliBackendTarget(value) !== null,
-  { message: 'Agent must identify one concrete execution target' },
-));
+const ExecutionRunCliAgentSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine((value) => readExecutionRunCliBackendTarget(value) !== null, { message: 'Agent must identify one concrete execution target' })));
 
-const ExecutionRunCliPermissionModeSchema = lazyZodSchema(() => z.string().trim().min(1).refine(
-  (value) => ExecutionRunActionPermissionModeSchema.safeParse(value).success,
-  { message: 'Invalid execution run permission mode' },
-));
+const ExecutionRunCliPermissionModeSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine((value) => ExecutionRunActionPermissionModeSchema.safeParse(value).success, { message: 'Invalid execution run permission mode' })));
 
-export const ExecutionRunStartCliInputSchema = lazyZodSchema(() => z.object({
-  sessionId: SessionSelectorSchema.nullable().optional(),
-  cwd: z.string().trim().min(1).optional(),
+export const ExecutionRunStartCliInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.optional(z.nullable(SessionSelectorSchema)),
+  cwd: z.optional(z.string().check(z.trim(), z.minLength(1))),
   intent: ExecutionRunIntentSchema,
   agent: ExecutionRunCliAgentSchema,
-  instructions: z.string().optional(),
-  permissionMode: ExecutionRunCliPermissionModeSchema.optional(),
-  retention: ExecutionRunRetentionPolicySchema.optional(),
-  runClass: ExecutionRunClassSchema.optional(),
-  ioMode: ExecutionRunIoModeSchema.optional(),
-}).strict());
+  instructions: z.optional(z.string()),
+  permissionMode: z.optional(ExecutionRunCliPermissionModeSchema),
+  retention: z.optional(ExecutionRunRetentionPolicySchema),
+  runClass: z.optional(ExecutionRunClassSchema),
+  ioMode: z.optional(ExecutionRunIoModeSchema),
+}));
 export type ExecutionRunStartCliInput = z.infer<typeof ExecutionRunStartCliInputSchema>;
 
 export function bindExecutionRunStartCliInput(
@@ -205,12 +199,12 @@ export const EXECUTION_RUN_START_CLI_PROJECTION: ActionCliProjection = {
   bindInput: (value) => bindExecutionRunStartCliInput(value as Partial<ExecutionRunStartCliInput>),
 };
 
-export const ExecutionRunListCliInputSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunListCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
-  agent: ExecutionRunCliAgentSchema.optional(),
-  status: ExecutionRunStatusSchema.optional(),
-  limit: z.number().int().min(1).max(200).optional(),
-}).strict());
+  agent: z.optional(ExecutionRunCliAgentSchema),
+  status: z.optional(ExecutionRunStatusSchema),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(200))),
+}));
 export type ExecutionRunListCliInput = z.infer<typeof ExecutionRunListCliInputSchema>;
 
 export function bindExecutionRunListCliInput(

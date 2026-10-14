@@ -18,6 +18,7 @@ import {
     useSessionSidechainMessages,
 } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import { SessionRunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { renderExecutionRunStructuredMeta } from '@/components/sessions/runs/renderExecutionRunStructuredMeta';
 import { SessionExecutionRunInfoCard } from '@/components/sessions/runs/details/SessionExecutionRunInfoCard';
 import {
@@ -757,6 +758,10 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 )}
             <View style={{ flex: 1, minHeight: 0, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s12 }}>
             <View style={{ gap: theme.space.s8 }}>
+                {/* A walkthrough or commit-proposal Run offers its own notification beside the output it writes. */}
+                {canMutateRunViaSessionRpc && state.run.status === 'running' && structuredMeta?.kind !== 'scm_diff_summary.v1' ? (
+                    <SessionRunWorkNotifications sessionId={props.sessionId} runId={props.runId} serverId={explicitServerId} />
+                ) : null}
                 {discussionOrigin ? (
                     <ExecutionRunContextChip
                         testID="session-run-details-context"

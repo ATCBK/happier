@@ -11,6 +11,7 @@ import type { ServerFetch } from '@/sync/http/client';
 import { t } from '@/text';
 import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type Props = CustomModalInjectedProps & Readonly<{
     /** The sign-in email when the caller knows it; null asks for it (an account-service Account). */
@@ -34,7 +35,7 @@ export function RecoveryKeyUnlockModal(props: Props) {
         title: t('settingsAccount.secretKey'),
         testID: 'recovery-key-unlock-modal',
         bodyScroll: 'auto' as const,
-        dimensions: { width: 380, maxHeightRatio: 0.85, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.85, size: 'dialog' as const },
     }), []));
 
     React.useEffect(() => () => {

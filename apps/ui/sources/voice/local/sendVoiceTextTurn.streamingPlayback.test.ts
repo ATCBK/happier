@@ -277,10 +277,10 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     const serverId = account.homes.voice.id;
     const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
     const target = createSessionFixture({ id: 's1', serverId, active: true, presence: 'online',
-      metadata: { machineId: machine.id, path: '/workspace/s1', flavor: 'claude',
+      metadata: { machineId: machine.id, path: '/workspace/s1', host: 'voice.test', flavor: 'claude',
         agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } });
     const carrier = createSessionFixture({ id: 'carrier-s1', serverId, active: true, presence: 'online',
-      metadata: writeVoiceConversationScopeMetadata({ ...target.metadata,
+      metadata: writeVoiceConversationScopeMetadata({ ...target.metadata!,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
       }, { kind: 'session_root', sessionRootId: target.id }) });
     storage.setState({ settings: buildAccountSettings(),

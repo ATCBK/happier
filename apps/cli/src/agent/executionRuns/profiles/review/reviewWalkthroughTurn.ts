@@ -30,6 +30,7 @@ export async function prepareReviewWalkthroughTurn(params: Readonly<{
   const patch = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: params.start.sessionId,
     request: { ...params.start, intent: 'scm_diff_summary', intentInput: {
       cwd, source: captured.comparison.source, comparisonId: captured.comparison.id, outputs: ['walkthrough'],
+      ...(typeof original.outputLanguage === 'string' ? { outputLanguage: original.outputLanguage } : {}),
       ...(current?.success ? { resultId: current.result.resultId, expectedRevision: current.result.revision } : {}),
     } } });
   const input = readScmDiffSummaryIntent(patch?.intentInput);
@@ -63,27 +64,29 @@ export async function prepareSavedReviewWalkthroughInput(start: ExecutionRunProf
     reviewFindingCitations,
   });
   if (!begun.success) throw new Error(begun.error);
-  const narrativeInstructions = [
+  const narrativeTask = [
     provenance.narrationMode === 'continued_review'
       ? 'Continue this review Run by writing the walkthrough. The findings were already published. Do not repeat the review.'
       : 'Write a walkthrough seeded from the published review findings. You are reading the diffs, not reviewing them.',
     'Use the latest review provenance supplied by the host input context.', findingCitationInstructions,
-    (() => { try { return JSON.stringify(presentReviewFindingCitations(JSON.parse(findingsContext), reviewFindingCitations)); }
-      catch { return findingsContext; } })(),
   ].join('\n\n');
+  const evidenceContext = (() => { try { return JSON.stringify(presentReviewFindingCitations(JSON.parse(findingsContext), reviewFindingCitations)); }
+    catch { return findingsContext; } })();
+  const userInstructions = typeof input.instructions === 'string' ? input.instructions : undefined;
+  const outputLanguage = typeof input.outputLanguage === 'string' ? input.outputLanguage : undefined;
   const instructions = buildDiffSummaryPrompt({ comparison,
     metadata: saved.result.output.metadata!, outputs: ['walkthrough'],
     files: comparison.inventory.files.map(file => ({ path: file.path, changeKind: file.changeKind,
       unifiedDiff: file.evidence.unifiedDiff, ...(file.binary !== null ? { binary: file.binary } : {}),
       ...(file.evidence.state === 'unavailable' ? { description: file.evidence.reason } : {}) })),
-    instructions: narrativeInstructions,
+    instructions: userInstructions, taskInstructions: narrativeTask, evidenceContext, outputLanguage,
   });
   const planned = planDiffSummaryAnalysis({ comparison, metadata: saved.result.output.metadata!, outputs: ['walkthrough'],
-    prompt: instructions, instructions: narrativeInstructions,
+    prompt: instructions, instructions: userInstructions, taskInstructions: narrativeTask, evidenceContext, outputLanguage,
     contextWindowTokens: typeof input.scmContextWindowTokens === 'number' ? input.scmContextWindowTokens : undefined });
   if (planned) planned.state.expectedInputId = localId;
   return { instructions: planned?.instructions ?? instructions, localId, intentInput: { ...input, resultId: saved.result.resultId,
-    instructions: narrativeInstructions,
+    ...(userInstructions ? { instructions: userInstructions } : {}),
     ...(planned ? { scmAnalysis: planned.state } : {}),
     expectedRevision: saved.result.revision, outputs: ['walkthrough'],
     reviewNarration: { ...narration, phase: 'writing', reviewFindingCitations },

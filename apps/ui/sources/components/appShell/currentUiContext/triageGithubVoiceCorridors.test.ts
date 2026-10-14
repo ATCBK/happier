@@ -30,11 +30,11 @@ import {
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
 } from '@happier-dev/triage-protocol/v1';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 
-import { composeCurrentUiContextSnapshotFromNavigation } from './currentUiContextModel';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
@@ -78,17 +78,24 @@ import type { CorpusSourceInstanceRowV1 } from '../../../../../../packages/plugi
 import { createTestkitCorpusCollections } from '../../../../../../packages/plugins/triage/src/corpus/testkit/corpusCollections.test-support';
 import { createTriageListWindowStore } from '../../../../../../packages/plugins/triage/src/projection/listWindowStore';
 import { projectTriageCurrentUiContextV1 } from '../../../../../../packages/plugins/triage/src/ui/currentContext';
-import { useTriageCurrentUiContextPublication } from '../../../../../../packages/plugins/triage/src/ui/shell/root';
+import { useTriageCurrentUiContextPublication } from '../../../../../../packages/plugins/triage/src/ui/currentContextPublication';
 import { TRIAGE_SURFACE_INITIAL_STATE_V1 } from '../../../../../../packages/plugins/triage/src/ui/state/surface';
 
 let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
+let restoreBrowserLocks: (() => void) | undefined;
+let composeCurrentUiContextSnapshotFromNavigation: typeof import('./currentUiContextModel').composeCurrentUiContextSnapshotFromNavigation;
 beforeAll(async () => {
+  restoreBrowserLocks = installBrowserStorageLockBoundary();
   network = await installSessionOpsNetworkBoundary();
+  // The model's Session presentation graph reaches Sync; load it after transport installation.
+  ({ composeCurrentUiContextSnapshotFromNavigation } = await import('./currentUiContextModel'));
 });
+beforeEach(() => { network.resetRequests(); });
 afterAll(async () => {
   (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool')).serverScopedRpcSocketPool.resetForTests();
   (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool')).resetScopedMachineTransportCacheForTests();
   await network.dispose();
+  restoreBrowserLocks?.();
 });
 
 const MACHINE_ID = 'machine-triage-proof';

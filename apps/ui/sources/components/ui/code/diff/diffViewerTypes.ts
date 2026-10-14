@@ -55,6 +55,13 @@ export type TextDiffViewerProps = DiffViewerBaseProps & Readonly<{
     oldText: string;
     newText: string;
     contextLines?: number;
+    /**
+     * `prose`: R5, the reading face for instructions people read (two labelled sides, proportional type,
+     * soft bands, no hunk headers). `code` (default) is the code diff.
+     */
+    face?: 'code' | 'prose';
+    /** The prose face's side labels and, when a choice is made, which side is kept (the other dims). */
+    prose?: Readonly<{ oldLabel?: ReactNode; newLabel?: ReactNode; kept?: 'old' | 'new' | null }>;
 }>;
 
 export type DiffViewerProps = UnifiedDiffViewerProps | TextDiffViewerProps;

@@ -30,7 +30,7 @@ import { getSessionGettingStartedSubtitle, getSessionGettingStartedTitle } from 
 import { SessionGettingStartedSummary } from './SessionGettingStartedSummary';
 import { useSessionGettingStartedGuidanceBaseModel } from './useSessionGettingStartedGuidanceBaseModel';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
@@ -285,7 +285,7 @@ function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuida
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { model } = props;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     const title = getSessionGettingStartedTitle(model.kind);
     const subtitle = getSessionGettingStartedSubtitle(model.kind, model.targetLabel);

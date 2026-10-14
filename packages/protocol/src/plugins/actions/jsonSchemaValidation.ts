@@ -9,7 +9,7 @@
  * and keep AJV out of their module graph.
  */
 import type { ErrorObject } from 'ajv';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { compileProtocolJsonSchema } from './jsonSchemaCompiler.js';
@@ -116,27 +116,27 @@ export function describePluginJsonSchemaValueIssues(
  * require an object schema, without making Zod a second schema-semantics owner.
  */
 export function createPluginJsonSchemaZodObjectAdapter(schema: object) {
-  return createPluginJsonSchemaZodAdapter(schema, z.object({}).passthrough(), true);
+  return createPluginJsonSchemaZodAdapter(schema, z.looseObject({}), true);
 }
 
 /** Native contributions may declare any ordinary JSON root, not only an object. */
 export function createPluginJsonSchemaZodValueAdapter(schema: object) {
   // AJV admits the strict JSON value at this boundary. An unknown base keeps
   // Zod's exporter representable before the canonical projection hook runs.
-  return createPluginJsonSchemaZodAdapter(schema, z.unknown(), false) as z.ZodType<ProtocolJsonValue>;
+  return createPluginJsonSchemaZodAdapter(schema, z.unknown(), false) as z.ZodMiniType<ProtocolJsonValue>;
 }
 
-function createPluginJsonSchemaZodAdapter<Schema extends z.ZodType>(schema: object, root: Schema, objectRoot: boolean) {
+function createPluginJsonSchemaZodAdapter<Schema extends z.ZodMiniType>(schema: object, root: Schema, objectRoot: boolean) {
   const prepared = preparePluginJsonSchema(schema);
   const { jsonSchema: normalized, validate } = prepared;
-  const adapter = root.superRefine((value, ctx) => {
+  const adapter = root.check(z.superRefine((value, ctx) => {
     if (!isValidPluginJsonSchemaValue(validate, value)) {
       ctx.addIssue({
         code: 'custom',
         message: 'Value does not match the plugin JSON Schema',
       });
     }
-  });
+  }));
 
   // The pinned Zod exporter exposes a processor hook for boundary adapters.
   // Copy a fresh protocol-validated value because the exporter mutates its
@@ -207,13 +207,13 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodType>(schema: obje
       }
       return output;
     };
-    return z.unknown().transform((value, context) => {
+    return z.pipe(z.unknown(), z.transform((value, context) => {
       let projected: unknown;
       try { projected = project(normalized, cloneStrictPluginJsonValue(value, 'stored value')); }
-      catch { context.addIssue({ code: 'custom', message: 'Stored value is not valid JSON' }); return z.NEVER; }
+      catch { context.issues.push({ code: 'custom', message: 'Stored value is not valid JSON', input: context.value }); return z.NEVER; }
       const parsed = adapter.safeParse(projected);
-      if (!parsed.success) { context.addIssue({ code: 'custom', message: 'Stored value does not match the declared plugin JSON Schema' }); return z.NEVER; }
+      if (!parsed.success) { context.issues.push({ code: 'custom', message: 'Stored value does not match the declared plugin JSON Schema', input: context.value }); return z.NEVER; }
       return parsed.data;
-    });
+    }));
   });
 }

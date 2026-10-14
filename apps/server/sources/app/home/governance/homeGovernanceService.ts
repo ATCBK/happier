@@ -1,26 +1,7 @@
-import {
-    decodeKeysetCursorV1,
-    encodeKeysetCursorV1,
-    HOME_ACCOUNT_DETAIL_RECENT_EVENTS_LIMIT_V1,
-    HOME_ACCOUNT_PAGE_LIMIT_DEFAULT_V1,
-    isActiveHomeAccountStatus,
-    normalizeVerifiedEmail,
-    readKeysetCursorIdV1,
-    readKeysetCursorTextV1,
-    type HomeAccountDetailV1,
-    type HomeAccountListResultV1,
-    type HomeAccountPickerRowV1,
-    type HomeAccountRowV1,
-    type HomeAccountSearchScopeV1,
-    type HomeAuthenticationPolicyProjectionV1,
-    type HomeAuthenticationOptionsV1,
-    type HomeAuthenticationPolicyReadV1,
-    type HomeGovernancePolicyProjectionV1,
-    type HomeGovernanceProjectionV1,
-    type HomeGovernanceEligibilityV1,
-    type HomeIdentityDeploymentServicesV1,
-    type HomeRoleV1,
-} from "@happier-dev/protocol";
+import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTextV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
+import { HOME_ACCOUNT_DETAIL_RECENT_EVENTS_LIMIT_V1, HOME_ACCOUNT_PAGE_LIMIT_DEFAULT_V1, isActiveHomeAccountStatus, type HomeAccountDetailV1, type HomeAccountListResultV1, type HomeAccountPickerRowV1, type HomeAccountRowV1, type HomeAccountSearchScopeV1, type HomeAuthenticationPolicyReadV1, type HomeRoleV1 } from '@happier-dev/protocol/home/governance';
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
+import { type HomeAuthenticationPolicyProjectionV1, type HomeAuthenticationOptionsV1, type HomeGovernancePolicyProjectionV1, type HomeGovernanceProjectionV1, type HomeGovernanceEligibilityV1, type HomeIdentityDeploymentServicesV1 } from '@happier-dev/protocol/home/governance/projection';
 
 import { deploymentAllowsPrivateIdentityNetwork } from "@/app/auth/providers/managed/managedIdentityNetworkPolicy";
 import { resolveDeploymentTeamProviderKinds } from "@/app/auth/providers/teamProviderDeploymentCeiling";

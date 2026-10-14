@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
+import { HappierItemAddRow, type HappierItemAddRowContentProps } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -10,35 +11,16 @@ import { Item } from '@/components/ui/lists/Item';
  * inline form or the add flow; it never carries a chevron.
  */
 export const ItemAddRow = React.memo(function ItemAddRow(
-  props: Readonly<{
-    testID?: string;
-    title: string;
-    subtitle?: string;
-    onPress: () => void;
-    /** For a row that opens an inline form under itself: whether that form is open. */
-    expanded?: boolean;
-    disabled?: boolean;
-    showDivider?: boolean;
-    density?: React.ComponentProps<typeof Item>['density'];
-  }>,
+  props: HappierItemAddRowContentProps,
 ) {
   const { theme } = useUnistyles();
   return (
-    <Item
-      testID={props.testID}
-      title={props.title}
-      subtitle={props.subtitle}
-      icon={<Icon name="plus" color={theme.colors.text.secondary} />}
-      onPress={props.onPress}
-      showChevron={false}
-      disabled={props.disabled}
-      density={props.density}
-      {...(props.showDivider !== undefined
-        ? { showDivider: props.showDivider }
-        : {})}
-      {...(props.expanded !== undefined
-        ? { accessibilityState: { expanded: props.expanded } }
-        : {})}
+    <HappierItemAddRow
+      {...props}
+      renderIcon={(icon) => <Icon {...icon} color={theme.colors.text.secondary} />}
+      renderRow={({ accessibilityExpanded, ...row }) => <Item {...row}
+        {...(accessibilityExpanded === undefined ? {} : { accessibilityState: { expanded: accessibilityExpanded } })}
+      />}
     />
   );
 });

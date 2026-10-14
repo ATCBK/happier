@@ -118,7 +118,12 @@ export function createHostedEntityDragDropHandlers(input: Readonly<{
                 }
                 if (command.kind === 'destinations') {
                     const source = mounts.get(command.mountId)?.source;
-                    return source?.isCurrent() ? { accepted: true, destinations: [...input.binding.runtime.getDestinations(source.id)], description: input.binding.runtime.describeSource(source.id) } : { accepted: false };
+                    if (!source?.isCurrent()) return { accepted: false };
+                    const description = input.binding.runtime.describeSource(source.id);
+                    return { accepted: true, destinations: [...input.binding.runtime.getDestinations(source.id)], description: description ? {
+                        title: description.title,
+                        ...(description.subtitle !== undefined ? { subtitle: description.subtitle } : {}),
+                    } : null };
                 }
                 if (command.kind === 'choose') {
                     const source = mounts.get(command.mountId)?.source;

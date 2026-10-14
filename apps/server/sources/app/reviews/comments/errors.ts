@@ -1,4 +1,4 @@
-import type { ReviewCommentOperationErrorCodeV1 } from "@happier-dev/protocol";
+import type { ReviewCommentOperationErrorCodeV1 } from '@happier-dev/protocol/reviews/comments/actions';
 
 export class ReviewCommentOperationError extends Error {
     constructor(

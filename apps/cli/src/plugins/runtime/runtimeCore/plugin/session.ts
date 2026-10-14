@@ -165,6 +165,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
     const hasManagedProviderRunServices = currentOperations.managedProviderRunServices !== undefined;
     const hasPrepareTerminalPresentation =
         currentOperations.prepareTerminalPresentation !== undefined;
+    const hasTerminalExecutionObserver = currentOperations.observeTerminalExecution !== undefined;
     const hasRefreshSkills = currentOperations.refreshSkills !== undefined;
     let runtimeClosed = false;
     let runtimeBindingEpoch = 0;
@@ -543,6 +544,11 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
                 },
             }
             : {}),
+        ...(hasTerminalExecutionObserver ? {
+            async observeTerminalExecution(input: Parameters<NonNullable<PluginRuntimeHookOperations['observeTerminalExecution']>>[0]) {
+                await currentOperations.observeTerminalExecution?.(input);
+            },
+        } : {}),
         readSessionIdentity() {
             return currentOperations.readSessionIdentity();
         },

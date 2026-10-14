@@ -41,7 +41,11 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
         tracedClient.$on("query", event => statements.push(event.query));
         const originalTransaction = db.$transaction;
         // Provider-generated clients implement the same transaction boundary.
-        db.$transaction = tracedClient.$transaction.bind(tracedClient) as typeof db.$transaction;
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(_target, _thisArg, args) {
+                return Reflect.apply(tracedClient.$transaction, tracedClient, args);
+            },
+        });
         const broadcast = vi.spyOn(eventRouter, "emitSessionBroadcast");
         const wake = vi.spyOn(eventRouter, "emitUpdate");
         const settleBroadcasts = async () => {

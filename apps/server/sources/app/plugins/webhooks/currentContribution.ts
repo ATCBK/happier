@@ -1,4 +1,4 @@
-import type { ParsedPluginManifestV2 } from '@happier-dev/protocol';
+import type { ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 
 import {
     currentPluginDeclarationKeyV1,

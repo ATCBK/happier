@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { TerminalPresentUserPolicySchema } from '../actions/invocationAuthority.js';
 
 import { AccountExternalAuthProofV1Schema } from './accountExternalAuthProof.js';
@@ -21,9 +21,9 @@ export const ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1 = '/v1/auth/password/mu
 export const NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1 = '/v1/auth/password/reset/submit' as const;
 export const ACCOUNT_SECURITY_PATH_V1 = '/v1/account/security' as const;
 export const ACCOUNT_TERMINAL_PRESENT_USER_POLICY_PATH_V1 = '/v1/account/security/terminal-present-user' as const;
-export const AccountTerminalPresentUserPolicySetRequestV1Schema = lazyZodSchema(() => z.object({ policy: TerminalPresentUserPolicySchema }).strict());
+export const AccountTerminalPresentUserPolicySetRequestV1Schema = lazyZodSchema(() => z.strictObject({ policy: TerminalPresentUserPolicySchema }));
 export type AccountTerminalPresentUserPolicySetRequestV1 = z.infer<typeof AccountTerminalPresentUserPolicySetRequestV1Schema>;
-export const AccountTerminalPresentUserPolicySetResponseV1Schema = lazyZodSchema(() => z.object({ policy: TerminalPresentUserPolicySchema }).strict());
+export const AccountTerminalPresentUserPolicySetResponseV1Schema = lazyZodSchema(() => z.strictObject({ policy: TerminalPresentUserPolicySchema }));
 export type AccountTerminalPresentUserPolicySetResponseV1 = z.infer<typeof AccountTerminalPresentUserPolicySetResponseV1Schema>;
 export const ACCOUNT_PASSWORD_ENROLL_PATH_V1 = '/v1/account/password/enroll' as const;
 export const ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1 = '/v1/account/password/enroll/email/request' as const;
@@ -32,173 +32,165 @@ export const ACCOUNT_PASSWORD_REMOVE_PATH_V1 = '/v1/account/password/remove' as 
 export const ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1 = '/v1/account/email/change/request' as const;
 export const ACCOUNT_EMAIL_CHANGE_PATH_V1 = '/v1/account/email/change' as const;
 
-const PasswordTextWireV1Schema = lazyZodSchema(() => z.string()
-  .max(PASSWORD_MAX_UTF8_BYTES_V1)
-  .refine((value) => acceptPasswordTextV1(value).accepted, { message: 'invalid password text' }));
-const CredentialRevisionV1Schema = lazyZodSchema(() => z.number().int().min(1).max(2_147_483_647));
-const VerifiedEmailWireV1Schema = lazyZodSchema(() => z.string().max(VERIFIED_EMAIL_MAX_SCALARS * 2).refine(
-  (value) => normalizeVerifiedEmail(value) !== null,
-  { message: 'invalid email address' },
-));
-const NormalizedEmailWireV1Schema = lazyZodSchema(() => z.string().max(VERIFIED_EMAIL_MAX_SCALARS * 2).refine(
-  (value) => normalizeVerifiedEmail(value)?.normalizedEmail === value,
-  { message: 'email must already be normalized' },
-));
-const TransitionRequestDigestWireV1Schema = lazyZodSchema(() => z.string().regex(/^aemrb1_[A-Za-z0-9_-]{43}$/));
+const PasswordTextWireV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(PASSWORD_MAX_UTF8_BYTES_V1), z.refine((value) => acceptPasswordTextV1(value).accepted, { message: 'invalid password text' })));
+const CredentialRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)));
+const VerifiedEmailWireV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(VERIFIED_EMAIL_MAX_SCALARS * 2), z.refine((value) => normalizeVerifiedEmail(value) !== null, { message: 'invalid email address' })));
+const NormalizedEmailWireV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(VERIFIED_EMAIL_MAX_SCALARS * 2), z.refine((value) => normalizeVerifiedEmail(value)?.normalizedEmail === value, { message: 'email must already be normalized' })));
+const TransitionRequestDigestWireV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^aemrb1_[A-Za-z0-9_-]{43}$/)));
 
-export const AccountSecurityGetRequestV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const AccountSecurityGetRequestV1Schema = lazyZodSchema(() => z.strictObject({}));
 /** Device-local historical custody; no caller-selected Account or credential material. */
-export const AccountHistoricalEncryptionKeyForgetInputV1Schema = lazyZodSchema(() => z.object({}).strict());
-export const AccountHistoricalEncryptionKeyForgetResultV1Schema = lazyZodSchema(() => z.object({
+export const AccountHistoricalEncryptionKeyForgetInputV1Schema = lazyZodSchema(() => z.strictObject({}));
+export const AccountHistoricalEncryptionKeyForgetResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['forgotten', 'nothing_retained', 'cancelled']),
-}).strict());
+}));
 export type AccountHistoricalEncryptionKeyForgetResultV1 = z.infer<typeof AccountHistoricalEncryptionKeyForgetResultV1Schema>;
 /** Client-custody recovery rewrites templates individually and never discards key material. */
-export const AccountEncryptionAutomationTemplatesRecoverInputV1Schema = lazyZodSchema(() => z.object({}).strict());
-export const AccountEncryptionAutomationTemplatesRecoverResultV1Schema = lazyZodSchema(() => z.object({
-  templates: z.array(z.object({
-    automationId: z.string().min(1),
+export const AccountEncryptionAutomationTemplatesRecoverInputV1Schema = lazyZodSchema(() => z.strictObject({}));
+export const AccountEncryptionAutomationTemplatesRecoverResultV1Schema = lazyZodSchema(() => z.strictObject({
+  templates: z.array(z.strictObject({
+    automationId: z.string().check(z.minLength(1)),
     status: z.enum(['recovered', 'already_plain', 'retained_e2ee', 'locked', 'conflict']),
-  }).strict()),
-}).strict());
+  })),
+}));
 export type AccountEncryptionAutomationTemplatesRecoverResultV1 = z.infer<typeof AccountEncryptionAutomationTemplatesRecoverResultV1Schema>;
-export const AccountSecurityGetResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountSecurityGetResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   encryptionMode: z.enum(['plain', 'e2ee']),
   terminalPresentUserPolicy: TerminalPresentUserPolicySchema,
-  nativeEmail: z.string().nullable(),
+  nativeEmail: z.nullable(z.string()),
   password: z.discriminatedUnion('status', [
-    z.object({ status: z.literal('enrolled'), revision: CredentialRevisionV1Schema }).strict(),
-    z.object({ status: z.literal('not_enrolled'), revision: z.null() }).strict(),
+    z.strictObject({ status: z.literal('enrolled'), revision: CredentialRevisionV1Schema }),
+    z.strictObject({ status: z.literal('not_enrolled'), revision: z.null() }),
   ]),
-}).strict());
+}));
 export type AccountSecurityGetResponseV1 = z.infer<typeof AccountSecurityGetResponseV1Schema>;
 
 export const AccountPasswordEnrollRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('plain'),
     email: VerifiedEmailWireV1Schema,
     targetCredential: PlainAccountPasswordCredentialV1Schema,
-    verificationToken: NativeAuthOneTimeBearerV1Schema.optional(),
+    verificationToken: z.optional(NativeAuthOneTimeBearerV1Schema),
     reauthentication: AccountExternalAuthProofV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('e2ee'),
     email: VerifiedEmailWireV1Schema,
     targetCredential: E2eeAccountPasswordCredentialV1Schema,
-    verificationToken: NativeAuthOneTimeBearerV1Schema.optional(),
+    verificationToken: z.optional(NativeAuthOneTimeBearerV1Schema),
     proof: PasswordMutationChallengeProofV1Schema,
-  }).strict(),
+  }),
 ]));
 
 export const AccountPasswordChangeRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('plain'),
     expectedCredentialRevision: CredentialRevisionV1Schema,
     currentPassword: PasswordTextWireV1Schema,
     newPassword: PasswordTextWireV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('e2ee'),
     action: z.enum(['change', 'recover']),
     expectedCredentialRevision: CredentialRevisionV1Schema,
     targetCredential: E2eeAccountPasswordCredentialV1Schema,
     proof: PasswordMutationChallengeProofV1Schema,
-  }).strict(),
+  }),
 ]));
 
 export const AccountPasswordRemoveRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('plain'),
     expectedCredentialRevision: CredentialRevisionV1Schema,
     currentPassword: PasswordTextWireV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('e2ee'),
     expectedCredentialRevision: CredentialRevisionV1Schema,
     proof: PasswordMutationChallengeProofV1Schema,
-  }).strict(),
+  }),
 ]));
 
-export const AccountEmailChangeRequestV1Schema = lazyZodSchema(() => z.object({
+export const AccountEmailChangeRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   email: VerifiedEmailWireV1Schema,
-}).strict());
+}));
 
-export const AccountPasswordEnrollEmailRequestV1Schema = lazyZodSchema(() => z.object({
+export const AccountPasswordEnrollEmailRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   email: VerifiedEmailWireV1Schema,
-}).strict());
+}));
 
-export const AccountEmailChangeCompleteRequestV1Schema = lazyZodSchema(() => z.object({
+export const AccountEmailChangeCompleteRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   verificationToken: NativeAuthOneTimeBearerV1Schema,
-}).strict());
+}));
 
-export const PlainPasswordResetSubmitRequestV1Schema = lazyZodSchema(() => z.object({
+export const PlainPasswordResetSubmitRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   token: NativeAuthOneTimeBearerV1Schema,
   password: PasswordTextWireV1Schema,
-}).strict());
+}));
 
-export const PlainPasswordResetSubmitResponseV1Schema = lazyZodSchema(() => z.object({
+export const PlainPasswordResetSubmitResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: z.literal('password_reset'),
-}).strict());
+}));
 
 export const PasswordMutationPreparationRequestV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     action: z.literal('remove'),
     expectedCredentialRevision: CredentialRevisionV1Schema,
-    normalizedNativeEmail: NormalizedEmailWireV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    normalizedNativeEmail: z.nullable(NormalizedEmailWireV1Schema),
+  }),
+  z.strictObject({
     v: z.literal(1),
     action: z.enum(['connect', 'change', 'recover']),
-    expectedCredentialRevision: CredentialRevisionV1Schema.nullable(),
-    normalizedNativeEmail: NormalizedEmailWireV1Schema.nullable(),
+    expectedCredentialRevision: z.nullable(CredentialRevisionV1Schema),
+    normalizedNativeEmail: z.nullable(NormalizedEmailWireV1Schema),
     newPlainPassword: PasswordTextWireV1Schema,
-    transitionRequestDigest: TransitionRequestDigestWireV1Schema.optional(),
-  }).strict(),
-  z.object({
+    transitionRequestDigest: z.optional(TransitionRequestDigestWireV1Schema),
+  }),
+  z.strictObject({
     v: z.literal(1),
     action: z.enum(['connect', 'change', 'recover']),
-    expectedCredentialRevision: CredentialRevisionV1Schema.nullable(),
-    normalizedNativeEmail: NormalizedEmailWireV1Schema.nullable(),
-    newE2eePassword: z.object({
+    expectedCredentialRevision: z.nullable(CredentialRevisionV1Schema),
+    normalizedNativeEmail: z.nullable(NormalizedEmailWireV1Schema),
+    newE2eePassword: z.strictObject({
       envelope: E2eeAccountPasswordCredentialV1Schema.shape.envelope,
-      authKey: z.string().length(43),
-    }).strict(),
-    transitionRequestDigest: TransitionRequestDigestWireV1Schema.optional(),
-  }).strict(),
+      authKey: z.string().check(z.length(43)),
+    }),
+    transitionRequestDigest: z.optional(TransitionRequestDigestWireV1Schema),
+  }),
 ]));
 
 export const PasswordMutationPreparationResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     targetCredential: AccountPasswordCredentialV1Schema,
-    challenge: PasswordMutationChallengeV1Schema.optional(),
-  }).strict(),
-  z.object({ challenge: PasswordMutationChallengeV1Schema }).strict(),
+    challenge: z.optional(PasswordMutationChallengeV1Schema),
+  }),
+  z.strictObject({ challenge: PasswordMutationChallengeV1Schema }),
 ]));
 
-export const AccountPasswordMutationResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountPasswordMutationResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: z.enum(['enrolled', 'updated', 'removed']),
-}).strict());
+}));
 
-export const AccountEmailChangeRequestResponseV1Schema = lazyZodSchema(() => z.object({
+export const AccountEmailChangeRequestResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: z.literal('verification_sent'),
-}).strict());
+}));
 
-export const AccountSecurityServerErrorV1Schema = lazyZodSchema(() => z.object({
+export const AccountSecurityServerErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.enum([
     'invalid_request',
     'authentication_failed',
@@ -219,7 +211,7 @@ export const AccountSecurityServerErrorV1Schema = lazyZodSchema(() => z.object({
     'invalid_reset',
     'account-disabled',
   ]),
-}).strict());
+}));
 
 /**
  * Complete strict error surface for the authenticated route boundary. The
@@ -229,8 +221,8 @@ export const AccountSecurityServerErrorV1Schema = lazyZodSchema(() => z.object({
  */
 export const AccountSecurityRouteErrorV1Schema = lazyZodSchema(() => z.union([
   AccountSecurityServerErrorV1Schema,
-  z.object({ error: z.enum(['invalid_token', 'not-eligible', 'upstream_error']) }).strict(),
-  z.object({ error: z.literal('provider-required'), provider: z.string().min(1) }).strict(),
+  z.strictObject({ error: z.enum(['invalid_token', 'not-eligible', 'upstream_error']) }),
+  z.strictObject({ error: z.literal('provider-required'), provider: z.string().check(z.minLength(1)) }),
 ]));
 
 export type AccountPasswordEnrollRequestV1 = z.infer<typeof AccountPasswordEnrollRequestV1Schema>;

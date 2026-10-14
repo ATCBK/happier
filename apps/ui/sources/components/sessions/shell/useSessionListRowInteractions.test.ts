@@ -147,12 +147,12 @@ describe('useSessionListRowInteractions', () => {
         const scrollToOffset = vi.fn();
         const initialInput = buildInteractionsInput({ listItems: twoSessionListItems, scrollToOffset });
         const hook = await renderHook((input: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(input), { initialProps: initialInput });
-        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        const sessionKey = sessionAddressKey({ serverId: ACTIVE_SCOPE.serverId, sessionId: 's2' });
         try {
             await act(async () => {
                 hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 1000, 300, 500) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's1'), { measureInWindow: callback => callback(0, 1000, 300, 500) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
                 hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: ' ' });
             });
             await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: 'ArrowUp' }); });
@@ -172,12 +172,12 @@ describe('useSessionListRowInteractions', () => {
         getStorage().setState({ sessions: {} });
         const initialInput = buildInteractionsInput({ listItems: twoSessionListItems, sessionListOrderingModeV1: 'created' });
         const hook = await renderHook((input: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(input), { initialProps: initialInput });
-        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        const sessionKey = sessionAddressKey({ serverId: ACTIVE_SCOPE.serverId, sessionId: 's2' });
         try {
             await act(async () => {
                 hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
                 hook.getCurrent().handleDragStart(sessionKey);
             });
             act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 105 } }); });
@@ -263,7 +263,7 @@ describe('useSessionListRowInteractions', () => {
 
     it('reports the first-gap Put under refusal through the same entity admission and leaves no overlay', async () => {
         const hook = await renderInteractions({ listItems: twoSessionListItems });
-        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        const sessionKey = sessionAddressKey({ serverId: ACTIVE_SCOPE.serverId, sessionId: 's2' });
         try {
             await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: ' ' }); });
             await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Two', key: 'ArrowUp' }); });
@@ -278,12 +278,12 @@ describe('useSessionListRowInteractions', () => {
 
     it('draws the existing list overlay for a staged keyboard move and hides it on cancel', async () => {
         const hook = await renderInteractions({ listItems: twoSessionListItems });
-        const sessionKey = sessionAddressKey({ serverId: 'server-a', sessionId: 's2' });
+        const sessionKey = sessionAddressKey({ serverId: ACTIVE_SCOPE.serverId, sessionId: 's2' });
         try {
             await act(async () => {
                 hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
-                hook.getCurrent().registerTreeRowBounds(treeRowId.session('server-a', 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
                 hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Second', key: ' ' });
             });
             await act(async () => { hook.getCurrent().stagedMove.handleRowKey({ sessionKey, label: 'Second', key: 'ArrowUp' }); });
@@ -343,9 +343,8 @@ describe('useSessionListRowInteractions', () => {
             await hook.rerender({ ...initialInput, listItems: [...nativeItems, { ...sessionTemplate, sessionId: 's3' }] });
             await act(async () => { finishMeasurement(); await completion; });
             expect(releaseOutcome).toEqual({ status: 'applied' });
-            const rootGroupKey = buildSessionFolderGroupKey({ serverId: scope.serverId,
-                workspace: { ...workspace, serverId: scope.serverId }, folderId: null });
-            expect(setOrder.mock.calls[0]?.[0]?.[rootGroupKey]).toEqual([
+            // Project ordering belongs to the list's projected group, not a folder-root scope.
+            expect(setOrder.mock.calls[0]?.[0]?.['project-a']).toEqual([
                 sessionKey, sessionAddressKey({ serverId: scope.serverId, sessionId: 's1' }),
                 sessionAddressKey({ serverId: scope.serverId, sessionId: 's3' }),
             ]);
@@ -478,11 +477,15 @@ describe('useSessionListRowInteractions', () => {
             expect(destinations).toEqual(expect.arrayContaining([
                 expect.objectContaining({ destination: { kind: 'folder-assignment', folderId: 'folder-a' },
                     admission: expect.objectContaining({ status: 'allowed', effect: expect.objectContaining({ actionId: 'session.folder.set' }) }) }),
-                expect.objectContaining({ destination: { kind: 'folder-assignment', folderId: null },
-                    admission: expect.objectContaining({ status: 'refused', reason: expect.objectContaining({ code: 'no-change' }) }) }),
                 expect.objectContaining({ destination: expect.objectContaining({ instructionKind: 'reorder-after' }),
                     admission: expect.objectContaining({ status: 'refused', reason: expect.objectContaining({ code: 'date-ordering-mode' }) }) }),
             ]));
+            // The canonical chooser omits unchanged places, while direct admission still refuses them.
+            expect(destinations).not.toEqual(expect.arrayContaining([
+                expect.objectContaining({ destination: { kind: 'folder-assignment', folderId: null } }),
+            ]));
+            expect(await runtime.perform('chooser-session', targetId!, { kind: 'folder-assignment', folderId: null }))
+                .toMatchObject({ status: 'refused', reason: { code: 'no-change' } });
             // A previously enumerated target is only a proposal: final admission reads current membership.
             await hook.rerender({ ...initialInput, listItems: [latestItems[0]!, latestItems[1]!] });
             expect(await runtime.perform('chooser-session', targetId!, previousRelation.destination))
@@ -723,8 +726,6 @@ describe('useSessionListRowInteractions', () => {
             },
         });
 
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(false);
-
         await act(async () => {
             hook.getCurrent().handleDragStart(sessionAddressKey({ serverId: 'srv_server_a', sessionId: 's1' }));
             hook.getCurrent().handleTreeDropResult({
@@ -744,8 +745,6 @@ describe('useSessionListRowInteractions', () => {
             });
         });
 
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(true);
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(false);
         // The pointer never reached an admitted place, so the release had nothing to commit.
         expect(folderAssignmentRequests()).toEqual([]);
 

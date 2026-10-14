@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
@@ -29,7 +30,7 @@ function MachinePathBrowserLoading(props: Pick<MachinePathBrowserModalProps, 'se
         kind: 'card' as const,
         title: props.title ?? t('newSession.pathPicker.enterPathTitle'),
         testID: PATH_BROWSER_MODAL_TEST_ID,
-        dimensions: { width: 560, maxHeightRatio: 0.92 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92 },
     }), [props.title]);
 
     useModalCardChrome(props.setChrome, chrome);

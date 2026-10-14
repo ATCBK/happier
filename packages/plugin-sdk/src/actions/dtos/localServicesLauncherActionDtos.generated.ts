@@ -388,9 +388,20 @@ export type LocalServicesLauncherActionResultById = {
             sessionId?: string | undefined;
         };
         reasonCode?: string | undefined;
-        reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null | undefined;
+        prerequisite?: {
+            tool: 'docker';
+            machineName: string;
+            cause: 'unavailable' | 'not_installed' | 'not_running' | 'permission_denied';
+        } | undefined;
+        establishmentFailure?: {
+            cause: 'process_exited' | 'port_in_use';
+            exitCode?: number | undefined;
+            signal?: string | undefined;
+            lastStderrLine?: string | undefined;
+            port?: number | undefined;
+            sameProject?: boolean | undefined;
+        } | undefined;
+        reviewedEffect?: JsonValue | undefined;
         reviewedEffectDigest?: string | undefined;
         currentTarget?: {
             kind: 'managed_service';

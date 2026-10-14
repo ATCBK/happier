@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MessageActionReferenceV1Schema } from './messageActionReferenceV1.js';
 import { SessionMessageAccountActorV1Schema } from './sessionMessageAccountActorV1.js';
 import { SessionInputAdmissionReceiptV1Schema } from './sessionInputAdmission.js';
@@ -15,42 +15,42 @@ import {
 
 /** Additive reader projection; unknown presentation fields are dropped, never trusted. */
 export const SessionMessageV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), localId: z.string().nullish(),
-  sidechainId: z.string().nullable().optional(),
-  messageRole: SessionMessageRoleSchema.nullish(),
-  attentionImpact: SessionMessageAttentionImpactSchema.optional(),
+  id: z.string().check(z.minLength(1)), seq: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)), localId: z.nullish(z.string()),
+  sidechainId: z.optional(z.nullable(z.string())),
+  messageRole: z.nullish(SessionMessageRoleSchema),
+  attentionImpact: z.optional(SessionMessageAttentionImpactSchema),
   content: SessionStoredMessageContentSchema,
-  createdAt: z.number().finite(), updatedAt: z.number().finite().optional(),
-  sourceCreatedAt: z.number().int().min(0).optional(),
-  sourceUpdatedAt: z.number().int().min(0).optional(),
-  transcriptObservationProvenance: SessionTranscriptObservationProvenanceV1Schema.optional(),
-  surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.nullable().optional(),
-  deliveryResolution: SessionMessageDeliveryResolutionV1Schema.optional(),
-  messageActionReference: MessageActionReferenceV1Schema.optional(),
-  accountActor: SessionMessageAccountActorV1Schema.nullable().optional(),
-  inputAdmissionReceipt: SessionInputAdmissionReceiptV1Schema.optional(),
+  createdAt: z.number(), updatedAt: z.optional(z.number()),
+  sourceCreatedAt: z.optional(z.number().check(z.int(), z.minimum(0))),
+  sourceUpdatedAt: z.optional(z.number().check(z.int(), z.minimum(0))),
+  transcriptObservationProvenance: z.optional(SessionTranscriptObservationProvenanceV1Schema),
+  surfaceItemReference: z.optional(z.nullable(SessionTranscriptSurfaceItemReferenceInputV1Schema)),
+  deliveryResolution: z.optional(SessionMessageDeliveryResolutionV1Schema),
+  messageActionReference: z.optional(MessageActionReferenceV1Schema),
+  accountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
+  inputAdmissionReceipt: z.optional(SessionInputAdmissionReceiptV1Schema),
 }));
 export type SessionMessageV1 = z.infer<typeof SessionMessageV1Schema>;
 export const SessionMessagesPageV1Schema = lazyZodSchema(() => z.object({
-  messages: z.array(SessionMessageV1Schema), hasMore: z.boolean().optional(),
-  nextBeforeSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(), nextAfterSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+  messages: z.array(SessionMessageV1Schema), hasMore: z.optional(z.boolean()),
+  nextBeforeSeq: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)))), nextAfterSeq: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)))),
 }));
 export type SessionMessagesPageV1 = z.infer<typeof SessionMessagesPageV1Schema>;
 // An external publication row may be an opaque cursor witness. Invalid content
 // and coarse actors are omitted; Account identity never crosses this projection.
-export const SessionExternalShareableMessagesPageV1Schema = lazyZodSchema(() => SessionMessagesPageV1Schema.extend({
-  messages: z.array(SessionMessageV1Schema.omit({ content: true, accountActor: true, inputAdmissionReceipt: true }).extend({
-    content: z.unknown().transform((input) => {
+export const SessionExternalShareableMessagesPageV1Schema = lazyZodSchema(() => z.extend(SessionMessagesPageV1Schema, {
+  messages: z.array(z.extend(z.omit(SessionMessageV1Schema, { content: true, accountActor: true, inputAdmissionReceipt: true }), {
+    content: z.pipe(z.unknown(), z.transform((input) => {
       const parsed = SessionStoredMessageContentSchema.safeParse(input);
       return parsed.success ? parsed.data : undefined;
-    }),
-    externalShareableActor: z.unknown().transform((input) => {
+    })),
+    externalShareableActor: z.pipe(z.unknown(), z.transform((input) => {
       const parsed = ExternalShareableActorV1Schema.safeParse(input);
       return parsed.success ? parsed.data : undefined;
-    }),
+    })),
   })),
-  publicationBlocked: z.boolean().optional(),
-  externalShareableSnapshot: ExternalShareableTranscriptSnapshotV1Schema.optional(),
+  publicationBlocked: z.optional(z.boolean()),
+  externalShareableSnapshot: z.optional(ExternalShareableTranscriptSnapshotV1Schema),
 }));
 export type SessionMessagesPageScope = 'main' | 'sidechain' | 'all';
 export type BuildSessionMessagesPathParams = Readonly<{

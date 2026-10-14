@@ -568,7 +568,7 @@ function clientActionExecuteAction(
                         occurrenceId: selection.registration.occurrenceId,
                         // An originless (bundled/development) plugin has no
                         // materialization; the daemon admits that exact case.
-                        ...(selection.registration.executionOrigin
+                        ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
                             ? { materializationRef: selection.registration.executionOrigin.materializationRef }
                             : {}),
                     },
@@ -1220,6 +1220,7 @@ async function executeHostAction(
 /** Execution and Resource admission stamp exactly the same mounted caller. */
 function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, caller: MountedPluginActionCaller | null,
     clientCaller: Extract<NonNullable<DispatchPluginSurfaceActionInput['invocation']>, { kind: 'clientPluginAction' }>['clientActionBinding'] | null): ActionExecutorContext {
+    const sourceCustody = input.callerSourceCustody ?? caller?.mountedBinding.sourceCustody;
     return {
         ...input.hostAction?.context,
         // Admission belongs to the continued parent, not an Action it invokes.
@@ -1237,9 +1238,9 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
                     pluginId: caller?.pluginId ?? clientCaller!.pluginId,
                     contributionLocalId: caller?.contributionLocalId ?? clientCaller!.contributionLocalId,
                     occurrenceId: caller?.occurrenceId ?? clientCaller!.occurrenceId,
-                    ...(input.callerSourceCustody === undefined
+                    ...(sourceCustody === undefined
                         ? {}
-                        : { sourceCustody: input.callerSourceCustody }),
+                        : { sourceCustody }),
                     ...((caller?.materialization ?? clientCaller?.materializationRef) === undefined
                         ? {}
                         : { materialization: caller?.materialization ?? clientCaller?.materializationRef }),

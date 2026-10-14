@@ -1,5 +1,6 @@
 import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol/teams';
 
+import { isAccountMissingOwnName } from '@/sync/domains/account/accountOwnName';
 import { t } from '@/text';
 
 /**
@@ -26,6 +27,8 @@ export type TeamJoinPresentation = Readonly<{
 
 export function resolveTeamJoinPresentation(
     result: TeamInvitationAcceptResultV1,
+    /** Names the Team in the joined title when the caller knows it. */
+    teamName?: string,
 ): TeamJoinPresentation {
     const base = {
         body: null,
@@ -41,7 +44,9 @@ export function resolveTeamJoinPresentation(
             // tell somebody their action did nothing when it just succeeded.
             return Object.freeze({
                 ...base,
-                title: t('teams.join.joinedTitle'),
+                title: teamName
+                    ? t('teams.join.joinedTeamTitle', { team: teamName })
+                    : t('teams.join.joinedTitle'),
                 openTeamId: result.teamId,
             });
         case 'already_member':
@@ -100,4 +105,16 @@ export function resolveTeamJoinPresentation(
                 askForNew: true,
             });
     }
+}
+
+/**
+ * Whether the joined-Team card asks for a name: only a fresh `joined`, and only
+ * when the Account's synced profile on that Home has no name of its own
+ * (`isAccountMissingOwnName`, the rule Home's "Add your name" shares).
+ */
+export function shouldOfferTeamJoinName(params: Readonly<{
+    outcome: TeamInvitationAcceptResultV1['outcome'];
+    profile: Readonly<{ name: string | null }> | null;
+}>): boolean {
+    return params.outcome === 'joined' && isAccountMissingOwnName(params.profile);
 }

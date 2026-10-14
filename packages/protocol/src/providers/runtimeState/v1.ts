@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -40,42 +40,38 @@ export type ProviderEndpointProbeActivityV1 = z.infer<typeof ProviderEndpointPro
 export const ProviderConnectionSummaryHealthV1Schema = lazyZodSchema(() => z.enum(['not_checked', 'available', 'partial', 'needs_attention', 'unreachable']));
 export type ProviderConnectionSummaryHealthV1 = z.infer<typeof ProviderConnectionSummaryHealthV1Schema>;
 
-export const ProviderCatalogObservationIdV1Schema = lazyZodSchema(() => z.string().min(1).max(256)
-  .refine((value) => value === value.trim(), 'Catalog observation id must already be canonical')
-  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), 'Catalog observation id must not contain control characters'));
+export const ProviderCatalogObservationIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value === value.trim(), 'Catalog observation id must already be canonical'), z.refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), 'Catalog observation id must not contain control characters')));
 
-export const ProviderEndpointRuntimeStateKeyV1Schema = lazyZodSchema(() => z.object({
+export const ProviderEndpointRuntimeStateKeyV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ProviderMachineIdSchema,
   connectionId: ProviderConnectionIdSchema,
   endpointTemplateId: ProviderLocalIdSchema,
   endpointFingerprint: ProviderEndpointObservationFingerprintV1Schema,
   observationAuthorizationFingerprint: ProviderObservationAuthorizationFingerprintV1Schema,
-}).strict());
+}));
 export type ProviderEndpointRuntimeStateKeyV1 = z.infer<typeof ProviderEndpointRuntimeStateKeyV1Schema>;
 
-export const ProviderCatalogRuntimeStateKeyV1Schema = lazyZodSchema(() => z.object({
+export const ProviderCatalogRuntimeStateKeyV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ProviderMachineIdSchema,
   connectionId: ProviderConnectionIdSchema,
   catalogFingerprint: ProviderCatalogFingerprintV1Schema,
   observationAuthorizationFingerprint: ProviderObservationAuthorizationFingerprintV1Schema,
-}).strict());
+}));
 export type ProviderCatalogRuntimeStateKeyV1 = z.infer<typeof ProviderCatalogRuntimeStateKeyV1Schema>;
 
-export const ProviderInstallationRuntimeStateKeyV1Schema = lazyZodSchema(() => z.object({
+export const ProviderInstallationRuntimeStateKeyV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ProviderMachineIdSchema,
-  contributionKey: ProviderContributionKeySchema.transform(
-    canonicalizeProviderContributionKeyV1,
-  ),
+  contributionKey: z.pipe(ProviderContributionKeySchema, z.transform(canonicalizeProviderContributionKeyV1)),
   checkId: ProviderLocalIdSchema,
-}).strict());
+}));
 export type ProviderInstallationRuntimeStateKeyV1 = z.infer<typeof ProviderInstallationRuntimeStateKeyV1Schema>;
 
-export const ProviderModelLoadRuntimeStateKeyV1Schema = lazyZodSchema(() => z.object({
+export const ProviderModelLoadRuntimeStateKeyV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ProviderMachineIdSchema,
   connectionId: ProviderConnectionIdSchema,
   catalogObservationId: ProviderCatalogObservationIdV1Schema,
   modelId: ProviderModelIdSchema,
-}).strict());
+}));
 export type ProviderModelLoadRuntimeStateKeyV1 = z.infer<typeof ProviderModelLoadRuntimeStateKeyV1Schema>;
 
 function serializeEndpointKey(key: ProviderEndpointRuntimeStateKeyV1): string {
@@ -121,51 +117,51 @@ export function serializeProviderModelLoadRuntimeStateKeyV1(input: unknown): str
   return serializeModelLoadKey(ProviderModelLoadRuntimeStateKeyV1Schema.parse(input));
 }
 
-const RuntimeTimestampSchema = lazyZodSchema(() => z.number().finite().nonnegative());
+const RuntimeTimestampSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
 const observedStateShape = {
   activity: ProviderEndpointProbeActivityV1Schema,
   observedAt: RuntimeTimestampSchema,
-  staleAt: RuntimeTimestampSchema.optional(),
+  staleAt: z.optional(RuntimeTimestampSchema),
 } as const;
 
 export const ProviderEndpointRuntimeStateV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('not_checked'),
     activity: ProviderEndpointProbeActivityV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('available'),
     ...observedStateShape,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('unreachable'),
     ...observedStateShape,
     errorCode: z.literal('provider_endpoint_unreachable'),
-    retryAt: RuntimeTimestampSchema.optional(),
-  }).strict(),
-  z.object({
+    retryAt: z.optional(RuntimeTimestampSchema),
+  }),
+  z.strictObject({
     status: z.literal('temporarily_unavailable'),
     ...observedStateShape,
     errorCode: z.literal('provider_endpoint_unavailable'),
-    retryAt: RuntimeTimestampSchema.optional(),
-  }).strict(),
-  z.object({
+    retryAt: z.optional(RuntimeTimestampSchema),
+  }),
+  z.strictObject({
     status: z.literal('rate_limited'),
     ...observedStateShape,
     errorCode: z.literal('provider_endpoint_rate_limited'),
-    retryAt: RuntimeTimestampSchema.optional(),
-  }).strict(),
-  z.object({
+    retryAt: z.optional(RuntimeTimestampSchema),
+  }),
+  z.strictObject({
     status: z.literal('unauthorized'),
     ...observedStateShape,
     errorCode: z.enum(['provider_endpoint_auth_required', 'provider_endpoint_unauthorized']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('invalid_response'),
     ...observedStateShape,
     errorCode: z.literal('provider_probe_response_invalid'),
-  }).strict(),
-]).superRefine((value, ctx) => {
+  }),
+]).check(z.superRefine((value, ctx) => {
   if ('observedAt' in value && value.staleAt !== undefined && value.staleAt < value.observedAt) {
     ctx.addIssue({ code: 'custom', path: ['staleAt'], message: 'Stale time cannot precede observation time' });
   }
@@ -177,30 +173,29 @@ export const ProviderEndpointRuntimeStateV1Schema = lazyZodSchema(() => z.discri
       ctx.addIssue({ code: 'custom', path: ['retryAt'], message: 'Retry time exceeds the maximum provider backoff' });
     }
   }
-}));
+})));
 export type ProviderEndpointRuntimeStateV1 = z.infer<typeof ProviderEndpointRuntimeStateV1Schema>;
 
-export const ProviderEndpointRuntimeStateRecordV1Schema = lazyZodSchema(() => z.object({
+export const ProviderEndpointRuntimeStateRecordV1Schema = lazyZodSchema(() => z.strictObject({
   key: ProviderEndpointRuntimeStateKeyV1Schema,
   state: ProviderEndpointRuntimeStateV1Schema,
   lastAccessedAt: RuntimeTimestampSchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if ('observedAt' in value.state && value.lastAccessedAt < value.state.observedAt) {
     ctx.addIssue({ code: 'custom', path: ['lastAccessedAt'], message: 'Access time cannot precede observation time' });
   }
-}));
+})));
 export type ProviderEndpointRuntimeStateRecordV1 = z.infer<typeof ProviderEndpointRuntimeStateRecordV1Schema>;
 
-const EmptyCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.object({
+const EmptyCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.strictObject({
   snapshot: z.null(),
-  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema).length(0),
-}).strict());
-const ObservedCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.object({
+  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema).check(z.length(0)),
+}));
+const ObservedCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.strictObject({
   catalogObservationId: ProviderCatalogObservationIdV1Schema,
   snapshot: ProviderCatalogSnapshotV1Schema,
-  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema)
-    .max(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection),
-}).strict().superRefine((value, ctx) => {
+  staleProbeModels: z.array(ProviderCatalogProbeModelV1Schema).check(z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)),
+}).check(z.superRefine((value, ctx) => {
   const activeIds = new Set(value.snapshot.models.map((model) => model.id));
   const staleIds = new Set<string>();
   value.staleProbeModels.forEach((model, index) => {
@@ -212,62 +207,58 @@ const ObservedCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.object({
     }
     staleIds.add(model.id);
   });
-}));
+})));
 export const ProviderCatalogRuntimeStateV1Schema = lazyZodSchema(() => z.union([
   EmptyCatalogRuntimeStateV1Schema,
   ObservedCatalogRuntimeStateV1Schema,
 ]));
 export type ProviderCatalogRuntimeStateV1 = z.infer<typeof ProviderCatalogRuntimeStateV1Schema>;
 
-export const ProviderCatalogRuntimeStateRecordV1Schema = lazyZodSchema(() => z.object({
+export const ProviderCatalogRuntimeStateRecordV1Schema = lazyZodSchema(() => z.strictObject({
   key: ProviderCatalogRuntimeStateKeyV1Schema,
   state: ProviderCatalogRuntimeStateV1Schema,
   lastAccessedAt: RuntimeTimestampSchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.state.snapshot && value.lastAccessedAt < value.state.snapshot.observedAt) {
     ctx.addIssue({ code: 'custom', path: ['lastAccessedAt'], message: 'Access time cannot precede observation time' });
   }
-}));
+})));
 export type ProviderCatalogRuntimeStateRecordV1 = z.infer<typeof ProviderCatalogRuntimeStateRecordV1Schema>;
 
-export const ProviderInstallationRuntimeStateRecordV1Schema = lazyZodSchema(() => z.object({
+export const ProviderInstallationRuntimeStateRecordV1Schema = lazyZodSchema(() => z.strictObject({
   key: ProviderInstallationRuntimeStateKeyV1Schema,
-  state: z.object({
+  state: z.strictObject({
     status: z.enum(['present', 'absent']),
     observedAt: RuntimeTimestampSchema,
-  }).strict(),
+  }),
   lastAccessedAt: RuntimeTimestampSchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.lastAccessedAt < value.state.observedAt) {
     ctx.addIssue({ code: 'custom', path: ['lastAccessedAt'], message: 'Access time cannot precede observation time' });
   }
-}));
+})));
 export type ProviderInstallationRuntimeStateRecordV1 = z.infer<typeof ProviderInstallationRuntimeStateRecordV1Schema>;
 
-export const ProviderModelLoadRuntimeStateRecordV1Schema = lazyZodSchema(() => z.object({
+export const ProviderModelLoadRuntimeStateRecordV1Schema = lazyZodSchema(() => z.strictObject({
   key: ProviderModelLoadRuntimeStateKeyV1Schema,
   loadState: ProviderModelLoadStateV1Schema,
   observedAt: RuntimeTimestampSchema,
   lastAccessedAt: RuntimeTimestampSchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.lastAccessedAt < value.observedAt) {
     ctx.addIssue({ code: 'custom', path: ['lastAccessedAt'], message: 'Access time cannot precede observation time' });
   }
-}));
+})));
 export type ProviderModelLoadRuntimeStateRecordV1 = z.infer<typeof ProviderModelLoadRuntimeStateRecordV1Schema>;
 
-const ProviderRuntimeStateFileShapeV1Schema = lazyZodSchema(() => z.object({
+const ProviderRuntimeStateFileShapeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   machineId: ProviderMachineIdSchema,
-  endpointHealth: z.array(ProviderEndpointRuntimeStateRecordV1Schema)
-    .max(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxEndpointRecords),
-  catalogs: z.array(ProviderCatalogRuntimeStateRecordV1Schema)
-    .max(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxCatalogRecords),
-  installationChecks: z.array(ProviderInstallationRuntimeStateRecordV1Schema)
-    .max(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxInstallationRecords),
-  modelLoadStates: z.array(ProviderModelLoadRuntimeStateRecordV1Schema)
-    .max(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxModelLoadRecords),
-}).strict());
+  endpointHealth: z.array(ProviderEndpointRuntimeStateRecordV1Schema).check(z.maxLength(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxEndpointRecords)),
+  catalogs: z.array(ProviderCatalogRuntimeStateRecordV1Schema).check(z.maxLength(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxCatalogRecords)),
+  installationChecks: z.array(ProviderInstallationRuntimeStateRecordV1Schema).check(z.maxLength(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxInstallationRecords)),
+  modelLoadStates: z.array(ProviderModelLoadRuntimeStateRecordV1Schema).check(z.maxLength(PROVIDER_RUNTIME_STATE_LIMITS_V1.maxModelLoadRecords)),
+}));
 export type ProviderRuntimeStateFileV1 = z.infer<typeof ProviderRuntimeStateFileShapeV1Schema>;
 
 type RuntimeStateSemanticIssue = Readonly<{
@@ -370,13 +361,13 @@ function validateRuntimeStateSemantics(value: ProviderRuntimeStateFileV1): Runti
   return null;
 }
 
-export const ProviderRuntimeStateFileV1Schema = lazyZodSchema(() => ProviderRuntimeStateFileShapeV1Schema.superRefine((value, ctx) => {
+export const ProviderRuntimeStateFileV1Schema = lazyZodSchema(() => ProviderRuntimeStateFileShapeV1Schema.check(z.superRefine((value, ctx) => {
   const issue = validateRuntimeStateSemantics(value);
   if (issue) ctx.addIssue({ code: 'custom', path: [...issue.path], message: issue.message });
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > PROVIDER_RUNTIME_STATE_LIMITS_V1.maxEncodedBytes) {
     ctx.addIssue({ code: 'custom', message: 'Provider runtime-state file exceeds the encoded byte limit' });
   }
-}));
+})));
 
 export type ProviderRuntimeStateParseFailureReasonV1 =
   | RuntimeStateSemanticIssue['reason']

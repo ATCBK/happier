@@ -1,11 +1,5 @@
-import {
-    SESSION_DISCUSSION_DEFAULT_PAGE_SIZE_V1,
-    SESSION_DISCUSSION_MAX_PAGE_SIZE_V1,
-    type SessionDiscussionDetailsResponseV1,
-    type SessionDiscussionListResponseV1,
-    type SessionDiscussionMessagesResponseV1,
-    type SessionDiscussionSummaryV1,
-} from "@happier-dev/protocol";
+import { SESSION_DISCUSSION_DEFAULT_PAGE_SIZE_V1, SESSION_DISCUSSION_MAX_PAGE_SIZE_V1, type SessionDiscussionDetailsResponseV1, type SessionDiscussionListResponseV1, type SessionDiscussionMessagesResponseV1 } from '@happier-dev/protocol/sessions/discussions/api';
+import { type SessionDiscussionSummaryV1 } from '@happier-dev/protocol/sessions/discussions/models';
 
 import { inTx, type Tx } from "@/storage/inTx";
 import { projectAuthenticatedAccountActorsById } from "@/app/session/messages/projectSessionMessageAccountActors";

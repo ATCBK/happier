@@ -56,16 +56,6 @@ export async function stageWorkspaceEntries(params: Readonly<{
         }));
     }
 
-    const stagedSymlinks: StagedWorkspaceSymlink[] = [];
-    for (const entry of symlinkEntries) {
-        await params.assertCanContinue?.();
-        stagedSymlinks.push(await stageWorkspaceSymlink({
-            stagingRoot: params.stagingRoot,
-            relativePath: entry.relativePath,
-            target: entry.target,
-        }));
-    }
-
     const stagedBlobsByDigest = new Map<string, StagedWorkspaceFileBlob>();
     for (const entry of fileEntries) {
         await params.assertCanContinue?.();
@@ -84,6 +74,17 @@ export async function stageWorkspaceEntries(params: Readonly<{
         stagedBlobsByDigest.set(stagedFile.blob.digest, stagedFile.blob);
     }
     const stagedBlobs = [...stagedBlobsByDigest.values()];
+
+    // Links cannot redirect regular-file writes during materialization.
+    const stagedSymlinks: StagedWorkspaceSymlink[] = [];
+    for (const entry of symlinkEntries) {
+        await params.assertCanContinue?.();
+        stagedSymlinks.push(await stageWorkspaceSymlink({
+            stagingRoot: params.stagingRoot,
+            relativePath: entry.relativePath,
+            target: entry.target,
+        }));
+    }
 
     const verification = await verifyStagedWorkspace({
         workspaceDirectory: params.stagingRoot.workspaceDirectory,

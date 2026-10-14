@@ -1,4 +1,4 @@
-import { supportsMachineSessionInputAdmissionProtocolVersion } from "@happier-dev/protocol";
+import { supportsMachineSessionInputAdmissionProtocolVersion } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessionScopedBinding";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 import type { Tx } from "@/storage/inTx";

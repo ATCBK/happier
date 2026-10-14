@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   type WorkflowDefinitionV1,
@@ -40,11 +40,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const WorkflowDocumentIngressEnvelopeV1Schema = z.object({
+const WorkflowDocumentIngressEnvelopeV1Schema = z.strictObject({
   kind: z.literal('happier.workflow'),
   version: z.literal(1),
   definition: z.unknown(),
-}).strict();
+});
 
 /**
  * Canonical ingress-aware document owner. It classifies the wrapper, delegates

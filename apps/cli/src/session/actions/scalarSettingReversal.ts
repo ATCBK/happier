@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { ACCOUNT_SETTING_DEFINITIONS } from '@happier-dev/protocol/account/settings/accountSettings';
+import type { AccountSettingMutationV1 } from '@happier-dev/protocol';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1,
@@ -25,29 +26,39 @@ export async function executeCliScalarSettingReversal(params: Readonly<{
   serverId?: string;
   signal?: AbortSignal;
   isCredentialCurrent?: () => boolean | Promise<boolean>;
+  /** Catalog admission stays with the ordinary Settings mutation producer. */
+  prepareMutation?: (raw: Readonly<Record<string, unknown>>) => Promise<AccountSettingMutationV1>;
+  readValue?: (settings: Readonly<Record<string, unknown>>) => unknown;
 }>) {
   const { declaration, requested } = params;
   const storage = declaration.storage;
-  const key = storage?.key;
-  const definition = Object.entries(ACCOUNT_SETTING_DEFINITIONS).find(([candidate]) => candidate === key)?.[1];
   const accountId = readAccountIdFromToken(params.credentials.token);
   const reversal = requested.reversal;
-  if (!reversal || !key || storage?.scope !== 'account' || storage.kind || storage.path || storage.owner
-    || !definition || !params.serverId || !accountId) return refuse('setting_conditional_mutation_unsupported');
+  if (!reversal || storage?.scope !== 'account' || !params.serverId || !accountId
+    || !params.prepareMutation && (!storage.key || storage.kind || storage.path || storage.owner)) return refuse('setting_conditional_mutation_unsupported');
   const scope = { serverId: params.serverId, accountId };
   if (reversal.kind === 'restore' && !sameStrictJsonValue(scope, reversal.scope)) return refuse('setting_reversal_scope_mismatch');
-  const value = reversal.kind === 'restore' ? { success: true as const, value: requested.value }
+  const value = params.prepareMutation || reversal.kind === 'restore' ? { success: true as const, value: requested.value }
     : parseBuiltInAccountSettingValueV1(declaration, requested.value);
   if (!value.success) return refuse('invalid_setting_value');
   const snapshot = await readAccountSettingsV2Raw({ credentials: params.credentials, signal: params.signal });
   params.signal?.throwIfAborted();
   if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
+  const prepared = params.prepareMutation ? await params.prepareMutation(snapshot.raw) : undefined;
+  const operation = prepared?.operations.length === 1 ? prepared.operations[0] : undefined;
+  if (prepared && operation?.op !== 'set') return refuse('setting_conditional_mutation_unsupported');
+  const key = operation?.op === 'set' ? operation.key : storage.key;
+  const definition = Object.entries(ACCOUNT_SETTING_DEFINITIONS).find(([candidate]) => candidate === key)?.[1];
+  if (!key || !definition) return refuse('setting_conditional_mutation_unsupported');
   const before = readRawSettingScalarV1(snapshot.raw, key);
   if (!before || 'value' in before && !definition.parseMutationValue(before.value).success) return refuse('invalid_setting_value');
   if (reversal.kind === 'restore' && (!sameStrictJsonValue(before, reversal.applied) || snapshot.version !== reversal.appliedVersion)) return refuse('account_settings_conflict');
   const restore = reversal.kind === 'restore' ? reversal.before : undefined;
   if (restore && 'value' in restore && !definition.parseMutationValue(restore.value).success) return refuse('invalid_setting_value');
-  const applied = restore ?? readRawSettingScalarV1({ [key]: storage.invertBoolean ? !value.value : value.value }, key);
+  if (restore && operation?.op === 'set' && !sameStrictJsonValue(operation.value,
+    'unset' in restore ? definition.default : restore.value)) return refuse('invalid_setting_value');
+  const applied = restore ?? readRawSettingScalarV1({ [key]: operation?.op === 'set' ? operation.value
+    : storage.invertBoolean ? !value.value : value.value }, key);
   if (!applied) return refuse('setting_conditional_mutation_unsupported');
   const mutation = AccountSettingMutationV1Schema.parse({ operations: [
     restore && 'unset' in restore ? { op: 'reset', key } : { op: 'set', key, value: 'value' in applied ? applied.value : null },
@@ -60,6 +71,9 @@ export async function executeCliScalarSettingReversal(params: Readonly<{
       params.signal?.throwIfAborted();
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) throw new SettingReversalRefused('credential_scope_retired');
       if (!sameStrictJsonValue(readRawSettingScalarV1(raw, key), before)) throw new SettingReversalRefused('account_settings_conflict');
+      if (params.prepareMutation && !sameStrictJsonValue(await params.prepareMutation(raw), prepared)) {
+        throw new SettingReversalRefused('account_settings_conflict');
+      }
       return mutation;
     }, signal: params.signal });
   } catch (error) {
@@ -67,7 +81,7 @@ export async function executeCliScalarSettingReversal(params: Readonly<{
     throw error;
   }
   if (result.status !== 'applied' && result.status !== 'unchanged') return { ...refuse(`account_settings_${result.status}`), details: result };
-  const projected = readBuiltInAccountSettingValueV1(declaration, result.settings);
+  const projected = params.readValue ? params.readValue(result.settings) : readBuiltInAccountSettingValueV1(declaration, result.settings);
   const response = { anchor: declaration.anchor,
     ...(projected === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(projected) }), settingsVersion: result.version };
   if (reversal.kind === 'restore') return response;

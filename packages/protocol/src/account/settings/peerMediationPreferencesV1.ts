@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PeerDirectPreferenceV1Schema = lazyZodSchema(() => z.enum(['inherit', 'enabled', 'disabled']));
 export type PeerDirectPreferenceV1 = z.infer<typeof PeerDirectPreferenceV1Schema>;
@@ -13,32 +13,29 @@ export const PeerMediationFlowKindV1Schema = lazyZodSchema(() => z.enum([
 export type PeerMediationFlowKindV1 = z.infer<typeof PeerMediationFlowKindV1Schema>;
 
 const PeerDirectFlowPreferenceV1Schema = lazyZodSchema(() => z.object({
-  direct: PeerDirectPreferenceV1Schema.default('inherit'),
+  direct: z._default(PeerDirectPreferenceV1Schema, 'inherit'),
 }));
 
-const PeerMediationFlowPreferencesV1Schema = lazyZodSchema(() => z
+const PeerMediationFlowPreferencesV1Schema = lazyZodSchema(() => z._default(z
   .object({
-    bounded_transfer: PeerDirectFlowPreferenceV1Schema.optional(),
-    tcp_tunnel: PeerDirectFlowPreferenceV1Schema.optional(),
-    live_stream: PeerDirectFlowPreferenceV1Schema.optional(),
-    machine_rpc: PeerDirectFlowPreferenceV1Schema.optional(),
-  })
-  .default({}));
+    bounded_transfer: z.optional(PeerDirectFlowPreferenceV1Schema),
+    tcp_tunnel: z.optional(PeerDirectFlowPreferenceV1Schema),
+    live_stream: z.optional(PeerDirectFlowPreferenceV1Schema),
+    machine_rpc: z.optional(PeerDirectFlowPreferenceV1Schema),
+  }), {}));
 
-export const PeerMediationPreferencesV1Schema = lazyZodSchema(() => z
+export const PeerMediationPreferencesV1Schema = lazyZodSchema(() => z.catch(z
   .object({
-    v: z.literal(1).default(1),
+    v: z._default(z.literal(1), 1),
     flows: PeerMediationFlowPreferencesV1Schema,
-    byMachineId: z
+    byMachineId: z._default(z
       .record(
-        z.string().min(1),
+        z.string().check(z.minLength(1)),
         z.object({
           flows: PeerMediationFlowPreferencesV1Schema,
         }),
-      )
-      .default({}),
-  })
-  .catch({
+      ), {}),
+  }), {
     v: 1,
     flows: {},
     byMachineId: {},

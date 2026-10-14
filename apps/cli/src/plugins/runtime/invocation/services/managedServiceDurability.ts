@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { link, open, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -482,6 +483,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
                 path: target,
                 contents: `${JSON.stringify(projection)}\n`,
             });
+            invalidateProcessLaunchDiscovery();
             return projection.projectionToken;
         });
     }

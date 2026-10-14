@@ -42,6 +42,8 @@ export type WhereItsOnSentence = Readonly<{
 }>;
 
 export type WhereItsOnConsequence = Readonly<{
+  /** An empty consequence cannot assert absence before online configured inventory is known. */
+  availabilityUnknown: boolean;
   availableAgentIds: readonly string[];
   onlineMachineNames: readonly string[];
   notes: readonly string[];
@@ -244,7 +246,7 @@ export function describeReachRule(
  * cannot are named once in `notes`. `online` comes from the caller's reachability owner (C4).
  */
 export function describeReach(
-  projection: readonly Readonly<ReachProjectionV1[number] & { projectKey?: string }>[],
+  projection: readonly Readonly<ReachProjectionV1[number] & { projectKey?: string; agentInventoryComplete?: boolean }>[],
   machines: readonly Readonly<{ machineId: string; online: boolean }>[],
   names: WhereItsOnNames,
   agentTakes: (agentId: string) => 'full' | 'index' | 'none',
@@ -286,6 +288,8 @@ export function describeReach(
       if (!available.includes(agent.agentId)) available.push(agent.agentId);
   }
   return {
+    availabilityUnknown: available.length === 0 && projection.some(row =>
+      row.agentInventoryComplete === false && online.get(row.machineId) !== false),
     availableAgentIds: available,
     onlineMachineNames,
     onlyProjectNames: availableOutsideProjects ? [] : [...projectKeys].map(names.projectName),
@@ -306,6 +310,7 @@ export function formatWhereItsOnConsequence(
   consequence: WhereItsOnConsequence,
   names: WhereItsOnNames,
 ): string {
+  if (consequence.availabilityUnknown) return '—';
   if (
     consequence.availableAgentIds.length === 0 ||
     consequence.onlineMachineNames.length === 0

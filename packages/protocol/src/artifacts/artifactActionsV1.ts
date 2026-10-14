@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { ArtifactCallerAccessV1Schema } from './artifactAccessV1.js';
@@ -16,85 +16,84 @@ export const ArtifactActionIdV1Schema = lazyZodSchema(() => z.enum(ARTIFACT_ACTI
 export type ArtifactActionIdV1 = z.infer<typeof ArtifactActionIdV1Schema>;
 
 /** Authenticated read fact: omitted or unfamiliar values never establish privacy. */
-export const ArtifactPublicAudienceV1ReadSchema = lazyZodSchema(() => z.enum(['retained', 'none', 'unknown'])
-  .optional().default('unknown').catch('unknown'));
+export const ArtifactPublicAudienceV1ReadSchema = lazyZodSchema(() => z.catch(z._default(z.optional(z.enum(['retained', 'none', 'unknown'])), 'unknown'), 'unknown'));
 export type ArtifactPublicAudienceV1 = z.output<typeof ArtifactPublicAudienceV1ReadSchema>;
 // Headers belong to their content-kind owners. Preserve JSON metadata; it never supplies authority.
 export const ArtifactHeaderMetadataV1Schema = lazyZodSchema(() => z.record(z.string(), StrictJsonValueSchema));
 
-const subject = z.object({ artifactId: z.string().min(1) }).strict();
+const subject = z.strictObject({ artifactId: z.string().check(z.minLength(1)) });
 const htmlPreview = {
-  previewUrl: z.string().url().optional(),
-  previewError: z.literal('artifact_html_preview_unavailable').optional(),
+  previewUrl: z.optional(z.string().check(z.url())),
+  previewError: z.optional(z.literal('artifact_html_preview_unavailable')),
 };
-const acknowledgement = subject.extend({ revision: ArtifactRevisionV1Schema, ...htmlPreview }).strict();
-export const ArtifactPublicLinkCreateInputV1Schema = subject.extend(StoredContentPublicShareCreateRequestV1Schema.pick({
+const acknowledgement = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { revision: ArtifactRevisionV1Schema, ...htmlPreview }));
+export const ArtifactPublicLinkCreateInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, lazyZodSchema(() => z.pick(StoredContentPublicShareCreateRequestV1Schema, {
   expiresAt: true, maxUses: true, isConsentRequired: true,
-}).shape).strict();
-export const ArtifactPublicLinkRevokeInputV1Schema = subject.extend({ shareId: z.string().min(1) }).strict();
-const upload = { uploadPath: z.string().min(1), mime: z.string().min(1).optional() };
+})).shape));
+export const ArtifactPublicLinkRevokeInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { shareId: z.string().check(z.minLength(1)) }));
+const upload = { uploadPath: z.string().check(z.minLength(1)), mime: z.optional(z.string().check(z.minLength(1))) };
 export const ArtifactCreateInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ artifactId: z.string().uuid().optional(), header: ArtifactHeaderMetadataV1Schema, body: z.string() }).strict(),
-  z.object({ artifactId: z.string().uuid().optional(), header: ArtifactHeaderMetadataV1Schema, ...upload }).strict(),
+  z.strictObject({ artifactId: z.optional(z.string().check(z.uuid())), header: ArtifactHeaderMetadataV1Schema, body: z.string() }),
+  z.strictObject({ artifactId: z.optional(z.string().check(z.uuid())), header: ArtifactHeaderMetadataV1Schema, ...upload }),
 ]));
-export const ArtifactListInputV1Schema = lazyZodSchema(() => z.object({
-  search: z.string().optional(), kind: z.string().min(1).optional(),
-  sort: z.enum(['updated_desc', 'created_desc', 'title_asc']).optional(),
-  limit: z.number().int().positive().optional(), cursor: z.string().min(1).optional(),
-}).strict());
+export const ArtifactListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  search: z.optional(z.string()), kind: z.optional(z.string().check(z.minLength(1))),
+  sort: z.optional(z.enum(['updated_desc', 'created_desc', 'title_asc'])),
+  limit: z.optional(z.number().check(z.int(), z.positive())), cursor: z.optional(z.string().check(z.minLength(1))),
+}));
 export const ArtifactUpdateInputV1Schema = lazyZodSchema(() => z.union([
-  subject.extend({ expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, body: z.string() }).strict(),
-  subject.extend({ expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, ...upload }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, body: z.string() })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, ...upload })),
 ]));
-export const ArtifactDeleteInputV1Schema = subject.extend({ expectedRevision: ArtifactRevisionV1Schema }).strict();
-export const ArtifactExportInputV1Schema = subject.extend({
-  path: z.string().min(1), overwrite: z.boolean().optional(),
-}).strict();
-export const ArtifactPublishFromFileInputV1Schema = lazyZodSchema(() => ArtifactWorkspacePublicationSourceV1Schema.extend({
-  title: z.string().optional(), mime: z.string().min(1).optional(), kind: z.string().min(1).optional(),
-  requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.optional(),
-}).strict());
-export const ArtifactRestoreInputV1Schema = subject.extend({
-  bodyVersion: z.number().int().positive(), expectedRevision: ArtifactRevisionV1Schema,
-}).strict();
-export const ArtifactHeaderV1Schema = subject.extend({
-  ownerAccountId: z.string().min(1), access: ArtifactCallerAccessV1Schema,
+export const ArtifactDeleteInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { expectedRevision: ArtifactRevisionV1Schema }));
+export const ArtifactExportInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, {
+  path: z.string().check(z.minLength(1)), overwrite: z.optional(z.boolean()),
+}));
+export const ArtifactPublishFromFileInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactWorkspacePublicationSourceV1Schema, {
+  title: z.optional(z.string()), mime: z.optional(z.string().check(z.minLength(1))), kind: z.optional(z.string().check(z.minLength(1))),
+  requestedCapabilities: z.optional(UiSurfaceCapabilityRequestV1Schema),
+})));
+export const ArtifactRestoreInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, {
+  bodyVersion: z.number().check(z.int(), z.positive()), expectedRevision: ArtifactRevisionV1Schema,
+}));
+export const ArtifactHeaderV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, {
+  ownerAccountId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema,
   publicAudience: ArtifactPublicAudienceV1ReadSchema,
-  header: ArtifactHeaderMetadataV1Schema, headerVersion: z.number().int().positive(),
-  seq: z.number().int().nonnegative(), createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative(),
-}).strict();
+  header: ArtifactHeaderMetadataV1Schema, headerVersion: z.number().check(z.int(), z.positive()),
+  seq: z.number().check(z.int(), z.nonnegative()), createdAt: z.number().check(z.int(), z.nonnegative()), updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 
 /** Project admitted native document rows onto the ordinary Action's strict header DTO. */
 export function projectArtifactHeaderV1(value: unknown): z.output<typeof ArtifactHeaderV1Schema> {
-  return ArtifactHeaderV1Schema.strip().parse(value);
+  return (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(ArtifactHeaderV1Schema).parse(value);
 }
-export const ArtifactDocumentV1Schema = lazyZodSchema(() => ArtifactHeaderV1Schema.omit({ headerVersion: true }).extend({
-  body: ArtifactBodyV1Schema.nullable(), revision: ArtifactRevisionV1Schema,
-  provenance: ArtifactRevisionProvenanceV1Schema.optional(),
+export const ArtifactDocumentV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(ArtifactHeaderV1Schema, { headerVersion: true }), {
+  body: z.nullable(ArtifactBodyV1Schema), revision: ArtifactRevisionV1Schema,
+  provenance: z.optional(ArtifactRevisionProvenanceV1Schema),
   /** Diagnostic projection from an admitted current audience, not caller authority. */
-  shared: z.boolean().optional(),
-}).strict());
-export const ArtifactQuotaExceededV1Schema = lazyZodSchema(() => z.object({
+  shared: z.optional(z.boolean()),
+})));
+export const ArtifactQuotaExceededV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('quota_exceeded'), budget: z.enum(['document', 'account']),
-  limitBytes: z.number().int().nonnegative(), usedBytes: z.number().int().nonnegative(),
-}).strict());
+  limitBytes: z.number().check(z.int(), z.nonnegative()), usedBytes: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ArtifactQuotaExceededV1 = z.infer<typeof ArtifactQuotaExceededV1Schema>;
-export const ArtifactStorageUsageV1Schema = lazyZodSchema(() => z.object({
-  usedBytes: z.number().int().nonnegative(), limitBytes: z.number().int().nonnegative().nullable(),
-  documentLimitBytes: z.number().int().nonnegative().nullable(), revisionRetentionCount: z.number().int().nonnegative(),
-}).strict());
+export const ArtifactStorageUsageV1Schema = lazyZodSchema(() => z.strictObject({
+  usedBytes: z.number().check(z.int(), z.nonnegative()), limitBytes: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  documentLimitBytes: z.nullable(z.number().check(z.int(), z.nonnegative())), revisionRetentionCount: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ArtifactStorageUsageV1 = z.infer<typeof ArtifactStorageUsageV1Schema>;
-export const ArtifactStoredBodyRevisionV1Schema = lazyZodSchema(() => z.object({
-  bodyVersion: z.number().int().positive(), body: z.string(), createdAt: z.number().int().nonnegative(),
-  sizeBytes: z.number().int().nonnegative(),
-  provenance: z.string().nullable().optional(),
-}).strict());
-export const ArtifactRevisionListResponseV1Schema = lazyZodSchema(() => z.object({
-  revisions: z.array(ArtifactStoredBodyRevisionV1Schema), retentionCount: z.number().int().nonnegative(),
-}).strict());
-export const ArtifactBodyRevisionV1Schema = lazyZodSchema(() => ArtifactStoredBodyRevisionV1Schema.extend({
-  body: ArtifactBodyV1Schema.nullable(), provenance: ArtifactRevisionProvenanceV1Schema.optional(),
-}).strict());
+export const ArtifactStoredBodyRevisionV1Schema = lazyZodSchema(() => z.strictObject({
+  bodyVersion: z.number().check(z.int(), z.positive()), body: z.string(), createdAt: z.number().check(z.int(), z.nonnegative()),
+  sizeBytes: z.number().check(z.int(), z.nonnegative()),
+  provenance: z.optional(z.nullable(z.string())),
+}));
+export const ArtifactRevisionListResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  revisions: z.array(ArtifactStoredBodyRevisionV1Schema), retentionCount: z.number().check(z.int(), z.nonnegative()),
+}));
+export const ArtifactBodyRevisionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactStoredBodyRevisionV1Schema, {
+  body: z.nullable(ArtifactBodyV1Schema), provenance: z.optional(ArtifactRevisionProvenanceV1Schema),
+})));
 
 export const ArtifactActionInputSchemasV1 = {
   'artifact.create': ArtifactCreateInputV1Schema,
@@ -106,7 +105,7 @@ export const ArtifactActionInputSchemasV1 = {
   'artifact.publish_from_file': ArtifactPublishFromFileInputV1Schema,
   'artifact.revisions.list': subject,
   'artifact.revisions.restore': ArtifactRestoreInputV1Schema,
-  'artifact.storage.usage': z.object({}).strict(),
+  'artifact.storage.usage': z.strictObject({}),
   'artifact.public_link.create': ArtifactPublicLinkCreateInputV1Schema,
   'artifact.public_link.list': subject,
   'artifact.public_link.revoke': ArtifactPublicLinkRevokeInputV1Schema,
@@ -114,18 +113,18 @@ export const ArtifactActionInputSchemasV1 = {
 } as const;
 export const ArtifactActionOutputSchemasV1 = {
   'artifact.create': acknowledgement,
-  'artifact.get': z.object({ artifact: ArtifactDocumentV1Schema.nullable(), ...htmlPreview }).strict(),
-  'artifact.export': subject.extend({ path: z.string().min(1), sizeBytes: z.number().int().nonnegative() }).strict(),
-  'artifact.list': z.object({ items: z.array(ArtifactHeaderV1Schema), nextCursor: z.string().min(1).optional() }).strict(),
+  'artifact.get': z.strictObject({ artifact: z.nullable(ArtifactDocumentV1Schema), ...htmlPreview }),
+  'artifact.export': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { path: z.string().check(z.minLength(1)), sizeBytes: z.number().check(z.int(), z.nonnegative()) })),
+  'artifact.list': z.strictObject({ items: z.array(ArtifactHeaderV1Schema), nextCursor: z.optional(z.string().check(z.minLength(1))) }),
   'artifact.update': acknowledgement,
-  'artifact.delete': subject.extend({ deleted: z.literal(true) }).strict(),
+  'artifact.delete': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { deleted: z.literal(true) })),
   'artifact.publish_from_file': acknowledgement,
-  'artifact.revisions.list': subject.extend({ revisions: z.array(ArtifactBodyRevisionV1Schema), retentionCount: z.number().int().nonnegative() }).strict(),
+  'artifact.revisions.list': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { revisions: z.array(ArtifactBodyRevisionV1Schema), retentionCount: z.number().check(z.int(), z.nonnegative()) })),
   'artifact.revisions.restore': acknowledgement,
   'artifact.storage.usage': ArtifactStorageUsageV1Schema,
-  'artifact.public_link.create': z.object({ publicShare: StoredContentPublicShareV1Schema, url: z.string().url() }).strict(),
+  'artifact.public_link.create': z.strictObject({ publicShare: StoredContentPublicShareV1Schema, url: z.string().check(z.url()) }),
   'artifact.public_link.list': StoredContentPublicSharesListResponseV1Schema,
-  'artifact.public_link.revoke': subject.extend({ shareId: z.string().min(1), revoked: z.literal(true) }).strict(),
+  'artifact.public_link.revoke': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { shareId: z.string().check(z.minLength(1)), revoked: z.literal(true) })),
   'artifact.public_link.audit': StoredContentPublicShareAccessLogResponseV1Schema,
 } as const;
 export type ArtifactActionInputV1<T extends ArtifactActionIdV1> = z.input<(typeof ArtifactActionInputSchemasV1)[T]>;

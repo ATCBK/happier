@@ -19,20 +19,19 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        gap: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
+        gap: theme.space.s10,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 20,
+        gap: theme.space.s20,
     },
     label: {
         flex: 1,
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     progressTrack: {
         height: BAR_HEIGHT,
@@ -104,7 +103,7 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
     const progress = resolveProgress(props.state.uploadedBytes, props.state.totalBytes);
 
     return (
-        <View testID="repository-tree-upload-status" style={{ gap: 8 }}>
+        <View testID="repository-tree-upload-status" style={{ gap: theme.space.s8 }}>
             <View style={styles.row}>
                 <Icon name="cloud-arrow-up" size={16} color={theme.colors.text.secondary} />
                 <Text numberOfLines={1} style={styles.label}>{label}</Text>
@@ -136,7 +135,7 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
     const progress = resolveProgress(props.state.downloadedBytes, props.state.totalBytes);
 
     return (
-        <View testID="repository-tree-download-status" style={{ gap: 8 }}>
+        <View testID="repository-tree-download-status" style={{ gap: theme.space.s8 }}>
             <View style={styles.row}>
                 <Icon name="download" size={16} color={theme.colors.text.secondary} />
                 <Text numberOfLines={1} style={styles.label}>{label}</Text>

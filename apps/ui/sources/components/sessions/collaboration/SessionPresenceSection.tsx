@@ -18,6 +18,7 @@ import { useSessionHumanPresence } from '@/sync/domains/session/humanPresence/us
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { STALE_PRESENCE_OPACITY } from './SessionViewerFacepile';
 import { formatSessionPresenceHere, formatSessionPresenceTyping, formatSessionPresenceViewerNames } from './sessionPresenceNames';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 const AVATAR_PX = 28;
 
@@ -89,7 +90,7 @@ export function SessionPresenceSection(target: SessionAddress) {
         const id = Modal.show({
             component: SessionPresenceViewerList,
             props: { target },
-            chrome: { kind: 'card', title: t('session.collaboration.viewingNow'), dimensions: { width: 520, maxHeightRatio: 0.85, size: 'md' } },
+            chrome: { kind: 'card', title: t('session.collaboration.viewingNow'), dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'md' } },
             // Closing the complete viewer list returns focus to the summary that
             // opened it, through the canonical modal focus-return contract.
             focusReturnRef: summaryAnchor,

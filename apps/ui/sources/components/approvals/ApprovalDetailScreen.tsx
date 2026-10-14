@@ -37,9 +37,15 @@ import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
 import { resolveApprovalHomeName } from './approvalRequesterLabels';
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
+import {
+  ProjectCommandApprovalFacts,
+  describeProjectCommandApprovalDecisions,
+  readProjectCommandApproval,
+  useProjectCommandApprovalTitle,
+} from './ProjectCommandApprovalFacts';
 import { resolveApprovalRequestTitle } from './approvalRequestTitle';
 import { WorkspaceSyncConflictDetailsView } from '@/components/workspaces/sync/WorkspaceSyncConflictDetailsView';
-import { resolveApprovalRequestApproveAdmission } from './approvalFieldValues';
+import { describeApprovalRequestFields, resolveApprovalRequestApproveAdmission } from './approvalFieldValues';
 import { ApprovalPreviewCard, readApprovalPreviewSummary } from './ApprovalPreviewCard';
 import { ApprovalVisualPreview } from './ApprovalVisualPreview';
 import { resolveApprovalVisualPreview } from './approvalFieldValues';
@@ -86,14 +92,14 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    padding: theme.space.s24,
   },
   recoveryActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 12,
-    marginTop: 12,
+    gap: theme.space.s12,
+    marginTop: theme.space.s12,
   },
 }));
 
@@ -185,11 +191,19 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   // decision may be taken, so an invisible field can never sit behind a live
   // Approve button.
   const builtInApproveAdmission = React.useMemo(() => (
-    parsed?.kind === 'built_in'
+    parsed?.kind === 'built_in' && parsed.request.status === 'open'
       ? resolveApprovalRequestApproveAdmission(parsed.request)
       : null
   ), [parsed]);
-  const actionFields = builtInApproveAdmission?.presentation ?? null;
+  const actionFields = React.useMemo(() => builtInApproveAdmission?.presentation
+    ?? (parsed?.kind === 'built_in' ? describeApprovalRequestFields(parsed.request) : null), [builtInApproveAdmission, parsed]);
+  // A Project's setup or command reads as the machine and the exact command, not as its protocol operands.
+  const projectCommand = React.useMemo(
+    () => (parsed?.kind === 'built_in' ? readProjectCommandApproval(parsed.request) : null),
+    [parsed],
+  );
+  const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
+  const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
   const approvalWithheld = builtInApproveAdmission?.status === 'unavailable';
 
   const request = parsed?.request ?? null;
@@ -216,6 +230,13 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
       : parsed?.kind === 'host_action'
         ? parsed.request.sessionId
         : '';
+  // Requested by already names the asking Session; a target that is that same Session keeps its
+  // exact identity one disclosure away instead of repeating it as a second row.
+  const shownActionFields = React.useMemo(() => actionFields && sessionId ? {
+    ...actionFields,
+    rows: actionFields.rows.map(row => row.kind === 'value' && row.reference?.kind === 'session'
+      && row.reference.id === sessionId ? { ...row, technical: true as const } : row),
+  } : actionFields, [actionFields, sessionId]);
   const builtInReplayRoute = React.useMemo(
     () => resolveApprovalReplayRoute(parsed?.kind === 'built_in' ? parsed.request : null),
     [parsed],
@@ -273,7 +294,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     approvalServerId,
   );
   // An agent's cleanup or stop proposal reads as the same card body as in the transcript (AGW-6).
-  const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId);
+  const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId, props.artifactId);
   const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
   const session = useSessionListRenderableWithServerScope(
     approvalServerId,
@@ -551,6 +572,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     storedTitle: parsed.request.summary,
     actionId: parsed.kind === 'target' ? null : String(parsed.request.actionId),
     qualifiedActionId: parsed.kind === 'target' ? parsed.request.qualifiedActionId : null,
+    ...(parsed.kind === 'built_in' ? { actionArgs: parsed.request.actionArgs, preview: parsed.request.preview } : {}),
     sessionIds: [sessionId, parsed.request.createdBy.sessionId],
   });
   const actionValue = requestTitle.actionTitle
@@ -576,7 +598,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
       <PageHeader
         testID="approvals.header"
         alwaysShowTitle
-        title={requestTitle.title || t('approvals.untitled')}
+        title={projectCommandTitle ?? (requestTitle.title || t('approvals.untitled'))}
         description={parsed.kind === 'target' && parsed.request.detail
           ? parsed.request.detail
           : requestTitle.detail ?? undefined}
@@ -672,8 +694,14 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
             arrive={false} onApproveKeepingUndo={() => { void decide('approve', { keepUndo: true }); }}
             testID="approvals.resource-proposal" />
         </ItemGroup>
-      ) : actionFields && !confidentialAction ? (
-        <ActionApprovalFieldsCard presentation={actionFields} anatomy="page" serverId={approvalServerId} />
+      ) : projectCommand ? (
+        <ItemGroup title={t('approvals.details')}>
+          <SectionContentRow>
+            <ProjectCommandApprovalFacts presentation={projectCommand} testID="approvals.project-command" />
+          </SectionContentRow>
+        </ItemGroup>
+      ) : shownActionFields && !confidentialAction ? (
+        <ActionApprovalFieldsCard presentation={shownActionFields} anatomy="page" serverId={approvalServerId} />
       ) : null}
 
       {approvedWorkspaceSyncResolution ? (
@@ -739,15 +767,15 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}
             layout={handoffTargetPresentation ? 'stacked' : 'inline'}
             approve={!confidentialAction ? {
-              testID: 'approvals.approve', label: handoffTargetPresentation?.decisionLabel ?? proposalLabels?.approve,
+              testID: 'approvals.approve', label: handoffTargetPresentation?.decisionLabel ?? projectCommandDecisions?.approve ?? proposalLabels?.approve,
               disabled: isDeciding || approvalWithheld || approvalRouteUnavailable || Boolean(proposal?.approveWithheld),
               accessibilityHint: approvalRouteUnavailable ? t('actionConfirmations.homeUnavailable')
                 : approvalWithheld ? t('approvals.approveUnavailableHint') : undefined,
               onPress: () => decide('approve'),
             } : undefined}
-            dismiss={{ testID: 'approvals.cancel', disabled: isDeciding, accessibilityHint: t('approvals.dismissHint'),
+            dismiss={projectCommand ? undefined : { testID: 'approvals.cancel', disabled: isDeciding, accessibilityHint: t('approvals.dismissHint'),
               onPress: () => decide('cancel') }}
-            reject={{ testID: 'approvals.reject', label: proposalLabels?.reject, disabled: isDeciding || approvalRouteUnavailable,
+            reject={{ testID: 'approvals.reject', label: projectCommandDecisions?.reject ?? proposalLabels?.reject, disabled: isDeciding || approvalRouteUnavailable,
               accessibilityHint: approvalRouteUnavailable ? t('actionConfirmations.homeUnavailable') : undefined,
               onPress: () => decide('reject') }} />
         </ItemGroup>

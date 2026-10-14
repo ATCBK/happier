@@ -1,11 +1,6 @@
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
-import {
-    readMachineIrohEndpointAuthorityV1,
-    MachineOperationProtocolCapabilitiesV1StoredReadSchema,
-    type MachineOperationProtocolCapabilityNameV1,
-    type MachineIrohEndpointAuthorityV1,
-} from "@happier-dev/protocol";
+import { readMachineIrohEndpointAuthorityV1, MachineOperationProtocolCapabilitiesV1StoredReadSchema, type MachineOperationProtocolCapabilityNameV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 export type MachineAvailabilityState = "available" | "revoked" | "replaced" | "missing";
 

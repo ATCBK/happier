@@ -93,6 +93,15 @@ function runInteractiveGitCommand(input: ScmBackendCommandRunInput): Promise<Scm
 
 export function createRealGitScmBackendRuntimeServices(): ScmBackendRuntimeServices {
     return {
+        async renamePathNoReplace({ sourcePath, targetPath, expectedIdentity, signal }) {
+            const { renameStoragePathNoReplace } = await import('@/storage/trash/renameStoragePath');
+            await renameStoragePathNoReplace(sourcePath, targetPath, signal, expectedIdentity);
+        },
+        async removeRetainedPath({ path, expectedIdentity, beforeEffect }) {
+            const { dirname } = await import('node:path');
+            const { removeStoragePath } = await import('@/storage/trash/removeStoragePath');
+            await removeStoragePath(path, { allowedRoot: dirname(path), expectedIdentity: { ...expectedIdentity, kind: 'directory' }, beforeEffect });
+        },
         // Real incremental reads use the canonical host process owner, including
         // byte admission, cancellation and owned cleanup, rather than a second runner.
         async runCommandStreaming(input) {

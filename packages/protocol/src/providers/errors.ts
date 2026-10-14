@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema } from './ids.js';
 import { ProfileRecordIdV1Schema } from '../profiles/v2/profileId.js';
@@ -86,16 +86,16 @@ const ERROR_DEFAULTS = {
   provider_profile_migration_conflict: [false, 'review_profile_migration'],
 } as const satisfies Record<ProviderErrorCodeV1, readonly [boolean, ProviderRecoveryActionV1]>;
 
-export const ProviderErrorV1Schema = lazyZodSchema(() => z.object({
+export const ProviderErrorV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   code: ProviderErrorCodeV1Schema,
-  connectionId: ProviderConnectionIdSchema.optional(),
-  machineId: ProviderMachineIdSchema.optional(),
-  sourceProfileId: ProfileRecordIdV1Schema.optional(),
+  connectionId: z.optional(ProviderConnectionIdSchema),
+  machineId: z.optional(ProviderMachineIdSchema),
+  sourceProfileId: z.optional(ProfileRecordIdV1Schema),
   retryable: z.boolean(),
-  retryAfterMs: z.number().int().nonnegative().max(86_400_000).optional(),
+  retryAfterMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(86_400_000))),
   action: ProviderRecoveryActionV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   const [expectedRetryable, defaultAction] = ERROR_DEFAULTS[value.code];
   if (value.retryable !== expectedRetryable) {
     ctx.addIssue({ code: 'custom', path: ['retryable'], message: 'Retryability must match the provider error code' });
@@ -109,7 +109,7 @@ export const ProviderErrorV1Schema = lazyZodSchema(() => z.object({
   if (value.code !== 'provider_endpoint_rate_limited' && value.retryAfterMs !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['retryAfterMs'], message: 'Retry delay is rate-limit only' });
   }
-}));
+})));
 export type ProviderErrorV1 = z.infer<typeof ProviderErrorV1Schema>;
 
 export function createProviderErrorV1(

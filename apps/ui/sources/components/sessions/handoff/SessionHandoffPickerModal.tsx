@@ -71,6 +71,7 @@ import type { SessionHandoffPickerResult } from './openSessionHandoffPicker';
 import { Icon } from '@/components/ui/icons/Icon';
 import { WorkspaceActivationContentPolicyFields, WorkspaceActivationDestinationFields, WorkspaceActivationModeField } from '@/components/workspaces/activation/WorkspaceActivationEditor';
 import { createWorkspaceSyncConflictDetailsResource } from '@/components/workspaces/sync/workspaceSyncConflictDetailsTab';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type SessionHandoffPickerModalProps = CustomModalInjectedProps & Readonly<{
     sessionId: string;
@@ -466,7 +467,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         title: actionSpec.title,
         subtitle: actionSpec.description,
         testID: 'session-handoff-modal',
-        dimensions: { width: 520, maxHeightRatio: 0.92 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92 },
         footer,
     }), [actionSpec.description, actionSpec.title, footer]);
 

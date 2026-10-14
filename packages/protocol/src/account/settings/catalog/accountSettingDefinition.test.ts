@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ACCOUNT_SETTING_CLASSIFICATIONS,

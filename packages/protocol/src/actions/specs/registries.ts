@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { readRecord } from '../../inputs/inputRecords.js';
 import { REGISTRY_ACTION_INPUT_SCHEMAS_V1 as inputs,REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 as outputs,type RegistryActionIdV1 } from '../../registries/registryActionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
@@ -20,13 +20,27 @@ function registrySpec<TId extends RegistryActionIdV1>(id:TId,title:string,option
   return {id,title,safety:options.danger?'danger':'safe',approval:{result:options.danger?'required':'none'},
     approvalPolicy:options.confirm?{uiConfirmation:'policy'}:{},sideEffectClass:options.write?'write':'read',
     requiredAuthority:'account_automation',executionPlacement:'account',placements:[],
+    // Account-owned registries also execute on the captured Account's daemon.
+    originalExecution:{accountRoot:'allowed'},
     surfaces:{ui:true,cli:true,agent:true,mcp:true,voice:false,rpc:true},bindings:{rpcMethod:id,mcpToolName:id.replaceAll('.','_')},
-    inputSchema:inputs[id],outputSchema:outputs[id],inputHints:{fields:[]},projectObservationInput:observation,projectObservationOutput:observation,
+    inputSchema:inputs[id],outputSchema:outputs[id],inputHints:{fields:id.startsWith('registries.sources.') ? [
+      {path:'sourceId',title:'Registry',widget:'text'},
+      {path:'title',title:'Name',widget:'text'},
+      {path:'url',title:'Address',widget:'url',required:id==='registries.sources.create' || id==='registries.sources.detect'},
+      {path:'kinds',title:'Contains',widget:'multiselect',options:[
+        {value:'skill',label:'Skills'},{value:'mcpServer',label:'MCP servers'},{value:'agent',label:'Agents'},{value:'plugin',label:'Plugins'},
+      ]},
+      {path:'enabled',title:'Enabled',widget:'boolean'},
+      {path:'token',title:'Saved Secret',widget:'json'},
+      {path:'npmRegistryProfileId',title:'npm profile',widget:'text'},
+    ]:[]},projectObservationInput:observation,projectObservationOutput:observation,
+    approvalPresentation:{summary:()=>null,projectInput:raw=>inputs[id].parse(raw),retainInputOnSettlement:true},
     cli:{acceptsServerId:true,commands:[{path:id.split('.'),visibility:'canonical'}]},
   };
 }
 export const REGISTRY_ACTION_SPECS_V1=[
   {...registrySpec('registries.updates.check','Check registry updates',{write:true}),cli:{acceptsServerId:true,
+    inputSchema:inputs['registries.updates.check'],
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);const kind=ctx.commandPath?.[0]==='skills'?'skill':ctx.commandPath?.[0]==='mcp'?'mcpServer':ctx.commandPath?.[0]==='agents'?'agent':undefined;
       return kind?{...value,kind}:value;},commands:[
     {path:['registries','updates','check'],variadicPositional:'keys',visibility:'canonical' as const},
@@ -34,6 +48,7 @@ export const REGISTRY_ACTION_SPECS_V1=[
     {path:['mcp','servers','updates','check'],variadicPositional:'keys',visibility:'alias' as const},
     {path:['agents','updates','check'],variadicPositional:'keys',visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.list','List registry sources'),cli:{acceptsServerId:true,
+    inputSchema:inputs['registries.sources.list'],
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);return ctx.commandPath?.[0]==='plugins'?{...value,kind:value.kind??'plugin'}:value;},
     commands:[
     {path:['registries','sources','list'],visibility:'canonical' as const},{path:['registries','list'],visibility:'alias' as const},
@@ -41,14 +56,14 @@ export const REGISTRY_ACTION_SPECS_V1=[
   {...registrySpec('registries.sources.detect','Detect registry source'),cli:{acceptsServerId:true,commands:[
     {path:['registries','sources','detect'],positionals:['url'],visibility:'canonical' as const},{path:['registries','detect'],positionals:['url'],visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.create','Add registry source',{danger:true,write:true}),cli:{acceptsServerId:true,
-    inputSchema:inputs['registries.sources.create'].extend({tokenSecret:z.string().min(1).optional(),npmProfile:z.string().min(1).optional()})
-      .refine(value=>!(value.tokenSecret!==undefined && value.token!==undefined),'Provide one token source.')
-      .refine(value=>!(value.npmProfile!==undefined && value.npmRegistryProfileId!==undefined),'Provide one npm profile source.'),
+    inputSchema:z.extend(inputs['registries.sources.create'], {tokenSecret:z.optional(z.string().check(z.minLength(1))),npmProfile:z.optional(z.string().check(z.minLength(1)))})
+      .check(z.refine(value=>!(value.tokenSecret!==undefined && value.token!==undefined), {message:'Provide one token source.'}),
+        z.refine(value=>!(value.npmProfile!==undefined && value.npmRegistryProfileId!==undefined), {message:'Provide one npm profile source.'})),
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);return ctx.commandPath?.[0]==='plugins'?{...value,kinds:value.kinds??['plugin']}:value;},commands:[
     {path:['registries','sources','create'],positionals:['url'],visibility:'canonical' as const},{path:['registries','add'],positionals:['url'],visibility:'alias' as const},
     {path:['plugins','marketplace','sources','add'],positionals:['url'],visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.update','Change registry source',{write:true}),cli:{acceptsServerId:true,
-    inputSchema:z.object({sourceId:z.string().min(1),title:z.string().min(1).optional(),enabled:z.boolean().optional()}).strict(),
+    inputSchema:z.strictObject({sourceId:z.string().check(z.minLength(1)),title:z.optional(z.string().check(z.minLength(1))),enabled:z.optional(z.boolean())}),
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);const command=ctx.commandPath?.at(-1);return {...value,...(command==='enable'?{enabled:true}:command==='disable'?{enabled:false}:{})};},
     commands:[{path:['registries','sources','update'],visibility:'canonical' as const},
       {path:['registries','rename'],positionals:['sourceId','title'],visibility:'alias' as const},
@@ -56,19 +71,19 @@ export const REGISTRY_ACTION_SPECS_V1=[
       {path:['plugins','marketplace','sources','enable'],positionals:['sourceId'],visibility:'alias' as const},
       {path:['plugins','marketplace','sources','disable'],positionals:['sourceId'],visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.token.set','Set registry credentials',{danger:true,write:true}),cli:{acceptsServerId:true,
-    inputSchema:inputs['registries.sources.token.set'].extend({secret:z.string().min(1).optional(),clear:z.boolean().optional(),
-      npmProfile:z.string().min(1).optional(),clearNpmProfile:z.boolean().optional()})
-      .refine(value=>[value.token!==undefined,value.secret!==undefined,value.clear===true].filter(Boolean).length<=1,'Provide one token change.')
-      .refine(value=>[value.npmRegistryProfileId!==undefined,value.npmProfile!==undefined,value.clearNpmProfile===true].filter(Boolean).length<=1,'Provide one npm profile change.')
-      .refine(value=>value.token!==undefined || value.secret!==undefined || value.clear===true || value.npmRegistryProfileId!==undefined
-        || value.npmProfile!==undefined || value.clearNpmProfile===true,'Provide a token or npm profile change.'),commands:[
+    inputSchema:z.extend(inputs['registries.sources.token.set'], {secret:z.optional(z.string().check(z.minLength(1))),clear:z.optional(z.boolean()),
+      npmProfile:z.optional(z.string().check(z.minLength(1))),clearNpmProfile:z.optional(z.boolean())})
+      .check(z.refine(value=>[value.token!==undefined,value.secret!==undefined,value.clear===true].filter(Boolean).length<=1, {message:'Provide one token change.'}),
+        z.refine(value=>[value.npmRegistryProfileId!==undefined,value.npmProfile!==undefined,value.clearNpmProfile===true].filter(Boolean).length<=1, {message:'Provide one npm profile change.'}),
+        z.refine(value=>value.token!==undefined || value.secret!==undefined || value.clear===true || value.npmRegistryProfileId!==undefined
+          || value.npmProfile!==undefined || value.clearNpmProfile===true, {message:'Provide a token or npm profile change.'})),commands:[
     {path:['registries','sources','token','set'],positionals:['sourceId'],visibility:'canonical' as const},
     {path:['registries','token'],positionals:['sourceId'],visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.delete','Remove registry source',{danger:true,confirm:true,write:true}),cli:{acceptsServerId:true,commands:[
     {path:['registries','sources','delete'],positionals:['sourceId'],visibility:'canonical' as const},{path:['registries','remove'],positionals:['sourceId'],visibility:'alias' as const},
     {path:['plugins','marketplace','sources','remove'],positionals:['sourceId'],visibility:'alias' as const}]}},
   {...registrySpec('registries.items.list','Browse registry items'),cli:{acceptsServerId:true,
-    inputSchema:inputs['registries.items.list'].extend({kind:inputs['registries.items.list'].shape.kind.optional()}),
+    inputSchema:z.extend(inputs['registries.items.list'], {kind:z.optional(inputs['registries.items.list'].shape.kind)}),
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);return ctx.commandPath?.[0]==='plugins'?{...value,kind:value.kind??'plugin'}:ctx.commandPath?.[0]==='agents'?{...value,kind:'agent',
       ...(Array.isArray(value.sourceIds)?{sourceIds:value.sourceIds.map(id=>registrySourceCliId(String(id)))}:{})}:value;},
     flagAliases:[{path:'sourceIds',aliases:['--source']}],commands:[
@@ -76,8 +91,8 @@ export const REGISTRY_ACTION_SPECS_V1=[
     {path:['plugins','marketplace','list'],visibility:'alias' as const},
     {path:['agents','browse'],positionals:['query'],visibility:'alias' as const}]}},
   {...registrySpec('registries.items.read','Read registry item'),cli:{acceptsServerId:true,
-    inputSchema:inputs['registries.items.read'].extend({kind:inputs['registries.items.read'].shape.kind.optional(),
-      sourceId:z.string().min(1).optional(),itemId:z.string().optional(),registryItem:z.string().min(1).optional()}),
+    inputSchema:z.extend(inputs['registries.items.read'], {kind:z.optional(inputs['registries.items.read'].shape.kind),
+      sourceId:z.optional(z.string().check(z.minLength(1))),itemId:z.optional(z.string()),registryItem:z.optional(z.string().check(z.minLength(1)))}),
     bindInput:(raw:unknown,ctx)=>{const {registryItem,...value}=readRecord(raw);
       if(ctx.commandPath?.[0]==='agents') {
         return {...value,kind:'agent',...readRegistryAgentCliLocatorV1(typeof registryItem==='string'?registryItem:'')};

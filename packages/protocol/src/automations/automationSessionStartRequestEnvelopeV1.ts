@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   getAccountScopedBlobCiphertextBase64LengthV1,
@@ -80,22 +80,22 @@ function serializedJsonUtf8ByteLength(value: PluginJsonValueV2): number | null {
  * path is allowed to parse the inner Session V2 request.
  */
 export const AutomationSessionStartRequestEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: PluginJsonValueV2Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().min(1),
-  }).strict(),
-]).superRefine((value, context) => {
+    c: z.string().check(z.minLength(1)),
+  }),
+]).check(z.superRefine((value, context) => {
   if (value.t === 'encrypted') {
     if (
       textEncoder.encode(value.c).byteLength
       > AUTOMATION_SESSION_START_REQUEST_MAX_ENCRYPTED_CIPHERTEXT_UTF8_BYTES_V1
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['c'],
         message: 'Automation Session-start ciphertext exceeds the maximum request size',
       });
@@ -106,12 +106,12 @@ export const AutomationSessionStartRequestEnvelopeV1Schema = lazyZodSchema(() =>
   const bytes = serializedJsonUtf8ByteLength(value.v);
   if (bytes === null || bytes > AUTOMATION_SESSION_START_REQUEST_MAX_RAW_UTF8_BYTES_V1) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['v'],
       message: 'Automation Session-start plaintext exceeds the maximum request size',
     });
   }
-}));
+})));
 export type AutomationSessionStartRequestEnvelopeV1 = z.infer<
   typeof AutomationSessionStartRequestEnvelopeV1Schema
 >;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionReportsToV1Schema, SessionReportsV1Schema } from '../relations/sessionReportsToV1.js';
 import { SessionOriginKindV1Schema } from '../creation/sessionCreateOriginV1.js';
 import { ExecutionRunIdSchema } from '../idsV1.js';
@@ -126,15 +126,13 @@ export type SessionAwarenessEncryptionV1 = z.infer<typeof SessionAwarenessEncryp
 export const SessionAwarenessAvailabilityV1Schema = lazyZodSchema(() => z.enum(['complete', 'partial', 'locked']));
 export type SessionAwarenessAvailabilityV1 = z.infer<typeof SessionAwarenessAvailabilityV1Schema>;
 
-export const SessionAwarenessWorkHeadlineV1Schema = lazyZodSchema(() => z
-  .object({
-    title: z.string().min(1),
-    itemId: z.string().min(1).optional(),
-    kind: SessionWorkStateItemKindV1Schema.optional(),
-    status: SessionWorkStateStatusV1Schema.optional(),
-    activeWorkflowRunCount: z.number().int().nonnegative().optional(),
-  })
-  .strict());
+export const SessionAwarenessWorkHeadlineV1Schema = lazyZodSchema(() => z.strictObject({
+    title: z.string().check(z.minLength(1)),
+    itemId: z.optional(z.string().check(z.minLength(1))),
+    kind: z.optional(SessionWorkStateItemKindV1Schema),
+    status: z.optional(SessionWorkStateStatusV1Schema),
+    activeWorkflowRunCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type SessionAwarenessWorkHeadlineV1 = z.infer<typeof SessionAwarenessWorkHeadlineV1Schema>;
 
 /**
@@ -142,61 +140,53 @@ export type SessionAwarenessWorkHeadlineV1 = z.infer<typeof SessionAwarenessWork
  * inter-Session message provenance are different facts, and collapsing them into `parent` would
  * make a subagent record look like a child Session.
  */
-export const SessionAwarenessLineageV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAwarenessLineageV1Schema = lazyZodSchema(() => z.strictObject({
     relation: z.enum(['fork', 'replay']),
-    sourceSessionId: z.string().min(1).optional(),
-  })
-  .strict());
+    sourceSessionId: z.optional(z.string().check(z.minLength(1))),
+  }));
 export type SessionAwarenessLineageV1 = z.infer<typeof SessionAwarenessLineageV1Schema>;
 
 /** Immutable creation provenance is control data, independent of private lineage. */
-export const SessionAwarenessOriginV1Schema = lazyZodSchema(() => z.object({
+export const SessionAwarenessOriginV1Schema = lazyZodSchema(() => z.strictObject({
   kind: SessionOriginKindV1Schema,
-  runId: ExecutionRunIdSchema.optional(),
-}).strict().superRefine((origin, context) => {
+  runId: z.optional(ExecutionRunIdSchema),
+}).check(z.superRefine((origin, context) => {
   if (origin.runId !== undefined && origin.kind !== 'run_step') {
     context.addIssue({ code: 'custom', path: ['runId'], message: 'Only workflow steps name a server Run' });
   }
-}));
+})));
 export type SessionAwarenessOriginV1 = z.infer<typeof SessionAwarenessOriginV1Schema>;
 
-export const SessionAwarenessWorkspaceV1Schema = lazyZodSchema(() => z
-  .object({
-    machineId: z.string().min(1).optional(),
-    projectName: z.string().min(1).optional(),
-    path: z.string().min(1).optional(),
-    worktreeName: z.string().min(1).optional(),
-  })
-  .strict());
+export const SessionAwarenessWorkspaceV1Schema = lazyZodSchema(() => z.strictObject({
+    machineId: z.optional(z.string().check(z.minLength(1))),
+    projectName: z.optional(z.string().check(z.minLength(1))),
+    path: z.optional(z.string().check(z.minLength(1))),
+    worktreeName: z.optional(z.string().check(z.minLength(1))),
+  }));
 export type SessionAwarenessWorkspaceV1 = z.infer<typeof SessionAwarenessWorkspaceV1Schema>;
 
-export const SessionAwarenessOperationalV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAwarenessOperationalV1Schema = lazyZodSchema(() => z.strictObject({
     primary: SessionAwarenessOperationalPrimaryV1Schema,
     reasons: z.array(SessionOperationalReasonV1Schema),
-  })
-  .strict());
+  }));
 export type SessionAwarenessOperationalV1 = z.infer<typeof SessionAwarenessOperationalV1Schema>;
 
-export const SessionAwarenessProjectionV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionAwarenessProjectionV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(SESSION_AWARENESS_PROJECTION_VERSION_V1),
-    sessionId: z.string().min(1),
-    origin: SessionAwarenessOriginV1Schema.optional(),
-    title: z.string().min(1).optional(),
+    sessionId: z.string().check(z.minLength(1)),
+    origin: z.optional(SessionAwarenessOriginV1Schema),
+    title: z.optional(z.string().check(z.minLength(1))),
     lifecycle: SessionAwarenessLifecycleV1Schema,
     runtime: SessionAwarenessRuntimeV1Schema,
     freshness: SessionAwarenessFreshnessV1Schema,
     operational: SessionAwarenessOperationalV1Schema,
-    currentWork: SessionAwarenessWorkHeadlineV1Schema.optional(),
-    lineage: SessionAwarenessLineageV1Schema.optional(),
-    workspace: SessionAwarenessWorkspaceV1Schema.optional(),
+    currentWork: z.optional(SessionAwarenessWorkHeadlineV1Schema),
+    lineage: z.optional(SessionAwarenessLineageV1Schema),
+    workspace: z.optional(SessionAwarenessWorkspaceV1Schema),
     encryption: SessionAwarenessEncryptionV1Schema,
     availability: SessionAwarenessAvailabilityV1Schema,
-    reportsTo: SessionReportsToV1Schema.optional(),
-    reports: SessionReportsV1Schema.optional(),
-    pendingReviewRuns: z.number().int().nonnegative().optional(),
-  })
-  .strict());
+    reportsTo: z.optional(SessionReportsToV1Schema),
+    reports: z.optional(SessionReportsV1Schema),
+    pendingReviewRuns: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type SessionAwarenessProjectionV1 = z.infer<typeof SessionAwarenessProjectionV1Schema>;

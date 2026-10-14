@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   MachineAccessGrantsListInputV1Schema, MachineAccessGrantsListResultV1Schema,
   MachineAccessGrantSetInputV1Schema, MachineAccessGrantRemoveInputV1Schema,

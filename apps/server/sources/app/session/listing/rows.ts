@@ -1,12 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PrimaryTurnStatusV1Schema,
-    SessionAwarenessOriginV1Schema,
-    parseSessionRuntimeActivityProjectionFields,
-    projectLegacyViewerLastViewedSessionSeqV1,
-    projectLegacyViewerUnreadSinceV1,
-    type V2SessionRecord,
-} from "@happier-dev/protocol";
+import { PrimaryTurnStatusV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionAwarenessOriginV1Schema } from '@happier-dev/protocol/sessions/awareness/projectionV1';
+import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { projectLegacyViewerLastViewedSessionSeqV1, projectLegacyViewerUnreadSinceV1 } from '@happier-dev/protocol/sessions';
+import { type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
 
 import {
     createSessionRollbackEligibleTurnsSelect,

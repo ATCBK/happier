@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AccountStoredContentCompatibilityServerRequirementsV1Schema } from '../../../clientCompatibility/accountStoredContentCompatibilityV1.js';
 
 import { OAuthProviderStatusSchema } from '../oauthProviderStatus.js';
@@ -88,64 +88,54 @@ import { TeamCredentialCapabilitiesSchema } from './teamCredentialCapabilities.j
 
 export const CapabilitiesSchema = lazyZodSchema(() => z.object({
   /** Operation epoch, separate from package version and product enablement. */
-  providerBroker: z.object({ protocolVersions: z.tuple([z.literal(1), z.literal(2)]) }).strict().optional(),
-  homeSearch: HomeSearchCapabilitiesSchema.optional(),
-  accountDirectory: AccountDirectoryCapabilitiesSchema.optional(),
+  providerBroker: z.optional(z.strictObject({ protocolVersions: z.tuple([z.literal(1), z.literal(2)]) })),
+  homeSearch: z.optional(HomeSearchCapabilitiesSchema),
+  accountDirectory: z.optional(AccountDirectoryCapabilitiesSchema),
   accountStoredContentCompatibility:
-    AccountStoredContentCompatibilityServerRequirementsV1Schema.optional(),
-  bugReports: BugReportsCapabilitiesSchema.optional().default(DEFAULT_BUG_REPORTS_CAPABILITIES),
-  voice: VoiceCapabilitiesSchema.optional().default(DEFAULT_VOICE_CAPABILITIES),
-  pets: PetsCapabilitiesSchema.optional().default(DEFAULT_PETS_CAPABILITIES),
-  encryption: EncryptionCapabilitiesSchema.optional().default(DEFAULT_ENCRYPTION_CAPABILITIES),
-  server: ServerCapabilitiesSchema.optional().default(DEFAULT_SERVER_CAPABILITIES),
-  serverIdentity: ServerIdentityCapabilitiesSchema.optional().default(DEFAULT_SERVER_IDENTITY_CAPABILITIES),
-  serverRelease: ServerReleaseCapabilitiesSchema.optional(),
-  machines: z
+    z.optional(AccountStoredContentCompatibilityServerRequirementsV1Schema),
+  bugReports: z._default(z.optional(BugReportsCapabilitiesSchema), DEFAULT_BUG_REPORTS_CAPABILITIES),
+  voice: z._default(z.optional(VoiceCapabilitiesSchema), DEFAULT_VOICE_CAPABILITIES),
+  pets: z._default(z.optional(PetsCapabilitiesSchema), DEFAULT_PETS_CAPABILITIES),
+  encryption: z._default(z.optional(EncryptionCapabilitiesSchema), DEFAULT_ENCRYPTION_CAPABILITIES),
+  server: z._default(z.optional(ServerCapabilitiesSchema), DEFAULT_SERVER_CAPABILITIES),
+  serverIdentity: z._default(z.optional(ServerIdentityCapabilitiesSchema), DEFAULT_SERVER_IDENTITY_CAPABILITIES),
+  serverRelease: z.optional(ServerReleaseCapabilitiesSchema),
+  machines: z._default(z.optional(z
     .object({
-      transfer: MachineTransferCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TRANSFER_CAPABILITIES),
-      tunnel: MachineTunnelCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TUNNEL_CAPABILITIES),
-      liveStream: MachineLiveStreamCapabilitiesSchema.optional().default(DEFAULT_MACHINE_LIVE_STREAM_CAPABILITIES),
-      peerMediation: PeerMediationCapabilitiesSchema.optional().default(DEFAULT_PEER_MEDIATION_CAPABILITIES),
-    })
-    .optional()
-    .default({
+      transfer: z._default(z.optional(MachineTransferCapabilitiesSchema), DEFAULT_MACHINE_TRANSFER_CAPABILITIES),
+      tunnel: z._default(z.optional(MachineTunnelCapabilitiesSchema), DEFAULT_MACHINE_TUNNEL_CAPABILITIES),
+      liveStream: z._default(z.optional(MachineLiveStreamCapabilitiesSchema), DEFAULT_MACHINE_LIVE_STREAM_CAPABILITIES),
+      peerMediation: z._default(z.optional(PeerMediationCapabilitiesSchema), DEFAULT_PEER_MEDIATION_CAPABILITIES),
+    })), {
       transfer: DEFAULT_MACHINE_TRANSFER_CAPABILITIES,
       tunnel: DEFAULT_MACHINE_TUNNEL_CAPABILITIES,
       liveStream: DEFAULT_MACHINE_LIVE_STREAM_CAPABILITIES,
       peerMediation: DEFAULT_PEER_MEDIATION_CAPABILITIES,
     }),
-  localServices: LocalServiceCapabilitiesSchema.optional().default(DEFAULT_LOCAL_SERVICE_CAPABILITIES),
-  browser: BrowserCapabilitiesSchema.optional().default(DEFAULT_BROWSER_CAPABILITIES),
-  devices: DeviceCapabilitiesSchema.optional().default(DEFAULT_DEVICE_CAPABILITIES),
-  plugins: PluginsCapabilitiesSchema.optional().default(DEFAULT_PLUGINS_CAPABILITIES),
+  localServices: z._default(z.optional(LocalServiceCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_CAPABILITIES),
+  browser: z._default(z.optional(BrowserCapabilitiesSchema), DEFAULT_BROWSER_CAPABILITIES),
+  devices: z._default(z.optional(DeviceCapabilitiesSchema), DEFAULT_DEVICE_CAPABILITIES),
+  plugins: z._default(z.optional(PluginsCapabilitiesSchema), DEFAULT_PLUGINS_CAPABILITIES),
   // This must remain a root-level optional family: `server` and `plugins` are
   // strict incumbent children, while the outer capability envelope is additive.
-  pluginDataCollections: PluginDataCollectionsCapabilitiesSchema.optional(),
-  social: z
+  pluginDataCollections: z.optional(PluginDataCollectionsCapabilitiesSchema),
+  social: z._default(z.optional(z
     .object({
-      friends: SocialFriendsCapabilitiesSchema.optional().default(DEFAULT_SOCIAL_FRIENDS_CAPABILITIES),
-    })
-    .optional()
-    .default({ friends: DEFAULT_SOCIAL_FRIENDS_CAPABILITIES }),
-  oauth: z
+      friends: z._default(z.optional(SocialFriendsCapabilitiesSchema), DEFAULT_SOCIAL_FRIENDS_CAPABILITIES),
+    })), { friends: DEFAULT_SOCIAL_FRIENDS_CAPABILITIES }),
+  oauth: z._default(z.optional(z
     .object({
       providers: z.record(z.string(), OAuthProviderStatusSchema),
-    })
-    .optional()
-    .default({ providers: {} }),
-  auth: AuthCapabilitiesSchema.optional().default(DEFAULT_AUTH_CAPABILITIES),
-  session: SessionCapabilitiesSchema.optional().default(DEFAULT_SESSION_CAPABILITIES),
-  sharing: SharingCapabilitiesSchema.optional().default(DEFAULT_SHARING_CAPABILITIES),
-  connectedServices: ConnectedServicesCapabilitiesSchema.optional().default(DEFAULT_CONNECTED_SERVICES_CAPABILITIES),
-  teams: TeamCredentialCapabilitiesSchema.optional(),
-  liveActivities: z
+    })), { providers: {} }),
+  auth: z._default(z.optional(AuthCapabilitiesSchema), DEFAULT_AUTH_CAPABILITIES),
+  session: z._default(z.optional(SessionCapabilitiesSchema), DEFAULT_SESSION_CAPABILITIES),
+  sharing: z._default(z.optional(SharingCapabilitiesSchema), DEFAULT_SHARING_CAPABILITIES),
+  connectedServices: z._default(z.optional(ConnectedServicesCapabilitiesSchema), DEFAULT_CONNECTED_SERVICES_CAPABILITIES),
+  teams: z.optional(TeamCredentialCapabilitiesSchema),
+  liveActivities: z._default(z.optional(z
     .object({
-      remoteUpdates: LiveActivityRemoteUpdateCapabilityDiagnosticsSchema.optional().default(
-        DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS,
-      ),
-    })
-    .optional()
-    .default({ remoteUpdates: DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS }),
+      remoteUpdates: z._default(z.optional(LiveActivityRemoteUpdateCapabilityDiagnosticsSchema), DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS),
+    })), { remoteUpdates: DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS }),
 }));
 
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;

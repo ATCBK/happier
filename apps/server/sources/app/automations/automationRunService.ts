@@ -2,20 +2,13 @@ import { afterTx, inTx, type Tx } from "@/storage/inTx";
 import { publishManagedRunWakeInTx } from '@/app/machines/managed/managedWake';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
-import {
-    AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1,
-    AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1,
-    AutomationRunResultStoredV1Schema,
-    deriveSessionCreationTagV1,
-    parseAutomationRunExecutionRecipeV1,
-    sameAutomationAccountContentIdentityV1,
-    sameAutomationAccountCurrentnessWitnessV1,
-    validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1,
-    type AutomationAccountCurrentnessWitnessV1,
-    type ExecutionRunWaitResult,
-    type AutomationRunResultStoredV1,
-    type SessionServerStartDispatchResultV1,
-} from "@happier-dev/protocol";
+import { AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1, AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
+import { AutomationRunResultStoredV1Schema, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1, type AutomationRunResultStoredV1 } from '@happier-dev/protocol/automations/event';
+import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { parseAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { sameAutomationAccountContentIdentityV1, sameAutomationAccountCurrentnessWitnessV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { type ExecutionRunWaitResult } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { type SessionServerStartDispatchResultV1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";

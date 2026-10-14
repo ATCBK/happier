@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX,
@@ -19,42 +19,37 @@ import { SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN } from './sessionWorkflowR
  */
 export const SessionWorkflowRunHeadlineV1Schema = lazyZodSchema(() => z
   .object({
-    runId: z.string().trim().min(1),
-    title: z.string().trim().min(1).max(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_WORKFLOW_RUN_SNAPSHOT_TITLE_MAX)),
     status: SessionWorkflowRunStatusV1Schema,
-    statusReason: SessionWorkflowRunStatusReasonV1Schema.optional(),
-    workflowToolUseId: z.string().trim().min(1).optional(),
-    updatedAt: z.number().int().nonnegative(),
-    recordRevision: z.string().trim().regex(SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN),
-    recordUpdatedAt: z.number().int().nonnegative(),
-    totalAgents: z.number().int().nonnegative(),
-    completedAgents: z.number().int().nonnegative(),
-    failedAgents: z.number().int().nonnegative().optional(),
-    blockedAgents: z.number().int().nonnegative().optional(),
-  })
-  // Strip unknown keys (Zod default): the headline is a count-only pointer, so any leaked
-  // phase/agent/preview detail is dropped on parse. Forward-compat fields are added explicitly.
-  .strip());
+    statusReason: z.optional(SessionWorkflowRunStatusReasonV1Schema),
+    workflowToolUseId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    recordRevision: z.string().check(z.trim(), z.regex(SESSION_WORKFLOW_RUN_RECORD_REVISION_PATTERN)),
+    recordUpdatedAt: z.number().check(z.int(), z.nonnegative()),
+    totalAgents: z.number().check(z.int(), z.nonnegative()),
+    completedAgents: z.number().check(z.int(), z.nonnegative()),
+    failedAgents: z.optional(z.number().check(z.int(), z.nonnegative())),
+    blockedAgents: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }));
 export type SessionWorkflowRunHeadlineV1 = z.infer<typeof SessionWorkflowRunHeadlineV1Schema>;
 
 export const SessionWorkflowActivityHeadlineTruncationV1Schema = lazyZodSchema(() => z
   .object({
     reason: z.literal('run_limit'),
-    omittedCount: z.number().int().nonnegative(),
-  })
-  .strip());
+    omittedCount: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionWorkflowActivityHeadlineTruncationV1 = z.infer<typeof SessionWorkflowActivityHeadlineTruncationV1Schema>;
 
 export const SessionWorkflowActivityHeadlineV1Schema = lazyZodSchema(() => z
   .object({
     v: z.literal(1),
-    backendId: z.string().trim().min(1),
-    agentId: z.string().trim().min(1).optional(),
-    updatedAt: z.number().int().nonnegative(),
-    primaryRunId: z.string().trim().min(1).nullable().optional(),
+    backendId: z.string().check(z.trim(), z.minLength(1)),
+    agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    primaryRunId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
     activeRuns: z.array(SessionWorkflowRunHeadlineV1Schema),
-    recentRuns: z.array(SessionWorkflowRunHeadlineV1Schema).optional(),
-    truncated: SessionWorkflowActivityHeadlineTruncationV1Schema.optional(),
-  })
-  .strip());
+    recentRuns: z.optional(z.array(SessionWorkflowRunHeadlineV1Schema)),
+    truncated: z.optional(SessionWorkflowActivityHeadlineTruncationV1Schema),
+  }));
 export type SessionWorkflowActivityHeadlineV1 = z.infer<typeof SessionWorkflowActivityHeadlineV1Schema>;

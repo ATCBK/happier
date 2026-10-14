@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES,
@@ -16,51 +16,51 @@ import { FEATURES_RESPONSE_MAX_UTF8_BYTES_V1 } from './responseLimits.js';
 
 export { FEATURES_RESPONSE_MAX_UTF8_BYTES_V1 } from './responseLimits.js';
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN));
+const ServerIdentityIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)));
 
 export const HomeSignInServicePolicyV1Schema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-  z.object({ v: z.literal(1), mode: z.literal('disabled') }).strict(),
-  z.object({ v: z.literal(1), mode: z.literal('self') }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), mode: z.literal('disabled') }),
+  z.strictObject({ v: z.literal(1), mode: z.literal('self') }),
+  z.strictObject({
     v: z.literal(1),
     mode: z.literal('external'),
     endpoint: HomeApplicationOriginV1Schema,
-    expectedServerIdentityId: ServerIdentityIdSchema.optional(),
-  }).strict(),
+    expectedServerIdentityId: z.optional(ServerIdentityIdSchema),
+  }),
 ]));
 export type HomeSignInServicePolicyV1 = z.infer<typeof HomeSignInServicePolicyV1Schema>;
 
-export const AccountServicePresentationV1Schema = lazyZodSchema(() => z.object({
+export const AccountServicePresentationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  displayName: z.string().trim().min(1).superRefine((value, context) => {
+  displayName: z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
     if (/\p{Cc}/u.test(value)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Display name must not contain control characters' });
+      context.addIssue({ code: "custom", message: 'Display name must not contain control characters' });
     }
     if (new TextEncoder().encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Display name exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Display name exceeds its UTF-8 byte limit' });
     }
-  }),
-}).strict());
+  })),
+}));
 export type AccountServicePresentationV1 = z.infer<typeof AccountServicePresentationV1Schema>;
 
-export const HomePresentationV1Schema = lazyZodSchema(() => z.object({
+export const HomePresentationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  displayName: z.string().trim().min(1).superRefine((value, context) => {
+  displayName: z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
     if (/\p{Cc}/u.test(value) || new TextEncoder().encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid Home display name' });
+      context.addIssue({ code: "custom", message: 'Invalid Home display name' });
     }
-  }),
-}).strict());
+  })),
+}));
 export type HomePresentationV1 = z.infer<typeof HomePresentationV1Schema>;
 
 export const HomeHostFactSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('known'),
-    machineName: z.string().trim().min(1).refine((value) => !/\p{Cc}/u.test(value)),
+    machineName: z.string().check(z.trim(), z.minLength(1), z.refine((value) => !/\p{Cc}/u.test(value))),
     platform: z.enum(['darwin', 'linux', 'win32']),
     mobility: z.enum(['portable', 'stationary']),
-  }).strict(),
-  z.object({ kind: z.literal('unknown') }).strict(),
+  }),
+  z.strictObject({ kind: z.literal('unknown') }),
 ]));
 export type HomeHostFact = z.infer<typeof HomeHostFactSchema>;
 
@@ -117,21 +117,18 @@ function coerceFeaturesResponsePayload(raw: unknown): unknown {
   };
 }
 
-export const FeaturesResponseSchema = lazyZodSchema(() => z.preprocess(
-  coerceFeaturesResponsePayload,
-  z.object({
+export const FeaturesResponseSchema = lazyZodSchema(() => z.pipe(z.transform(coerceFeaturesResponsePayload), z.object({
     features: FeatureGatesSchema,
     capabilities: CapabilitiesSchema,
     // Additive optional Home connection descriptor (Home Iroh publication):
     // old servers omit the field and remain valid; a present field must parse
     // through the one canonical outer descriptor schema or the response fails.
-    homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.optional(),
-    signInService: HomeSignInServicePolicyV1Schema.optional(),
-    accountServicePresentation: AccountServicePresentationV1Schema.optional(),
-    homePresentation: HomePresentationV1Schema.optional(),
-    homeHostFact: HomeHostFactSchema.optional(),
-  }),
-));
+    homeConnectionDescriptor: z.optional(HomeConnectionDescriptorV1Schema),
+    signInService: z.optional(HomeSignInServicePolicyV1Schema),
+    accountServicePresentation: z.optional(AccountServicePresentationV1Schema),
+    homePresentation: z.optional(HomePresentationV1Schema),
+    homeHostFact: z.optional(HomeHostFactSchema),
+  })));
 
 export type FeaturesResponse = Readonly<{
   features: FeatureGates;

@@ -19,6 +19,7 @@ import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
 import {
     clearMachineRequestReachabilityForTest,
     readMachineRequestReachabilityObservation,
@@ -641,7 +642,9 @@ describe('machineRpcWithServerScope', () => {
         try {
             getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
             getAppliedActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
-            getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: { transfer: { enabled: true } } } }));
+            getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: {
+                transfer: FeatureGatesSchema.parse({ machines: { enabled: true, transfer: { enabled: true } } }).machines.transfer,
+            } } }));
             let resolveResult!: (value: unknown) => void;
             machineRpcSpy.mockImplementation(async (_machineId, _method, _params, options) => {
                 options?.onIssued?.();
@@ -708,7 +711,9 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A });
         getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
         getAppliedActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
-        getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: { transfer: { enabled: true } } } }));
+        getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: {
+            transfer: FeatureGatesSchema.parse({ machines: { enabled: true, transfer: { enabled: true } } }).machines.transfer,
+        } } }));
         const { createTransferRecipientKeyPair, createEncryptedTransferChunkEnvelope, decryptEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
         const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         const binary = new Uint8Array([0, 255, 128, 42]);
@@ -1664,7 +1669,7 @@ describe('machineRpcWithServerScope', () => {
         expect(fakeSocket.timeout).toHaveBeenCalledWith(1);
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
         expect(readMachineRequestReachabilityObservation({ serverId: 'server-a', accountId: 'account-a' }, 'machine-1'))
-            .toMatchObject({ outcome: 'failed' });
+            .toBeNull();
         vi.useRealTimers();
     });
 

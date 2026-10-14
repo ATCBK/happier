@@ -3,21 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { derivePluginDaemonContributionRegistrationRights } from './catalog.js';
 import { PluginContributesV2Schema } from './v2.js';
 
-const externalSkillAdapterDescriptor = Object.freeze({
-  id: 'acme.skill',
-  providerId: 'acme',
-  title: 'Acme skills',
-  description: 'Acme SKILL.md bundles.',
-  libraryKind: 'bundle' as const,
-  supportsScope: { user: true, project: true },
-  supportsFiles: true,
-  formatId: 'skill_md_v1',
-  defaultRoots: [
-    { label: 'Project skills', scope: 'project' as const, pathTemplate: '.acme/skills' },
-  ],
-  capabilities: { supportsCatalogInstall: true },
-});
-
 describe('plugin prompt asset contributions', () => {
   it('parses digest-resource prompt assets targeted to an Agent', () => {
     const parsed = PluginContributesV2Schema.parse({
@@ -58,24 +43,9 @@ describe('plugin prompt asset contributions', () => {
     ).toThrow();
   });
 
-  it('admits an advertised external adapter and derives its exact registration right', () => {
-    const parsed = PluginContributesV2Schema.parse({
-      promptAssets: [{
-        id: 'external-skills',
-        kind: 'context',
-        resource: 'skill-context',
-        target: { kind: 'agent', agent: 'acme-agent' },
-        adapterDescriptor: externalSkillAdapterDescriptor,
-      }],
-    });
-
-    expect(parsed.promptAssets[0]?.adapterDescriptor).toEqual(externalSkillAdapterDescriptor);
-    expect(derivePluginDaemonContributionRegistrationRights(parsed)).toContainEqual({
-      family: 'promptAssets',
-      localId: 'external-skills',
-      target: { realm: 'daemon' },
-      promptAssetDescriptor: externalSkillAdapterDescriptor,
-    });
+  it('rejects the retired external adapter declaration', () => {
+    expect(PluginContributesV2Schema.safeParse({ promptAssets: [{ id: 'external-skills', kind: 'context',
+      resource: 'skill-context', target: { kind: 'agent', agent: 'acme-agent' }, adapterDescriptor: {} }] }).success).toBe(false);
   });
 
   it('keeps descriptor-only prompt assets free of runtime registration demand', () => {

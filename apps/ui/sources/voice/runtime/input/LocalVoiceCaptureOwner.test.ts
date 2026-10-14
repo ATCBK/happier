@@ -161,7 +161,7 @@ function installBrowserCaptureBoundary() {
     // Permission probing and capture are separate browser acquisitions. A
     // stopped permission-probe track must not be the capture resource.
     vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints =>
-        constraints.audio === true ? permissionStream : await captureAcquire());
+        constraints?.audio === true ? permissionStream : await captureAcquire());
     vi.stubGlobal('window', { AudioContext: vi.fn(() => audioContext) });
     vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
     return { micStream: capture.stream, micTrack: capture.track,

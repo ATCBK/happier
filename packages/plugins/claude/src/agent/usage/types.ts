@@ -21,6 +21,8 @@ export type ClaudeUsageObservation = {
     nativeRecordId?: string;
     inferenceId?: string;
     nativeSessionId?: string;
+    /** Explicit foreground request ownership, absent for replay and unbound sidechains. */
+    turnId?: string;
     observedAtMs?: number;
     modelId: string | null;
     tokens: UsageObservationTokens;

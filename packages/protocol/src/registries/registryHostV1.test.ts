@@ -2,9 +2,70 @@ import {describe,expect,it} from 'vitest';
 import {createRegistryHostV1} from './registryHostV1.js';
 import {listRegistrySourcesV1,type RegistrySourceDescriptorV1} from './registrySourcesV1.js';
 import type {RegistryHttpV1} from './formats/registryFormatAdapterV1.js';
+import {computeGitBlobShaV1,computeGitTreeShaV1} from './registryGitTreeV1.js';
+import {encodeBase64} from '../crypto/base64.js';
 const commit='1'.repeat(40);
 const source=(id:string):RegistrySourceDescriptorV1=>({id,title:id,format:'git',kinds:['skill'],url:`https://github.com/account/${id}`,enabled:true,addedAt:0,origin:{kind:'user'},removable:true});
 const tree={sha:'tree',tree:[{path:'review/SKILL.md',type:'blob',mode:'100644',sha:'blob',size:3},{path:'review',type:'tree',mode:'040000',sha:'subtree'}]};
+
+describe('registry link operation',()=>{
+  it.each(['rate_limited','auth_failed'] as const)('preserves %s during detection without continuing quota requests',async state=>{
+    const requests:string[]=[];
+    const fail=async(url:string)=>{requests.push(url);return {ok:false as const,status:{state}};};
+    const host=createRegistryHostV1({host:'web',readSources:async()=>[],http:{getJson:fail,getText:fail,getBytes:fail}});
+    expect(await host.fetchRequest({op:'link',url:'https://github.com/owner/limited'})).toEqual({op:'error',status:{state}});
+    expect(requests).toHaveLength(state==='rate_limited'?1:2);
+  });
+  it('reuses the repository reader across marketplace listing and pinned skill reads, then refreshes the next operation',async()=>{
+    const requests:string[]=[];
+    const names=['review','release','debug'];
+    const markdown=(name:string)=>`---\nname: ${name}\n---\nInstructions`;
+    const bytes=(name:string)=>new TextEncoder().encode(markdown(name));
+    const http:RegistryHttpV1={getJson:async url=>{
+      requests.push(url);
+      return {ok:true,fetchedAt:2,value:url.endsWith('marketplace.json')?{plugins:names.map(name=>({name,source:`./plugins/${name}`}))}
+        :url.endsWith('plugin.json')?{}:url.includes('/commits/')?{sha:commit}:{sha:'2'.repeat(40),tree:names.flatMap(name=>[
+          {path:`plugins/${name}/skills/${name}`,type:'tree',mode:'040000',sha:computeGitTreeShaV1([{path:'SKILL.md',unixMode:0o644,bytes:bytes(name)}])},
+          {path:`plugins/${name}/skills/${name}/SKILL.md`,type:'blob',mode:'100644',sha:computeGitBlobShaV1(bytes(name)),size:bytes(name).length},
+        ])}};
+    },getText:async url=>({ok:true,fetchedAt:2,value:markdown(url.split('/').at(-2)!)}),
+      getBytes:async url=>({ok:true,fetchedAt:2,value:bytes(url.split('/').at(-2)!)})};
+    const host=createRegistryHostV1({host:'web',http,readSources:async()=>[]});
+    for(let operation=1;operation<=2;operation++){
+      const items=await host.readLinkSkills('https://github.com/owner/market');
+      expect(items.map(item=>item.summary.title)).toEqual(names);
+      await Promise.all(items.map(item=>host.fetchLinkSkillFiles('https://github.com/owner/market',item)));
+      expect(requests.filter(url=>url.includes('/commits/'))).toHaveLength(operation);
+      expect(requests.filter(url=>url.includes('/git/trees/'))).toHaveLength(operation);
+    }
+  });
+  it('retains the prescribed file transport fallback and refuses changed pinned bytes',async()=>{
+    const markdown='---\nname: review\n---\nInstructions';
+    const bytes=new TextEncoder().encode(markdown);
+    const file={path:'SKILL.md',unixMode:0o644 as const,bytes};
+    let transportFails=false,corrupted=false;
+    const daemonRequests:unknown[]=[];
+    const http:RegistryHttpV1={getJson:async url=>url.endsWith('marketplace.json')?{ok:false,status:{state:'invalid_source'}}
+      :{ok:true,fetchedAt:2,value:url.includes('/commits/')?{sha:commit}:url.includes('/git/trees/')?{sha:'2'.repeat(40),tree:[
+        {path:'review',type:'tree',mode:'040000',sha:computeGitTreeShaV1([file])},
+        {path:'review/SKILL.md',type:'blob',mode:'100644',sha:computeGitBlobShaV1(bytes),size:bytes.length},
+      ]}:{name:'skills'}},getText:async()=>({ok:true,fetchedAt:2,value:markdown}),getBytes:async()=>{
+        if(transportFails)throw new TypeError('Raw-file transport unavailable');
+        return {ok:true,fetchedAt:2,value:corrupted?new TextEncoder().encode(markdown+' changed'):bytes};
+      }};
+    const host=createRegistryHostV1({host:'web',http,readSources:async()=>[],daemonFetch:async request=>{
+      daemonRequests.push(request);return {op:'files',files:[{path:'SKILL.md',unixMode:0o644,contentBase64:encodeBase64(bytes)}]};
+    }});
+    const item=(await host.readLinkSkills('https://github.com/owner/skills'))[0]!;
+    transportFails=true;
+    expect(await host.fetchLinkSkillFiles('https://github.com/owner/skills',item)).toEqual([file]);
+    expect(daemonRequests).toEqual([{op:'linkFiles',url:'https://github.com/owner/skills',itemId:'review',version:commit,
+      ref:item.payload.skill.ref}]);
+    transportFails=false;corrupted=true;
+    await expect(host.fetchLinkSkillFiles('https://github.com/owner/skills',item)).rejects.toThrow('registry_blob_sha_mismatch');
+    expect(daemonRequests).toHaveLength(1);
+  });
+});
 
 describe('registry final transport failure classification',()=>{
   it.each(['native','web'] as const)('keeps healthy source pages when %s placement exhausts a network TypeError',async hostKind=>{

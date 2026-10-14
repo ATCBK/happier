@@ -89,6 +89,10 @@ describe('PoliteAccessibilityStatus on web', () => {
         // Screen readers announce inserted content; an untouched node stays silent.
         expect(spokenNode()?.textContent).toBe('Approved: Home A');
         expect(spokenNode()).not.toBe(first);
+        const liveRegion = region();
+        await render('', 'revision:2:acknowledged');
+        expect(region()).toBe(liveRegion);
+        expect(region().textContent).toBe('');
     });
 
     it('coalesces new text that arrives under the same transition', async () => {

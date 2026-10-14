@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { useHappierCopyFeedback } from '../interaction/copyFeedback.js';
+
 export type HappierCodeBlockBehaviorInput = Readonly<{
   language?: string | null;
   showHeaderRow: boolean;
@@ -31,33 +33,10 @@ export function resolveHappierCodeBlockLayout(input: Pick<
 
 /** One copy settlement/timer and header-placement owner for app and public code blocks. */
 export function useHappierCodeBlockBehavior(input: HappierCodeBlockBehaviorInput) {
-  const [copied, setCopied] = React.useState(false);
-  const resetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mountedRef = React.useRef(true);
+  const feedback = useHappierCopyFeedback(input.copiedDurationMs);
   const layout = resolveHappierCodeBlockLayout(input);
+  const copyAction = feedback.copy;
+  const copy = React.useCallback(() => copyAction(input.onCopy), [copyAction, input.onCopy]);
 
-  React.useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (resetTimer.current) clearTimeout(resetTimer.current);
-    };
-  }, []);
-
-  const copy = React.useCallback(async () => {
-    try {
-      await input.onCopy();
-      if (!mountedRef.current) return true;
-      setCopied(true);
-      if (resetTimer.current) clearTimeout(resetTimer.current);
-      resetTimer.current = setTimeout(() => {
-        if (mountedRef.current) setCopied(false);
-      }, input.copiedDurationMs ?? 1_200);
-      return true;
-    } catch {
-      return false;
-    }
-  }, [input.copiedDurationMs, input.onCopy]);
-
-  return { ...layout, copied, copy } as const;
+  return { ...layout, copied: feedback.isCopied(), copy } as const;
 }

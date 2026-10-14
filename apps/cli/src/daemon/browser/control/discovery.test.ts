@@ -15,7 +15,7 @@ import { createBrowserCdpScreencastProducer } from '../capture/cdpScreencast';
 import { registerBrowserLiveCapture } from '../capture/registration';
 
 describe('daemon browser view discovery', () => {
-  it('projects only the requested session from the live control owner and removes closed views', async () => {
+  it.each(['present_user', 'account_automation', undefined] as const)('projects the live control owner and drains pending %s focus before confidentiality', async authority => {
     const broker = createBrowserDaemonControlBroker();
     const view = { browserSessionId: 'session', viewId: 'view' };
     const owners = createBrowserAutomationOwnerRegistry();
@@ -67,7 +67,7 @@ describe('daemon browser view discovery', () => {
       expect(JSON.stringify(discover())).not.toContain('private-cdp');
       const focus = { kind: 'focusView' as const, commandId: 'focus-held', ...view };
       blockFocus = true;
-      const queuedFocus = routes.dispatchCommand(focus, { authority: 'account_automation' });
+      const queuedFocus = routes.dispatchCommand(focus, { authority });
       await vi.waitFor(() => expect(focusIssued).toBe(true));
       let observationDrained = false;
       const unregisterDrain = control.registerConfidentialityDrain(async () => { observationDrained = true; });
@@ -98,8 +98,9 @@ describe('daemon browser view discovery', () => {
       expect.soft(discover()).toMatchObject([{ ...view }]);
       expect.soft(JSON.stringify(discover())).not.toContain(material);
       const rpcDispatch = handlers.get(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH);
-      // The owner-scoped UI RPC supplies human authority; Agent control uses the routes directly.
-      const humanFocus = await rpcDispatch?.({ machineId: 'machine', command: focus });
+      // The authenticated Home supplies authority; the handler never promotes an omitted caller.
+      const humanFocus = await rpcDispatch?.({ machineId: 'machine', command: focus },
+        { signal, callerAuthority: 'present_user' });
       expect.soft(humanFocus).toMatchObject({ result: { status: 'dispatched' } });
       expect.soft(JSON.stringify(humanFocus)).not.toContain(material);
       expect.soft(await routes.dispatchCommand(focus))

@@ -287,7 +287,8 @@ const styles = StyleSheet.create((theme) => ({
     summaryText: { flex: 1, minWidth: 0 },
     summaryMessage: { ...Typography.variant('heading'),  color: theme.colors.text.primary,  },
     summaryMeta: { ...Typography.variant('body'),  color: theme.colors.text.tertiary,  },
-    mono: { ...Typography.mono(), fontSize: 12.5 },
+    // Inline in a meta line: mono takes the surrounding role's size.
+    mono: { ...Typography.mono() },
     actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s8, marginTop: theme.space.s12 },
     inset: { paddingLeft: 50, paddingRight: theme.space.s16, paddingBottom: theme.space.s16, paddingTop: theme.space.s2 },
     insetText: { ...Typography.variant('reading'),  color: theme.colors.text.secondary,  },
@@ -302,7 +303,8 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.inset,
     },
     logFlush: { marginLeft: 0, marginRight: 0, marginBottom: 0, marginTop: theme.space.s10 },
-    logText: { fontSize: 12.5, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.mono() },
+    // Hook output is terminal text (D8): mono at the meta size with a log's leading.
+    logText: { ...Typography.variant('meta'), lineHeight: 19, color: theme.colors.text.secondary, ...Typography.mono() },
     metaRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
     metaText: { ...Typography.variant('body'),  color: theme.colors.text.tertiary,  },
 }));

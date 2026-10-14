@@ -65,6 +65,15 @@ const installedSource: SessionSurfaceItemV1['source'] = {
 };
 
 describe('Session widget provenance', () => {
+    it('says what an agent visual is: a chart or a table reads as such, a note stays a note', () => {
+        const declarative = (root: unknown) => ({ kind: 'declarative', document: { version: 1, root } }) as SessionSurfaceItemV1['source'];
+        const data = { kind: 'value', value: [] };
+        expect(resolveBoardWidgetProvenance(declarative({ kind: 'chart', label: 'Orders', style: 'bar', rows: [], data,
+            x: { path: ['day'], type: 'string' }, y: { path: ['orders'], type: 'number' } }), null).label).toBe('Chart');
+        expect(resolveBoardWidgetProvenance(declarative({ kind: 'table', label: 'Orders', rows: [], data, columns: [] }), null).label).toBe('Table');
+        expect(resolveBoardWidgetProvenance(declarative({ kind: 'markdown', text: 'Hello' }), null).label).toBe('Note');
+    });
+
     it('names the installed plugin and its contribution, never a generic plugin line', () => {
         const provenance = resolveBoardWidgetProvenance(installedSource, projectionWith({
             surfaces: [{ pluginId: 'acme.review', localId: 'review-status-widget', title: 'Review status' }],

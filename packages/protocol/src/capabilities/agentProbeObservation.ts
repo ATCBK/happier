@@ -1,53 +1,54 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProviderModelDescriptorV1Schema } from '../models/descriptor.js';
 import { ProbedCatalogOptionSchema } from './probedCatalogOption.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Native preflight observations, distinct from the public inventory projection. */
-export const AgentProbeModelSchema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1),
-  name: z.string().trim().min(1),
-  description: z.string().optional(),
-  contextWindowTokens: z.number().int().positive().max(100_000_000).optional(),
-  extendedContextModelId: z.string().trim().min(1).optional(),
-  modelOptions: z.array(ProbedCatalogOptionSchema).readonly().optional(),
+export const AgentProbeModelSchema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
+  name: z.string().check(z.trim(), z.minLength(1)),
+  description: z.optional(z.string()),
+  contextWindowTokens: z.optional(z.number().check(z.int(), z.positive(), z.maximum(100_000_000))),
+  extendedContextModelId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  modelOptions: z.optional(z.readonly(z.array(ProbedCatalogOptionSchema))),
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
-}).strict());
+  costTier: ProviderModelDescriptorV1Schema.shape.costTier,
+}));
 export type AgentProbeModel = z.output<typeof AgentProbeModelSchema>;
 
 // Agent identity and source were not required by the incumbent UI native readers.
 // Neither optional field establishes selected-backend membership or runtime custody.
 const AgentProbeObservationFields = {
-  agentId: z.string().trim().min(1).optional(),
-  source: z.enum(['dynamic', 'static', 'unavailable']).optional(),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  source: z.optional(z.enum(['dynamic', 'static', 'unavailable'])),
 };
 
-export const AgentModelsProbeObservationSchema = lazyZodSchema(() => z.object({
+export const AgentModelsProbeObservationSchema = lazyZodSchema(() => z.strictObject({
   ...AgentProbeObservationFields,
-  availableModels: z.array(AgentProbeModelSchema).readonly(),
+  availableModels: z.readonly(z.array(AgentProbeModelSchema)),
   supportsFreeform: z.boolean(),
-  observedAt: z.number().finite().nonnegative().optional(),
-  refreshError: z.boolean().optional(),
-  cacheable: z.boolean().optional(),
-  runtimeDescriptorV1Accepted: z.boolean().optional(),
-}).strict());
+  observedAt: z.optional(z.number().check(z.nonnegative())),
+  refreshError: z.optional(z.boolean()),
+  cacheable: z.optional(z.boolean()),
+  runtimeDescriptorV1Accepted: z.optional(z.boolean()),
+}));
 export type AgentModelsProbeObservation = z.output<typeof AgentModelsProbeObservationSchema>;
 
-export const AgentProbeModeSchema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1),
-  name: z.string().trim().min(1),
-  description: z.string().optional(),
-}).strict());
+export const AgentProbeModeSchema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
+  name: z.string().check(z.trim(), z.minLength(1)),
+  description: z.optional(z.string()),
+}));
 export type AgentProbeMode = z.output<typeof AgentProbeModeSchema>;
 
-export const AgentSessionModesProbeObservationSchema = lazyZodSchema(() => z.object({
+export const AgentSessionModesProbeObservationSchema = lazyZodSchema(() => z.strictObject({
   ...AgentProbeObservationFields,
-  availableModes: z.array(AgentProbeModeSchema).readonly(),
-}).strict());
+  availableModes: z.readonly(z.array(AgentProbeModeSchema)),
+}));
 export type AgentSessionModesProbeObservation = z.output<typeof AgentSessionModesProbeObservationSchema>;
 
-export const AgentConfigOptionsProbeObservationSchema = lazyZodSchema(() => z.object({
+export const AgentConfigOptionsProbeObservationSchema = lazyZodSchema(() => z.strictObject({
   ...AgentProbeObservationFields,
-  configOptions: z.array(ProbedCatalogOptionSchema).readonly(),
-}).strict());
+  configOptions: z.readonly(z.array(ProbedCatalogOptionSchema)),
+}));
 export type AgentConfigOptionsProbeObservation = z.output<typeof AgentConfigOptionsProbeObservationSchema>;

@@ -395,7 +395,8 @@ export type ResolvedActionContribution = Readonly<{
 /**
  * The legacy Action schema is passthrough-shaped, so `Omit<ActionDefinitionV1,
  * 'execution'>` would erase every known field through its string index. Pick
- * its declared fields explicitly and replace only the legacy execution slot.
+ * its declared fields explicitly; contributed Actions below retain their
+ * optional author input contract and closed execution target.
  */
 type ActionDefinitionV1NonExecutionFields = Pick<ActionDefinitionV1,
     | 'kindVersion'
@@ -415,7 +416,6 @@ type ActionDefinitionV1NonExecutionFields = Pick<ActionDefinitionV1,
     | 'outputSchema'
     | 'operation'
     | 'sideEffectClass'
-    | 'inputSchema'
     | 'compatibility'
 >;
 type ResolvedActionDefinitionBase = Readonly<
@@ -453,6 +453,8 @@ type LegacyResolvedActionDefinition = Readonly<
 /** Canonical V2 contribution truth retained alongside the legacy ActionSpec shell. */
 type ResolvedContributedActionDefinition = Readonly<
     ResolvedActionDefinitionBase & ResolvedActionPresentation & ResolvedActionSafety & Readonly<{
+        /** Preserve an absent author contract; an explicit empty schema is distinct. */
+        inputSchema?: PluginActionContributionV2['inputSchema'];
         /** The one explicit contributed-Action execution owner, retained without fallback. */
         execution: PluginActionContributionV2['execution'];
     }>

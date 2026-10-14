@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { readWorkBoardArtifactV1 } from '../boards/workBoardArtifactV1.js';
 import { loadAiLaunchProfileArtifacts, readAiLaunchProfileCollection, readAiLaunchProfileRecords } from '../profiles/read.js';
@@ -7,15 +7,15 @@ import type { WorkflowDefinitionArtifactOperations } from '../actions/executor/w
 import type { AutomationDefinitionListResponse } from '../automations/automationApiV3.js';
 import type { MachinePoolListOutputV1 } from './pools/v1.js';
 
-export const MachineReferenceV1Schema = lazyZodSchema(() => z.object({
+export const MachineReferenceV1Schema = lazyZodSchema(() => z.readonly(z.strictObject({
   kind: z.enum(['board', 'profile', 'machine_pool', 'workflow_assignment', 'automation_assignment']),
-  id: z.string().trim().min(1), name: z.string(),
-}).strict().readonly());
-export const MachineReferenceCensusV1Schema = lazyZodSchema(() => z.object({
-  homeId: z.string().trim().min(1), machineId: z.string().trim().min(1).nullable(),
-  coverage: z.enum(['complete', 'partial']), references: z.array(MachineReferenceV1Schema).readonly(),
-  unavailable: z.array(z.enum(['target', 'artifacts', 'profiles', 'pools', 'assignments', 'requester_authority'])).readonly(),
-}).strict().readonly());
+  id: z.string().check(z.trim(), z.minLength(1)), name: z.string(),
+})));
+export const MachineReferenceCensusV1Schema = lazyZodSchema(() => z.readonly(z.strictObject({
+  homeId: z.string().check(z.trim(), z.minLength(1)), machineId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  coverage: z.enum(['complete', 'partial']), references: z.readonly(z.array(MachineReferenceV1Schema)),
+  unavailable: z.readonly(z.array(z.enum(['target', 'artifacts', 'profiles', 'pools', 'assignments', 'requester_authority']))),
+})));
 export type MachineReferenceV1 = z.infer<typeof MachineReferenceV1Schema>;
 export type MachineReferenceCensusV1 = z.infer<typeof MachineReferenceCensusV1Schema>;
 export type MachineReferenceCensusPortsV1 = Readonly<{

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  estimateHappierDataColumnWidths,
   describeHappierDataChart,
   formatHappierDataBytes,
   formatHappierDataBytesParts,
@@ -9,6 +10,7 @@ import {
   resolveHappierDataShares,
   resolveHappierDataTableColumns,
   resolveHappierSeriesGeometry,
+  resolveHappierSeriesRampStep,
 } from './dataModel.js';
 
 describe('shared data presentation rules', () => {
@@ -40,6 +42,15 @@ describe('shared data presentation rules', () => {
     expect(resolveHappierDataTableColumns({ ...input, availableWidth: 40 })).toEqual([0]);
   });
 
+  it('gives a header its medium weight, so a label as long as its cells never truncates', () => {
+    // Live: "Orders" over two-digit counts drew as "Ord…" at 14px/500 with a body-weight estimate.
+    const [, orders] = estimateHappierDataColumnWidths({
+      columns: [{ label: 'Channel' }, { label: 'Orders' }], rows: [['Copper', 17]], characterWidth: 7.2,
+    });
+    const bodyEstimate = 'Orders'.length * 7.2;
+    expect(orders).toBeGreaterThan(Math.ceil(bodyEstimate * 1.05));
+  });
+
   it('names every point through the retained public chart-description helper', () => {
     expect(describeHappierDataChart('Signups per day', [{ x: 'Tue', y: 236 }, { x: 'Wed', y: 1183 }], 'en-US'))
       .toBe('Signups per day: Tue 236, Wed 1,183');
@@ -69,5 +80,13 @@ describe('shared data presentation rules', () => {
     expect(formatHappierDataBytes(0, { kind: 'memory', locale: 'en-US' })).toBe('0 B');
     expect(formatHappierDataBytes(812, { kind: 'storage', locale: 'en-US' })).toBe('812 B');
     expect(formatHappierDataBytesParts(180 * 1024 ** 2, { kind: 'memory', locale: 'en-US' })).toEqual({ value: '180', unit: 'MB' });
+  });
+
+  it('spreads a few uncoloured series across the legible ramp so neighbours never sit one step apart', () => {
+    expect([0].map((index) => resolveHappierSeriesRampStep(index, 1))).toEqual([0]);
+    expect([0, 1].map((index) => resolveHappierSeriesRampStep(index, 2))).toEqual([0, 4]);
+    expect([0, 1, 2].map((index) => resolveHappierSeriesRampStep(index, 3))).toEqual([0, 2, 4]);
+    // Many series use every step in order, never wrapping.
+    expect(Array.from({ length: 8 }, (_, index) => resolveHappierSeriesRampStep(index, 8))).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   });
 });

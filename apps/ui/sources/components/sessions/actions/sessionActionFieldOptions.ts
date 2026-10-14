@@ -6,6 +6,8 @@ import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
 import type { InputTypePickerHostContext } from './InputTypePickerHostProvider';
 import { usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
 import { localizeBuiltinInputLabel } from '@/text/builtinInputPrompts';
+import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
+import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
 
 export type InputFieldOptionsContext = Readonly<{ actionId?: string; consumer?: InputOptionsConsumerV1; draftInput?: Readonly<Record<string, unknown>> }>;
 export type ResolveSessionActionFieldOptions = ((
@@ -23,6 +25,11 @@ const EMPTY_OPTIONS: readonly ActionFieldOption[] = Object.freeze([]);
 export function buildSessionActionFieldOptionsResolver(lists: SessionActionFieldOptionLists): ResolveSessionActionFieldOptions {
     const projected = Object.fromEntries(Object.entries(lists).map(([source, options]) => {
         if (source === 'usage.query.breakdown') return [source, options.map(option => ({ ...option, label: localizeBuiltinInputLabel(option.label) }))];
+        // The Period's choices read as the Usage page names them; a custom range reads as its dates.
+        if (source === 'usage.query.period') return [source, options.map(option => {
+            const period = UsageQuerySchema.shape.period.safeParse(option.value);
+            return period.success ? { ...option, label: formatUsageCalendarPeriod(period.data) } : option;
+        })];
         const dimension = source === 'usage.filters.agents' ? 'agent' : source === 'usage.filters.machines' ? 'machine'
             : source === 'usage.filters.projects' ? 'project' : source === 'usage.filters.sources' ? 'source' : null;
         if (!dimension) return [source, options];

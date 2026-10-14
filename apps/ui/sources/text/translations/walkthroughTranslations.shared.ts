@@ -89,7 +89,6 @@ export const en = {
     notice: {
         stale: 'Files changed after this was written',
         refresh: 'Refresh walkthrough',
-        failed: ({ reason }: { reason: string }) => `Writing stopped · ${reason}`,
         failedGeneric: 'Writing stopped',
         tryAgain: 'Try again',
         chooseModel: 'Choose model',
@@ -99,6 +98,16 @@ export const en = {
         offlineA11y: 'Needs the machine, which is offline',
         incomplete: 'Some changes couldn’t be listed. What is here is exact; nothing claims to be complete.',
         undo: 'Undo',
+    },
+    // Why a start was refused, and the next step: written for any output (Walkthrough, Commits), never a code.
+    generationFailure: {
+        invalidRequest: 'This machine couldn’t read the request. Its Happier may be out of date.',
+        reviewRequest: 'Update this machine’s Happier, then try again',
+        modelUnavailable: 'The selected model isn’t available right now.',
+        machineUnavailable: 'Happier can’t reach this machine.',
+        reconnectMachine: 'Reconnect it, then try again',
+        disabled: '“Explain changes” is off.',
+        enableExplain: 'Turn it on in settings',
     },
     none: {
         title: 'No walkthrough yet',

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { ActionSurfaceSchema, ActionRequiredAuthoritySchema, getActionSpec, resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import type { ActionExecuteResult } from './executor/types.js';
@@ -13,42 +13,42 @@ import { isWorkflowAuthoringActionId } from './workflowAuthoringActionIds.js';
 import { isAppShellActionId } from './appShellActionFamily.js';
 
 /** Private continuation of an Action admitted by the authenticated Machine host. */
-export const UiActionDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const UiActionDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   actionId: ActionIdSchema,
   input: z.unknown(),
-  context: z.object({
-    surface: ActionSurfaceSchema.keyof(),
+  context: z.strictObject({
+    surface: z.keyof(ActionSurfaceSchema),
     authority: ActionRequiredAuthoritySchema,
-    defaultSessionId: z.string().min(1).optional(),
-    defaultSessionMachineId: z.string().min(1).optional(),
-    agentStartWorkspaceWrites: z.enum(['allow', 'deny']).optional(),
+    defaultSessionId: z.optional(z.string().check(z.minLength(1))),
+    defaultSessionMachineId: z.optional(z.string().check(z.minLength(1))),
+    agentStartWorkspaceWrites: z.optional(z.enum(['allow', 'deny'])),
     // Host provenance, never Action input. Nested owners recheck the grant and
     // keep their own approval policy; the root's bypass/signature is not delegated.
-    actionCaller: ApprovalExecutionOriginCallerV1Schema.optional(),
-    actionRequestId: z.string().trim().min(1).optional(),
-    externalActionCredential: z.object({
-      accountId: z.string().min(1), principalId: z.string().min(1), credentialId: z.string().min(1),
+    actionCaller: z.optional(ApprovalExecutionOriginCallerV1Schema),
+    actionRequestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    externalActionCredential: z.optional(z.strictObject({
+      accountId: z.string().check(z.minLength(1)), principalId: z.string().check(z.minLength(1)), credentialId: z.string().check(z.minLength(1)),
       grant: ApiTokenGrantV1Schema,
-    }).strict().optional(),
-    externalActionTarget: ExternalActionTargetV1Schema.optional(),
-  }).strict(),
-}).strict().superRefine((request, ctx) => {
+    })),
+    externalActionTarget: z.optional(ExternalActionTargetV1Schema),
+  }),
+}).check(z.superRefine((request, ctx) => {
   const spec = getActionSpec(request.actionId);
   const input = spec.inputSchema.safeParse(request.input);
   if (!Object.hasOwn(request, 'input') || !input.success || resolveActionExecutionPlacementForInput(spec, input.data) !== 'client') {
     ctx.addIssue({ code: 'custom', message: 'Invalid client Action', path: ['input'] });
   }
-}));
+})));
 export type UiActionDispatchRequestV1 = z.infer<typeof UiActionDispatchRequestV1Schema>;
 
-export const UiActionDispatchResultV1Schema = lazyZodSchema(() => z.object({
+export const UiActionDispatchResultV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   execution: z.discriminatedUnion('ok', [
-    z.object({ ok: z.literal(true), result: z.unknown() }).strict(),
+    z.strictObject({ ok: z.literal(true), result: z.unknown() }),
     ActionExecuteFailureSchema,
   ]),
-}).strict());
+}));
 
 /** Absence is a declared domain result where the Action has one, otherwise a typed failure. */
 export function clientActionUnavailable(actionId: ActionId): ActionExecuteResult {

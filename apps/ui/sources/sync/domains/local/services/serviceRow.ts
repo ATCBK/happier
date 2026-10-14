@@ -9,9 +9,10 @@ import {
 } from '@/sync/domains/local/services/presentation';
 import type { TranslationKey } from '@/text/i18n';
 import { localServiceListenerGroupKey } from '@happier-dev/protocol/local/services/inventory';
+import { normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 
 export type ServiceRowScope = 'thisSession' | 'workspace' | 'machine' | 'suggestion';
-export type ServiceRowStatus = 'running' | 'starting' | 'stopping' | 'stale' | 'stopped' | 'failed' | 'unavailable';
+export type ServiceRowStatus = 'loading' | 'running' | 'starting' | 'stopping' | 'stale' | 'stopped' | 'failed' | 'unavailable';
 
 export type ServiceRow = Readonly<{
     id: string; // stable identity (inventory:<id> | package:<id> | ...)
@@ -77,6 +78,7 @@ function hasUncertainNativeCustody(target: LocalServiceLaunchTarget): boolean {
 }
 
 function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
+    if (target.unavailableReason === 'project_service_binding_pending') return 'loading';
     if (target.unavailableReason === 'project_service_binding_unavailable') return 'unavailable';
     // Available means the script can be launched, never that a listener is running. Older
     // launcher snapshots may omit sourceClass; source already establishes this distinction.
@@ -106,6 +108,7 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
 }
 
 function resolvePrimaryAction(target: LocalServiceLaunchTarget): ServiceRow['primaryAction'] {
+    if (target.unavailableReason === 'project_service_binding_pending') return null;
     if (target.unavailableReason === 'project_service_binding_unavailable') return null;
     if (hasUncertainNativeCustody(target)) return null;
     // An unaccepted package is presentation only, not a Session terminal command.
@@ -411,6 +414,31 @@ export function selectLocalServiceRowForInventoryEntry(
     return rows.find((row) => inventoryIdFromTarget(row.target) === entry.inventoryEntryId)
         ?? rows.find((row) => row.target.source === 'inventory_entry' && row.portLabel === `:${entry.port}`)
         ?? null;
+}
+
+/**
+ * The openable instance already running on a port, other than the row asking: a Start that collided
+ * with the same project's own listener points the person at it instead of offering the same Start.
+ */
+export function selectRunningOpenTargetOnPort(
+    rows: readonly ServiceRow[],
+    port: number,
+    failedTarget: LocalServiceLaunchTarget,
+): LocalServiceLaunchTarget | null {
+    const workspace = failedTarget.workspace;
+    if (!workspace || workspace.machineId !== failedTarget.machineId) return null;
+    const root = normalizeWorkspaceRootPathV1(workspace.rootPath);
+    if (root === null) return null;
+    for (const row of rows) {
+        const candidate = row.target.workspace;
+        if (row.id !== failedTarget.id && row.status === 'running' && row.portLabel === `:${port}` && row.primaryAction?.kind === 'open'
+            && row.target.machineId === failedTarget.machineId && candidate?.machineId === row.target.machineId
+            && candidate.serverId === workspace.serverId && candidate.workspaceId === workspace.workspaceId
+            && normalizeWorkspaceRootPathV1(candidate.rootPath) === root) {
+            return row.primaryAction.openTarget;
+        }
+    }
+    return null;
 }
 
 /**

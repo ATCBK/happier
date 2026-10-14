@@ -8,7 +8,7 @@ import { FloatingOverlay, type FloatingOverlayArrow } from '@/components/ui/over
 import { t } from '@/text';
 import type { SelectableRowVariant } from '@/components/ui/lists/SelectableRow';
 import { SelectableMenuResults, type SelectableMenuResultsHandle } from '@/components/ui/forms/dropdown/SelectableMenuResults';
-import type { SelectableMenuItem } from '@/components/ui/forms/dropdown/selectableMenuTypes';
+import type { SelectableMenuCategoryDecorations, SelectableMenuItem } from '@/components/ui/forms/dropdown/selectableMenuTypes';
 import { useSelectableMenu, CREATE_ITEM_ID } from '@/components/ui/forms/dropdown/useSelectableMenu';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
@@ -188,6 +188,10 @@ export type DropdownMenuProps = Readonly<{
     overlayStyle?: ViewStyle;
     /** When true, category titles like "General" are rendered (default false). */
     showCategoryTitles?: boolean;
+    /** Draw a hairline between untitled categories (choices, then operations). */
+    separateCategories?: boolean;
+    /** Per titled category (keyed by its title): an identity mark beside the title and one quiet note under its rows. */
+    categoryDecorations?: SelectableMenuCategoryDecorations;
     /** Extra bottom padding under the results list (defaults to 0; uses menu padding when `search` is enabled). */
     resultsPaddingBottom?: number;
     /** Render rows using the app `Item` component for perfect icon/typography parity. */
@@ -512,7 +516,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     });
 
     const resultScroll = useScrollRectIntoViewRegistry({
-        activeKey: selectedIndex >= 0 ? String(selectedIndex) : null,
+        activeKey: filteredCategories.flatMap((category) => category.items)[selectedIndex]?.id ?? null,
         padding: theme.space.s8,
         animated: !reducedMotion,
     });
@@ -705,6 +709,8 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                     rowVariant={rowVariant}
                                     emptyLabel={emptyLabel}
                                     showCategoryTitles={props.showCategoryTitles ?? false}
+                                    separateCategories={props.separateCategories}
+                                    categoryDecorations={props.categoryDecorations}
                                     rowKind={props.rowKind}
                                     itemProps={props.itemRowProps}
                                     registerItemLayout={resultScroll.registerItemLayout}

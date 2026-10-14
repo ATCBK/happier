@@ -12,6 +12,28 @@ export type SessionSurfaceItemBinding = Readonly<{
     loading: 'idle' | 'initial' | 'refreshing';
 }> | Readonly<{ status: 'unavailable'; reason: SessionSystemRecordUnavailableReason }>;
 
+/** The already-opened record, guarded by the same authority as its observer. No work starts here. */
+export function readRetainedSessionSurfaceItem(options: Pick<SessionSystemRecordObservationBase,
+    'session' | 'repository' | 'isCurrent' | 'readCapabilities' | 'readContentContext'> & Readonly<{ itemId: string }>): SessionSurfaceItemBinding | null {
+    if (!options.isCurrent() || !options.repository.isCurrent() || options.readCapabilities()?.readTranscript !== true) {
+        return { status: 'unavailable', reason: 'forbidden' };
+    }
+    const snapshot = options.repository.getSnapshot(options.session, { type: 'read', address: {
+        owner: 'host', namespace: 'surface', kind: 'item.v1', localId: options.itemId,
+    } });
+    if (snapshot.lastError && (!snapshot.data || (snapshot.lastError.status !== 'offline' && snapshot.lastError.status !== 'server_error'))) {
+        return snapshot.lastError.status === 'not_found'
+            ? { status: 'ready', item: { itemId: options.itemId, revision: null, state: { kind: 'removed' } },
+                freshness: snapshot.freshness, reachability: snapshot.reachability, loading: snapshot.loading }
+            : { status: 'unavailable', reason: snapshot.lastError.status };
+    }
+    const outcome = snapshot.data && options.repository.readOpenedSurfaceItem(snapshot.data, options.readContentContext());
+    if (!outcome || !snapshot.data) return null;
+    return { status: 'ready', item: { itemId: options.itemId, revision: snapshot.data.revision,
+        state: deriveSessionBoardItemState({ revision: snapshot.data.revision, outcome }, { complete: false }) },
+        freshness: snapshot.freshness, reachability: snapshot.reachability, loading: snapshot.loading };
+}
+
 /** Observe one exact Session content address, without Board inventory or admission. */
 export function observeSessionSurfaceItem(options: SessionSystemRecordObservationBase & Readonly<{
     itemId: string;
@@ -23,7 +45,8 @@ export function observeSessionSurfaceItem(options: SessionSystemRecordObservatio
     let snapshot: SessionSystemRecordRepositoryEntry<SessionSystemRecordStored> = options.repository.getSnapshot(options.session, query);
     let context = options.authority.contentContext;
     let authorityReachability: 'reachable' | 'offline' = 'reachable';
-    let previous: Extract<SessionSurfaceItemBinding, { status: 'ready' }> | undefined;
+    const retained = readRetainedSessionSurfaceItem(options);
+    let previous = retained?.status === 'ready' ? retained : undefined;
     let renewal: ReturnType<typeof options.renewAuthority> | null = null;
     const emit = (binding: SessionSurfaceItemBinding) => { if (!stopped) options.onChange(binding); };
     const authorized = () => options.isCurrent() && options.repository.isCurrent() && options.readCapabilities()?.readTranscript === true;
@@ -82,6 +105,7 @@ export function observeSessionSurfaceItem(options: SessionSystemRecordObservatio
         })().catch(() => { if (isCurrent()) emit({ status: 'unavailable', reason: 'invalid_response' }); });
     }
     if (!authorized()) { emit({ status: 'unavailable', reason: 'forbidden' }); return () => { stopped = true; }; }
+    if (retained) emit(retained);
     const unsubscribe = options.repository.subscribe(options.session, query, changed);
     changed();
     return () => { stopped = true; currentJob = null; unsubscribe(); };

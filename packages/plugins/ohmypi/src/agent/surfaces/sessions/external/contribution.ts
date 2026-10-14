@@ -437,7 +437,10 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
         }
         cursor = parsed.cursor;
       }
-      const control = contentSearch ? createExternalSessionContentSearchControl(request) : null;
+      const control = contentSearch ? createExternalSessionContentSearchControl({
+        signal: request.signal,
+        deadlineAtMs: request.scanDeadlineAtMs ?? request.deadlineAtMs,
+      }) : null;
       let partial = false;
       try {
         const listed = await listOhMyPiSessionCandidates({
@@ -504,7 +507,7 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
           },
         });
         request.signal.throwIfAborted();
-        const after = contentSearch && listed.searchIncomplete ? null : invocationFailure(request);
+        const after = invocationFailure(request);
         if (after) return after;
         const value = {
           candidates: listed.candidates.map(mapCandidate),

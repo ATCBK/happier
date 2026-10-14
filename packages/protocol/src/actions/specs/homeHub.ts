@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { HomeHubLayoutV1Schema, HomeHubLayoutIntentSchema } from '../../home/homeHubLayoutV1.js';
 import { WidgetInstanceV1Schema } from '../../widgets/widgetInstanceV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
@@ -9,23 +9,23 @@ import { WidgetLayoutGroupV1Schema } from '../../widgets/widgetLayoutItemV1.js';
 export const HOME_HUB_LAYOUT_ACTION_IDS = ['home.hub.layout.get', 'home.hub.layout.update', 'home.reachNudge.dismiss'] as const;
 export type HomeHubLayoutActionId = typeof HOME_HUB_LAYOUT_ACTION_IDS[number];
 
-const sectionId = z.string().min(1);
+const sectionId = z.string().check(z.minLength(1));
 export { HomeHubLayoutIntentSchema };
 export type { HomeHubLayoutIntent } from '../../home/homeHubLayoutV1.js';
 
-export const HomeHubLayoutGetInputSchema = lazyZodSchema(() => z.object({}).strict());
-export const HomeHubLayoutUpdateInputSchema = lazyZodSchema(() => z.object({ intent: HomeHubLayoutIntentSchema }).strict());
-export const HomeReachNudgeDismissInputSchema = lazyZodSchema(() => z.object({ homeServerId: z.string().trim().min(1) }).strict());
-export const HomeReachNudgeDismissResultSchema = lazyZodSchema(() => z.object({ homeIdentityId: z.string().min(1), dismissed: z.literal(true) }).strict());
-const builtinSectionSchema = lazyZodSchema(() => z.object({ id: sectionId, kind: z.literal('builtin'), hidden: z.boolean(), hideable: z.boolean(), frameStyle: z.enum(['card', 'plain']).optional() }).strict());
-const widgetSectionSchema = lazyZodSchema(() => z.object({ id: sectionId, kind: z.literal('widget'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.enum(['card', 'plain']).optional(), instance: WidgetInstanceV1Schema, size: WidgetSizeV1Schema }).strict());
-const groupSectionSchema = lazyZodSchema(() => z.object({ id: sectionId, kind: z.literal('group'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.enum(['card', 'plain']), group: WidgetLayoutGroupV1Schema, children: z.array(widgetSectionSchema) }).strict());
-export const HomeHubLayoutResultSchema = lazyZodSchema(() => z.object({
+export const HomeHubLayoutGetInputSchema = lazyZodSchema(() => z.strictObject({}));
+export const HomeHubLayoutUpdateInputSchema = lazyZodSchema(() => z.strictObject({ intent: HomeHubLayoutIntentSchema }));
+export const HomeReachNudgeDismissInputSchema = lazyZodSchema(() => z.strictObject({ homeServerId: z.string().check(z.trim(), z.minLength(1)) }));
+export const HomeReachNudgeDismissResultSchema = lazyZodSchema(() => z.strictObject({ homeIdentityId: z.string().check(z.minLength(1)), dismissed: z.literal(true) }));
+const builtinSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('builtin'), hidden: z.boolean(), hideable: z.boolean(), frameStyle: z.optional(z.enum(['card', 'plain'])) }));
+const widgetSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('widget'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.optional(z.enum(['card', 'plain'])), instance: WidgetInstanceV1Schema, size: WidgetSizeV1Schema }));
+const groupSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('group'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.enum(['card', 'plain']), group: WidgetLayoutGroupV1Schema, children: z.array(widgetSectionSchema) }));
+export const HomeHubLayoutResultSchema = lazyZodSchema(() => z.strictObject({
   layout: HomeHubLayoutV1Schema,
   sections: z.array(z.discriminatedUnion('kind', [builtinSectionSchema, widgetSectionSchema, groupSectionSchema])),
   availableWidgetIds: z.array(sectionId),
   hiddenSetupStepIds: z.array(sectionId),
-}).strict());
+}));
 
 export const HOME_HUB_LAYOUT_ACTION_SPECS = [
   {

@@ -4,18 +4,13 @@ import type { ExtendedStackNavigationOptions } from 'expo-router/build/layouts/S
 import { getFocusedRouteNameFromRoute, type ParamListBase, type RouteProp } from '@react-navigation/native';
 import 'react-native-reanimated';
 import * as React from 'react';
-import { Platform, TouchableOpacity } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { getPreferredLanguage, t } from '@/text';
 import { createAppStackScreenOptions, useAppStackUsesCustomHeader } from '@/components/navigation/createAppStackScreenOptions';
 import { useAuth } from '@/auth/context/AuthContext';
-import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
-import { Text } from '@/components/ui/text/Text';
 import { isTerminalConnectWebPathname } from '@/utils/path/terminalConnectUrl';
-import {
-    createFriendsStackScreenOptions,
-    createInboxStackScreenOptions,
-} from '@/utils/navigation/createSocialStackScreenOptions';
+import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
 import { isDesktopOverlayWindowContext } from '@/desktop/window/isDesktopOverlayWindowContext';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
@@ -33,7 +28,6 @@ import { useSetting } from '@/sync/domains/state/storage';
 import {
     isNewSessionFloatingComposerPresentation,
     resolveNewSessionRoutePresentation,
-    resolveNewSessionSecretRequirementRoutePresentation,
 } from '@/components/sessions/new/navigation/newSessionPresentation';
 import { RootLayoutNavigationEffects } from '@/components/navigation/root/RootLayoutNavigationEffects';
 import { renderRootLayoutRedirectGate } from '@/components/navigation/root/RootLayoutRedirectGate';
@@ -61,7 +55,6 @@ function hasPriorModalStackRoute(navigation: ModalRouteNavigation): boolean {
         && state.routes.length > 1;
 }
 
-const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
 // Module-scope so the memo hands the navigator the same object on every render.
 const NEW_SESSION_TRANSPARENT_CONTENT_STYLE = { backgroundColor: 'transparent' } as const;
 const sessionRouteScreenOptions = ({ route }: { route: RouteProp<ParamListBase, string> }) => (
@@ -122,8 +115,6 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
     const isAuthenticated = auth.isAuthenticated;
     const { theme } = useUnistyles();
     const preferredLanguage = getPreferredLanguage();
-    const friendsIdentityReadiness = useFriendsIdentityReadiness();
-    const friendsIdentityReady = friendsIdentityReadiness.isReady;
     const isDesktopOverlayWindow = isDesktopOverlayWindowContext();
     const isDesktopShell = isDesktopHost();
     const newSessionPresentationMode = useSetting('newSessionPresentationModeV1');
@@ -160,202 +151,9 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
         theme.colors.chrome.header.background,
         theme.colors.chrome.header.foreground,
     ]);
-    const rootStackRouteOptions = React.useMemo(() => {
-        const back = t('common.back');
-        const cancel = t('common.cancel');
-        const hiddenHeader: StackScreenOptions = { headerShown: false };
-        const blankBack: StackScreenOptions = {
-            headerTitle: '',
-            headerBackTitle: back,
-        };
-        const visibleBlankBack: StackScreenOptions = {
-            headerShown: true,
-            headerTitle: '',
-            headerBackTitle: back,
-        };
-        const visibleSessionHistory: StackScreenOptions = {
-            headerShown: true,
-            headerTitle: t('sessionHistory.title'),
-            headerBackTitle: back,
-        };
-
-        return {
-            index: {
-                headerShown: false,
-                headerTitle: '',
-                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
-            },
-            inboxIndex: {
-                ...createInboxStackScreenOptions(t),
-                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
-            },
-            friendsIndex: {
-                ...createFriendsStackScreenOptions(t),
-                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
-            },
-            hiddenHeader,
-            settings: {
-                // Nested navigator; per-settings-screen headers are configured in `settings/_layout.tsx`.
-                // Settings is a destination on every form factor: the phone's tab, and the app rail's
-                // Settings on tablets and desktops, whose column holds its navigation (`AppShellColumn`).
-                headerShown: false,
-                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
-            },
-            desktopActivityOverlay: {
-                headerShown: false,
-                contentStyle: {
-                    backgroundColor: 'transparent',
-                },
-            },
-            automationsIndex: {
-                headerShown: true,
-                headerTitle: t('navigation.automations'),
-                headerBackTitle: back,
-            },
-            automationsId: {
-                headerShown: true,
-                headerTitle: t('navigation.automation'),
-                headerBackTitle: back,
-            },
-            automationsNew: {
-                headerShown: true,
-                headerTitle: t('navigation.newAutomation'),
-                headerBackTitle: back,
-            },
-            automationsEdit: {
-                headerShown: true,
-                headerTitle: t('automations.edit.title'),
-                headerBackTitle: back,
-            },
-            workflowsIndex: {
-                // The library's PageHeader owns its identity and creation actions.
-                headerShown: false,
-                headerTitle: t('workflows.title'),
-                headerBackTitle: back,
-            },
-            boards: {
-                headerShown: true,
-                headerTitle: t('boards.title'),
-                headerBackTitle: back,
-            },
-            workflowsDetail: {
-                headerShown: true,
-                // The editable name lives in the page; the chrome names the kind only.
-                headerTitle: t('workflows.page.chromeTitle'),
-                headerBackTitle: back,
-            },
-            workflowsRunDetail: {
-                headerShown: true,
-                headerTitle: t('workflows.run.title'),
-                headerBackTitle: back,
-            },
-            automationsSettings: {
-                headerShown: true,
-                headerTitle: t('automations.settings.title'),
-                headerBackTitle: back,
-            },
-            workflowsHistory: {
-                headerShown: true,
-                headerTitle: t('workflows.destination.history.title'),
-                headerBackTitle: back,
-            },
-            workflowsRunSettings: {
-                headerShown: true,
-                headerTitle: t('workflows.destination.runSettingsPage.title'),
-                headerBackTitle: back,
-            },
-            visibleBlankBack,
-            sessionRecent: visibleSessionHistory,
-            sessionArchived: visibleSessionHistory,
-            teamSessions: {
-                headerShown: true,
-                headerTitle: t('settings.sessions'),
-                headerBackTitle: back,
-            },
-            terminalIndex: {
-                headerTitle: t('navigation.connectTerminal'),
-            },
-            // The main sidebar's Plugins page: the same screens as Settings → Plugin marketplace,
-            // hosted as an app page.
-            pluginsIndex: {
-                headerShown: true,
-                headerTitle: t('settingsPlugins.surfaces.navigationTitle'),
-                headerBackTitle: back,
-            },
-            pluginsListing: {
-                headerShown: true,
-                headerTitle: t('settingsPlugins.detailTitle'),
-                headerBackTitle: back,
-            },
-            // An entity page: its own header names the plugin, so the native title stays empty.
-            pluginsDetail: visibleBlankBack,
-            changelog: {
-                headerShown: true,
-                headerTitle: t('navigation.whatsNew'),
-                headerBackTitle: back,
-            },
-            // Titled like its Settings route and catalog entry: one title for the Homes page.
-            server: {
-                headerShown: true,
-                headerTitle: t('settings.servers'),
-                headerBackTitle: back,
-            },
-            // The phone's Account & Homes page: the desktop account/Home popover's content.
-            accountHomes: {
-                headerShown: true,
-                headerTitle: t('accountPopover.pageTitle'),
-                headerBackTitle: back,
-            },
-            artifactsIndex: {
-                headerShown: true,
-                headerTitle: t('artifacts.title'),
-                headerBackTitle: back,
-            },
-            artifactsId: {
-                // The page header carries the artifact's own title; the native header is the way back.
-                headerShown: true,
-                headerTitle: t('artifacts.title'),
-                headerBackTitle: back,
-            },
-            artifactsNew: {
-                headerShown: true,
-                headerTitle: t('artifacts.new'),
-                headerBackTitle: cancel,
-            },
-            artifactsEdit: {
-                headerShown: true,
-                headerTitle: t('artifacts.edit'),
-                headerBackTitle: cancel,
-            },
-            friendsSearch: {
-                headerShown: true,
-                headerTitle: t('friends.addFriend'),
-                headerBackTitle: back,
-            },
-            userId: visibleBlankBack,
-            blankBack,
-            newPickSecretRequirement: {
-                headerShown: false,
-                presentation: resolveNewSessionSecretRequirementRoutePresentation({
-                    mode: newSessionPresentationMode,
-                    platformOs: Platform.OS,
-                }),
-            },
-            zenIndex: hiddenHeader,
-            zenNew: {
-                presentation: 'modal',
-                headerTitle: t('navigation.zenNewTask'),
-                headerBackTitle: cancel,
-            },
-            zenView: {
-                presentation: 'modal',
-                headerTitle: t('navigation.zenTaskDetails'),
-                headerBackTitle: back,
-            },
-        } satisfies Record<string, StackScreenOptions>;
-    }, [newSessionPresentationMode, preferredLanguage]);
+    const rootStackRouteOptions = useRootStackRouteOptions();
     const workflowEditorScreenOptions = React.useCallback(() => ({
-        ...rootStackRouteOptions.workflowsDetail,
+        ...rootStackRouteOptions['workflows/[id]/index'],
         // Desktop workflow pages own Back when their column is collapsed.
         // Publishing the native control there creates a second trailing Back.
         ...(appShellPresent ? {} : {
@@ -367,25 +165,7 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
             />
         ),
         }),
-    }), [appShellPresent, rootStackRouteOptions.workflowsDetail, router]);
-    const friendsManageScreenOptions = React.useCallback((args: { navigation: { navigate: (route: never) => void } }) => ({
-        headerShown: true,
-        headerTitle: t('navigation.friends'),
-        headerBackTitle: t('common.back'),
-        headerRight: () =>
-            (
-                <TouchableOpacity
-                    onPress={() => args.navigation.navigate('friends/search' as never)}
-                    style={{ paddingHorizontal: 16, opacity: friendsIdentityReady ? 1 : 0.5 }}
-                    disabled={!friendsIdentityReady}
-                    accessibilityState={{ disabled: !friendsIdentityReady }}
-                >
-                    <Text style={{ color: theme.colors.button.primary.tint, fontSize: 16 }}>
-                        {t('friends.addFriend')}
-                    </Text>
-                </TouchableOpacity>
-            ),
-    }), [friendsIdentityReady, preferredLanguage, theme.colors.button.primary.tint]);
+    }), [appShellPresent, rootStackRouteOptions['workflows/[id]/index'], router]);
     const newSessionScreenOptions = React.useMemo<StackScreenOptions>(() => {
         const presentation = resolveNewSessionRoutePresentation({
             mode: newSessionPresentationMode,
@@ -476,19 +256,23 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
             <Stack screenOptions={rootStackScreenOptions} layout={renderRootLayoutRedirectGate}>
                 <Stack.Screen
                     name="index"
-                    options={rootStackRouteOptions.index}
+                    options={rootStackRouteOptions['index']}
                 />
                 <Stack.Screen
                     name="inbox/index"
-                    options={rootStackRouteOptions.inboxIndex}
+                    options={rootStackRouteOptions['inbox/index']}
                 />
                 <Stack.Screen
                     name="friends/index"
-                    options={rootStackRouteOptions.friendsIndex}
+                    options={rootStackRouteOptions['friends/index']}
                 />
                 <Stack.Screen
                     name="oauth/[provider]"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['oauth/[provider]']}
+                />
+                <Stack.Screen
+                    name="oauth/mcp/callback"
+                    options={rootStackRouteOptions['oauth/mcp/callback']}
                 />
                 {/* All tabs (phone): a full page over the session, reached by pulling the session title down. */}
                 <Stack.Screen
@@ -497,19 +281,23 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="settings"
-                    options={rootStackRouteOptions.settings}
+                    options={rootStackRouteOptions['settings']}
+                />
+                <Stack.Screen
+                    name="dev"
+                    options={rootStackRouteOptions['dev']}
                 />
                 <Stack.Screen
                     name="plugins/index"
-                    options={rootStackRouteOptions.pluginsIndex}
+                    options={rootStackRouteOptions['plugins/index']}
                 />
                 <Stack.Screen
                     name="plugins/listing"
-                    options={rootStackRouteOptions.pluginsListing}
+                    options={rootStackRouteOptions['plugins/listing']}
                 />
                 <Stack.Screen
                     name="plugins/[pluginId]"
-                    options={rootStackRouteOptions.pluginsDetail}
+                    options={rootStackRouteOptions['plugins/[pluginId]']}
                 />
                 <Stack.Screen
                     name="search"
@@ -517,43 +305,43 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="desktop/activity-overlay"
-                    options={rootStackRouteOptions.desktopActivityOverlay}
+                    options={rootStackRouteOptions['desktop/activity-overlay']}
                 />
                 <Stack.Screen
                     name="automations/index"
-                    options={rootStackRouteOptions.automationsIndex}
+                    options={rootStackRouteOptions['automations/index']}
                 />
                 <Stack.Screen
                     name="automations/[id]"
-                    options={rootStackRouteOptions.automationsId}
+                    options={rootStackRouteOptions['automations/[id]']}
                 />
                 <Stack.Screen
                     name="automations/[id]/runs/[runId]"
-                    options={rootStackRouteOptions.visibleBlankBack}
+                    options={rootStackRouteOptions['automations/[id]/runs/[runId]']}
                 />
                 <Stack.Screen
                     name="automations/new"
-                    options={rootStackRouteOptions.automationsNew}
+                    options={rootStackRouteOptions['automations/new']}
                 />
                 <Stack.Screen
                     name="automations/edit"
-                    options={rootStackRouteOptions.automationsEdit}
+                    options={rootStackRouteOptions['automations/edit']}
                 />
                 <Stack.Screen
                     name="automations/settings"
-                    options={rootStackRouteOptions.automationsSettings}
+                    options={rootStackRouteOptions['automations/settings']}
                 />
                 <Stack.Screen
                     name="workflows/index"
-                    options={rootStackRouteOptions.workflowsIndex}
+                    options={rootStackRouteOptions['workflows/index']}
                 />
                 <Stack.Screen
                     name="boards/index"
-                    options={rootStackRouteOptions.boards}
+                    options={rootStackRouteOptions['boards/index']}
                 />
                 <Stack.Screen
                     name="boards/[boardId]"
-                    options={rootStackRouteOptions.boards}
+                    options={rootStackRouteOptions['boards/[boardId]']}
                 />
                 <Stack.Screen
                     name="workflows/edit"
@@ -565,37 +353,37 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="workflows/runs/[runId]"
-                    options={rootStackRouteOptions.workflowsRunDetail}
+                    options={rootStackRouteOptions['workflows/runs/[runId]']}
                 />
                 <Stack.Screen
                     name="workflows/runs/index"
-                    options={rootStackRouteOptions.workflowsHistory}
+                    options={rootStackRouteOptions['workflows/runs/index']}
                 />
                 <Stack.Screen
                     name="workflows/settings"
-                    options={rootStackRouteOptions.workflowsRunSettings}
+                    options={rootStackRouteOptions['workflows/settings']}
                 />
                 <Stack.Screen
                     name="projects/[workspaceRefId]/terminal"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['projects/[workspaceRefId]/terminal']}
                 />
                 <Stack.Screen
                     name="projects/index"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['projects/index']}
                 />
                 <Stack.Screen
                     name="projects/[workspaceRefId]/index"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['projects/[workspaceRefId]/index']}
                 />
 
 
 
-                <Stack.Screen name="projects/[workspaceRefId]/overview" options={rootStackRouteOptions.hiddenHeader} />
-                <Stack.Screen name="projects/[workspaceRefId]/code" options={rootStackRouteOptions.hiddenHeader} />
-                <Stack.Screen name="projects/[workspaceRefId]/changes" options={rootStackRouteOptions.hiddenHeader} />
-                <Stack.Screen name="projects/[workspaceRefId]/scripts" options={rootStackRouteOptions.hiddenHeader} />
-                <Stack.Screen name="projects/[workspaceRefId]/services" options={rootStackRouteOptions.hiddenHeader} />
-                <Stack.Screen name="projects/[workspaceRefId]/context" options={rootStackRouteOptions.hiddenHeader} />
+                <Stack.Screen name="projects/[workspaceRefId]/overview" options={rootStackRouteOptions['projects/[workspaceRefId]/overview']} />
+                <Stack.Screen name="projects/[workspaceRefId]/code" options={rootStackRouteOptions['projects/[workspaceRefId]/code']} />
+                <Stack.Screen name="projects/[workspaceRefId]/changes" options={rootStackRouteOptions['projects/[workspaceRefId]/changes']} />
+                <Stack.Screen name="projects/[workspaceRefId]/scripts" options={rootStackRouteOptions['projects/[workspaceRefId]/scripts']} />
+                <Stack.Screen name="projects/[workspaceRefId]/services" options={rootStackRouteOptions['projects/[workspaceRefId]/services']} />
+                <Stack.Screen name="projects/[workspaceRefId]/context" options={rootStackRouteOptions['projects/[workspaceRefId]/context']} />
                 {/*
                   * `session/[id]` has its own `_layout` (a Slot), so this is the stack's only screen for
                   * every Session route (no `session/[id]/…` entry here would name a stack child). The
@@ -608,15 +396,15 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="session/recent"
-                    options={rootStackRouteOptions.sessionRecent}
+                    options={rootStackRouteOptions['session/recent']}
                 />
                 <Stack.Screen
                     name="session/archived"
-                    options={rootStackRouteOptions.sessionArchived}
+                    options={rootStackRouteOptions['session/archived']}
                 />
                 <Stack.Screen
                     name="teams/[teamId]/sessions"
-                    options={rootStackRouteOptions.teamSessions}
+                    options={rootStackRouteOptions['teams/[teamId]/sessions']}
                 />
                 {/*
                  * The two public Team entries. Both are opened from a link by
@@ -626,77 +414,77 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                  */}
                 <Stack.Screen
                     name="teams/[teamId]/sign-in"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['teams/[teamId]/sign-in']}
                 />
                 <Stack.Screen
                     name="join/[token]"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['join/[token]']}
                 />
                 <Stack.Screen
                     name="terminal/connect"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['terminal/connect']}
                 />
                 <Stack.Screen
                     name="terminal/index"
-                    options={rootStackRouteOptions.terminalIndex}
+                    options={rootStackRouteOptions['terminal/index']}
                 />
                 <Stack.Screen
                     name="scan/terminal"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['scan/terminal']}
                 />
                 <Stack.Screen
                     name="scan/account"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['scan/account']}
                 />
                 <Stack.Screen
                     name="homes/sign-in"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['homes/sign-in']}
                 />
                 <Stack.Screen
                     name="restore/index"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['restore/index']}
                 />
                 <Stack.Screen
                     name="restore/show-qr"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['restore/show-qr']}
                 />
                 <Stack.Screen
                     name="restore/manual"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['restore/manual']}
                 />
                 <Stack.Screen
                     name="restore/lost-access"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['restore/lost-access']}
                 />
                 <Stack.Screen
                     name="auth/password/recover"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['auth/password/recover']}
                 />
                 <Stack.Screen
                     name="auth/email/verify/[token]"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['auth/email/verify/[token]']}
                 />
                 <Stack.Screen
                     name="auth/password/reset/[token]"
-                    options={rootStackRouteOptions.hiddenHeader}
+                    options={rootStackRouteOptions['auth/password/reset/[token]']}
                 />
                 <Stack.Screen
                     name="home"
                     // The phone's Home, opened from the Sessions header logo: the page is its own title.
-                    options={rootStackRouteOptions.visibleBlankBack}
+                    options={rootStackRouteOptions['home']}
                 />
                 <Stack.Screen
                     name="changelog"
-                    options={rootStackRouteOptions.changelog}
+                    options={rootStackRouteOptions['changelog']}
                 />
                 <Stack.Screen
                     name="server"
-                    options={rootStackRouteOptions.server}
+                    options={rootStackRouteOptions['server']}
                 />
                 <Stack.Screen
                     name="homes/index"
                     options={({ navigation }) => ({
-                        ...rootStackRouteOptions.accountHomes,
+                        ...rootStackRouteOptions['homes/index'],
                         // Opened from the Sessions header's Home line; phone web reports no stack `back`,
                         // so the page names its own way back (lab `xacct-P1`), falling back to Sessions.
                         headerLeft: ({ tintColor }: { tintColor?: string }) => (
@@ -710,55 +498,55 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="artifacts/index"
-                    options={rootStackRouteOptions.artifactsIndex}
+                    options={rootStackRouteOptions['artifacts/index']}
                 />
                 <Stack.Screen
                     name="artifacts/[id]"
-                    options={rootStackRouteOptions.artifactsId}
+                    options={rootStackRouteOptions['artifacts/[id]']}
                 />
                 <Stack.Screen
                     name="artifacts/new"
-                    options={rootStackRouteOptions.artifactsNew}
+                    options={rootStackRouteOptions['artifacts/new']}
                 />
                 <Stack.Screen
                     name="artifacts/edit/[id]"
-                    options={rootStackRouteOptions.artifactsEdit}
+                    options={rootStackRouteOptions['artifacts/edit/[id]']}
                 />
                 <Stack.Screen
                     name="friends/manage"
-                    options={friendsManageScreenOptions}
+                    options={rootStackRouteOptions['friends/manage']}
                 />
                 <Stack.Screen
                     name="friends/search"
-                    options={rootStackRouteOptions.friendsSearch}
+                    options={rootStackRouteOptions['friends/search']}
                 />
                 <Stack.Screen
                     name="user/[id]"
-                    options={rootStackRouteOptions.userId}
+                    options={rootStackRouteOptions['user/[id]']}
                 />
                 <Stack.Screen
                     name="new/pick/machine"
-                    options={rootStackRouteOptions.blankBack}
+                    options={rootStackRouteOptions['new/pick/machine']}
                 />
                 <Stack.Screen
                     name="new/pick/path"
-                    options={rootStackRouteOptions.blankBack}
+                    options={rootStackRouteOptions['new/pick/path']}
                 />
                 <Stack.Screen
                     name="new/pick/profile"
-                    options={rootStackRouteOptions.blankBack}
+                    options={rootStackRouteOptions['new/pick/profile']}
                 />
                 <Stack.Screen
                     name="new/pick/server"
-                    options={rootStackRouteOptions.blankBack}
+                    options={rootStackRouteOptions['new/pick/server']}
                 />
                 <Stack.Screen
                     name="new/pick/profile-edit"
-                    options={rootStackRouteOptions.blankBack}
+                    options={rootStackRouteOptions['new/pick/profile-edit']}
                 />
                 <Stack.Screen
                     name="new/pick/secret-requirement"
-                    options={rootStackRouteOptions.newPickSecretRequirement}
+                    options={rootStackRouteOptions['new/pick/secret-requirement']}
                 />
                 <Stack.Screen
                     name="new/index"
@@ -800,15 +588,15 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="zen/index"
-                    options={rootStackRouteOptions.zenIndex}
+                    options={rootStackRouteOptions['zen/index']}
                 />
                 <Stack.Screen
                     name="zen/new"
-                    options={rootStackRouteOptions.zenNew}
+                    options={rootStackRouteOptions['zen/new']}
                 />
                 <Stack.Screen
                     name="zen/view"
-                    options={rootStackRouteOptions.zenView}
+                    options={rootStackRouteOptions['zen/view']}
                 />
             </Stack>
             </NavigationTitleChromeProvider>

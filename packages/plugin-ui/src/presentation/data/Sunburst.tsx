@@ -23,7 +23,6 @@ import {
 import type { HappierUiTheme } from '../../environment/types.js';
 import { useOptionalHappierUiAccessibility } from '../../environment/context.js';
 import {
-  hitHappierSunburst,
   layoutHappierSunburst,
   type HappierSunburstArc,
   type HappierSunburstNode,
@@ -256,7 +255,11 @@ export function Sunburst(props: HappierSunburstProps) {
   const levelKey = `${props.centerLabel}\u0000${props.items.map((item) => item.key).join('\u0000')}`;
   const lastLevel = useRef(levelKey);
   useEffect(() => {
-    if (lastLevel.current === levelKey) return;
+    if (lastLevel.current === levelKey) {
+      if (reducedMotion) setProgress(1);
+      fade.setValue(1);
+      return;
+    }
     lastLevel.current = levelKey;
     if (reducedMotion) {
       setProgress(1);
@@ -329,6 +332,17 @@ export function Sunburst(props: HappierSunburstProps) {
   });
   const inHole = (x: number, y: number) =>
     Math.hypot(x - cx, y - cy) < rings[0]!.inner;
+  const hit = (x: number, y: number) => {
+    const radius = Math.hypot(x - cx, y - cy);
+    const angle = (Math.atan2(x - cx, cy - y) + Math.PI * 2) % (Math.PI * 2);
+    let key: string | null = null;
+    // Match the visible paths, including their padding/fade. Later shapes paint over earlier ones.
+    for (const [candidate, g] of geometry) {
+      if (g.opacity <= 0.01 || radius < g.r0 || radius > g.r1) continue;
+      if (angle >= g.a0 + PAD_RADIANS && angle < g.a1 - PAD_RADIANS) key = candidate;
+    }
+    return key;
+  };
   const onKeyDown = (event: KeyEvent) => {
     const key = event.key ?? event.nativeEvent?.key;
     const current = pointed ? byKey.get(pointed) : undefined;
@@ -383,7 +397,7 @@ export function Sunburst(props: HappierSunburstProps) {
     onPointerMove: (event: PointerEvent) => {
       const at = locate(event);
       setPointer(at);
-      pointAt(hitHappierSunburst(arcs, rings, { cx, cy }, at.x, at.y));
+      pointAt(hit(at.x, at.y));
     },
     onPointerLeave: () => {
       setPointer(null);
@@ -533,7 +547,7 @@ export function Sunburst(props: HappierSunburstProps) {
           props.onUp?.();
           return;
         }
-        const key = hitHappierSunburst(arcs, rings, { cx, cy }, at.x, at.y);
+        const key = hit(at.x, at.y);
         if (key) props.onOpen?.(key);
       }}
       tabIndex={0}

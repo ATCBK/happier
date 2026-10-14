@@ -5,9 +5,8 @@ import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 const fetchSessionByIdMock = vi.fn();
 const fetchAccountEncryptionCurrentnessMock = vi.fn();
@@ -76,7 +75,7 @@ import {
 } from './loadLinkedExternalSession';
 
 describe('loadLinkedExternalSession', () => {
-  let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
+  let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
   beforeAll(async () => {
     const pluginIds = [
@@ -94,24 +93,18 @@ describe('loadLinkedExternalSession', () => {
         ),
       ),
     };
-    runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
-      resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+    runtimeFixture = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: {
         contributes,
         pluginIds,
-        generationAuthority: {
-          commit: null,
-          generations: new Map(),
-          rejectedGenerations: new Map(),
-          isCurrent: async () => true,
-        },
-      }),
+      },
     });
   });
 
   afterAll(async () => {
-    await runtimeRegistryLease?.release();
-    runtimeRegistryLease = null;
-    await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+    await runtimeFixture?.dispose();
+    runtimeFixture = null;
   });
 
   beforeEach(() => {

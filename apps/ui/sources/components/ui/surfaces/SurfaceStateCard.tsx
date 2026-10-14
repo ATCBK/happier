@@ -152,6 +152,8 @@ export function SurfaceStateCard(props: Readonly<{
     learnMore?: SurfaceStateAction;
     /** A quiet line under the actions: a prerequisite ("Runs on a machine in Personal Home.") or a reassurance ("Nothing is lost."). */
     note?: string;
+    /** Controls that belong with the action: a choice it affects, or why it cannot proceed. Directly under the actions, before the note. */
+    actionFooter?: React.ReactNode;
     /**
      * The present, under the copy ("Reconnecting · next try in 8 s"). A sized loading state narrates a
      * long wait on its own ("Still waiting · 12 s") unless this is given.
@@ -312,6 +314,7 @@ export function SurfaceStateCard(props: Readonly<{
             body={props.body}
             actionCaption={props.actionCaption}
             note={props.note}
+            actionFooter={props.actionFooter}
             learnMore={props.learnMore}
             bindings={tileBindings}
         />
@@ -335,8 +338,9 @@ function useSurfaceStateBindings(testID: string | undefined, animationEnabled: b
                 testID={buttonTestID}
                 disabled={action.disabled}
                 loading={action.busy}
-                // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy.
-                size={compact ? 'mini' : 'small'}
+                // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy,
+                // and a column-wide action is a form action, so it takes the form control's height.
+                size={compact ? 'mini' : fullWidth ? 'normal' : 'small'}
                 display={emphasis === 'secondary' ? 'inverted' : tone === 'filled' ? undefined : 'secondary'}
                 textStyle={emphasis === 'secondary' ? Typography.default() : undefined}
                 title={action.label}

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { projectNativeJsonValueForTransport } from '../json/strictJsonValue.js';
@@ -13,33 +13,33 @@ export type UsageRelativePeriod = z.infer<typeof UsageRelativePeriodSchema>;
 export const UsageQuerySchema = lazyZodSchema(() => {
   const clauses = UsageAnalyticsQueryRequestSchema.shape;
   const filters = UsageAnalyticsQueryFiltersSchema.shape;
-  return z.object({
-    period: z.union([clauses.dateRange.unwrap(), z.object({ relative: UsageRelativePeriodSchema,
-      startMs: z.never().optional(), endMs: z.never().optional() }).strict()]).default({}),
-    agents: filters.agentIds.unwrap().default([]),
-    machines: filters.machineIds.unwrap().default([]),
-    projects: filters.projectKeys.unwrap().default([]),
-    sources: filters.sources.unwrap().default([]),
-    session: z.union([filters.sessionIds.unwrap().element, filters.sessionIds.unwrap()]).nullable().default(null),
-    costBasis: clauses.costMode.unwrap().default('auto'),
-    metric: z.enum(['tokens', 'cost']).default('tokens'),
+  return z.strictObject({
+    period: z._default(z.union([clauses.dateRange._zod.def.innerType, z.strictObject({ relative: UsageRelativePeriodSchema,
+      startMs: z.optional(z.never()), endMs: z.optional(z.never()) })]), {}),
+    agents: z._default(filters.agentIds._zod.def.innerType, []),
+    machines: z._default(filters.machineIds._zod.def.innerType, []),
+    projects: z._default(filters.projectKeys._zod.def.innerType, []),
+    sources: z._default(filters.sources._zod.def.innerType, []),
+    session: z._default(z.nullable(z.union([filters.sessionIds._zod.def.innerType._zod.def.element, filters.sessionIds._zod.def.innerType])), null),
+    costBasis: z._default(clauses.costMode._zod.def.innerType, 'auto'),
+    metric: z._default(z.enum(['tokens', 'cost']), 'tokens'),
     // Host projection demand; accounting transport never receives this clause.
-    includeSessionEvidence: z.boolean().default(true),
-    includeWorkEvidence: z.boolean().default(true),
-    breakdown: clauses.breakdowns.unwrap().default([]),
-    modelIds: filters.modelIds.unwrap().default([]),
-    workspaceIds: filters.workspaceIds.unwrap().default([]),
-    backendModes: filters.backendModes.unwrap().default([]),
-    ...UsageAnalyticsQueryRequestSchema.omit({ dateRange: true, costMode: true, breakdowns: true, filters: true }).shape,
-  }).strict();
+    includeSessionEvidence: z._default(z.boolean(), true),
+    includeWorkEvidence: z._default(z.boolean(), true),
+    breakdown: z._default(clauses.breakdowns._zod.def.innerType, []),
+    modelIds: z._default(filters.modelIds._zod.def.innerType, []),
+    workspaceIds: z._default(filters.workspaceIds._zod.def.innerType, []),
+    backendModes: z._default(filters.backendModes._zod.def.innerType, []),
+    ...z.omit(UsageAnalyticsQueryRequestSchema, { dateRange: true, costMode: true, breakdowns: true, filters: true }).shape,
+  });
 });
 export type UsageQuery = z.infer<typeof UsageQuerySchema>;
 
 /** Source inventory is metadata, independent of accounting period, metric and cost basis. */
-export const UsageSourceInventoryScopeSchema = lazyZodSchema(() => UsageQuerySchema.pick({ agents: true, machines: true, sources: true }));
+export const UsageSourceInventoryScopeSchema = lazyZodSchema(() => z.pick(UsageQuerySchema, { agents: true, machines: true, sources: true }));
 export type UsageSourceInventoryScope = z.infer<typeof UsageSourceInventoryScopeSchema>;
 
-export const UsageQueryBatchInputSchema = lazyZodSchema(() => z.object({ queries: z.array(UsageQuerySchema).min(1) }).strict());
+export const UsageQueryBatchInputSchema = lazyZodSchema(() => z.strictObject({ queries: z.array(UsageQuerySchema).check(z.minLength(1)) }));
 export type UsageQueryBatchInput = z.infer<typeof UsageQueryBatchInputSchema>;
 
 const sortedSet = (values: readonly string[]) => [...new Set(values)].sort();
@@ -127,6 +127,27 @@ export function readUsageGroupByOptions(value: unknown): readonly InputOption[] 
   return options;
 }
 
+const relativePeriodLabels = {
+  today: 'Today', '7days': 'Last 7 days', '30days': 'Last 30 days', '90days': 'Last 90 days', year: 'Last year', all: 'All time',
+} satisfies Record<UsageRelativePeriod, string>;
+
+/**
+ * The Period's few named choices, offered in place like any other fixed choice. A stored range that is
+ * not one of them (a custom range copied from the Usage page) stays listed, so it keeps its name.
+ */
+export function readUsagePeriodOptions(value: unknown): readonly InputOption[] {
+  const stored = value === undefined ? undefined : UsageQuerySchema.shape.period.safeParse(value);
+  const range = stored?.success && !('relative' in stored.data) ? stored.data : null;
+  // An unbounded range is All time as the Usage page stores it; it takes the All time slot, never a second one.
+  const unbounded = range !== null && range.startMs === undefined && range.endMs === undefined;
+  const options = UsageRelativePeriodSchema.options.map((relative): InputOption => {
+    const value: InputOption['value'] = relative === 'all' && unbounded ? {} : { relative };
+    return { value, label: relativePeriodLabels[relative] };
+  });
+  if (range !== null && !unbounded) options.push({ value: range, label: 'Custom range' });
+  return options;
+}
+
 /** The breakdowns widget really draws several dimensions; ordinary widgets choose one grouping. */
 export const USAGE_MULTI_BREAKDOWN_INPUT_FIELD: InputFieldHint = {
   path: 'breakdown', title: 'Breakdown', widget: 'multiselect', contextMode: 'own', required: false,
@@ -135,14 +156,14 @@ export const USAGE_MULTI_BREAKDOWN_INPUT_FIELD: InputFieldHint = {
 
 /** Same independently editable paths for widget, group and ordinary input editors. */
 export const USAGE_QUERY_INPUT_FIELDS: readonly InputFieldHint[] = [
-  { path: 'period', title: 'Period', widget: 'select', inputType: { hostType: 'usageQuery', field: 'period' }, contextMode: 'follow' },
+  { path: 'period', title: 'Period', widget: 'select', inputType: { hostType: 'usageQuery', field: 'period' }, optionsSourceId: 'usage.query.period', contextMode: 'follow' },
   { path: 'agents', title: 'Agents', widget: 'multiselect', optionsSourceId: 'usage.filters.agents', placeholder: 'All agents', contextMode: 'follow', required: false },
   { path: 'machines', title: 'Machines', widget: 'multiselect', optionsSourceId: 'usage.filters.machines', placeholder: 'All machines', contextMode: 'follow', required: false },
   { path: 'projects', title: 'Projects', widget: 'multiselect', optionsSourceId: 'usage.filters.projects', placeholder: 'All projects', contextMode: 'follow', required: false },
   { path: 'sources', title: 'Sources', widget: 'multiselect', optionsSourceId: 'usage.filters.sources', placeholder: 'All sources', contextMode: 'follow', required: false },
   { path: 'session', title: 'Session', widget: 'select', inputType: { hostType: 'usageQuery', field: 'session' }, contextMode: 'follow', visibleWhenContextSlot: 'session' },
   { path: 'costBasis', title: 'Cost basis', widget: 'select', contextMode: 'follow',
-    options: UsageAnalyticsQueryRequestSchema.shape.costMode.unwrap().options.map(value => ({ value,
+    options: UsageAnalyticsQueryRequestSchema.shape.costMode._zod.def.innerType.options.map(value => ({ value,
       label: { auto: 'Automatic', reported: 'Reported', estimated: 'Estimated', api_equivalent: 'API equivalent' }[value] })) },
   { path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: [
     { value: 'tokens', label: 'Tokens' }, { value: 'cost', label: 'Cost' },

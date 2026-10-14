@@ -160,6 +160,7 @@ export function useProfilesCollection(): ProfilesCollection {
                 Modal.alert(t('common.error'), result.authoringMemoryCleanup.reason);
             }
         } catch (error) {
+            if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'approval_canceled') return false;
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
             return false;
         }

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginDescriptorBaseV1Schema } from '../plugins/contributions/_descriptors.js';
 import { InstallableSourceSchema } from './sourceKind.js';
@@ -7,17 +7,17 @@ import { InstallableSourceSchema } from './sourceKind.js';
 export const InstallableAutoUpdateModeSchema = lazyZodSchema(() => z.enum(['off', 'notify', 'auto']));
 export type InstallableAutoUpdateMode = z.infer<typeof InstallableAutoUpdateModeSchema>;
 
-export const InstallableDefaultPolicySchema = lazyZodSchema(() => z.object({
+export const InstallableDefaultPolicySchema = lazyZodSchema(() => z.strictObject({
   autoInstallWhenNeeded: z.boolean(),
   autoUpdateMode: InstallableAutoUpdateModeSchema,
-}).strict());
+}));
 export type InstallableDefaultPolicy = z.infer<typeof InstallableDefaultPolicySchema>;
 
 export const InstallableConsentModeSchema = lazyZodSchema(() => z.enum(['not_required', 'required']));
 export type InstallableConsentMode = z.infer<typeof InstallableConsentModeSchema>;
 
 export const InstallableCapabilityIdSchema = lazyZodSchema(() => z.templateLiteral([
-  'dep.', z.string().regex(/^[A-Za-z0-9._-]+$/, 'Installable capabilityId must use dep.* syntax'),
+  'dep.', z.string().check(z.regex(/^[A-Za-z0-9._-]+$/, 'Installable capabilityId must use dep.* syntax')),
 ]));
 
 // Inherits `id`, `version`, gates, redaction, ordering, hidden, defaultValue, clearWhenEmpty
@@ -25,57 +25,55 @@ export const InstallableCapabilityIdSchema = lazyZodSchema(() => z.templateLiter
 // repeating base fields creates a divergence risk if the base ever tightens (e.g. semver constraints).
 // `kind` is restated as a literal narrowing so `InstallableDependencyDescriptor['kind']` resolves to
 // the discriminator at the type level — the runtime constraint is still validated by the base.
-const InstallableDependencyDescriptorFieldsSchema = lazyZodSchema(() => z.object({
-  key: z.string().trim().min(1),
+const InstallableDependencyDescriptorFieldsSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.trim(), z.minLength(1)),
   kind: z.literal('dep'),
   capabilityId: InstallableCapabilityIdSchema,
-  display: z.object({
-    name: z.string().trim().min(1),
-    subtitle: z.string().trim().min(1).optional(),
-  }).strict(),
-  description: z.string().trim().min(1),
+  display: z.strictObject({
+    name: z.string().check(z.trim(), z.minLength(1)),
+    subtitle: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  description: z.string().check(z.trim(), z.minLength(1)),
   source: InstallableSourceSchema,
-  binary: z.object({
-    commands: z.array(z.string().trim().min(1)).min(1),
-    systemFirst: z.boolean().default(true),
-    managedFallback: z.boolean().optional(),
-    platforms: z.array(z.string().trim().min(1)).optional(),
-    arches: z.array(z.string().trim().min(1)).optional(),
-  }).strict(),
+  binary: z.strictObject({
+    commands: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)),
+    systemFirst: z._default(z.boolean(), true),
+    managedFallback: z.optional(z.boolean()),
+    platforms: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+    arches: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  }),
   defaultPolicy: InstallableDefaultPolicySchema,
-  consent: z.object({
+  consent: z.strictObject({
     install: InstallableConsentModeSchema,
     update: InstallableConsentModeSchema,
-    commandsPreviewRequired: z.boolean().optional(),
-  }).strict(),
-  ui: z.object({
-    setupUrl: z.string().trim().url().optional(),
-    iconName: z.string().trim().min(1).optional(),
-  }).strict().optional(),
-  stability: z.object({
-    experimental: z.boolean().default(false),
-    supported: z.boolean().default(true),
-  }).strict().default({ experimental: false, supported: true }),
-}).strict());
+    commandsPreviewRequired: z.optional(z.boolean()),
+  }),
+  ui: z.optional(z.strictObject({
+    setupUrl: z.optional(z.string().check(z.trim(), z.url())),
+    iconName: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  })),
+  stability: z._default(z.strictObject({
+    experimental: z._default(z.boolean(), false),
+    supported: z._default(z.boolean(), true),
+  }), { experimental: false, supported: true }),
+}));
 
-export const InstallableDependencyDescriptorSchema = lazyZodSchema(() => PluginDescriptorBaseV1Schema
-  .and(InstallableDependencyDescriptorFieldsSchema)
-  .superRefine((value, ctx) => {
+export const InstallableDependencyDescriptorSchema = lazyZodSchema(() => z.intersection(PluginDescriptorBaseV1Schema, InstallableDependencyDescriptorFieldsSchema).check(z.superRefine((value, ctx) => {
     if (value.id !== value.key) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['id'],
         message: 'Installable descriptor id must match key',
       });
     }
     if (value.source.kind === 'vendor_recipe' && value.consent.install !== 'required') {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['consent', 'install'],
         message: 'Vendor recipe installables require explicit install consent',
       });
     }
-  }));
+  })));
 export type InstallableDependencyDescriptor = z.infer<typeof InstallableDependencyDescriptorSchema>;
 
 export type InstallableKind = InstallableDependencyDescriptor['kind'];

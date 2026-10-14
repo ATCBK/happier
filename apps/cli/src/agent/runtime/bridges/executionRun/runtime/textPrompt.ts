@@ -6,6 +6,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
+import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 
 type ExecutionRunStartAction = (
   input: unknown,
@@ -88,6 +89,7 @@ export async function runEphemeralExecutionRunTextPrompt(params: Readonly<{
   sessionId: string;
   backendTarget: BackendTargetRefV1;
   modelId?: string;
+  modelSelection?: ProviderBoundModelRef;
   permissionMode: string;
   intent: ExecutionRunIntent;
   prompt: string;
@@ -106,7 +108,7 @@ export async function runEphemeralExecutionRunTextPrompt(params: Readonly<{
   const result = await executeStart({
     intent: params.intent,
     backendTarget: params.backendTarget,
-    ...(modelId ? { modelId } : {}),
+    ...(params.modelSelection ? { modelSelection: params.modelSelection } : modelId ? { modelId } : {}),
     permissionMode: params.permissionMode,
     retentionPolicy: 'ephemeral',
     runClass: 'bounded',

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import {
@@ -14,34 +14,34 @@ export const EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1 = Object.freeze({
   surfaceUtf16Units: 64,
 });
 
-const boundedId = z.string().trim().min(1).max(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.idUtf16Units);
+const boundedId = z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
 
-const ExecutionRunHostActionProposalPreviewV1Schema = lazyZodSchema(() => z.object({
-  findingId: boundedId.optional(),
-  pathLabel: z.string().trim().min(1).max(512),
-  pathSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  startLine: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
-  endLine: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
-  severity: z.enum(['info', 'warning', 'error', 'critical']).optional(),
-  bodySha256: z.string().regex(/^[a-f0-9]{64}$/),
-  bodyPreview: z.string().trim().min(1).max(1_024),
-}).strict().superRefine((value, ctx) => {
+const ExecutionRunHostActionProposalPreviewV1Schema = lazyZodSchema(() => z.strictObject({
+  findingId: z.optional(boundedId),
+  pathLabel: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  pathSha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  startLine: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(Number.MAX_SAFE_INTEGER))),
+  endLine: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(Number.MAX_SAFE_INTEGER))),
+  severity: z.optional(z.enum(['info', 'warning', 'error', 'critical'])),
+  bodySha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  bodyPreview: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+}).check(z.superRefine((value, ctx) => {
   if ((value.startLine === undefined) !== (value.endLine === undefined)) {
     ctx.addIssue({ code: 'custom', message: 'proposal preview line range must be complete' });
   }
   if (value.startLine !== undefined && value.endLine !== undefined && value.endLine < value.startLine) {
     ctx.addIssue({ code: 'custom', message: 'proposal preview endLine must be greater than or equal to startLine' });
   }
-}));
+})));
 
-export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() => z.object({
+export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('execution_run_host_action'),
   status: ApprovalRequestStatusSchema,
-  createdAtMs: z.number().int().min(0),
-  updatedAtMs: z.number().int().min(0),
+  createdAtMs: z.number().check(z.int(), z.minimum(0)),
+  updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: z.string().trim().min(1).max(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units),
+  requestedSurface: z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
   actionId: z.literal('reviews.comments.create'),
   sessionId: boundedId,
   runId: boundedId,
@@ -52,12 +52,12 @@ export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() =>
   projectId: boundedId,
   workspaceId: boundedId,
   serverId: boundedId,
-  proposalCount: z.number().int().min(1).max(200),
-  proposalPreview: z.array(ExecutionRunHostActionProposalPreviewV1Schema).max(20),
-  subjectFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  summary: z.string().trim().min(1).max(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units),
-  decision: ApprovalDecisionV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  proposalCount: z.number().check(z.int(), z.minimum(1), z.maximum(200)),
+  proposalPreview: z.array(ExecutionRunHostActionProposalPreviewV1Schema).check(z.maxLength(20)),
+  subjectFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  summary: z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
+  decision: z.optional(ApprovalDecisionV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if (value.status === 'open' && value.decision) {
     ctx.addIssue({ code: 'custom', message: 'open execution-run host-action approval cannot contain a decision' });
   }
@@ -77,7 +77,7 @@ export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() =>
   if (encodedBytes > EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.artifactJsonBytes) {
     ctx.addIssue({ code: 'custom', message: 'execution-run host-action approval artifact byte limit exceeded' });
   }
-}));
+})));
 
 export type ExecutionRunHostActionApprovalRequestV1 = z.infer<typeof ExecutionRunHostActionApprovalRequestV1Schema>;
 export const StoredExecutionRunHostActionApprovalRequestV1Schema = createStoredReadSchema(ExecutionRunHostActionApprovalRequestV1Schema);

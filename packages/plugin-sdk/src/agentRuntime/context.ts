@@ -19,7 +19,7 @@ import type {
 import type { AgentRuntimeProtocolComposers } from './acp.js';
 import type { Disposable } from '../lifecycle.js';
 import type { JsonValue } from '../identity.js';
-import type { AgentPermissionIntent } from './session.js';
+import type { AgentPermissionIntent, AgentSessionMcpLaunchConfig } from './session.js';
 import type {
   AgentModelOptionOverrideRule,
   AgentSessionAuthRefreshClassificationV1,
@@ -55,6 +55,8 @@ export type AgentRuntimeContext = PluginInvocationContext & Readonly<{
 export type AgentSessionHookProviderPayload = Readonly<Record<string, unknown>>;
 
 export type AgentSessionHookServerStartRequest = Readonly<{
+  /** Ephemeral resources for one execution; omission preserves the host's Session retention. */
+  lifetime?: 'invocation';
   onSessionHook?: (providerSessionId: string, data: AgentSessionHookProviderPayload) => void | Promise<void>;
   onPermissionHook?: (data: AgentSessionHookProviderPayload) => unknown | Promise<unknown>;
   onStatuslineUpdate?: (data: AgentSessionHookProviderPayload) => void | Promise<void>;
@@ -89,6 +91,7 @@ export type AgentSessionHookPluginFile =
   | Readonly<{ path: string; contents: string; json?: never }>;
 
 export type AgentSessionHookPluginDirCreateRequest = Readonly<{
+  lifetime?: 'invocation';
   files: readonly AgentSessionHookPluginFile[];
 }>;
 
@@ -305,6 +308,18 @@ export type AgentSessionMcpServer = Readonly<{
  * service and from Session-handle MCP elicitation.
  */
 export interface AgentSessionMcpService {
+  /** Projects only this transport's names; the canonical inventory and tool authority stay host-owned.
+   * Each read observes the current inventory. Missing/removed aliases supply no canonical identity. */
+  resolveToolNaming?(
+    request: Readonly<{ serverName: string; toolNameMaxLength: number }>,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<Readonly<{
+    launchConfig: AgentSessionMcpLaunchConfig;
+    /** Reserved marker owned by the transport projection; ordinary names never start with it. */
+    aliasPrefix: string;
+    tools: readonly Readonly<{ originalName: string; projectedName: string }>[];
+  }> | null>;
+
   resolveServers(options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly AgentSessionMcpServer[]>;
 }
 
@@ -389,6 +404,12 @@ export type AgentTerminalHostService = Readonly<{
   injectUserPrompt(handle: TerminalHostHandle, input: TerminalPromptInput): Promise<TerminalInputInjectionResult>;
   interruptTurn(handle: TerminalHostHandle): Promise<void>;
   evaluateLiveness(handle: TerminalHostHandle): Promise<TerminalHostLivenessV1>;
+  /** Observe the owned child once it exits; null means this host has no exit source.
+   * Wrapper exit alone does not prove native provider closure. */
+  subscribeExit?(
+    handle: TerminalHostHandle,
+    listener: (exit: Readonly<{ code: number | null; signal: string | null; nativeExited?: true }>) => void,
+  ): Promise<Disposable | null>;
   captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState | null>;
   controlPort(handle: TerminalHostHandle): Promise<TerminalControlPort | null>;
   dispose(handle: TerminalHostHandle, intent: AgentTerminalHostDisposeIntent): Promise<void>;

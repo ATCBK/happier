@@ -159,7 +159,7 @@ export type SavedSecretSharingActionInputById = {
                             }[] | undefined;
                             envVarRequirements?: {
                                 name: string;
-                                kind?: 'secret' | 'config' | undefined;
+                                kind?: 'config' | 'secret' | undefined;
                                 required?: boolean | undefined;
                             }[] | undefined;
                         };
@@ -190,7 +190,7 @@ export type SavedSecretSharingActionInputById = {
                             requiresMachineLogin?: string | undefined;
                             envVarRequirements?: {
                                 name: string;
-                                kind?: 'secret' | 'config' | undefined;
+                                kind?: 'config' | 'secret' | undefined;
                                 required?: boolean | undefined;
                             }[] | undefined;
                             isBuiltIn?: boolean | undefined;
@@ -297,10 +297,10 @@ export type SavedSecretSharingActionInputById = {
                                 command: string;
                                 args: string[];
                                 cwd?: {
-                                    t: 'session';
-                                } | {
                                     t: 'path';
                                     path: string;
+                                } | {
+                                    t: 'session';
                                 } | undefined;
                             } | undefined;
                             remote?: {

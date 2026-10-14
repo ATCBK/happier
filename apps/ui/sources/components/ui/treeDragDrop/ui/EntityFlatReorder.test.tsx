@@ -12,6 +12,7 @@ import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
 import { EntityDragGripTrigger, EntityStagedMoveDock } from './EntityReleasePreview';
+import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -42,9 +43,16 @@ const scope = { serverId: 'home-a', accountId: 'account-a' };
 let runtime: EntityDragDropRuntime;
 const screens: RenderScreenResult[] = [];
 const domRows: HTMLElement[] = [];
-function RuntimeProbe() { runtime = useEntityDragDropRuntime(); return null; }
+function RuntimeProbe(props: Readonly<{ enumerate?: boolean }>) {
+    runtime = useEntityDragDropRuntime();
+    React.useEffect(() => props.enumerate ? runtime.subscribe(() => {
+        const sourceId = runtime.getSnapshot().sourceId;
+        if (sourceId) runtime.getDestinations(sourceId);
+    }) : undefined, [props.enumerate]);
+    return null;
+}
 
-function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>) {
+function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>, enumerate = false) {
     const model = { ids: ['a', 'b', 'c'], scope, writes: [] as TodoReorderInputV1[] };
     const binding = (): EntityFlatReorderBinding => ({
         scope: model.scope, kind: 'todo', items: model.ids.map(id => ({ id, title: id })),
@@ -67,7 +75,7 @@ function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement
             return { status: 'applied' };
         },
     });
-    const render = () => <><RuntimeProbe /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
+    const render = () => <><RuntimeProbe enumerate={enumerate} /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
         {model.ids.map(id => <EntityFlatReorderRow key={id} id={id}>
             {({ renderHandle }) => <>{renderHandle(`grip:${id}`)}<Text>{id}</Text></>}
         </EntityFlatReorderRow>)}
@@ -137,17 +145,82 @@ describe('shared flat reorder UI binding', () => {
             await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
             await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
             expect(runtime.getSnapshot().phase).toBe('pending');
+            // Released: the insertion line is gone and the row itself shows where it landed (see the next test).
+            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
             await screen.pressByTestIdAsync('grip:a');
             await flushHookEffects({ cycles: 1, frames: 1 });
             expect(screen.root.findAllByType(DropdownMenu).every(menu => !menu.props.open)).toBe(true);
             expect(f.model.writes).toHaveLength(1);
             await act(async () => { acknowledgement.resolve(); });
             expect(runtime.getSnapshot().phase).toBe('settled');
+            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
             // A later intentional press still opens the ordinary Move chooser.
             await screen.pressByTestIdAsync('grip:a');
             await flushHookEffects({ cycles: 1, frames: 1 });
             expect(screen.root.findAllByType(DropdownMenu).some(menu => menu.props.open)).toBe(true);
         } finally { acknowledgement.resolve(); }
+    });
+
+    it('keeps the released row at its new slot until the owner\'s list shows the move, then follows the owner', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise);
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        const order = () => [...new Set(screen.root.findAll(node => typeof node.props?.testID === 'string' && node.props.testID.startsWith('grip:'))
+            .map(node => String(node.props.testID)))];
+        try {
+            expect(order()).toEqual(['grip:a', 'grip:b', 'grip:c']);
+            await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+            await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+            await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+        } finally { acknowledgement.resolve(); }
+        await act(async () => { await acknowledgement.promise; });
+        expect(runtime.getSnapshot().phase).toBe('settled');
+        // The drag runtime has settled, but the owner's list has not shown the move yet: the row stays where it landed.
+        expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+        // The owner's own list then carries the move, and the row follows it.
+        f.model.ids = ['b', 'a', 'c'];
+        await act(async () => { screen.tree.update(f.render()); });
+        expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+    });
+
+    it('lands the committed chooser destination despite enumeration and clears feedback on early acknowledgement', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise, true);
+        const screen = await mount(f);
+        await key(screen, 'a', ' ');
+        const sourceId = runtime.getSnapshot().sourceId!;
+        await act(async () => { runtime.cancel(); });
+        const destination = runtime.getDestinations(sourceId).find(entry =>
+            AnchoredListPositionV1Schema.safeParse(entry.destination).data?.anchorId === 'c'
+            && AnchoredListPositionV1Schema.safeParse(entry.destination).data?.placement === 'before')!;
+        // A mounted chooser enumerates destinations on semantic notifications; enumeration is read-only.
+        const unsubscribe = runtime.subscribe(() => { runtime.getDestinations(sourceId); });
+        let move: Promise<unknown> | undefined;
+        const order = () => [...new Set(screen.root.findAll(node => typeof node.props?.testID === 'string' && node.props.testID.startsWith('grip:'))
+            .map(node => String(node.props.testID)))];
+        const row = () => screen.findAllByType('View').find(node => node.props.onLayout
+            && node.props.testID !== 'list' && node.findAll(child => child.props.testID === 'grip:a').length > 0)!;
+        try {
+            await act(async () => { move = runtime.perform(sourceId, destination.targetId, destination.destination); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            expect.soft(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+            expect(StyleSheet.flatten(row().props.style)?.opacity).toBeLessThan(1);
+            const announcement = () => screen.findByTestId('list.status')!.findAllByType(Text)
+                .map(node => node.props.children).join('');
+            expect(announcement()).toContain('entityDragDrop.preview.pendingDetail');
+            f.model.ids = ['b', 'a', 'c'];
+            await screen.update(f.render());
+            expect.soft(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
+            expect.soft(screen.findByTestId('list.staged') === null).toBe(true);
+            expect.soft(announcement()).toBe('');
+            await act(async () => { acknowledgement.resolve(); await move; });
+            expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+            expect(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
+            expect(announcement()).toBe('');
+        } finally { unsubscribe(); acknowledgement.resolve(); await move; }
     });
 
     it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {
@@ -356,8 +429,28 @@ describe('shared flat reorder UI binding', () => {
         if (!option) throw new Error('Missing current b destination');
         await act(async () => { menu.props.onSelect(option.id); });
         expect(f.model.writes).toHaveLength(1);
-        expect(f.model.writes[0]).toMatchObject({ scope, sourceId: 'a', position: { anchorId: 'b', placement: 'after' } });
+        expect(f.model.writes[0]).toMatchObject({ scope, sourceId: 'a', position: { anchorId: 'c', placement: 'before' } });
         expect(AnchoredListPositionV1Schema.safeParse(f.model.writes[0]!.position).success).toBe(true);
+    });
+
+    it('lists each place a row can go once: between two rows is "before" the lower one, and only the end is "after"', async () => {
+        vi.useFakeTimers();
+        const f = fixture();
+        const screen = await mount(f);
+        await screen.pressByTestIdAsync('grip:a');
+        await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+        const menu = screen.findAllByType(DropdownMenu).find(node => node.findAll(child => child.props.testID === 'grip:a').length > 0);
+        if (!menu) throw new Error('Missing source chooser');
+        const available = (menu.props.items as Array<{ id: string; disabled?: boolean }>).filter(item => !item.disabled);
+        // a, b, c: "a" can go between b and c, or to the end. The gap b|c is not offered as "after b" too.
+        expect(available).toHaveLength(2);
+        const orders = new Set<string>();
+        for (const option of available) {
+            await act(async () => { menu.props.onSelect(option.id); });
+            const write = f.model.writes.at(-1)!;
+            orders.add(JSON.stringify(resolveAnchoredListMoveV1(['a', 'b', 'c'], 'a', write.position)));
+        }
+        expect(orders.size).toBe(2);
     });
 
     it('revalidates added membership and removed sources at release', async () => {

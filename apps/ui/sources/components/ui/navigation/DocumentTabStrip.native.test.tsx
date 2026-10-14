@@ -49,7 +49,7 @@ describe('native DocumentTabStrip geometry', () => {
         await act(async () => { carry.move({ x: 250, y: 20 }); });
         expect(runtime.getSnapshot().targetId).not.toBeNull();
         x = 400;
-        await act(async () => { expect(await carry.release()).toBeNull(); });
+        await act(async () => { expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'target-missing' } }); });
         expect(writes).toEqual([]);
         let current!: NonNullable<ReturnType<typeof runtime.begin>>;
         await act(async () => { current = runtime.begin('row')!; });

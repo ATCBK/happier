@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
-import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_DATA_METRICS, HappierDataMetric, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
@@ -32,6 +33,7 @@ import {
   UsagePlansNothingRead,
   UsagePlanIdentity,
   UsagePlanAccountStates,
+  readPendingPlanAccountCount,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { UsagePoolQueue, UsagePoolSteps } from './plans/UsagePoolOrder';
@@ -162,6 +164,10 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
   const tightest = projection.tightest;
   const tightestName = tightest ? nameOf(tightest.account) : null;
   const cellCount = projection.accounts.length;
+  // Until the first allowance answers there is no tightest to name, but the headline's room is held: the
+  // figure it will be and one quiet line ("Reading 5 accounts…"), so its arrival moves nothing below it.
+  const pendingAccounts = readPendingPlanAccountCount(projection.accounts);
+  const reading = tightest === null && pendingAccounts > 0;
   // Equal cells while they fit; a narrow frame (a phone) wraps them two-up rather than shrinking them.
   const cellBasis =
     width !== null && width / cellCount < CELL_MIN_WIDTH_PX ? ('46%' as const) : undefined;
@@ -204,6 +210,8 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
               .join(' · ')}
           </Text>
         </View>
+      ) : reading ? (
+        <CapacityHeroReading count={pendingAccounts} testID={`${props.testID}.reading`} />
       ) : null}
       <View style={styles.bar} accessibilityRole="list">
         {runs.map((run) => (
@@ -257,7 +265,24 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         slice={props.slice}
         onRetry={props.model.refresh}
         testID={`${props.testID}.state`}
+        pendingInHeadline={reading}
       />
+    </View>
+  );
+}
+
+/** The headline's room while the first allowance is still being read: its figure's height and its line. */
+function CapacityHeroReading(props: Readonly<{ count: number; testID: string }>) {
+  const { theme } = useUnistyles();
+  const text = usePlanText();
+  const reducedMotion = useReducedMotionPreference();
+  return (
+    <View style={styles.hero} testID={props.testID}>
+      <View style={[styles.heroReading, { height: HAPPIER_DATA_METRICS.heroValue.lineHeight }]}>
+        <HappierSkeletonBlock color={theme.colors.surface.pressedOverlay} width={84} height={HAPPIER_DATA_METRICS.heroValue.fontSize * 0.7}
+          radius={8} reducedMotion={reducedMotion} />
+      </View>
+      <Text style={[styles.subline, text.detail]}>{t('usage.board.plans.capacityReading', { count: props.count })}</Text>
     </View>
   );
 }
@@ -293,15 +318,17 @@ function CapacityCell(
       : null;
   // Only a state that changes what the viewer can do speaks under the segment (excluded, stale, used
   // up); the ordinary reset is the headline's job (lab ucap/wgusage-CD: one figure, one plan label).
-  const detail =
-    cell.excluded ??
-    (cell.account.stale && cell.account.observedAtMs !== null
+  const staleDetail =
+    cell.excluded === null && cell.account.stale && cell.account.observedAtMs !== null
       ? t('usage.board.plans.cellStale', {
           time: formatPlanMoment(cell.account.observedAtMs, nowMs),
         })
-      : usedUp && countdown
-        ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
-        : null);
+      : null;
+  // Red belongs to "used up" alone: a stale read of a used-up plan stays the quiet "last read" note.
+  const usedUpDetail = cell.excluded === null && staleDetail === null && usedUp && countdown
+    ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
+    : null;
+  const detail = cell.excluded ?? staleDetail ?? usedUpDetail;
   const value =
     remaining === null
       ? '—'
@@ -359,15 +386,20 @@ function CapacityCell(
           <UsagePlanRank rank={cell.rank} selected={cell.selected} />
         ) : null}
       </View>
-      {detail ? (
-        <Text
-          style={[styles.cellDetail, text.detail, usedUp ? styles.danger : null]}
-          // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
-          numberOfLines={2}
-        >
-          {detail}
-        </Text>
-      ) : null}
+      {/* The caption's line is held for every account from the first frame, the one that never answers
+          included: "last read" or "used up" arrives into it, and settling never resizes the bar. */}
+      <Text
+        style={[
+          styles.cellDetail,
+          text.detail,
+          { minHeight: text.detail.lineHeight },
+          usedUpDetail !== null ? styles.danger : null,
+        ]}
+        // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
+        numberOfLines={2}
+      >
+        {detail}
+      </Text>
     </View>
   );
 }
@@ -381,6 +413,7 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
     columnGap: theme.space.s10,
   },
+  heroReading: { justifyContent: 'center' },
   heroUnit: {
     ...Typography.default(),
     color: theme.colors.text.secondary,

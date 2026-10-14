@@ -56,7 +56,7 @@ export const ScmComparisonHeader = React.memo(function ScmComparisonHeader(props
                 {props.stacked ? null : (
                     <ScmComparisonEyebrow icon="files" viewLabel={props.viewLabel} scope={props.scopeLabel} detail={props.scopeDetail} />
                 )}
-                {title ? <Text accessibilityRole="header" style={[styles.title, props.stacked ? styles.titleStacked : null]}>{title}</Text> : null}
+                {title ? <Text accessibilityRole="header" style={styles.title}>{title}</Text> : null}
                 <View style={[styles.coverage, props.stacked ? styles.coverageStacked : null]}>
                     {source}
                     {props.analysis ?? null}
@@ -218,10 +218,6 @@ const styles = StyleSheet.create((theme) => ({
     title: {
         ...Typography.variant('title'),
         color: theme.colors.text.primary,
-    },
-    titleStacked: {
-        fontSize: 24,
-        lineHeight: 30,
     },
     coverage: {
         flexDirection: 'row',

@@ -48,7 +48,7 @@ export function groupActionSettingsEntriesByFamily(
         }
     }
 
-    return ACTION_SETTINGS_FAMILY_ORDER.flatMap((family) => {
+    return ACTION_SETTINGS_FAMILY_ORDER.flatMap<ActionSettingsFamilySection>((family) => {
         const familyEntries = entriesByFamily.get(family);
         if (!familyEntries || familyEntries.length === 0) {
             return [];

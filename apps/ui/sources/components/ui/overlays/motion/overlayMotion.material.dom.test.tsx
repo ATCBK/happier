@@ -43,18 +43,22 @@ describe('web overlay material composition', () => {
         function Scene({ visible, preset }: { visible: boolean; preset: 'auto' | 'solid' }) {
             return <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials(preset) }}>
                 <OverlayMotionFrame visible={visible} kind="popover" direction="bottom">
-                    <GlassSurface testID="material" finishRole={null} style={{ padding: 12, gap: 8, alignItems: 'stretch' }}>
-                        <input data-testid="draft" defaultValue="keep this draft" />
-                        <button>Continue</button>
-                        <GlassSurface finishRole={null}><button>Nested action</button></GlassSurface>
-                    </GlassSurface>
+                    {/* A card's elevation drawn on an ancestor of its paint (ModalCardFrame, floating chrome). */}
+                    <div data-testid="elevation" style={{ boxShadow: '0px 8px 24px rgba(0, 0, 0, 0.2)' }}>
+                        <GlassSurface testID="material" finishRole={null} style={{ padding: 12, gap: 8, alignItems: 'stretch' }}>
+                            <input data-testid="draft" defaultValue="keep this draft" />
+                            <button>Continue</button>
+                            <GlassSurface finishRole={null}><button>Nested action</button></GlassSurface>
+                        </GlassSurface>
+                    </div>
                 </OverlayMotionFrame>
             </GlassMaterialSettingsProvider>;
         }
         try {
             await act(async () => root.render(<Scene visible preset="auto" />));
             const material = container.querySelector<HTMLElement>('[data-testid="material"]')!;
-            const frame = material.parentElement!;
+            const elevation = container.querySelector<HTMLElement>('[data-testid="elevation"]')!;
+            const frame = elevation.parentElement!;
             const paint = Array.from(material.children).find(child => (child as HTMLElement).style.backdropFilter.includes('blur')) as HTMLElement;
             expect(paint).toBeTruthy();
             // One run, on the frame: the material's own edge and fill (its ancestors of the paint) move with it.
@@ -69,15 +73,46 @@ describe('web overlay material composition', () => {
             }
             expect(material.style.padding).toBe('12px');
             expect(material.style.gap).toBe('8px');
+            const enterRuns = runs.length;
             await act(async () => root.render(<Scene visible={false} preset="auto" />));
-            const exit = runs.at(-1)!;
-            expect(exit.target).toBe(frame);
-            expect(exit.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
-            expect(exit.frames[1]).not.toHaveProperty('opacity');
-            expect(exit.options.duration).toBe(motionTokens.overlay.popover.exitMs);
-            expect(exit.options.fill).toBeUndefined();
+            const [exit, ...leaving] = runs.slice(enterRuns);
+            // The elevation fades too, by its shadow alone: no shadow is left standing where the card was,
+            // and no ancestor of the paint takes opacity.
+            const shadowFades = leaving.filter(run => 'boxShadow' in run.frames.at(-1)!);
+            expect(shadowFades.map(run => run.target)).toEqual([elevation]);
+            expect(shadowFades[0]!.frames.at(-1)).toMatchObject({ boxShadow: 'none' });
+            expect(shadowFades[0]!.options).toMatchObject({ duration: motionTokens.overlay.popover.exitMs, fill: 'forwards' });
+            expect(elevation.style.opacity).toBe('');
+            const fades = leaving.filter(run => !shadowFades.includes(run));
+            expect(exit!.target).toBe(frame);
+            expect(exit!.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
+            expect(exit!.frames[1]).not.toHaveProperty('opacity');
+            expect(exit!.options.duration).toBe(motionTokens.overlay.popover.exitMs);
+            expect(exit!.options.fill).toBeUndefined();
             expect(frame.style.pointerEvents).toBe('none');
             expect(frame.style.opacity).toBe('');
+            // Leaving, the paint itself and everything beside it fade out and hold until unmount, so the
+            // surface does not end in a cut; no ancestor of a paint fades, so every blur keeps its backdrop.
+            const paints = Array.from(frame.querySelectorAll<HTMLElement>('[data-happy-glass-backdrop]'));
+            const faded = fades.map(run => run.target);
+            for (const layer of paints) expect(faded).toContain(layer);
+            expect(faded).toContain(input);
+            expect(faded).toContain(Array.from(material.children).find(child => child.textContent === 'Continue'));
+            for (const target of faded) expect(paints.some(layer => layer !== target && target.contains(layer))).toBe(false);
+            for (const fade of fades) {
+                expect(fade.frames.at(-1)).toMatchObject({ opacity: 0 });
+                expect(fade.options).toMatchObject({ duration: motionTokens.overlay.popover.exitMs, fill: 'forwards' });
+            }
+            // Opening again mid-way turns each running fade around from where it is.
+            const exitRuns = runs.length;
+            await act(async () => root.render(<Scene visible preset="auto" />));
+            for (const fade of leaving) expect(fade.cancel).toHaveBeenCalled();
+            expect(runs.slice(exitRuns).filter(run => faded.includes(run.target)).length).toBe(fades.length);
+            const shadowBack = runs.slice(exitRuns).filter(run => run.target === elevation);
+            expect(shadowBack).toHaveLength(1);
+            expect(shadowBack[0]!.frames[0]).toHaveProperty('boxShadow');
+            await act(async () => root.render(<Scene visible={false} preset="auto" />));
+            await act(async () => root.render(<Scene visible preset="auto" />));
             await act(async () => root.render(<Scene visible preset="solid" />));
             expect(container.querySelector('[data-testid="draft"]')).toBe(input);
             expect(input.value).toBe('keep this draft');

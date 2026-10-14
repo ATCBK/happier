@@ -412,8 +412,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                 testID={`${props.testID ?? 'review-comments'}-header`}
             />}
             {panelOpen ? (
-                <View style={{ gap: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
-                    <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <View style={{ gap: theme.space.s8, paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s12 }}>
+                    <View style={{ flexDirection: 'row', gap: theme.space.s8, flexWrap: 'wrap' }}>
                         <Pressable
                             onPress={() => setShowHistory(false)}
                             testID={`${props.testID ?? 'review-comments'}-show-active`}
@@ -421,8 +421,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                             style={{
                                 borderWidth: 1,
                                 borderColor: showHistory ? theme.colors.border.default : theme.colors.button.primary.background,
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
+                                paddingHorizontal: theme.space.s10,
+                                paddingVertical: theme.space.s6,
                             }}
                         >
                             <Text style={{ color: theme.colors.text.primary }}>
@@ -436,8 +436,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                             style={{
                                 borderWidth: 1,
                                 borderColor: showHistory ? theme.colors.button.primary.background : theme.colors.border.default,
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
+                                paddingHorizontal: theme.space.s10,
+                                paddingVertical: theme.space.s6,
                             }}
                         >
                             <Text style={{ color: theme.colors.text.primary }}>
@@ -451,8 +451,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                             style={{
                                 borderWidth: 1,
                                 borderColor: theme.colors.border.default,
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
+                                paddingHorizontal: theme.space.s10,
+                                paddingVertical: theme.space.s6,
                             }}
                         >
                             <Text style={{ color: theme.colors.text.primary }}>
@@ -499,7 +499,7 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                         <View
                             key={grant.id}
                             testID={`${props.testID ?? 'review-comments'}-direct-write-grant-${grant.id}`}
-                            style={{ gap: 4, paddingVertical: 6 }}
+                            style={{ gap: theme.space.s4, paddingVertical: theme.space.s6 }}
                         >
                             <Text style={{ color: theme.colors.text.primary }}>
                                 {grant.pluginId}
@@ -554,7 +554,7 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                     testID={`${props.testID ?? 'review-comments'}-permission-grants-error`}
                     accessibilityRole="alert"
                     accessibilityLiveRegion="polite"
-                    style={{ gap: 4 }}
+                    style={{ gap: theme.space.s4 }}
                 >
                     <Text selectable>{props.permissionGrantError}</Text>
                     {props.onRefreshPermissionGrants ? (

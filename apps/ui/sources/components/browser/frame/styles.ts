@@ -13,11 +13,11 @@ export const browserFrameStyles = StyleSheet.create((theme) => ({
         minHeight: 0,
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 24,
+        padding: theme.space.s24,
         backgroundColor: theme.colors.surface.base,
     },
     statusText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },

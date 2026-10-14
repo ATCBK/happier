@@ -2,7 +2,7 @@ import type { Context } from "@/context";
 import type { AuthPolicy } from "@/app/auth/authPolicy";
 import type { LoginEligibilityResult } from "@/app/auth/loginEligibilityResult";
 import type { Tx } from "@/storage/inTx";
-import type { NormalizedVerifiedEmail } from "@happier-dev/protocol";
+import type { NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 
 export type PreparedIdentityConnection = Readonly<{
     connectInTx: (tx: Tx) => Promise<void>;

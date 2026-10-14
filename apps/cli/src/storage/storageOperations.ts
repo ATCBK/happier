@@ -45,10 +45,16 @@ export function createStorageOperations(input: Readonly<{
     const contains = storagePathContains;
     const permitted = (item: Readonly<{ sessionId?: string }>, actor: StorageOperationActor) => actor.sessionIds === undefined
         || item.sessionId !== undefined && actor.sessionIds.has(item.sessionId);
+    function retirementChildren(item: Pick<StorageCleanupItem, 'path' | 'retirementKind'>, discovered: readonly StorageCategoryItem[]) {
+        const children = discovered.filter(child => !canonicalAbsolutePathsEqual(item.path, child.path) && contains(item.path, child.path));
+        if (item.retirementKind === 'main' || item.retirementKind === 'common') return children;
+        return children.filter(child => !children.some(parent => parent !== child && parent.retirementKind === 'main'
+            && contains(parent.path, child.path)));
+    }
     async function assertActor(actor: StorageOperationActor) { assertActive(); await actor.assertCurrentAuthority(); assertActive(); }
-    async function protectionSnapshot() {
+    async function protectionSnapshot(paths: readonly string[] = []) {
         const [projects, use, discovered, environment] = await Promise.all([
-            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(), deps.readStorageProtectionFacts?.(),
+            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(paths), deps.readStorageProtectionFacts?.(),
         ]);
         const trashRoots = trash ? (await (await trash).roots()).map(root => root.path) : [];
         const facts: StorageProtectionFacts = { ...environment, homeDir: deps.homeDir ?? homedir(),
@@ -102,7 +108,7 @@ export function createStorageOperations(input: Readonly<{
     }
     async function resolveRef(ref: StorageItemRefV1, actor: StorageOperationActor, snapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
         await assertActor(actor);
-        const discovered = snapshot?.discovered ?? await catalog.discover();
+        let discovered = snapshot?.discovered ?? await catalog.discover();
         await assertActor(actor);
         if (actor.sessionIds !== undefined && !discovered.some(item => item.itemId === ref.itemId && permitted(item, actor))) {
             throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
@@ -113,7 +119,7 @@ export function createStorageOperations(input: Readonly<{
                 if (!permitted(item, actor)) throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
                 return { item, fingerprint: item.fingerprint, fingerprintRequired: item.fingerprintRequired,
                     ownFingerprint: item.ownFingerprint,
-                    retirementChildren: discovered.filter(child => !canonicalAbsolutePathsEqual(item.path, child.path) && contains(item.path, child.path)) };
+                    retirementChildren: retirementChildren(item, discovered) };
             }
         }
         // Global disk refs have no Session scope proof, even when their spelling overlaps a Session.
@@ -122,15 +128,17 @@ export function createStorageOperations(input: Readonly<{
         await assertActor(actor);
         if (!indexed || !indexed.complete || indexed.node.nodeId !== ref.itemId
             || !canonicalAbsolutePathsEqual(await physicalPathWithoutFollowingLeaf(indexed.path), physical)) return null;
+        discovered = await catalog.discover([physical], discovered);
+        await assertActor(actor);
         const exact = discovered.find(item => canonicalAbsolutePathsEqual(item.path, physical));
         if (exact) return { item: { ...exact, itemId: ref.itemId, canonicalItemId: exact.itemId },
             fingerprint: exact.fingerprint, fingerprintRequired: exact.fingerprintRequired, ownFingerprint: exact.ownFingerprint,
-            retirementChildren: discovered.filter(child => !canonicalAbsolutePathsEqual(exact.path, child.path) && contains(exact.path, child.path)) };
-        const retirementChildren = discovered.filter(item => contains(physical, item.path));
+            retirementChildren: retirementChildren(exact, discovered) };
+        const children = retirementChildren({ path: physical }, discovered);
         const enclosing = discovered.filter(item => contains(item.path, physical)).sort((left, right) => right.path.length - left.path.length);
         const limitation = catalog.descendantCleanupLimitation(physical, discovered);
         if (limitation) throw new PileFactError('facts_unavailable', limitation);
-        const worktree = enclosing.find(item => item.categoryId === 'worktrees');
+        const worktree = enclosing.find(item => item.categoryId === 'worktrees' && item.retirementKind !== 'main');
         if (worktree && !worktree.collectable) throw new PileFactError('facts_unavailable');
         const protection = snapshot?.facts ?? await protectionFacts();
         const recognized = await recognizeStorageCandidate({ path: physical, size: indexed.node.size,
@@ -142,7 +150,7 @@ export function createStorageOperations(input: Readonly<{
             verdict: recognized?.verdict ?? 'caution', reason: recognized?.reason ?? { code: 'not_rebuildable' },
             evidence: ['trusted_disk_index', ...(recognized?.evidence ?? [])], collectable: true,
             ...(worktree && worktree.verdict !== 'safe' ? { verdict: worktree.verdict, reason: worktree.reason, loses: worktree.loses } : {}) };
-        return { item: { ...item, ...foldStorageDescendantVerdicts(item, retirementChildren) }, retirementChildren };
+        return { item: { ...item, ...foldStorageDescendantVerdicts(item, children) }, retirementChildren: children };
     }
     async function reviewDeps(actor: StorageOperationActor): Promise<PileReviewDeps> {
         const store = await getTrash();
@@ -225,7 +233,9 @@ export function createStorageOperations(input: Readonly<{
     return {
         /** Only the returned index page is projected; the scan never acquires per-file TS identities. */
         async projectDiskNodes(nodes: readonly DiskNodeV1[]): Promise<DiskNodeV1[]> {
-            const { facts, discovered } = await protectionSnapshot();
+            const paths = await Promise.all(nodes.filter(node => node.kind === 'folder' || node.kind === 'package')
+                .map(node => physicalPathWithoutFollowingLeaf(node.nodeId)));
+            const { facts, discovered } = await protectionSnapshot(paths);
             return Promise.all(nodes.map(async node => {
                 const virtual = node.kind === 'small-items' || node.kind === 'hidden-space' || node.kind === 'reserved';
                 const source = virtual ? node.parentId : node.nodeId;
@@ -235,7 +245,7 @@ export function createStorageOperations(input: Readonly<{
                 const owner = discovered.find(item => canonicalAbsolutePathsEqual(item.path, path));
                 const classification = await classifyPath(path, { ...facts,
                     ...(owner ? { managedItemPath: owner.path } : {}) });
-                const enclosing = discovered.filter(item => item.categoryId === 'worktrees' && contains(item.path, path));
+                const enclosing = discovered.filter(item => item.categoryId === 'worktrees' && item.retirementKind !== 'main' && contains(item.path, path));
                 const losses = [...(owner?.loses ?? []), ...enclosing.flatMap(item => item.loses ?? []), ...(classification.loses ?? [])];
                 const children = await Promise.all(discovered.filter(item => !canonicalAbsolutePathsEqual(path, item.path) && contains(path, item.path))
                     .map(async item => ({ ...item, ...await classifyItem(item, item.path, facts) })));

@@ -26,7 +26,7 @@ describe('initializeRuntimeOverridesSynchronizer', () => {
     expect(sync.getSnapshot().permissionMode).toEqual({ current: 'read-only', updatedAt: 77 });
   });
 
-  it('prefers newer transcript intent over older metadata when seeding attach sessions', async () => {
+  it('keeps the owner baseline rather than the last turn override when attaching', async () => {
     const fetchLatestUserPermissionIntentFromTranscript = vi.fn(async () => ({ intent: 'safe-yolo' as any, updatedAt: 20 }));
 
     const sync = await initializeRuntimeOverridesSynchronizer({
@@ -43,9 +43,9 @@ describe('initializeRuntimeOverridesSynchronizer', () => {
 
     await sync.seedFromSession();
 
-    expect(fetchLatestUserPermissionIntentFromTranscript).toHaveBeenCalledTimes(1);
-    expect(sync.getSnapshot().permissionMode.current).toBe('safe-yolo');
-    expect(sync.getSnapshot().permissionMode.updatedAt).toBe(20);
+    expect(fetchLatestUserPermissionIntentFromTranscript).not.toHaveBeenCalled();
+    expect(sync.getSnapshot().permissionMode.current).toBe('default');
+    expect(sync.getSnapshot().permissionMode.updatedAt).toBe(10);
   });
 
   it('does not fetch transcript intent for fresh sessions when seeding permission mode', async () => {

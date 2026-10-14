@@ -2640,6 +2640,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.surface.session.deliveryFailed": "Die Session wurde geöffnet, aber der Prompt dieser Aktion konnte nicht darin eingefügt werden.",
   "plugins.triage.surface.session.deliveryUnknown": "Die Session wurde geöffnet, aber Happier konnte nicht bestätigen, ob der Prompt dieser Aktion gesendet wurde. Erneutes Drücken sendet denselben Prompt noch einmal statt eines zweiten.",
   "plugins.triage.surface.session.dispatchFailed": "Es wurde nichts gestartet: Diese Ansicht konnte die angeforderte Session nicht erreichen.",
+  "plugins.triage.surface.session.explainPr": "Diesen PR im Chat erklären",
   "plugins.triage.surface.session.fix": "Beheben",
   "plugins.triage.surface.session.instructionMissing": "Diese Aktion benötigt eine Anweisung, bevor sie Arbeit starten kann. Wähle unter „Aktionen konfigurieren“ einen Eintrag aus der Prompt Library aus.",
   "plugins.triage.surface.session.linkedNotOpened": "Die Session wurde erstellt und verknüpft, aber nicht geöffnet.",

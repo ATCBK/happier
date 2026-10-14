@@ -122,6 +122,29 @@ afterEach(() => {
 });
 
 describe('inspector renderSurface (real source, mounted)', () => {
+    it('settles its declared self-check through the same public Action bridge as inventory', async () => {
+        const executeAction = vi.fn(async (actionId: string) => {
+            if (actionId === 'plugins.list') return { ok: true, kind: 'plugins_list', plugins: [] };
+            if (actionId === 'self-check') return { ok: true };
+            throw new Error(`unexpected actionId ${actionId}`);
+        });
+        await act(async () => {
+            renderer = create(renderInspectorSurface({
+                hostApi: createInspectorTabHostApi(executeAction),
+                surface: createInspectorTabSurface(),
+                signal: new AbortController().signal,
+            }));
+        });
+        const initialStatus = findByTestId(renderer!, 'inspector-self-check-settled')
+            .find(instance => typeof instance.props.label === 'string')?.props.label;
+        const selfCheck = await findPressableByTestId(renderer!, 'inspector-self-check-action');
+        await act(async () => { await selfCheck.props.onPress(); });
+        await vi.waitFor(() => {
+            expect(findByTestId(renderer!, 'inspector-self-check-settled')
+                .some(instance => instance.props.tone === 'secondary' && instance.props.label !== initialStatus)).toBe(true);
+        });
+    });
+
     it('retains the inventory on a semantic catalog refusal and retries instead of publishing an empty list', async () => {
         let listReadCount = 0;
         const diagnostic = 'The daemon plugin runtime is unavailable.';
@@ -138,6 +161,7 @@ describe('inspector renderSurface (real source, mounted)', () => {
             renderer = create(renderInspectorSurface({
                 hostApi: createInspectorTabHostApi(executeAction),
                 surface: createInspectorTabSurface(),
+                signal: new AbortController().signal,
             }));
         });
         await waitForTestId(renderer!, 'inspector-plugin-acme.retained');

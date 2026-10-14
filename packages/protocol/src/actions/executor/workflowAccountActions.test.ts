@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
-import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError } from './workflowAccountActions.js';
+import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError, type WorkflowActionFailureDiagnosticV1 } from './workflowAccountActions.js';
 import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
 import { createWorkflowAccountRunActionOwner } from './workflowRunActions.js';
 import { parseWorkflowDocumentJsonIngressV1 } from '../../workflows/workflowDocumentV1.js';
+import { WorkflowActionFailureV1Schema } from '../../workflows/workflowProgressV1.js';
 
 const definitionId = '11111111-1111-4111-8111-111111111111';
 const definition = { version: 1 as const, inputs: [], defaults: {}, blocks: [{ kind: 'wait' as const, id: 'wait',
@@ -70,6 +71,7 @@ describe('workflow Action refusal classification', () => {
     ['unknown transport code', Object.assign(new Error('Connection reset'), { code: 'ECONNRESET' }), 'storage_unavailable'],
     ['unknown server code', Object.assign(new Error('Transaction acquisition unavailable'), { code: 'P2028' }), 'storage_unavailable'],
     ['typed storage refusal', Object.assign(new Error('Storage unavailable'), { code: 'storage_unavailable' }), 'storage_unavailable'],
+    ['unreadable Account role overrides', Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' }), 'content_unavailable'],
     ['typed unopened content refusal', Object.assign(new Error('Artifact content is unavailable'), { code: 'content_unavailable' }), 'content_unavailable'],
     ['retained Session custody missing', Object.assign(new Error('session_key_required'), { code: 'session_key_required' }), 'content_unavailable'],
     ['template encryption material missing', Object.assign(new Error('encryption_material_unavailable'), { code: 'encryption_material_unavailable' }), 'content_unavailable'],
@@ -79,6 +81,17 @@ describe('workflow Action refusal classification', () => {
     const actions = createActionExecutor({ workflowAction: executor(false, error) } as unknown as ActionExecutorDeps);
     await expect(actions.execute('workflow.definition.get', { definitionId }, { surface: 'ui' }))
       .resolves.toMatchObject({ ok: false, errorCode });
+  });
+
+  it('preserves the Account role preparation cause in the content-free diagnostic', () => {
+    const events: WorkflowActionFailureDiagnosticV1[] = [];
+    const result = normalizeWorkflowActionThrownError(Object.assign(new Error('private catalog contents'), {
+      code: 'account_role_overrides_unavailable',
+    }), { operation: 'workflow.run.start', durationMs: 12, emit: event => events.push(event) });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'content_unavailable',
+      details: { reason: 'account_role_overrides_unavailable' } });
+    expect(events).toEqual([{ event: 'workflow_action_failure', errorCode: 'content_unavailable',
+      originalCode: 'account_role_overrides_unavailable', httpStatus: null, operation: 'workflow.run.start', durationMs: 12 }]);
   });
 
   it('reports invalid requests separately from unavailable private content', async () => {

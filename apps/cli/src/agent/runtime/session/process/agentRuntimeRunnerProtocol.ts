@@ -475,6 +475,7 @@ const AgentSessionOpenBaseSchema = lazyZodSchema(() => z.object({
   mcpServers:
     z.record(BoundedIdSchema, McpLaunchConfigSchema).optional(),
   mcpToolPolicy: McpToolLaunchPoliciesV1Schema.optional(),
+  mcpServersStrictMode: z.boolean().optional(),
   providerBinding: AgentSessionProviderBindingV1Schema.optional(),
   stateSharing: ConnectedServicesProviderStateSharingPolicyV1Schema.optional(),
 }));

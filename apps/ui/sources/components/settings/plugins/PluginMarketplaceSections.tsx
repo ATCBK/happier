@@ -511,18 +511,21 @@ export function PendingPluginChangesSection(props: Readonly<{
                 {props.pendingChanges.map((entry) => {
                     const pendingChangeId = readPendingPluginChangeListingId(entry);
                     const busy = props.isPluginActionInFlight(pendingChangeId);
-                    const decidable = entry.kind !== 'applying';
+                    const presentationEntry: PendingPluginChangeListing = busy
+                        ? { kind: 'applying', pendingChangeId }
+                        : entry;
+                    const decidable = !busy && entry.kind !== 'applying';
                     return (
                         <Item
                             key={pendingChangeId}
                             testID={`settings.plugins.management.pendingChanges.${pendingChangeId}`}
-                            title={formatPendingPluginChangeTitle(entry)}
-                            subtitle={formatPendingPluginChangeSubtitle(entry)}
+                            title={formatPendingPluginChangeTitle(presentationEntry)}
+                            subtitle={formatPendingPluginChangeSubtitle(presentationEntry)}
                             subtitleLines={0}
                             icon={<Icon
-                                name={decidable ? 'shield-check' : 'arrow-clockwise'}
+                                name={presentationEntry.kind === 'applying' ? 'arrow-clockwise' : 'shield-check'}
                                 size={20}
-                                color={decidable ? theme.colors.state.info.foreground : theme.colors.text.secondary}
+                                color={presentationEntry.kind === 'applying' ? theme.colors.text.secondary : theme.colors.state.info.foreground}
                             />}
                             showChevron={false}
                             mode="info"

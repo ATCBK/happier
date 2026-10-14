@@ -1,3 +1,4 @@
+import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { describe, expect, it, vi } from 'vitest';
@@ -76,18 +77,18 @@ describe('local voice engine stop', () => {
           providers: {
             ...storage.getState().settings.voice.providers,
             local_conversation: { schemaVersion: 1, config: {
-              ...storage.getState().settings.voice.providers.local_conversation.config,
+              ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
               conversationMode: 'agent',
               stt: {
-                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                 baseUrl: 'http://localhost:8000',
               },
               agent: {
-                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                 prewarmOnConnect: true,
               },
               tts: {
-                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                 autoSpeakReplies: false,
               },
             } },
@@ -172,13 +173,13 @@ describe('local voice engine stop', () => {
           providers: {
             ...storage.getState().settings.voice.providers,
             local_direct: { schemaVersion: 1, config: {
-              ...storage.getState().settings.voice.providers.local_direct.config,
+              ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
               stt: {
-                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                 provider: 'device',
               },
               tts: {
-                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                 autoSpeakReplies: false,
               },
             } },
@@ -222,9 +223,9 @@ describe('local voice engine stop', () => {
           providers: {
             ...storage.getState().settings.voice.providers,
             local_direct: { schemaVersion: 1, config: {
-              ...storage.getState().settings.voice.providers.local_direct.config,
+              ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
               tts: {
-                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                 autoSpeakReplies: true,
                 provider: 'device',
               },

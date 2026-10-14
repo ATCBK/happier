@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     RunnerActivationCreateRequestV1Schema,
     RunnerEndpointFactsRecipientV1Schema,
@@ -22,7 +22,7 @@ import {
 import { RunnerArtifactAvailabilityProjectionV1Schema } from '@happier-dev/protocol/ephemeralRunner/runnerArtifact';
 import { RunnerServerErrorV1Schema } from '@happier-dev/protocol/ephemeralRunner/errors';
 import { RunnerCredentialSelectionResolutionRequestV1Schema, RunnerCredentialSelectionResolutionResponseV1Schema } from '@happier-dev/protocol/teams';
-import { RPC_METHODS } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import {
     EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1,
     EPHEMERAL_RUNNER_CREATOR_RECIPIENT_PATH_V1,
@@ -72,7 +72,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: [app.authenticate, requirePresentUser],
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.status') },
         schema: {
-            querystring: z.object({ version: z.string().min(1).optional() }).strict(),
+            querystring: z.strictObject({ version: z.optional(z.string().check(z.minLength(1))) }),
             response: { 200: RunnerArtifactAvailabilityProjectionV1Schema, 503: ErrorSchema },
         },
     }, async (request, reply) => {
@@ -107,7 +107,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         schema: {
             body: RunnerActivationCreateRequestV1Schema,
             response: {
-                200: z.object({ status: z.literal('created'), activation: RunnerActivationProjectionV1Schema }).strict(),
+                200: z.strictObject({ status: z.literal('created'), activation: RunnerActivationProjectionV1Schema }),
                 400: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema, 503: ErrorSchema,
             },
         },
@@ -161,7 +161,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.status') },
         schema: {
-            querystring: z.object({ draftId: RunnerActivationCreateRequestV1Schema.shape.draftId }).strict(),
+            querystring: z.strictObject({ draftId: RunnerActivationCreateRequestV1Schema.shape.draftId }),
             response: { 200: RunnerActivationProjectionV1Schema, 400: ErrorSchema, 404: ErrorSchema },
         },
     }, async (request, reply) => {
@@ -173,7 +173,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.status') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             response: { 200: RunnerActivationProjectionV1Schema, 404: ErrorSchema },
         },
     }, async (request, reply) => {
@@ -185,7 +185,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             response: { 200: RunnerActivationProjectionV1Schema, 404: ErrorSchema },
         },
     }, async (request, reply) => {
@@ -196,9 +196,9 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.post('/v1/ephemeral-runners/activations/:activationId/endpoint/claim', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerClaimV1Schema,
-            response: { 200: z.object({ status: z.literal('claimed'), claim: RunnerClaimV1Schema }).strict(), 404: ErrorSchema },
+            response: { 200: z.strictObject({ status: z.literal('claimed'), claim: RunnerClaimV1Schema }), 404: ErrorSchema },
         },
     }, async (request, reply) => {
         reply.header('Cache-Control', 'no-store');
@@ -210,9 +210,9 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.put('/v1/ephemeral-runners/activations/:activationId/endpoint/facts', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerEndpointFactsV1Schema,
-            response: { 200: z.object({ status: z.literal('stored'), endpointFacts: RunnerEndpointFactsV1Schema }).strict(), 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
+            response: { 200: z.strictObject({ status: z.literal('stored'), endpointFacts: RunnerEndpointFactsV1Schema }), 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
         },
     }, async (request, reply) => {
         reply.header('Cache-Control', 'no-store');
@@ -227,7 +227,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.post('/v1/ephemeral-runners/activations/:activationId/endpoint/projection', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.status') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerEndpointProjectionRequestV1Schema,
             response: { 200: RunnerEndpointProjectionResponseV1Schema },
         },
@@ -241,10 +241,10 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.put('/v1/ephemeral-runners/activations/:activationId/endpoint/progress', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerActivationProgressUpdateV1Schema,
             response: {
-                200: z.object({ status: z.literal('stored'), progressPhase: RunnerActivationProgressPhaseV1Schema }).strict(),
+                200: z.strictObject({ status: z.literal('stored'), progressPhase: RunnerActivationProgressPhaseV1Schema }),
                 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema,
             },
         },
@@ -260,7 +260,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.delete('/v1/ephemeral-runners/activations/:activationId/endpoint', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerEndpointProjectionRequestV1Schema,
             response: { 200: RunnerEndpointDeclineResponseV1Schema },
         },
@@ -275,10 +275,10 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: [app.authenticate, requirePresentUser],
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerActivationReviewV1Schema,
             response: {
-                200: z.object({ status: z.literal('stored'), review: RunnerActivationReviewV1Schema }).strict(),
+                200: z.strictObject({ status: z.literal('stored'), review: RunnerActivationReviewV1Schema }),
                 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema,
             },
         },
@@ -302,7 +302,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         attachValidation: true,
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.status') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerCredentialSelectionResolutionRequestV1Schema,
             response: { 200: RunnerCredentialSelectionResolutionResponseV1Schema, 400: ErrorSchema },
         },
@@ -350,10 +350,10 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.put('/v1/ephemeral-runners/activations/:activationId/endpoint/consent', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerConsentV1Schema,
             response: {
-                200: z.object({ status: z.literal('stored'), consent: RunnerConsentV1Schema }).strict(),
+                200: z.strictObject({ status: z.literal('stored'), consent: RunnerConsentV1Schema }),
                 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema,
             },
         },
@@ -369,10 +369,10 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
     app.put('/v1/ephemeral-runners/activations/:activationId/endpoint/readiness', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerReadinessV1Schema,
             response: {
-                200: z.object({ status: z.literal('stored'), readiness: RunnerReadinessV1Schema }).strict(),
+                200: z.strictObject({ status: z.literal('stored'), readiness: RunnerReadinessV1Schema }),
                 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema,
             },
         },
@@ -389,7 +389,7 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
         preHandler: [app.authenticate, requirePresentUser],
         config: { rateLimit: resolveApiHotEndpointRateLimit(env, 'auth.pairing.request') },
         schema: {
-            params: z.object({ activationId: z.string().uuid() }).strict(),
+            params: z.strictObject({ activationId: z.string().check(z.uuid()) }),
             body: RunnerMaterializationRequestV1Schema,
             response: {
                 200: RunnerMaterializationResponseV1Schema,

@@ -3,7 +3,7 @@ import { readWidgetInputTargetV1, type WidgetInputDescriptorV1 } from './widgetI
 import type { WidgetDefinitionRefV1, WidgetInstanceV1 } from './widgetInstanceV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { WidgetSizeDeclarationV1 } from './widgetPresentationV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyDefinition } from '../lazyZodSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
@@ -97,9 +97,9 @@ const sessionInputs: WidgetInputDescriptorV1 = {
     }, required: ['serverId', 'sessionId'], additionalProperties: false } }, required: ['session'], additionalProperties: false },
 };
 const nativeSizeDeclaration = { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1;
-const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.object({
+const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(z.strictObject({
     checkout: WorkspaceRefV1WriteSchema,
-}).strict().toJSONSchema({ io: 'input', target: 'draft-7' })));
+}), { io: 'input', target: 'draft-7' })));
 const workspaceInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which workspace?', widget: 'json', inputType: { hostType: 'workspace' }, required: true }] },
     inputSchema: workspaceInputSchema,
@@ -110,7 +110,7 @@ const usagePresentationInputs: Readonly<Partial<Record<UsageBuiltinWidgetIdV1, r
     usage_breakdowns: ['metric', 'breakdown'], usage_project_ledger: ['metric'], usage_session_value: ['metric'],
     usage_outcomes: ['metric'], usage_recap: ['metric'],
 };
-const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(UsageQuerySchema.toJSONSchema({ io: 'input', target: 'draft-7' })));
+const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageQuerySchema, { io: 'input', target: 'draft-7' })));
 const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
         || usagePresentationInputs[id]?.some(path => path === field.path))
@@ -123,7 +123,7 @@ const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
 const sourceInventoryInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => ['agents', 'machines', 'sources'].includes(field.path))
         .map(field => ({ ...field, required: field.required ?? true })) },
-    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(UsageSourceInventoryScopeSchema.toJSONSchema({ io: 'input', target: 'draft-7' }))),
+    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageSourceInventoryScopeSchema, { io: 'input', target: 'draft-7' }))),
 };
 
 const machineField: InputFieldHint = { path: 'machine', title: 'Machine', prompt: 'Which machine?', widget: 'select',
@@ -136,35 +136,37 @@ const machineChoiceLabels: Readonly<Record<string, string>> = { cpu: 'CPU', memo
 const choices = (values: readonly string[]) => values.map(value => ({ value, label: machineChoiceLabels[value] ?? value }));
 function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescriptorV1 & { sizeDeclaration: WidgetSizeDeclarationV1 } {
     let fields: InputFieldHint[] = [{ ...machineField, ...(id === 'machine_activity' ? { required: false } : {}) }];
-    let schema: z.ZodType = z.object({ machine: id === 'machine_activity' ? MachineTargetV1Schema.optional() : MachineTargetV1Schema }).strict();
+    let schema: z.ZodMiniType = z.strictObject({ machine: id === 'machine_activity' ? z.optional(MachineTargetV1Schema) : MachineTargetV1Schema });
     if (id === 'machine_fleet') {
         fields = [{ path: 'style', title: 'Style', widget: 'select', contextMode: 'own', options: choices(['sparklines', 'bars', 'numbers', 'rings']) },
             { path: 'metrics', title: 'Metrics', widget: 'multiselect', contextMode: 'own', options: choices(['cpu', 'memory', 'disk', 'network']) }];
-        schema = z.object({ style: z.enum(['sparklines', 'bars', 'numbers', 'rings']).optional(),
-            metrics: z.array(z.enum(['cpu', 'memory', 'disk', 'network'])).optional() }).strict();
+        schema = z.strictObject({ style: z.optional(z.enum(['sparklines', 'bars', 'numbers', 'rings'])),
+            metrics: z.optional(z.array(z.enum(['cpu', 'memory', 'disk', 'network']))) });
     } else if (id === 'machine_metric') {
         const disk = { op: 'eq' as const, path: 'metric', value: 'disk_free' };
         fields.push({ path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: choices(['cpu', 'memory', 'disk_free', 'network']) },
             { path: 'range', title: 'Range', widget: 'select', contextMode: 'own', options: choices(['1h', '24h', '7d']) },
             { ...volumeField, visibleWhen: disk }, { path: 'warnAbove', title: 'Warn above', widget: 'number', contextMode: 'own' });
-        schema = z.object({ machine: MachineTargetV1Schema, metric: z.enum(['cpu', 'memory', 'disk_free', 'network']).optional(),
-            range: z.enum(['1h', '24h', '7d']).optional(), volume: z.string().min(1).optional(), warnAbove: z.number().nonnegative().optional() }).strict();
+        // The body reads an unset metric as CPU over the last hour; the declaration says so, so setup
+        // starts on those choices instead of showing none selected.
+        schema = z.strictObject({ machine: MachineTargetV1Schema, metric: z._default(z.enum(['cpu', 'memory', 'disk_free', 'network']), 'cpu'),
+            range: z._default(z.enum(['1h', '24h', '7d']), '1h'), volume: z.optional(z.string().check(z.minLength(1))), warnAbove: z.optional(z.number().check(z.nonnegative())) });
     } else if (id === 'machine_storage') {
         fields.push(volumeField);
-        schema = z.object({ machine: MachineTargetV1Schema, volume: z.string().min(1).optional() }).strict();
+        schema = z.strictObject({ machine: MachineTargetV1Schema, volume: z.optional(z.string().check(z.minLength(1))) });
     } else if (id === 'machine_top_consumers') {
         const session = { op: 'eq' as const, path: 'scope', value: 'session' };
         fields.push({ path: 'scope', title: 'Scope', widget: 'select', contextMode: 'own', options: choices(['machine', 'session']) },
             { path: 'session', title: 'Session', widget: 'json', contextMode: 'follow', visibleWhen: session, requiredWhen: session });
-        schema = z.object({ machine: MachineTargetV1Schema, scope: z.enum(['machine', 'session']).optional(),
-            session: VoiceTrackedSessionAddressV1Schema.optional() }).strict();
+        schema = z.strictObject({ machine: MachineTargetV1Schema, scope: z._default(z.enum(['machine', 'session']), 'machine'),
+            session: z.optional(VoiceTrackedSessionAddressV1Schema) });
     } else if (id === 'machine_worktrees') {
         fields.push({ path: 'project', title: 'Project', widget: 'text', contextMode: 'follow' });
-        schema = z.object({ machine: MachineTargetV1Schema, project: z.string().min(1).optional() }).strict();
+        schema = z.strictObject({ machine: MachineTargetV1Schema, project: z.optional(z.string().check(z.minLength(1))) });
     }
     const fourSizes = id === 'machine_left_behind' || id === 'machine_worktrees' || id === 'machine_cleanup_suggestion';
     const defaultSize = id === 'machine_fleet' ? 'wide' : id === 'machine_vitals' || id === 'machine_left_behind' || id === 'machine_worktrees' ? 'small' : 'medium';
-    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(schema.toJSONSchema({ io: 'input', target: 'draft-7' }))),
+    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(schema, { io: 'input', target: 'draft-7' }))),
         sizeDeclaration: { sizes: fourSizes ? ['small', 'medium', 'wide', 'full'] : nativeSizeDeclaration.sizes, defaultSize } };
 }
 

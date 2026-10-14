@@ -1,16 +1,16 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const AgentTeamDeleteSubagentCommandV1Schema = z.object({
+const AgentTeamDeleteSubagentCommandV1Schema = z.looseObject({
   kind: z.literal('agent_team_delete'),
-  teamId: z.string().min(1),
-}).passthrough();
+  teamId: z.string().check(z.minLength(1)),
+});
 
-const AgentTeamMemberDeleteSubagentCommandV1Schema = z.object({
+const AgentTeamMemberDeleteSubagentCommandV1Schema = z.looseObject({
   kind: z.literal('agent_team_member_delete'),
-  teamId: z.string().min(1),
-  memberId: z.string().min(1),
-  memberLabel: z.string().min(1).max(200).optional(),
-}).passthrough();
+  teamId: z.string().check(z.minLength(1)),
+  memberId: z.string().check(z.minLength(1)),
+  memberLabel: z.optional(z.string().check(z.minLength(1), z.maxLength(200))),
+});
 
 export const SubagentCommandV1Schema = z.discriminatedUnion('kind', [
   AgentTeamDeleteSubagentCommandV1Schema,

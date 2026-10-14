@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ChildProcess, spawn } from 'node:child_process';
 import { createTerminalLauncherFixture } from '@/testkit/process/terminalLauncher';
+import { launchBorrowedTerminalProcess } from '@/terminal/host/borrowedTerminalProcess';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -4176,6 +4177,76 @@ describe('native Agent session host adapter', () => {
             { kind: 'destroy_owned_host', reason: 'session_closed' },
             { kind: 'preserve_host', reason: 'runtime_recovery' },
         ]);
+    });
+
+    it.each(['live', 'retired', 'unsubscribed'] as const)('fences terminal exit delivery through the public native scope (%s)', async (scopeState) => {
+        const launcher = createTerminalLauncherFixture();
+        const handle: TerminalHostHandle = {
+            attachmentId: 'native-exit-attachment' as NonNullable<TerminalHostHandle['attachmentId']>,
+            kind: 'tmux', sessionName: 'native-exit-host', paneId: '0',
+            attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine',
+                maxClients: null, requiresLocalAttachmentInfo: true, liveProbe: 'required' },
+        };
+        const adapter: TerminalHostAdapter = {
+            kind: 'tmux', createOrAttachHost: async () => handle,
+            injectUserPrompt: async () => { throw new Error('Exit observation never injects a prompt'); },
+            interruptTurn: async () => undefined,
+            evaluateLiveness: async () => ({ paneAlive: true, observedAt: 1 }),
+            dispose: async () => undefined,
+        };
+        const terminalHost = createPluginTerminalHostService({
+            hasCapability: capability => capability === 'terminalHost',
+            resolveTerminalHost: () => ({ status: 'resolved', adapter, reason: 'tmux_available' }),
+            resolveAgentCliLaunch: () => ({ command: '/external/agent', args: [] }),
+            resolveCurrentHost: () => ({ handle, lifecycle: 'borrowed' }),
+            // Only the external child-process boundary is a fixture. Both terminal
+            // ownership and the native-session/public-service guards stay real.
+            launchCurrentHostProcess: params => launchBorrowedTerminalProcess({ ...params,
+                spawnProcess: launcher.spawnProcess,
+                terminateProcess: async () => { launcher.child.emit('exit', 0, null); },
+            }),
+            disposeHost: async () => undefined,
+        });
+        let current = true;
+        const received: unknown[] = [];
+        const observation: { subscription: Awaited<ReturnType<NonNullable<typeof terminalHost.subscribeExit>>> } = { subscription: null };
+        const agentId = 'acme-terminal-exit';
+        const contributions = createExternalContributionFixtures(agentId);
+        const session = createNativeSessionClientTestPort('native-exit-session');
+        const plan = await createNativeAgentRuntimeSessionPlan({
+            runtime: { sessions: { open: async (_request, context) => {
+                const projected = (context.session.services as typeof context.session.services & Readonly<{ terminalHost?: typeof terminalHost }>).terminalHost;
+                if (!projected?.subscribeExit) throw new Error('Public terminal exit observation was not projected');
+                const active = await projected.createOrAttachHost({ preference: 'tmux', sessionName: handle.sessionName,
+                    workingDirectory: '/tmp', isolatedEnv: true, launch: { kind: 'agent-cli', agentId } });
+                observation.subscription = await projected.subscribeExit(active, result => received.push(result));
+                return { send: async () => ({ status: 'admitted' as const }),
+                    watch: () => ({ dispose: () => undefined }), dispose: async () => undefined };
+            } } },
+            lease: { ...createLease(agentId), isCurrent: () => current },
+            backend: contributions.backend, agent: contributions.agent,
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/tmp',
+                backendTarget: { kind: 'backend', backendId: agentId } }),
+            createSessionHostServiceOwners: () => Object.freeze({ ...createSessionHostServiceOwners(), terminalHost }),
+            reportSessionMetadataToDaemon: async () => undefined,
+        });
+        if (!plan.config.createSessionRuntime) throw new Error('Native runtime factory unavailable');
+        const created = await plan.config.createSessionRuntime({ directory: '/tmp', metadata: {}, machineId: 'machine-1',
+            session, transcriptSession: { rpcHandlerManager: { registerHandler: vi.fn() } }, messageBuffer: {},
+            mcpServers: {}, permissionHandler: {}, getPermissionMode: () => 'default', setThinking: () => undefined,
+            memoryRecallGuidanceEnabled: false,
+        } as never);
+        try {
+            if (scopeState === 'retired') current = false;
+            if (scopeState === 'unsubscribed') await observation.subscription?.dispose();
+            launcher.child.emit('message', { type: 'terminal-native-exited', code: 0, signal: null });
+            launcher.child.emit('exit', 0, null);
+            await vi.waitFor(async () => expect(await terminalHost.evaluateLiveness(handle)).toMatchObject({ paneDead: true }));
+            expect(received).toEqual(scopeState === 'live' ? [{ code: 0, signal: null, nativeExited: true }] : []);
+        } finally {
+            await observation.subscription?.dispose();
+            await created.operations.resetOrDisposeRuntime();
+        }
     });
 
     it('keeps feature decisions fail-closed and omits imperative terminal authority when it is not granted', async () => {
@@ -8821,6 +8892,72 @@ describe('native Agent session host adapter', () => {
         },
     );
 
+    it('delivers physical terminal observation through the native runtime facade', async () => {
+        const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+        let sequence = 0;
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            watch(listener) {
+                listeners.add(listener);
+                listener({ kind: 'runtime-activity-snapshot', sessionId: 'session-terminal-observation',
+                    emittedAtMs: 1, sequence: ++sequence, state: 'active', activeCount: 1 });
+                return { dispose: () => { listeners.delete(listener); } };
+            },
+            observeTerminalExecution(input) {
+                if (input.kind !== 'provider_stopped') return;
+                for (const listener of listeners) listener({ kind: 'runtime-activity-snapshot',
+                    sessionId: 'session-terminal-observation', emittedAtMs: 2, sequence: ++sequence,
+                    state: 'idle', activeCount: 0 });
+            },
+            dispose: async () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'session-terminal-observation');
+        const events: unknown[] = [];
+        const unsubscribe = runtime.subscribeRuntimeEvents(event => events.push(event));
+        try {
+            const observe = runtime.observeTerminalExecution;
+            if (typeof observe === 'function') await observe({ kind: 'provider_stopped', plan: { argv: [] }, exitCode: 0, signal: null });
+            expect(events.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
+        } finally { unsubscribe(); await runtime.resetOrDisposeRuntime(); }
+    });
+
+    it('replays current Activity to the first runtime listener after prompt-outcome observation already started', async () => {
+        // External AgentSessionRuntime boundary mirrors Claude watch: current Activity
+        // replays synchronously with a fresh native sequence on every subscription.
+        const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+        let sequence = 0;
+        let current: 'idle' | 'active' = 'idle';
+        const snapshot = (): AgentSessionRuntimeEvent => ({
+            kind: 'runtime-activity-snapshot', sessionId: 'session-activity',
+            emittedAtMs: 1, sequence: ++sequence, state: current,
+            activeCount: current === 'active' ? 1 : 0,
+        });
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            watch(listener) {
+                listeners.add(listener);
+                listener(snapshot());
+                return { dispose: () => { listeners.delete(listener); } };
+            },
+            dispose: async () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'session-activity');
+        runtime.setOnPromptDeliveryOutcome(() => undefined);
+        current = 'active';
+        for (const listener of listeners) listener(snapshot());
+        const events: unknown[] = [];
+        const unsubscribe = runtime.subscribeRuntimeEvents(event => events.push(event));
+        try {
+            expect(events).toEqual([expect.objectContaining({
+                kind: 'runtime-activity-snapshot', state: 'active', activeCount: 1,
+            })]);
+            expect(listeners.size).toBe(1);
+        } finally {
+            unsubscribe();
+            await runtime.resetOrDisposeRuntime('runtime_recovery');
+        }
+    });
+
     it('delivers host input through the public AgentSessionRuntime contract and projects identity/events', async () => {
         const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
         const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
@@ -8875,6 +9012,68 @@ describe('native Agent session host adapter', () => {
         unsubscribe();
         await runtime.resetOrDisposeRuntime('session_closed');
         expect(disposeRuntimeScope).toHaveBeenCalledOnce();
+    });
+
+    it('times the first admitted foreground assistant text without counting reasoning or sidechains', async () => {
+        // Native events are the external Agent boundary; admission/invariants remain real.
+        const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            watch(listener) {
+                listeners.add(listener);
+                return { dispose: () => { listeners.delete(listener); } };
+            },
+            dispose: async () => undefined,
+        };
+        const fileLog = vi.spyOn(logger, 'infoFile');
+        const runtime = createNativeAgentSessionOperations(session, 'session-timing');
+        let sequence = 0;
+        const emit = (event: AgentSessionRuntimeEvent) => {
+            for (const listener of listeners) listener(event);
+        };
+        const text = (channel: 'assistant' | 'reasoning', value: string, sidechainId?: string) => emit({
+            sequence: ++sequence, sessionId: 'session-timing', emittedAtMs: sequence,
+            kind: 'message-delta', turnId: 'turn-timing', channel, text: value,
+            ...(sidechainId ? { sidechainId } : {}),
+        });
+        try {
+            await runtime.sendTurnPrompt('private prompt', { localId: 'input-timing', turnId: 'turn-timing' });
+            emit({ sequence: ++sequence, sessionId: 'session-timing', emittedAtMs: sequence,
+                kind: 'turn-start', turnId: 'turn-timing', startedBy: 'provider' });
+            text('reasoning', 'private reasoning');
+            text('assistant', 'private sidechain', 'child-timing');
+            text('assistant', '');
+            emit({ sequence: ++sequence, sessionId: 'foreign-session', emittedAtMs: sequence,
+                kind: 'message-delta', turnId: 'turn-timing', channel: 'assistant', text: 'private foreign reply' });
+            expect(fileLog.mock.calls.filter(([name, facts]) => name === '[NativeAgentSession] Turn phase'
+                && (facts as { phase?: string }).phase === 'first_assistant_text')).toHaveLength(0);
+            text('assistant', 'private reply');
+            text('assistant', 'private continuation');
+            const firstText = fileLog.mock.calls.filter(([name, facts]) => name === '[NativeAgentSession] Turn phase'
+                && (facts as { phase?: string }).phase === 'first_assistant_text');
+            expect(firstText).toEqual([[expect.any(String), expect.objectContaining({
+                phase: 'first_assistant_text', eventKind: 'message-delta', sessionId: 'session-timing', turnId: 'turn-timing',
+                durationMs: expect.any(Number),
+            })]]);
+            expect(JSON.stringify(firstText)).not.toContain('private');
+            emit({ sequence: ++sequence, sessionId: 'session-timing', emittedAtMs: sequence,
+                kind: 'turn-complete', turnId: 'turn-timing' });
+            await runtime.sendTurnPrompt('private second prompt', { localId: 'input-second', turnId: 'turn-second' });
+            emit({ sequence: ++sequence, sessionId: 'session-timing', emittedAtMs: sequence,
+                kind: 'turn-start', turnId: 'turn-second', startedBy: 'provider' });
+            emit({ sequence: ++sequence, sessionId: 'session-timing', emittedAtMs: sequence,
+                kind: 'transcript-message-committed', turnId: 'turn-second', messageId: 'reply-second',
+                role: 'assistant', text: 'private second reply' });
+            const allFirstText = fileLog.mock.calls.filter(([name, facts]) => name === '[NativeAgentSession] Turn phase'
+                && (facts as { phase?: string }).phase === 'first_assistant_text');
+            expect(allFirstText).toHaveLength(2);
+            expect(allFirstText[1]?.[1]).toMatchObject({ turnId: 'turn-second', localId: 'input-second',
+                eventKind: 'transcript-message-committed' });
+            expect(JSON.stringify(allFirstText)).not.toContain('private');
+        } finally {
+            await runtime.resetOrDisposeRuntime('session_closed');
+            fileLog.mockRestore();
+        }
     });
 
     it('isolates throwing runtime-event subscribers so later listeners and input custody still settle', async () => {

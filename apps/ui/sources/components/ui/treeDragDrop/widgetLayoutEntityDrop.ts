@@ -7,14 +7,14 @@ import {
     type WidgetInstanceRefV1, type WidgetLayoutGroupV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1, type WidgetProjectAreaV1,
 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
+import { WIDGET_MOVE_UNCHANGED_CODE } from './entityDropNoChange';
 
-export const WidgetLayoutDropDestinationSchema = AnchoredListPositionV1Schema.extend({
+export const WidgetLayoutDropDestinationSchema = z.object({
+    ...AnchoredListPositionV1Schema.shape,
     groupId: z.string().trim().min(1).nullable().optional(),
 }).strict();
 export type WidgetLayoutDropDestination = z.infer<typeof WidgetLayoutDropDestinationSchema>;
 
-/** The carried widget is over its own place: releasing changes nothing. */
-export const WIDGET_MOVE_UNCHANGED_CODE = 'widget_position_unchanged';
 /** Its source placement is still being read: a pending state, never a refusal. */
 export const WIDGET_MOVE_PENDING_CODE = 'widget_admission_pending';
 /** Neither is an answer about the place under the pointer, so the carried card shows only what it carries. */

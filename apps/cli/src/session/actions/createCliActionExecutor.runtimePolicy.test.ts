@@ -4,18 +4,28 @@ import { accountSettingsParse, normalizeActionsSettingsV1, MACHINE_POOL_ACTION_I
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
-import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { registerHappierSessionAgentToolRpc } from '@/mcp/startHappyServer';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+// The daemon control transport is outside the Session process. Keep the real
+// inventory, scoped policy and Action executor beneath this boundary.
+vi.mock('@/daemon/controlClient', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/daemon/controlClient')>(),
+  readDaemonPluginCatalog: async () => ({ kind: 'available' as const, plugins: [], tools: [] }),
+  requestDaemonPluginActionExecution: async () => ({ matched: false }),
+}));
 
 const denied = normalizeActionsSettingsV1({ v: 1, actions: { 'session.message.send': { enabled: false } } });
 const allowed = normalizeActionsSettingsV1({ v: 1, actions: {} });
@@ -157,10 +167,16 @@ describe('runtime Actions policy binding', () => {
 
     const result = await harness.executor[method]('action.spec.get', { id: 'session.message.send' }, {
       surface: 'agent', authority: 'account_automation', defaultSessionId: 'session-a',
+      serverId: 'runtime-policy-home', serverIdentityId: 'runtime-policy-home-identity',
+      actionRequestId: `runtime-policy-${method}`,
+      defaultSessionMachineId: 'runtime-policy-machine',
     });
-    expect(result).toMatchObject(method === 'prepare'
-      ? { kind: 'settled', result: { ok: false, errorCode: 'action_disabled' } }
-      : { ok: false, errorCode: 'action_disabled' });
+    if (method === 'prepare') {
+      expect(result).toMatchObject({ kind: 'ready' });
+      expect(storedRequest).toMatchObject({ status: 'approved' });
+    }
+    const execution = 'kind' in result && result.kind === 'ready' ? await result.invocation.run() : result;
+    expect(execution).toMatchObject({ ok: false, errorCode: 'action_disabled' });
     expect(storedRequest).toMatchObject({
       status: 'failed', execution: { ok: false, errorCode: 'action_disabled' },
     });
@@ -201,27 +217,31 @@ describe('runtime Actions policy binding', () => {
     });
     const aliceScopeKey = resolveAccountSettingsScopeKeyForToken('runtime-alice');
     publishToolPolicy(aliceScopeKey, false);
-    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'session-alice', encryptionMode: 'plain' });
     const aliceSettings = getActiveAccountSettingsSnapshot()!.settings;
     const serverBinding = Object.freeze({
       serverId: configuration.activeServerId,
       serverUrl: resolveServerHttpBaseUrl(),
     });
-    registerHappierSessionAgentToolRpc({
-      sessionId: 'session-alice', rpcHandlerManager, updateMetadata: () => {},
-      getServerBinding: () => serverBinding,
+    const session = Object.assign(createMutableApiSessionClientFixture({
+      sessionId: 'session-alice', serverBinding,
+      metadata: createTestMetadata({ machineId: 'runtime-policy-machine' }),
+    }), {
+      getCurrentSessionLocation: () => ({ machineId: 'runtime-policy-machine', path: '/tmp/runtime-policy' }),
       getPermissionMode: () => 'default',
+      getWorkDepth: () => 0,
       getActiveTurnPermissionWitness: () => ({
         turnId: 'alice-turn',
-        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+        workDepth: 0,
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' as const },
       }),
-    }, {
+    });
+    registerHappierSessionAgentToolRpc(session, {
       credentials: { token: 'runtime-alice', encryption: null },
       accountSettings: aliceSettings,
       // This is the callback supplied by runHostSessionRuntime, not a pinned fixture callback.
       getAccountSettings: () => getActiveAccountSettingsSnapshot()?.settings ?? aliceSettings,
     });
-    const invoke = () => rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, {
+    const invoke = () => session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, {
       toolName: 'action_spec_get', args: { id: 'session.list' },
     });
     await expect(invoke()).resolves.toMatchObject({ ok: false, errorCode: 'action_disabled' });

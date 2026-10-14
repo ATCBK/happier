@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
 import { ProviderErrorV1Schema } from '../../providers/errors.js';
 import { TerminalHostUnavailableSpawnErrorDetailSchema } from '../spawnSession.js';
@@ -24,51 +24,50 @@ import {
  * Creation-time Account organization intent. Existing Session organization
  * edits are a separate domain and must not be inferred from this snapshot.
  */
-export const SessionOrganizationPlacementV1Schema = lazyZodSchema(() => z.object({
-  folderId: SessionCreationOpaqueIdV1Schema.nullable(),
-  tagIds: z.array(SessionCreationOpaqueIdV1Schema)
-    .max(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION),
-}).strict().superRefine((value, context) => {
+export const SessionOrganizationPlacementV1Schema = lazyZodSchema(() => z.strictObject({
+  folderId: z.nullable(SessionCreationOpaqueIdV1Schema),
+  tagIds: z.array(SessionCreationOpaqueIdV1Schema).check(z.maxLength(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION)),
+}).check(z.superRefine((value, context) => {
   const seen = new Set<string>();
   for (const [index, tagId] of value.tagIds.entries()) {
     if (seen.has(tagId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['tagIds', index],
         message: 'Organization placement tag ids must be unique.',
       });
     }
     seen.add(tagId);
   }
-}));
+})));
 export type SessionOrganizationPlacementV1 = z.infer<typeof SessionOrganizationPlacementV1Schema>;
 
 export const SessionSpawnNewInitialInputDispositionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('notRequested') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('notRequested') }),
+  z.strictObject({
     status: z.literal('accepted'),
     localId: PendingLocalIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('alreadyAccepted'),
     localId: PendingLocalIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('rejected'),
     code: SessionInputAdmissionRejectionCodeV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('outcomeUnknown'),
     localId: PendingLocalIdSchema,
-    code: z.string().trim().min(1).max(128),
-  }).strict(),
+    code: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  }),
 ]));
 export type SessionSpawnNewInitialInputDispositionV1 = z.infer<
   typeof SessionSpawnNewInitialInputDispositionV1Schema
 >;
 
 /** A cross-machine fork starts empty rather than implying its source files travelled. */
-export const SessionForkFilesNotCopiedV1Schema = lazyZodSchema(() => z.object({ reason: z.literal('cross_machine') }).strict());
+export const SessionForkFilesNotCopiedV1Schema = lazyZodSchema(() => z.strictObject({ reason: z.literal('cross_machine') }));
 export type SessionForkFilesNotCopiedV1 = z.infer<typeof SessionForkFilesNotCopiedV1Schema>;
 
 const SessionSpawnNewErrorCodeV1Schema = lazyZodSchema(() => z.union([
@@ -100,7 +99,7 @@ export type SessionSpawnNewErrorCodeV1 = z.infer<typeof SessionSpawnNewErrorCode
  * separate from creation and remains explicit inside the committed result.
  */
 export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     type: z.literal('success'),
     disposition: z.enum(['created', 'rejoined']),
     sessionId: asProtocolZod(SessionIdSchema),
@@ -108,36 +107,36 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     organizationPlacement: SessionOrganizationPlacementV1Schema,
     initialInput: SessionSpawnNewInitialInputDispositionV1Schema,
     /** Persisted birth facts, including when a creation key rejoins an existing Session. */
-    attestedContext: SessionAttestedContextV1Schema.optional(),
-    filesNotCopied: SessionForkFilesNotCopiedV1Schema.optional(),
-    sourceKeyPreparation: SessionFollowSourceKeyPreparationResultV1Schema.optional(),
-  }).strict(),
-  z.object({
+    attestedContext: z.optional(SessionAttestedContextV1Schema),
+    filesNotCopied: z.optional(SessionForkFilesNotCopiedV1Schema),
+    sourceKeyPreparation: z.optional(SessionFollowSourceKeyPreparationResultV1Schema),
+  }),
+  z.strictObject({
     type: z.literal('pending'),
     retryWithSameCreationKey: z.literal(true),
     outcome: z.enum(['accepted', 'unknown']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     type: z.literal('error'),
     code: SessionSpawnNewErrorCodeV1Schema,
     retryable: z.boolean(),
-    agentId: z.string().refine((value) => value.trim().length > 0).optional(),
-    providerError: ProviderErrorV1Schema.optional(),
-    terminalHostError: TerminalHostUnavailableSpawnErrorDetailSchema.optional(),
-    launchError: SessionSpawnLaunchErrorV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    agentId: z.optional(z.string().check(z.refine((value) => value.trim().length > 0))),
+    providerError: z.optional(ProviderErrorV1Schema),
+    terminalHostError: z.optional(TerminalHostUnavailableSpawnErrorDetailSchema),
+    launchError: z.optional(SessionSpawnLaunchErrorV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.launchError && value.code !== 'spawn_failed') {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['launchError'], message: 'Launch causes accompany spawn failures only.' });
+      context.addIssue({ code: "custom", path: ['launchError'], message: 'Launch causes accompany spawn failures only.' });
     }
     if (value.terminalHostError && (value.code !== 'incompatible_target' || value.retryable)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['terminalHostError'], message: 'Terminal host setup failures require a non-retryable incompatible target.' });
+      context.addIssue({ code: "custom", path: ['terminalHostError'], message: 'Terminal host setup failures require a non-retryable incompatible target.' });
     }
     const agentPrecondition = value.code === 'agent_cli_missing' || value.code === 'agent_signed_out';
     if (agentPrecondition !== (value.agentId !== undefined)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['agentId'], message: 'Agent identity is required only for an Agent precondition failure.' });
+      context.addIssue({ code: "custom", path: ['agentId'], message: 'Agent identity is required only for an Agent precondition failure.' });
     }
     if (agentPrecondition && value.retryable) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['retryable'], message: 'Agent preconditions require setup before retrying.' });
+      context.addIssue({ code: "custom", path: ['retryable'], message: 'Agent preconditions require setup before retrying.' });
     }
     const localInitialAccessRetryability = {
       session_access_request_failed: true,
@@ -153,24 +152,24 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
       && value.retryable !== expectedInitialAccessRetryability
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['retryable'],
         message: 'Retryability must match the initial-access failure.',
       });
     }
     if (!value.providerError) return;
     if (value.code !== 'spawn_failed') {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['code'], message: 'Provider recovery requires a spawn failure.' });
+      context.addIssue({ code: "custom", path: ['code'], message: 'Provider recovery requires a spawn failure.' });
     }
     if (value.retryable !== value.providerError.retryable) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['retryable'], message: 'Retryability must match the Provider failure.' });
+      context.addIssue({ code: "custom", path: ['retryable'], message: 'Retryability must match the Provider failure.' });
     }
-  }),
-  z.object({
+  })),
+  z.strictObject({
     type: z.literal('error'),
     code: z.literal('update_required'),
     retryable: z.literal(false),
     details: OperationUpdateRequiredV1Schema,
-  }).strict(),
+  }),
 ]));
 export type SessionSpawnNewResultV1 = z.infer<typeof SessionSpawnNewResultV1Schema>;

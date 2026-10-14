@@ -15,8 +15,17 @@ afterEach(() => {
 });
 
 describe('daemon control HTTP authentication', () => {
-  it('waits for catalog preparation beyond the generic control timeout while preserving caller cancellation', async () => {
+  it.each([
+    '/plugins/catalog/read',
+    '/connected-service-run/applied-parent-selection',
+    '/connected-service-run/generation-current',
+  ])('waits for %s beyond the generic control timeout while preserving caller cancellation', async (path) => {
     envScope.patch({ HAPPIER_DAEMON_HTTP_TIMEOUT: '100' });
+    const expected = path === '/plugins/catalog/read'
+      ? { kind: 'available', plugins: [], tools: [] }
+      : path === '/connected-service-run/generation-current'
+        ? { ok: true, current: true }
+        : { status: 'unavailable' };
     let releaseResponse!: () => void;
     let requestStarted!: () => void;
     let started = new Promise<void>((resolve) => { requestStarted = resolve; });
@@ -24,7 +33,7 @@ describe('daemon control HTTP authentication', () => {
       request.resume();
       releaseResponse = () => {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ kind: 'available', plugins: [], tools: [] }));
+        response.end(JSON.stringify(expected));
       };
       requestStarted();
     });
@@ -34,23 +43,23 @@ describe('daemon control HTTP authentication', () => {
     if (!address || typeof address === 'string') throw new Error('Missing server address');
     const target = { pid: process.pid, httpPort: address.port, controlToken: 'control-token' };
     try {
-      const catalog = daemonPost('/plugins/catalog/read', {}, { target });
+      const catalog = daemonPost(path, {}, { target });
       await started;
-      // Cross the actual generic-control boundary; the catalog owner must
+      // Cross the actual generic-control boundary; the operation owner must
       // continue waiting for this same request rather than retrying it.
       await new Promise<void>((resolve) => setTimeout(resolve, 150));
       releaseResponse();
-      await expect(catalog).resolves.toEqual({ kind: 'available', plugins: [], tools: [] });
+      await expect(catalog).resolves.toEqual(expected);
 
       started = new Promise<void>((resolve) => { requestStarted = resolve; });
       const cancellation = new AbortController();
-      const cancelledCatalog = daemonPost('/plugins/catalog/read', {}, { target, signal: cancellation.signal });
+      const cancelledCatalog = daemonPost(path, {}, { target, signal: cancellation.signal });
       await started;
       cancellation.abort();
       await expect(cancelledCatalog).resolves.toMatchObject({ errorCode: 'cancelled' });
 
       started = new Promise<void>((resolve) => { requestStarted = resolve; });
-      const boundedCatalog = daemonPost('/plugins/catalog/read', {}, { target, timeoutMs: 100 });
+      const boundedCatalog = daemonPost(path, {}, { target, timeoutMs: 100 });
       await started;
       await expect(boundedCatalog).resolves.toMatchObject({ errorCode: 'timeout' });
     } finally {

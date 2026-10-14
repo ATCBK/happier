@@ -15,6 +15,7 @@ import {
 } from '../../actions/actionsCatalogProtocol.js';
 import { mintTriageOpaqueIdV1 } from '../../opaqueId.js';
 import {
+  appendMissingTriageDefaultActionsV1,
   type TriageActionMutableTargetV1,
   type TriageActionV1,
   type TriageActionsReadV1,
@@ -127,9 +128,9 @@ export async function administerTriageActionFromSurface(
  *
  * `absent` is carried through rather than flattened into `parsed`, because the
  * two mean different things to the editor: an absent catalog is showing the
- * shipped seed and the first write stores it, while a parsed one is the
- * person's own set. `unavailable` becomes `unreadable` and carries the seed's
- * empty stand-in — the editor must say the catalog belongs to a newer writer
+ * shipped seed and the first write stores it, while a parsed one includes the
+ * person's configured rows and any missing built-ins. `unavailable` becomes
+ * `unreadable` and carries the empty stand-in — the editor must say the catalog belongs to a newer writer
  * rather than offering to replace it.
  */
 export function readTriageActionsProjectionV1(
@@ -141,37 +142,9 @@ export function readTriageActionsProjectionV1(
   if (projection.availability === 'unavailable') {
     return { kind: 'unreadable', value: { v: 1, actions: [] } };
   }
-  const actions: TriageActionV1[] = projection.actions.map((action) => ({
-    actionId: action.actionId,
-    label: action.label,
-    enabled: action.enabled,
-    appliesTo: action.appliesTo,
-    profileId: action.profileId,
-    workspaceMode: action.workspaceMode,
-    target: action.target.kind === 'reviewStart'
-      ? {
-        kind: 'reviewStart',
-        promptInvocationId: action.target.promptInvocationId,
-        ...(action.target.promptArgsText === undefined
-          ? {}
-          : { promptArgsText: action.target.promptArgsText }),
-        ...(action.target.seededFallbackInstruction === undefined
-          ? {}
-          : { seededFallbackInstruction: action.target.seededFallbackInstruction }),
-      }
-      : {
-        kind: 'agent',
-        promptInvocationId: action.target.promptInvocationId,
-        ...(action.target.promptArgsText === undefined
-          ? {}
-          : { promptArgsText: action.target.promptArgsText }),
-        ...(action.target.seededFallbackInstruction === undefined
-          ? {}
-          : { seededFallbackInstruction: action.target.seededFallbackInstruction }),
-        delivery: action.target.delivery,
-      },
-  }));
-  return { kind: projection.availability, value: { v: 1, actions } };
+  return { kind: projection.availability, value: { v: 1,
+    actions: appendMissingTriageDefaultActionsV1(projection.actions),
+  } };
 }
 
 /** Everything an action is, minus the identity the writer owns. */
@@ -292,8 +265,8 @@ export function triageMovedActionOrderV1(
  * What the editor and entry controls hold before Account KV has answered.
  *
  * The shipped seed is an executable catalog only after an authoritative read
- * answers `absent`. Until then this empty unreadable projection makes no claim
- * about the Account and, critically, exposes nothing that can be pressed.
+ * answers with a readable catalog. Until then this empty unreadable projection
+ * makes no claim about the Account and exposes nothing that can be pressed.
  */
 export const TRIAGE_UNREAD_ACTIONS_V1: TriageActionsReadV1 = Object.freeze({
   kind: 'unreadable',

@@ -1,8 +1,4 @@
-import {
-    PluginWebhookEndpointConvergeTargetResultV1Schema,
-    type PluginWebhookEndpointConvergeTargetInputV1,
-    type PluginWebhookEndpointConvergeTargetResultV1,
-} from "@happier-dev/protocol";
+import { PluginWebhookEndpointConvergeTargetResultV1Schema, type PluginWebhookEndpointConvergeTargetInputV1, type PluginWebhookEndpointConvergeTargetResultV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 
 import type { Tx } from "@/storage/inTx";
 

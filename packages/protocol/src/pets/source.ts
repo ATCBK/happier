@@ -1,45 +1,35 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PetPackageSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z
-    .object({
+  z.looseObject({
       kind: z.literal('builtIn'),
-      petId: z.string().min(1).max(200),
-    })
-    .passthrough(),
-  z
-    .object({
+      petId: z.string().check(z.minLength(1), z.maxLength(200)),
+    }),
+  z.looseObject({
       kind: z.literal('detectedCodexHome'),
       homeKind: z.enum(['user', 'connectedService']),
-      homePath: z.string().min(1).max(10_000),
-      packagePath: z.string().min(1).max(10_000),
-      sourceKey: z.string().min(1).max(500),
-    })
-    .passthrough(),
-  z
-    .object({
+      homePath: z.string().check(z.minLength(1), z.maxLength(10_000)),
+      packagePath: z.string().check(z.minLength(1), z.maxLength(10_000)),
+      sourceKey: z.string().check(z.minLength(1), z.maxLength(500)),
+    }),
+  z.looseObject({
       kind: z.literal('happierManagedLocal'),
-      packagePath: z.string().min(1).max(10_000),
-      sourceKey: z.string().min(1).max(500),
-    })
-    .passthrough(),
-  z
-    .object({
+      packagePath: z.string().check(z.minLength(1), z.maxLength(10_000)),
+      sourceKey: z.string().check(z.minLength(1), z.maxLength(500)),
+    }),
+  z.looseObject({
       kind: z.literal('accountPet'),
-      accountPetId: z.string().min(1).max(500),
-      sourceKey: z.string().min(1).max(500),
-    })
-    .passthrough(),
+      accountPetId: z.string().check(z.minLength(1), z.maxLength(500)),
+      sourceKey: z.string().check(z.minLength(1), z.maxLength(500)),
+    }),
 ]));
 
 export type PetPackageSourceV1 = z.infer<typeof PetPackageSourceV1Schema>;
 
-export const PetPackageSelectionV1Schema = lazyZodSchema(() => z
-  .object({
+export const PetPackageSelectionV1Schema = lazyZodSchema(() => z.looseObject({
     source: PetPackageSourceV1Schema,
-    selectedAtMs: z.number().int().min(0),
-  })
-  .passthrough());
+    selectedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }));
 
 export type PetPackageSelectionV1 = z.infer<typeof PetPackageSelectionV1Schema>;

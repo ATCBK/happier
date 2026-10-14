@@ -6,11 +6,9 @@ import {
     type RunnerActivationCreateRequestV1,
 } from '@happier-dev/protocol/ephemeralRunner/activation';
 import { RunnerActivationProjectionV1Schema, type RunnerActivationProjectionV1 } from '@happier-dev/protocol/ephemeralRunner/projection';
-import {
-    AuthTokenAuthenticationEvidenceSnapshotV1Schema,
-    isStoredJsonContentEnvelopeModeCompatible,
-    pluginJsonValuesEqual,
-} from '@happier-dev/protocol';
+import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '@happier-dev/protocol/auth/authToken';
+import { isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { verifyRunnerEndpointFactsV1 } from '@happier-dev/protocol/ephemeralRunner/endpoint';
 import { readSessionDraftInTx } from '@/app/account/sessionDrafts/sessionDraftService';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';

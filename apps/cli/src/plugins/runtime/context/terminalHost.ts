@@ -130,12 +130,14 @@ export type CreateDefaultPluginTerminalHostServiceParams = Readonly<{
     arch?: NodeJS.Architecture;
 }>;
 
+type TerminalHostExit = Parameters<Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[1]>[0];
+
 type ActiveTerminalHost = Readonly<{
     adapter: TerminalHostAdapter;
     handle: TerminalHostHandle;
     lifecycle: 'owned' | 'borrowed';
     currentHostProcess?: BorrowedTerminalProcess;
-    currentHostState?: { exited: boolean };
+    currentHostState?: { exited: boolean; result?: TerminalHostExit; listeners: Set<(exit: TerminalHostExit) => void> };
     launch?: TerminalLaunchSpec;
     physicalDisposition?: Promise<void>;
     rollbackCreation?(): Promise<void>;
@@ -337,7 +339,8 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
             isolatedEnv: request.isolatedEnv,
             ...(request.preparedLaunch ? { preparedLaunch: request.preparedLaunch } : {}),
         });
-        const currentHostState = currentHostProcess ? { exited: false } : undefined;
+        const currentHostState: ActiveTerminalHost['currentHostState'] = currentHostProcess
+            ? { exited: false, listeners: new Set() } : undefined;
         const active = {
             adapter: resolution.adapter, handle: createdHandle, lifecycle,
             ...(currentHostProcess ? { currentHostProcess, currentHostState } : {}),
@@ -365,10 +368,16 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
             throw error;
         }
         if (currentHostProcess && currentHostState) {
-            void currentHostProcess.whenExited.then(
-                () => { currentHostState.exited = true; },
-                () => { currentHostState.exited = true; },
-            );
+            const notifyExit = (result: TerminalHostExit) => {
+                currentHostState.exited = true;
+                currentHostState.result = result;
+                for (const listener of currentHostState.listeners) {
+                    try { listener(result); }
+                    catch { logger.infoFile('[terminal-host] Exit observer failed (terminal_exit_observer_failed)'); }
+                }
+                currentHostState.listeners.clear();
+            };
+            void currentHostProcess.whenExited.then(notifyExit, () => notifyExit({ code: null, signal: null }));
         }
         activeHosts.delete(createdHandle);
         const { rollbackCreation: _rollback, ...bound } = active;
@@ -439,6 +448,26 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
                 return { paneAlive: false, paneDead: true, observedAt: Date.now() };
             }
             return active.adapter.evaluateLiveness(active.handle);
+        },
+        async subscribeExit(
+            handle: Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[0],
+            listener: (exit: TerminalHostExit) => void,
+        ) {
+            const active = resolveActiveHost(activeHosts, handle);
+            const state = active.currentHostState;
+            if (!state) return null;
+            let disposed = false;
+            const notify = (result: TerminalHostExit) => {
+                if (!disposed && activeHosts.get(handle)?.currentHostState === state) listener(result);
+            };
+            if (state.result) {
+                const result = state.result;
+                queueMicrotask(() => {
+                    try { notify(result); }
+                    catch { logger.infoFile('[terminal-host] Exit observer failed (terminal_exit_observer_failed)'); }
+                });
+            } else state.listeners.add(notify);
+            return { dispose() { disposed = true; state.listeners.delete(notify); } };
         },
         async captureInputState(handle: Parameters<AgentTerminalHostService['captureInputState']>[0]) {
             const active = resolveActiveHost(activeHosts, handle);

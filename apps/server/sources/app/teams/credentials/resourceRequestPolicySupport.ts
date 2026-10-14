@@ -1,16 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-    TeamCredentialBrokerPlacementV1Schema,
-    TeamCredentialRequestPolicySupportOutputV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialBrokerPlacementV1,
-    type TeamCredentialRequestPolicyModelSupportV1,
-    type TeamCredentialRequestPolicyV1,
-    type TeamCredentialRequestPolicySupportOutputV1,
-    type TeamCredentialSourceBindingV1,
-} from "@happier-dev/protocol/teams";
-import { RPC_METHODS } from "@happier-dev/protocol";
-import { DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema } from "@happier-dev/protocol/rpc";
+import { TeamCredentialBrokerPlacementV1Schema, TeamCredentialRequestPolicySupportOutputV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialRequestPolicyModelSupportV1, type TeamCredentialRequestPolicyV1, type TeamCredentialRequestPolicySupportOutputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 
 import type { Tx } from "@/storage/inTx";
 import type { Fastify } from "@/app/api/types";

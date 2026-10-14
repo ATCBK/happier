@@ -16,23 +16,23 @@ import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEdito
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     explanation: {
-        ...Typography.default('regular'),
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
     },
     issueList: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     issue: {
-        gap: theme.margins.xs,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s8,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border.default,
     },
     issueMessage: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     issuePath: {
@@ -43,21 +43,21 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         justifyContent: 'flex-end',
         flexWrap: 'wrap',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     action: {
         minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
         borderWidth: 1,
         borderColor: 'transparent',
         justifyContent: 'center',
-        paddingHorizontal: theme.margins.sm,
+        paddingHorizontal: theme.space.s8,
     },
     secondaryActionText: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     primaryActionText: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

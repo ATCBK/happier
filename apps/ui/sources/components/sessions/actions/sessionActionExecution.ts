@@ -17,7 +17,7 @@ import { router } from 'expo-router';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { VoiceConversationActionOutputSchemas } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 import {
     sessionSetManualReadStateWithServerScope,
@@ -86,8 +86,8 @@ export async function executeSessionLifecycleAction(
             ...(details === undefined ? {} : { details }) };
     }
     const result = outcome.result;
-    const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result);
-    if (approval.success) return { success: false, code: approval.data.kind, message: approval.data.kind, details: approval.data };
+    const lifecycle = classifyHomeActionOutcome(outcome);
+    if (lifecycle.kind === 'approval_pending') return { success: false, code: 'approval_request_created', message: 'approval_request_created', details: result };
     // The title Action acknowledges a metadata write; lifecycle transports retain
     // their success/recovery envelope for the incumbent stop/archive flow.
     if (actionId === 'session.title.set') return { success: true };
@@ -225,7 +225,14 @@ async function runStopArchiveFlow(params: Readonly<{
         hideInactiveSessions: params.context?.hideInactiveSessions === true,
         isPinned: params.target.isPinned,
         archiveAfterStop: params.archiveAfterStop,
-        stopSession: async () => await stopSession(params.address.sessionId, { serverId: params.address.serverId }),
+        stopSession: async () => {
+            const result = await stopSession(params.address.sessionId, { serverId: params.address.serverId });
+            if (result.success && params.archiveAfterStop === 'never') {
+                publishPresentationNotice({ key: `session-stop:${params.address.serverId}:${params.address.sessionId}`,
+                    severity: 'info', message: t('sessionInfo.sessionStopped') });
+            }
+            return result;
+        },
         archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId }),
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),

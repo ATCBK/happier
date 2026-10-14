@@ -65,6 +65,9 @@ import { prepareCgroupProcessLaunchScope } from '@/daemon/platform/linux/buildCg
 import { configuration } from '@/configuration';
 import { formatProcessOwnerTag, type ProcessOwnerRef } from '@/processes/ownerTag';
 import { classifySpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
+import { logger } from '@/ui/logger';
+import { isWorkspacePathWithin } from '@/daemon/local/services/inventory/provenance';
+import type { LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 export type ManagedServiceProcessCredential =
     | Readonly<{
@@ -120,6 +123,8 @@ export type ProjectBuiltinNativeLifecycle = Readonly<{
     stop(options?: Readonly<{ signal?: AbortSignal }>): ReturnType<ManagedServiceNativeLifecycleV1['stop']>;
     logs?(options?: Readonly<{ signal?: AbortSignal }>): Promise<string>;
     prepareStart?(options?: Readonly<{ signal?: AbortSignal }>): Promise<void>;
+    /** Builtin native codecs retain uncertainty once their starter can create resources. */
+    markStarted?(): void;
     redactedValues?: readonly string[];
 }>;
 
@@ -257,6 +262,7 @@ Readonly<{
     ): Promise<ResolvedPluginExecutable>;
 }> | Readonly<{
     kind: 'project';
+    projectRoot?: string;
     occurrenceId?: never;
     sourceCustody?: never;
     pluginId?: never;
@@ -1024,6 +1030,14 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
 
         let process: PluginProcessHandle | null = null;
         let retainedLaunchRelease: HostAuthorizedPluginExecLaunch['release'] | null = null;
+        let launchRedactedValues: readonly string[] = Object.values(spec.launch?.env ?? {})
+            .flatMap(value => readCredentialRedactionValues({ rawCredential: value }));
+        const retainLaunchDiagnostics = (launch: HostAuthorizedPluginExecLaunch): void => {
+            // Project secrets may use arbitrary environment names. Treat values
+            // as private rather than inferring secrecy from a variable's name.
+            launchRedactedValues = Object.values(launch.env)
+                .flatMap(value => readCredentialRedactionValues({ rawCredential: value }));
+        };
         const retainLaunch = (release: HostAuthorizedPluginExecLaunch['release']): void => {
             retainedLaunchRelease = release;
         };
@@ -1139,7 +1153,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             });
             void processTerminalObservation;
         };
-        const assertProcessRunning = (): void => {
+        const assertProcessRunning = async (): Promise<void> => {
             if (!processTerminal || spec.mode.kind === 'native') return;
             if (processTerminal.kind === 'failed') {
                 return fail('plugin_managed_server_process_failed', 'Managed server process observation failed');
@@ -1152,8 +1166,77 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             throw new PluginError({ code: 'plugin_managed_server_process_exited',
                 message: `Managed server process exited (${processExitCode(processTerminal.result)})`,
                 // A launcher exit supplies no target exec errno (notably systemd-run).
-                details: { spawnFailure: classifySpawnFailure(undefined) } });
+                details: { spawnFailure: classifySpawnFailure(undefined),
+                    establishmentFailure: await establishmentFailure(processTerminal.result,
+                        spec.mode.kind === 'managedSpawn' ? spec.mode.port : undefined) } });
         };
+        async function establishmentFailure(result: PluginProcessResult | undefined, declaredPort?: number): Promise<LocalServiceEstablishmentFailureV1> {
+            const observed = result?.termination.observed;
+            const stderr = result ? Buffer.from(result.stderr).toString('utf8') : '';
+            // Retained stderr can end in a runtime footer, stack or error metadata.
+            // Keep the latest error summary, otherwise the latest substantive line.
+            let lastMeaningfulLine: string | undefined;
+            let lastErrorLine: string | undefined;
+            let pythonFrame = false;
+            for (const rawLine of stderr.split(/\r\n?|\n/u)) {
+                const line = rawLine.trim();
+                if (/^File ".+", line \d+(?:, in .+)?$/u.test(line)) {
+                    pythonFrame = true;
+                    continue;
+                }
+                // Python source excerpts and caret annotations belong to the preceding frame.
+                if (pythonFrame && /^\s+\S/u.test(rawLine)) continue;
+                pythonFrame = false;
+                if (!line
+                    || /^Node\.js v\d+\.\d+\.\d+(?:[-+]\S+)?$/u.test(line)
+                    || /^\s+at\s+/u.test(rawLine)
+                    || /^Traceback \(most recent call last\):$/u.test(line)
+                    || /^\s+from\s+.+:\d+:in\s/u.test(rawLine)
+                    || /^goroutine \d+ \[[^\]]+\]:$/u.test(line)
+                    || /^\s+.+\.go:\d+(?:\s+\+0x[\da-f]+)?$/iu.test(rawLine)
+                    || /^[\w./]+\.[\w.]+\([^)]*\)$/u.test(line)
+                    || /^exit status \d+$/u.test(line)
+                    || /^[{}\[\]];?$/u.test(line)
+                    || /^[~^]+$/u.test(line)) continue;
+                lastMeaningfulLine = line;
+                if (/\b[\w.]*Error(?:\s+\[[^\]]+\])?:|\b[\w.]*Exception:|^(?:panic|fatal error):|\([^()]+(?:Error|Exception)\)$/iu.test(line)) lastErrorLine = line;
+            }
+            const lastLine = lastErrorLine ?? lastMeaningfulLine;
+            const lastStderrLine = lastLine ? sanitizeExecDiagnosticText(lastLine, 2_048, {
+                redactedValues: [...launchRedactedValues, ...(spec.mode.kind === 'managedSpawn'
+                    ? readManagedServiceProcessCredentialRedactionValues(spec.mode.credential) : [])],
+            }) : undefined;
+            // Node uses EADDRINUSE on Linux/macOS/Windows; native Winsock also
+            // reports WSAEADDRINUSE/10048. A bound port alone is not exit causality.
+            const collision = /\b(?:EADDRINUSE|WSAEADDRINUSE)\b|address already in use|Only one usage of each socket address/iu.test(stderr);
+            const parsedPort = collision ? Number(/\bport\s*:\s*(\d+)\b/iu.exec(stderr)?.[1]
+                ?? /(?:listen|bind)[^\r\n]*:(\d+)\b/iu.exec(stderr)?.[1]) : NaN;
+            const port = Number.isSafeInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65_535
+                ? parsedPort : declaredPort;
+            let sameProject: boolean | undefined;
+            if (port !== undefined && (collision || !result)) {
+                try {
+                    const scan = await scanPlatformLocalServices();
+                    const listeners = scan.listeners.filter(listener => listener.port === port);
+                    if (scope.kind === 'project' && scope.projectRoot) {
+                        const roots = listeners.flatMap(listener => {
+                            const cwd = listener.pid === undefined ? undefined : scan.processes.get(listener.pid)?.cwd;
+                            return cwd ? [cwd] : [];
+                        });
+                        if (roots.some(root => isWorkspacePathWithin(scope.projectRoot!, root))) sameProject = true;
+                        else if (listeners.length > 0 && roots.length === listeners.length) sameProject = false;
+                    }
+                } catch {
+                    // Optional listener provenance cannot erase retained exit evidence.
+                }
+            }
+            return { cause: port !== undefined && (collision || !result) ? 'port_in_use' : 'process_exited',
+                ...(observed?.kind === 'exit' ? { exitCode: observed.exitCode } : {}),
+                ...(observed?.kind === 'signal' ? { signal: observed.signal } : {}),
+                ...(lastStderrLine ? { lastStderrLine } : {}),
+                ...(port !== undefined && (collision || !result) ? { port } : {}),
+                ...(sameProject === undefined ? {} : { sameProject }) };
+        }
         const rejectUnstartedProjectProcess = async (code: string): Promise<void> => {
             if (scope.kind !== 'project' || !process || readSupervisedPluginProcessIdForHost(process) !== null) return;
             // Node reports an OS spawn failure asynchronously without assigning a PID.
@@ -1442,7 +1525,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             if (spec.mode.kind !== 'managedSpawn' || !spec.mode.endpointDetection) return false;
             const scan = await waitWithAbort(scanPlatformLocalServices(), signal);
             assertNotAborted(signal);
-            assertProcessRunning();
+            await assertProcessRunning();
             assertGenerationUsable();
             const inventorySnapshot = normalizeLocalServiceScan({
                 machineId: 'managed-service-endpoint-detection', now: now(), previous: null,
@@ -1778,6 +1861,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             assertGenerationUsable();
             if (scope.kind === 'project' && spec.authorizeLaunch) {
                 const launch = await spec.authorizeLaunch({ endpoint: null, signal: entry.lifecycle.signal });
+                retainLaunchDiagnostics(launch);
                 try {
                     assertGenerationUsable();
                     assertNotAborted(entry.lifecycle.signal);
@@ -1804,6 +1888,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         readSpawnFailureLimits: params.readSpawnFailureLimits,
                         signal: entry.lifecycle.signal, retainLaunch, linuxProcessLaunchScope,
                     }).handle;
+                    if (readSupervisedPluginProcessIdForHost(process) !== null) spec.mode.builtinLifecycle?.markStarted?.();
                 }
             } else if (scope.exec && spec.launch) {
                 const ownerInstall = installManagedProcessCustodyForHost(scope.exec, spec.launch, null, undefined, processOwner);
@@ -1815,6 +1900,9 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             observeSpawnedProcessTerminal();
             await rejectUnstartedProjectProcess('native_service_start_failed');
             if (spec.mode.builtinLifecycle && process) {
+                // A PID-less OS spawn failure was rejected above and never
+                // acquired native custody. Retain uncertainty for actual starters.
+                spec.mode.builtinLifecycle.markStarted?.();
                 // Detached up is a finite starter. Its exit does not decide resource death;
                 // join it before the first post-launch native observation instead.
                 const result = await waitWithAbort(process.wait(), entry.lifecycle.signal);
@@ -1825,7 +1913,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                             details: result.termination.observed.diagnostic.details });
                     }
                     throw new PluginError({ code: 'native_service_start_failed', message: 'Native starter failed',
-                        details: { spawnFailure: classifySpawnFailure(undefined) } });
+                        details: { spawnFailure: classifySpawnFailure(undefined), establishmentFailure: await establishmentFailure(result) } });
                 }
                 await process.dispose();
                 processContainmentTerminated = true;
@@ -1918,10 +2006,11 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         || spec.mode.onPortCollision !== 'fallback'
                         || !collision
                     ) {
-                        return fail(
-                            'plugin_managed_server_port_unavailable',
-                            'The selected managed server port is unavailable',
-                        );
+                        throw new PluginError({ code: 'plugin_managed_server_port_unavailable',
+                            message: 'The selected managed server port is unavailable',
+                            ...(collision && preferredPort !== undefined ? { details: {
+                                establishmentFailure: await establishmentFailure(undefined, preferredPort),
+                            } } : {}) });
                     }
                     portReservation = await reservePort(
                         host,
@@ -2031,6 +2120,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         return fail('plugin_managed_service_unavailable', 'Project launch admission is unavailable');
                     }
                     const authorized = await spec.authorizeLaunch({ endpoint, signal: entry.lifecycle.signal });
+                    retainLaunchDiagnostics(authorized);
                     try {
                         assertGenerationUsable();
                         assertNotAborted(entry.lifecycle.signal);
@@ -2106,6 +2196,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             await rejectUnstartedProjectProcess('plugin_managed_server_process_exited');
             let custodyFacts: SupervisedPluginProcessCustody | null = null;
             if (managedProcessCustody) {
+                const custodyWaitStartedAt = performance.now();
                 // The helper writes the handshake only after the target was
                 // assigned to the occurrenceId-unique job and resumed, so these
                 // facts are the custody-established fact. Without them the
@@ -2121,6 +2212,12 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         'Managed server job custody could not be established',
                     );
                 }
+                logger.infoFile('[PluginExec] Launch preparation phase', {
+                    phase: 'target_resume_acknowledged',
+                    launcherPid: readSupervisedPluginProcessIdForHost(process),
+                    targetPid: custodyFacts.targetPid,
+                    durationMs: Math.round(performance.now() - custodyWaitStartedAt),
+                });
             }
             const processId = custodyFacts
                 ? custodyFacts.targetPid
@@ -2145,14 +2242,14 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 try {
                     for (;;) {
                         assertNotAborted(entry.lifecycle.signal);
-                        assertProcessRunning();
+                        await assertProcessRunning();
                         assertGenerationUsable();
                         if (await observeOwnedTreeEndpoint(managedPid, signal)) break;
                         await delay(25, signal);
                     }
                 } catch (error) {
                     assertNotAborted(entry.lifecycle.signal);
-                    assertProcessRunning();
+                    await assertProcessRunning();
                     if (!deadlineController.signal.aborted) throw error;
                 } finally {
                     disarmDeadline?.();
@@ -2284,17 +2381,17 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     ...(options?.signal ? [options.signal] : []),
                     entry.lifecycle.signal, lifecycleProbeController.signal, deadlineController.signal,
                 ]);
-                const assertWaitUsable = (): void => {
+                const assertWaitUsable = async (): Promise<void> => {
                     assertNotAborted(options?.signal);
                     assertGenerationUsable();
                     if (isStopping() || isStopped()) {
                         return fail('plugin_managed_server_stopped', 'Managed server handle is stopped');
                     }
-                    assertProcessRunning();
+                    await assertProcessRunning();
                 };
                 try {
                     while (deadline === undefined || now() <= deadline) {
-                        assertWaitUsable();
+                        await assertWaitUsable();
                         if (deadlineController.signal.aborted) break;
                         let healthy = false;
                         const remainingMs = deadline === undefined ? undefined : Math.max(1, deadline - now());
@@ -2306,11 +2403,11 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                                     : remainingMs,
                             ), signal);
                         } catch (error) {
-                            assertWaitUsable();
+                            await assertWaitUsable();
                             if (deadlineController.signal.aborted) break;
                             if (isPluginError(error)) throw error;
                         }
-                        assertWaitUsable();
+                        await assertWaitUsable();
                         if (deadlineController.signal.aborted) break;
                         if (healthy) {
                             setSnapshot({
@@ -2319,7 +2416,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                                 lastHealthyAtMs: now(),
                             });
                             await publishEndpointProjection();
-                            assertWaitUsable();
+                            await assertWaitUsable();
                             startWatchdog();
                             return snapshot;
                         }
@@ -2330,7 +2427,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         );
                     }
                 } catch (error) {
-                    assertWaitUsable();
+                    await assertWaitUsable();
                     if (!deadlineController.signal.aborted) throw error;
                 } finally {
                     disarmDeadline?.();

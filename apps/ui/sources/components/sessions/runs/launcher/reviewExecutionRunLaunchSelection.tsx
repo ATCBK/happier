@@ -12,6 +12,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 
 import { useReviewExecutionRunLaunchOptions } from './useReviewExecutionRunLaunchOptions';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type LaunchSelection = Extract<PluginUiSelectActionInputResultV1, { kind: 'executionRunLaunch' }>;
 export type ReviewExecutionRunLaunchSelectionRequest = Readonly<{
@@ -92,7 +93,7 @@ export function presentReviewExecutionRunLaunchSelection(request: ReviewExecutio
         onRequestClose: close,
         onHostUnmount: close,
         closeOnBackdrop: true,
-        chrome: { kind: 'card', title: t('scmComparison.startReview'), dimensions: { width: 520 }, phonePresentation: 'sheet' },
+        chrome: { kind: 'card', title: t('scmComparison.startReview'), dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide }, phonePresentation: 'sheet' },
     });
     if (!modalId) close();
     else if (hideAfterShow) Modal.hide(modalId);

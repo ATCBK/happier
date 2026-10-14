@@ -57,10 +57,9 @@ export function SourceControlOperationsHistorySection(props: SourceControlOperat
         <View>
             <Text
                 style={{
-                    fontSize: 12,
+                    ...Typography.variant('meta', 'semiBold'),
                     color: theme.colors.text.secondary,
-                    marginBottom: 6,
-                    ...Typography.default('semiBold'),
+                    marginBottom: theme.space.s6,
                 }}
             >
                 {t('files.operationsHistory.recentCommits')}

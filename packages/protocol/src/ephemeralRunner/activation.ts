@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { HomeConnectionDescriptorV1Schema } from '../auth/accountDirectory.js';
 import { isValidBoxBundlePublicKey } from '../crypto/boxPublicKeyValidation.js';
@@ -11,41 +11,35 @@ import { RunnerArtifactIdentityV1Schema } from './runnerArtifact.js';
 import { TemporaryComputerWorkspaceV1Schema } from '../sessions/authoring/temporaryComputerWorkspaceV1.js';
 
 function encodedBytes(length: number) {
-  return z.string().length(Math.ceil(length * 8 / 6)).refine(
-    (value) => decodeCanonicalBase64UrlFixedLength(value, length) !== null,
-    'Expected canonical unpadded base64url bytes',
-  );
+  return z.string().check(z.length(Math.ceil(length * 8 / 6)), z.refine((value) => decodeCanonicalBase64UrlFixedLength(value, length) !== null, 'Expected canonical unpadded base64url bytes'));
 }
 
-export const RunnerPublicKeySchema = encodedBytes(32).refine((value) => {
+export const RunnerPublicKeySchema = encodedBytes(32).check(z.refine((value) => {
   const bytes = decodeCanonicalBase64UrlFixedLength(value, 32);
   return bytes !== null && isValidEd25519PublicKey(bytes);
-}, 'Invalid Ed25519 public key');
+}, 'Invalid Ed25519 public key'));
 export const RunnerSha256CommitmentSchema = encodedBytes(32);
 export const RunnerSignatureSchema = encodedBytes(64);
-export const RunnerBoxPublicKeySchema = encodedBytes(32).refine(
-  (value) => {
+export const RunnerBoxPublicKeySchema = encodedBytes(32).check(z.refine((value) => {
     const bytes = decodeCanonicalBase64UrlFixedLength(value, 32);
     return bytes !== null && isValidBoxBundlePublicKey(bytes);
-  },
-  'Invalid X25519 public key',
-);
+  }, 'Invalid X25519 public key'));
 
 // Activation bindings carry existing persisted Account/Session/Machine ids;
 // the supported MySQL string identity columns are bounded to 191 characters.
-export const RunnerResourceIdSchema = lazyZodSchema(() => z.string().min(1).max(191).refine((value) => value.trim() === value));
+export const RunnerResourceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(191), z.refine((value) => value.trim() === value)));
 
 export const RunnerEndpointFactsRecipientV1Schema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('plain'), creatorAccountId: RunnerResourceIdSchema }).strict(),
-  z.object({
+  z.strictObject({ mode: z.literal('plain'), creatorAccountId: RunnerResourceIdSchema }),
+  z.strictObject({
     mode: z.literal('e2ee'),
     creatorAccountId: RunnerResourceIdSchema,
     accountSigningPublicKey: RunnerPublicKeySchema,
     contentPublicKey: RunnerBoxPublicKeySchema,
     contentPublicKeySignature: RunnerSignatureSchema,
     contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema,
-  }).strict(),
-]).superRefine((recipient, ctx) => {
+  }),
+]).check(z.superRefine((recipient, ctx) => {
   if (recipient.mode === 'plain') return;
   const accountSigningPublicKey = decodeCanonicalBase64UrlFixedLength(recipient.accountSigningPublicKey, 32);
   const contentPublicKey = decodeCanonicalBase64UrlFixedLength(recipient.contentPublicKey, 32);
@@ -54,22 +48,22 @@ export const RunnerEndpointFactsRecipientV1Schema = lazyZodSchema(() => z.discri
     ? verifyAccountContentKeyBindingV1({ accountSigningPublicKey, contentPublicKey, signature })
     : null;
   if (!verified || verified.contentPublicKeyFingerprint !== recipient.contentPublicKeyFingerprint) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid Account content-key binding' });
+    ctx.addIssue({ code: "custom", message: 'Invalid Account content-key binding' });
   }
-}));
+})));
 export type RunnerEndpointFactsRecipientV1 = z.infer<typeof RunnerEndpointFactsRecipientV1Schema>;
 
-const CanonicalHomeIdentitySchema = lazyZodSchema(() => z.string().refine((value) => {
+const CanonicalHomeIdentitySchema = lazyZodSchema(() => z.string().check(z.refine((value) => {
   const parsed = HomeConnectionDescriptorV1Schema.shape.homeServerIdentityId.safeParse(value);
   return parsed.success && parsed.data === value;
-}));
+})));
 
-const RunnerActivationBindingFieldsV1Schema = lazyZodSchema(() => z.object({
-  activationId: z.string().uuid(),
+const RunnerActivationBindingFieldsV1Schema = lazyZodSchema(() => z.strictObject({
+  activationId: z.string().check(z.uuid()),
   homeServerIdentityId: CanonicalHomeIdentitySchema,
   creatorAccountId: RunnerResourceIdSchema,
-  creatorTokenEpoch: z.number().int().nonnegative().safe(),
-  activationExpiresAt: z.number().int().nonnegative().safe().nullable(),
+  creatorTokenEpoch: z.number().check(z.int(), z.nonnegative(), z.int()),
+  activationExpiresAt: z.nullable(z.number().check(z.int(), z.nonnegative(), z.int())),
   workspace: TemporaryComputerWorkspaceV1Schema,
   sessionId: RunnerResourceIdSchema,
   machineId: RunnerResourceIdSchema,
@@ -77,28 +71,25 @@ const RunnerActivationBindingFieldsV1Schema = lazyZodSchema(() => z.object({
   authoringCommitment: RunnerSha256CommitmentSchema,
   artifact: RunnerArtifactIdentityV1Schema,
   endpointFactsRecipient: RunnerEndpointFactsRecipientV1Schema,
-}).strict());
+}));
 
-export const RunnerActivationBindingV1Schema = lazyZodSchema(() => RunnerActivationBindingFieldsV1Schema.refine(
-  (binding) => binding.creatorAccountId === binding.endpointFactsRecipient.creatorAccountId,
-  'Recipient must belong to the authenticated creator',
-));
+export const RunnerActivationBindingV1Schema = lazyZodSchema(() => RunnerActivationBindingFieldsV1Schema.check(z.refine((binding) => binding.creatorAccountId === binding.endpointFactsRecipient.creatorAccountId, 'Recipient must belong to the authenticated creator')));
 export type RunnerActivationBindingV1 = z.infer<typeof RunnerActivationBindingV1Schema>;
 
-export const RunnerActivationCreateRequestV1Schema = lazyZodSchema(() => z.object({
+export const RunnerActivationCreateRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   draftId: RunnerResourceIdSchema,
   /** Explicit creator consent for this exact activation to retain current Team-authentication evidence. */
-  authorizeUnattendedTeamAccess: z.literal(true).optional(),
+  authorizeUnattendedTeamAccess: z.optional(z.literal(true)),
   homeServerIdentityId: CanonicalHomeIdentitySchema,
   activationSigningPublicKey: RunnerPublicKeySchema,
-  activationExpiresAt: z.number().int().nonnegative().safe().nullable(),
+  activationExpiresAt: z.nullable(z.number().check(z.int(), z.nonnegative(), z.int())),
   workspace: TemporaryComputerWorkspaceV1Schema,
   authoringCommitment: RunnerSha256CommitmentSchema,
   artifact: RunnerArtifactIdentityV1Schema,
   endpointFactsRecipient: RunnerEndpointFactsRecipientV1Schema,
-}).strict());
+}));
 export type RunnerActivationCreateRequestV1 = z.infer<typeof RunnerActivationCreateRequestV1Schema>;
 
 export const RunnerActivationStateV1Schema = lazyZodSchema(() => z.enum(['pending', 'claimed', 'consented', 'materialized', 'closed']));

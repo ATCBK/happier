@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import {
@@ -35,16 +35,16 @@ export type { PluginUiSurfacePlacementV1 } from './surfaceContextPlacement.js';
  * the one public SDK truth rendered to an author.
  */
 export const PluginUiMountContextV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('destination'),
     destination: asProtocolZod(PluginContributionIdentityV1Schema),
     container: PluginUiDestinationContainerV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('embedded'),
-    role: z.string().trim().min(1),
+    role: z.string().check(z.trim(), z.minLength(1)),
     presentation: z.enum(['content', 'fill']),
-  }).strict(),
+  }),
 ]));
 export type PluginUiMountContextV1 =
   | Readonly<{
@@ -63,72 +63,69 @@ export type PluginUiMountContextV1 =
  * current public surface fact. The mounted transport already has JSON-safe
  * values; this is an author-facing payload grammar, not a normalizer.
  */
-const PluginUiHostApiSurfaceNonBlankStringV1Schema = lazyZodSchema(() => z.string().refine(
-  (value) => value.trim().length > 0,
-  'Expected a non-blank string.',
-));
+const PluginUiHostApiSurfaceNonBlankStringV1Schema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0, 'Expected a non-blank string.')));
 
 /** The exact mounted target disclosure carried to an author-facing UI. */
 export const PluginUiHostApiSurfaceTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('app') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('app') }),
+  z.strictObject({
     kind: z.literal('session'),
     sessionId: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-    agentId: PluginUiHostApiSurfaceNonBlankStringV1Schema.optional(),
-  }).strict(),
-  z.object({
+    agentId: z.optional(PluginUiHostApiSurfaceNonBlankStringV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('project'),
     projectId: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('browser'),
     targetId: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-    origin: PluginUiHostApiSurfaceNonBlankStringV1Schema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('services') }).strict(),
+    origin: z.optional(PluginUiHostApiSurfaceNonBlankStringV1Schema),
+  }),
+  z.strictObject({ kind: z.literal('services') }),
 ]));
 export type PluginUiHostApiSurfaceTargetV1 = z.infer<
   typeof PluginUiHostApiSurfaceTargetV1Schema
 >;
 
-const PluginUiHostApiSurfaceMetricV1Schema = lazyZodSchema(() => z.number().finite().nonnegative());
+const PluginUiHostApiSurfaceMetricV1Schema = lazyZodSchema(() => z.number().check(z.nonnegative()));
 
-const PluginUiHostApiSurfaceThemeTypographyV1Schema = lazyZodSchema(() => z.object({
-  body: z.object({
+const PluginUiHostApiSurfaceThemeTypographyV1Schema = lazyZodSchema(() => z.strictObject({
+  body: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
     fontWeight: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
+  }),
   /** Reading prose (a detail's body, a story step): a step above `body`, the dense row meta line. */
-  reading: z.object({
+  reading: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
     fontWeight: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
-  label: z.object({
+  }),
+  label: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
     fontWeight: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
-  title: z.object({
+  }),
+  title: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
     fontWeight: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
-  caption: z.object({
+  }),
+  caption: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
     fontWeight: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
-  code: z.object({
+  }),
+  code: z.strictObject({
     fontSize: PluginUiHostApiSurfaceMetricV1Schema,
     lineHeight: PluginUiHostApiSurfaceMetricV1Schema,
-    fontFamily: PluginUiHostApiSurfaceNonBlankStringV1Schema.optional(),
-  }).strict(),
-}).strict());
+    fontFamily: z.optional(PluginUiHostApiSurfaceNonBlankStringV1Schema),
+  }),
+}));
 
 /** The complete semantic theme payload, not a style-system object. */
-export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   /** Optional host presentation choices. Unknown ids use the shared renderer's defaults. */
   spinner: z.object({
@@ -138,14 +135,14 @@ export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.object(
   }).strict().optional(),
   // Presentation-only V1 addition. The map, gradient and coordinates drop unknown fields;
   // the surrounding identity/authority context remains closed.
-  surfaceFinish: z.object({
-    card: surfaceFinishGradientSchema().nullable().optional(),
-    floating: surfaceFinishGradientSchema().nullable().optional(),
-    composer: surfaceFinishGradientSchema().nullable().optional(),
-    primaryButton: surfaceFinishGradientSchema().nullable().optional(),
-    secondaryButton: surfaceFinishGradientSchema().nullable().optional(),
-  }).optional(),
-  colors: z.object({
+  surfaceFinish: z.optional(z.object({
+    card: z.optional(z.nullable(surfaceFinishGradientSchema())),
+    floating: z.optional(z.nullable(surfaceFinishGradientSchema())),
+    composer: z.optional(z.nullable(surfaceFinishGradientSchema())),
+    primaryButton: z.optional(z.nullable(surfaceFinishGradientSchema())),
+    secondaryButton: z.optional(z.nullable(surfaceFinishGradientSchema())),
+  })),
+  colors: z.strictObject({
     canvas: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     surface: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     elevatedSurface: PluginUiHostApiSurfaceNonBlankStringV1Schema,
@@ -166,41 +163,41 @@ export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.object(
     control: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     controlDisabled: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     overlay: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict(),
+  }),
   /** Text on tinted status surfaces; marker/icon colours remain in `colors`. Older snapshots omit it. */
-  statusText: z.object({
+  statusText: z.optional(z.strictObject({
     success: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     warning: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     attention: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     danger: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     info: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     neutral: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict().optional(),
-  spacing: z.object({
+  })),
+  spacing: z.strictObject({
     xsmall: PluginUiHostApiSurfaceMetricV1Schema,
     small: PluginUiHostApiSurfaceMetricV1Schema,
     medium: PluginUiHostApiSurfaceMetricV1Schema,
     large: PluginUiHostApiSurfaceMetricV1Schema,
     xlarge: PluginUiHostApiSurfaceMetricV1Schema,
-  }).strict(),
-  radii: z.object({
+  }),
+  radii: z.strictObject({
     small: PluginUiHostApiSurfaceMetricV1Schema,
     control: PluginUiHostApiSurfaceMetricV1Schema,
     panel: PluginUiHostApiSurfaceMetricV1Schema,
     pill: PluginUiHostApiSurfaceMetricV1Schema,
-  }).strict(),
+  }),
   typography: PluginUiHostApiSurfaceThemeTypographyV1Schema,
-}).strict());
+}));
 export type PluginUiHostApiSurfaceThemeV1 = z.infer<
   typeof PluginUiHostApiSurfaceThemeV1Schema
 >;
 
 function surfaceFinishGradientSchema() {
-  const point = z.object({ x: z.number().finite(), y: z.number().finite() });
+  const point = z.object({ x: z.number(), y: z.number() });
   return z.object({
-    colors: z.tuple([PluginUiHostApiSurfaceNonBlankStringV1Schema, PluginUiHostApiSurfaceNonBlankStringV1Schema]).rest(PluginUiHostApiSurfaceNonBlankStringV1Schema),
-    locations: z.tuple([z.number().finite(), z.number().finite()]).rest(z.number().finite()).optional(),
-    start: point.optional(), end: point.optional(),
+    colors: z.tuple([PluginUiHostApiSurfaceNonBlankStringV1Schema, PluginUiHostApiSurfaceNonBlankStringV1Schema], PluginUiHostApiSurfaceNonBlankStringV1Schema),
+    locations: z.optional(z.tuple([z.number(), z.number()], z.number())),
+    start: z.optional(point), end: z.optional(point),
   });
 }
 
@@ -210,52 +207,52 @@ function surfaceFinishGradientSchema() {
  * `PluginUiSurfaceContextV1Schema` below remains the separate host-private
  * request dispatch key. It is not an alternate author payload grammar.
  */
-export const PluginUiHostApiSurfaceContextV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiHostApiSurfaceContextV1Schema = lazyZodSchema(() => z.strictObject({
   mount: PluginUiMountContextV1Schema,
   target: PluginUiHostApiSurfaceTargetV1Schema,
   /** Host page chrome for app pages; absent on other surface placements. */
-  page: z.object({ columnVisible: z.boolean() }).strict().optional(),
+  page: z.optional(z.strictObject({ columnVisible: z.boolean() })),
   accountEncryptionMode: z.enum(['plain', 'e2ee']),
   platform: PluginUiPlatformV1Schema,
   locale: PluginUiHostApiSurfaceNonBlankStringV1Schema,
   direction: z.enum(['ltr', 'rtl']),
   colorScheme: z.enum(['light', 'dark']),
   contrast: z.enum(['normal', 'high']),
-  textScale: z.number().finite().positive(),
+  textScale: z.number().check(z.positive()),
   reducedMotion: z.boolean(),
   screenReaderEnabled: z.boolean(),
-  safeAreaInsets: z.object({
+  safeAreaInsets: z.strictObject({
     top: PluginUiHostApiSurfaceMetricV1Schema,
     right: PluginUiHostApiSurfaceMetricV1Schema,
     bottom: PluginUiHostApiSurfaceMetricV1Schema,
     left: PluginUiHostApiSurfaceMetricV1Schema,
-  }).strict(),
+  }),
   theme: PluginUiHostApiSurfaceThemeV1Schema,
   translations: z.record(z.string(), z.string()),
-  targetedContributions: PluginUiTargetedContributionsV1Schema.optional(),
-}).strict());
+  targetedContributions: z.optional(PluginUiTargetedContributionsV1Schema),
+}));
 export type PluginUiHostApiSurfaceContextV1 = z.infer<
   typeof PluginUiHostApiSurfaceContextV1Schema
 >;
 
 /** One current hosted render snapshot for context reads and watches. */
-export const PluginUiHostApiRenderContextSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiHostApiRenderContextSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   surface: PluginUiHostApiSurfaceContextV1Schema,
-  activity: z.object({ active: z.boolean() }).strict(),
-}).strict());
+  activity: z.strictObject({ active: z.boolean() }),
+}));
 export type PluginUiHostApiRenderContextSnapshotV1 = z.infer<
   typeof PluginUiHostApiRenderContextSnapshotV1Schema
 >;
 
-export const PluginUiSurfaceContextV1Schema = lazyZodSchema(() => z.object({
-  pluginId: z.string().trim().min(1),
-  contributionId: z.string().trim().min(1),
-  surfaceId: z.string().trim().min(1),
-  sessionId: z.string().trim().min(1).optional(),
-  placement: PluginUiSurfacePlacementV1Schema.default('unknown'),
+export const PluginUiSurfaceContextV1Schema = lazyZodSchema(() => z.strictObject({
+  pluginId: z.string().check(z.trim(), z.minLength(1)),
+  contributionId: z.string().check(z.trim(), z.minLength(1)),
+  surfaceId: z.string().check(z.trim(), z.minLength(1)),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  placement: z._default(PluginUiSurfacePlacementV1Schema, 'unknown'),
   platform: PluginUiPlatformV1Schema,
   channel: PluginUiChannelV1Schema,
-  resourceScope: z.array(PluginSessionResourceTargetV1Schema).default([]),
-  diagnostics: z.array(z.string().trim().min(1)).default([]),
-}).strict());
+  resourceScope: z._default(z.array(PluginSessionResourceTargetV1Schema), []),
+  diagnostics: z._default(z.array(z.string().check(z.trim(), z.minLength(1))), []),
+}));
 export type PluginUiSurfaceContextV1 = z.infer<typeof PluginUiSurfaceContextV1Schema>;

@@ -21,13 +21,14 @@ import { selectRenderablePluginSurfacePlacementsForBinding } from '@/sync/domain
 import type { PluginSurfaceHostActionExecute } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 
 const stylesheet = StyleSheet.create(() => ({
-    // A sibling of the Browser shell, whose own box is `flex: 1; min-height: 0`. Unbounded, a tall
-    // plugin panel takes the whole column, the shell collapses to zero height and its toolbar and
-    // diagnostics drawer overflow underneath this later-painted region, which then catches every
-    // pointer press meant for them. A bounded region shares the column and scrolls inside itself.
+    // One of the Browser shell column's flexible regions (rendered through `BrowserShell.panels`).
+    // Its basis is its share of the column, not its content: a content-sized panel is as tall as
+    // its whole document and never yields, so a short pane starved the page instead. With a share
+    // it gives way in proportion with the page and the diagnostics body, and clips inside its box.
     region: {
-        flexGrow: 1,
-        flexBasis: 0,
+        flexGrow: 0,
+        flexShrink: 1,
+        flexBasis: '40%',
         minHeight: 0,
         overflow: 'hidden',
     },

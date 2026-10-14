@@ -1,4 +1,4 @@
-import { parse as parseClassic } from 'zod';
+import { parse as parseClassic } from 'zod/mini';
 import * as z from 'zod/mini';
 import { deriveReviewCommentMutationCommitmentV1, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';

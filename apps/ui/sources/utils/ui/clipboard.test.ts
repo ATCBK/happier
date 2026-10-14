@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('getClipboardStringTrimmedSafe', () => {
     it('preserves the raw clipboard value when the host must distinguish a failed read', async () => {
@@ -67,6 +69,7 @@ describe('setClipboardStringSafe', () => {
 
     it('returns false when clipboard write throws', async () => {
         vi.resetModules();
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.doMock('expo-clipboard', () => {
             return {
                 setStringAsync: vi.fn(async () => {
@@ -77,13 +80,18 @@ describe('setClipboardStringSafe', () => {
 
         const { setClipboardStringSafe } = await import('./clipboard');
         await expect(setClipboardStringSafe('hello')).resolves.toBe(false);
+        expect(warning).toHaveBeenCalled();
+        expect(warning.mock.calls.flat()).not.toContain('hello');
     });
 
     it('returns false when the platform declines a clipboard write', async () => {
         vi.resetModules();
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.doMock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => false) }));
 
         const { setClipboardStringSafe } = await import('./clipboard');
         await expect(setClipboardStringSafe('hello')).resolves.toBe(false);
+        expect(warning).toHaveBeenCalled();
+        expect(warning.mock.calls.flat()).not.toContain('hello');
     });
 });

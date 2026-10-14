@@ -28,22 +28,63 @@ export function addUsageCost(left: UsageObservationCost, right: UsageObservation
 // This aggregation-only evidence never enters the serialized contract.
 export const usageCostAggregationBasis = Symbol('usageCostAggregationBasis');
 export type AggregatedUsageCost = UsageObservationCost & { [usageCostAggregationBasis]?: {
-    mode: UsageCostMode; available: boolean; selected?: UsageSelectedCostBasis;
+    mode: UsageCostMode; available: boolean; selected?: UsageSelectedCostBasis; covered?: boolean;
 } };
+
+/** Resolve whole-total overlap only within the actual selected population, including bucket/Work subsets. */
+export function resolveUsageContributionCosts(rows: readonly { id?: string; cost: UsageObservationCost }[], mode: UsageCostMode): UsageObservationCost[] {
+    if (mode === 'estimated') return rows.map(row => {
+        // A scoped money-only report is not another estimated-token population.
+        if (!row.cost.reportedTotalContributionIds || row.cost.estimatedUsd !== 0) return row.cost;
+        const cost: AggregatedUsageCost = { ...row.cost, [usageCostAggregationBasis]: { mode, available: true, covered: true } };
+        return cost;
+    });
+    if (mode !== 'auto' && mode !== 'reported') return rows.map(row => row.cost);
+    const ids = new Set(rows.flatMap(row => row.id ? [row.id] : []));
+    const completeTotals = new Map(rows.filter(row => row.id && row.cost.reportedTotalContributionIds
+        && row.cost.reportedTotalContributionIds.every(id => ids.has(id)))
+        .map(row => [row.id!, new Set(row.cost.reportedTotalContributionIds)]));
+    return rows.map(row => {
+        const total = row.cost.reportedTotalId && completeTotals.get(row.cost.reportedTotalId);
+        if (total && row.id && total.has(row.id)) {
+            const cost: AggregatedUsageCost = { ...row.cost, [usageCostAggregationBasis]: { mode, available: true, covered: true } };
+            return cost;
+        }
+        if (row.id && completeTotals.has(row.id)) {
+            const { reportedTotalContributionIds: _scope, ...raw } = row.cost;
+            const selected = resolveUsageCostBasis(raw, mode);
+            const cost: AggregatedUsageCost = { ...row.cost, [usageCostAggregationBasis]: { mode,
+                available: selected !== null, ...(selected ? { selected } : {}) } };
+            return cost;
+        }
+        return row.cost;
+    });
+}
+
+export function aggregateUsageContributionCosts(rows: readonly { id?: string; cost: UsageObservationCost }[], mode: UsageCostMode): AggregatedUsageCost {
+    return resolveUsageContributionCosts(rows, mode).reduce((total, cost) => addUsageCostForMode(total, cost, mode), createEmptyUsageCost());
+}
 
 export function addUsageCostForMode(left: UsageObservationCost, right: UsageObservationCost, mode: UsageCostMode): AggregatedUsageCost {
     const leftBasis = resolveUsageCostBasis(left, mode);
     const rightBasis = resolveUsageCostBasis(right, mode);
     const leftAggregate: AggregatedUsageCost = left;
-    const leftEmpty = leftAggregate[usageCostAggregationBasis]?.available !== false && left.apiEquivalentUsd === undefined && left.costSource === 'none'
+    const state = leftAggregate[usageCostAggregationBasis];
+    const leftEmpty = state ? state.available && !state.selected : left.apiEquivalentUsd === undefined && left.costSource === 'none'
         && left.reportedUsd === 0 && left.estimatedUsd === 0 && (left.invoiceUsd ?? 0) === 0;
-    const apiEquivalentUsd = leftEmpty ? right.apiEquivalentUsd
+    const noApiPopulation = left.apiEquivalentUsd === undefined && left.reportedUsd === 0 && left.estimatedUsd === 0 && (left.invoiceUsd ?? 0) === 0;
+    const apiEquivalentUsd = !state && noApiPopulation ? right.apiEquivalentUsd
         : left.apiEquivalentUsd !== undefined && right.apiEquivalentUsd !== undefined ? left.apiEquivalentUsd + right.apiEquivalentUsd : undefined;
     const combined = { ...addUsageCost(left, right), ...(apiEquivalentUsd !== undefined ? {
         apiEquivalentUsd, pricingSource: leftEmpty ? right.pricingSource
             : left.pricingSource === right.pricingSource ? left.pricingSource : 'effective_model_prices',
     } : {}) };
-    if (leftEmpty && rightBasis) return { ...combined, currency: right.currency, costSource: right.costSource,
+    if ((right as AggregatedUsageCost)[usageCostAggregationBasis]?.covered) return { ...combined,
+        ...(leftBasis ? { effectiveUsd: leftBasis.amountUsd } : {}),
+        [usageCostAggregationBasis]: { mode, available: leftEmpty || leftBasis !== null,
+            ...(leftBasis ? { selected: leftBasis } : {}) } };
+    if (leftEmpty && rightBasis) return { ...combined, currency: right.currency,
+        costSource: noApiPopulation ? right.costSource : combined.costSource,
         effectiveUsd: rightBasis.amountUsd, [usageCostAggregationBasis]: { mode, available: true, selected: rightBasis } };
     if (leftBasis && rightBasis && (mode === 'auto' || leftBasis.kind === rightBasis.kind) && leftBasis.currency === rightBasis.currency) {
         const selected: UsageSelectedCostBasis = { kind: leftBasis.kind === rightBasis.kind ? leftBasis.kind : 'mixed',

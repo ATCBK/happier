@@ -507,7 +507,7 @@ describe('SourceControlSettingsView', () => {
 
     it('only renders backend-supported default diff modes', async () => {
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
-        const git = segmentedControl(screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.git.defaultDiff'));
+        const git = segmentedControl(screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.git.defaultDiff') ?? null);
         expect(git.tabs.map((tab) => tab.id)).toContain('included');
         // When no snapshot/capabilities are available yet, Sapling conservatively only advertises "pending".
         const sapling = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.sapling.defaultDiff');

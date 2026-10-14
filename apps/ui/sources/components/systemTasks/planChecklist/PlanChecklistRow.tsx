@@ -110,23 +110,23 @@ function shouldRenderBadge(statusLabel: string | null, badge: React.ReactNode): 
 const stylesheet = StyleSheet.create((theme) => ({
     row: {
         width: '100%',
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
         backgroundColor: theme.colors.surface.base,
     },
     rowOnboarding: {
-        paddingHorizontal: 20,
+        paddingHorizontal: theme.space.s20,
         paddingVertical: 18,
         alignItems: 'flex-start',
         gap: 14,
     },
     rowCompact: {
-        paddingVertical: 10,
-        gap: 10,
+        paddingVertical: theme.space.s10,
+        gap: theme.space.s10,
     },
     rowSelected: {
         backgroundColor: theme.colors.surface.pressedOverlay,
@@ -142,14 +142,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     rowContentOnboarding: {
         alignItems: 'flex-start',
         gap: 14,
     },
     rowContentCompact: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     leading: {
         width: 26,
@@ -185,23 +185,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     titleColumn: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     title: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 15,
-        lineHeight: 19,
+        ...Typography.variant('heading'),
     },
     titleCompact: {
         fontSize: 13,
         lineHeight: 18,
     },
     subtitle: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     subtitleCompact: {
         fontSize: 12,
@@ -210,32 +206,28 @@ const stylesheet = StyleSheet.create((theme) => ({
     trailing: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         flexShrink: 0,
     },
     trailingOnboarding: {
-        paddingTop: 2,
+        paddingTop: theme.space.s2,
     },
     statusLabel: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
     },
     badge: {
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s4,
         backgroundColor: theme.colors.surface.pressedOverlay,
         borderRadius: 999,
     },
     badgeText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
     detailsToggle: {
-        padding: 2,
+        padding: theme.space.s2,
     },
     detailsToggleHidden: {
         opacity: 0,

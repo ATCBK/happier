@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens, slideTransitionTokens } from '@/components/ui/motion';
 import { Text } from '@/components/ui/text/Text';
@@ -243,7 +243,7 @@ export function ApiTokenRevealBody(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const copyFeedback = useTemporaryCopyFeedback(1_500);
+    const copyFeedback = useHappierCopyFeedback(1_500);
     const [copyError, setCopyError] = React.useState(false);
     const { onCopied, token } = props;
     const copied = copyFeedback.isCopied('token');

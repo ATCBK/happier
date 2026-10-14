@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionForkStrategySchema } from '../../sessions/fork.js';
 import { ProjectSetupConsentFailureDetailsV1Schema, ProjectScriptEffectChangedFailureDetailsV1Schema } from '../projectSetupConsentFailure.js';
@@ -43,22 +43,19 @@ const ACTION_OPERATION_TITLE_MAX_LENGTH_V1 = 10_000;
 const ACTION_OPERATION_ERROR_CODE_MAX_LENGTH_V1 = 200;
 const ACTION_OPERATION_ERROR_MAX_LENGTH_V1 = 10_000;
 
-const ActionOperationIdentifierV1Schema = lazyZodSchema(() => z.string().trim().min(1)
-  .max(ACTION_OPERATION_IDENTIFIER_MAX_LENGTH_V1));
+const ActionOperationIdentifierV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_IDENTIFIER_MAX_LENGTH_V1)));
 
-const ActionOperationProgressPhaseV1Schema = lazyZodSchema(() => z.string().trim().min(1)
-  .max(ACTION_OPERATION_PROGRESS_PHASE_MAX_LENGTH_V1));
-const ActionOperationProgressLabelV1Schema = lazyZodSchema(() => z.string().trim().min(1)
-  .max(ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1));
+const ActionOperationProgressPhaseV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_PROGRESS_PHASE_MAX_LENGTH_V1)));
+const ActionOperationProgressLabelV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1)));
 
-export const ActionOperationDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   visibility: z.literal('activity'),
   progress: z.enum(['indeterminate', 'reported']),
-  presentation: z.object({
+  presentation: z.strictObject({
     onStart: z.enum(['current', 'detail', 'activity']),
-  }).strict(),
-}).strict());
+  }),
+}));
 export type ActionOperationDeclarationV1 = Readonly<z.infer<typeof ActionOperationDeclarationV1Schema>>;
 
 export const ActionOperationStateV1Schema = lazyZodSchema(() => z.enum([
@@ -67,124 +64,124 @@ export const ActionOperationStateV1Schema = lazyZodSchema(() => z.enum([
 export type ActionOperationStateV1 = z.infer<typeof ActionOperationStateV1Schema>;
 
 export const ActionOperationProgressV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('indeterminate'),
-    label: ActionOperationProgressLabelV1Schema.optional(),
-  }).strict(),
-  z.object({
+    label: z.optional(ActionOperationProgressLabelV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('phase'),
     phase: ActionOperationProgressPhaseV1Schema,
     label: ActionOperationProgressLabelV1Schema,
     /** Current target FIFO observation, not a percentage or admission token. */
-    queueAhead: z.number().finite().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-  }).strict().refine(value => value.queueAhead === undefined || value.phase === 'queued', {
+    queueAhead: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
+  }).check(z.refine(value => value.queueAhead === undefined || value.phase === 'queued', {
     path: ['queueAhead'], message: 'FIFO ahead is available only during the queued phase.',
-  }),
-  z.object({
+  })),
+  z.strictObject({
     kind: z.literal('determinate'),
-    current: z.number().finite().nonnegative(),
-    total: z.number().finite().positive(),
-    label: ActionOperationProgressLabelV1Schema.optional(),
-  }).strict().refine((value) => value.current <= value.total, {
+    current: z.number().check(z.nonnegative()),
+    total: z.number().check(z.positive()),
+    label: z.optional(ActionOperationProgressLabelV1Schema),
+  }).check(z.refine((value) => value.current <= value.total, {
     path: ['current'],
     message: 'Determinate operation progress cannot exceed its total.',
-  }),
+  })),
 ]));
 export type ActionOperationProgressV1 = Readonly<z.infer<typeof ActionOperationProgressV1Schema>>;
 
 /** Public, redacted projection of the canonical terminal Action failure. */
-const ActionOperationErrorCodeV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(ACTION_OPERATION_ERROR_CODE_MAX_LENGTH_V1));
-export const ActionOperationFailureV1Schema = lazyZodSchema(() => z.object({
+const ActionOperationErrorCodeV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_ERROR_CODE_MAX_LENGTH_V1)));
+export const ActionOperationFailureV1Schema = lazyZodSchema(() => z.strictObject({
   errorCode: ActionOperationErrorCodeV1Schema,
-  error: z.string().trim().min(1).max(ACTION_OPERATION_ERROR_MAX_LENGTH_V1),
-  details: z.union([ProjectSetupConsentFailureDetailsV1Schema, ProjectScriptEffectChangedFailureDetailsV1Schema,
-    ProjectWorkerNoAcceptanceFailureDetailsV1Schema]).optional(),
-}).strict().refine(failure => !failure.details || (failure.details.kind === 'pendingApproval'
+  error: z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_ERROR_MAX_LENGTH_V1)),
+  details: z.optional(z.union([ProjectSetupConsentFailureDetailsV1Schema, ProjectScriptEffectChangedFailureDetailsV1Schema,
+    ProjectWorkerNoAcceptanceFailureDetailsV1Schema])),
+}).check(z.refine(failure => !failure.details || (failure.details.kind === 'pendingApproval'
   ? failure.details.code === failure.errorCode
   : readProjectWorkerNoAcceptanceFailureV1({ ok: false, ...failure }) !== null), {
   path: ['details'], message: 'Public refusal facts must match their terminal failure code.',
-}));
+})));
 export type ActionOperationFailureV1 = Readonly<z.infer<typeof ActionOperationFailureV1Schema>>;
 
 /** Actual command/output target, independent of the operation's observation custody. */
-export const ProjectCommandAttachmentV1Schema = lazyZodSchema(() => z.object({
+export const ProjectCommandAttachmentV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('projectCommand'),
   purpose: z.enum(['setup', 'teardown', 'script', 'exec']),
   serverId: ActionOperationIdentifierV1Schema,
   machineId: ActionOperationIdentifierV1Schema,
   workspaceRefId: ActionOperationIdentifierV1Schema,
-  cwd: z.string().min(1),
+  cwd: z.string().check(z.minLength(1)),
   /** Final execution-target edge, observed only after its completed clean Sync barrier. */
-  lastCleanSyncAtMs: z.number().finite().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
-  terminalId: ActionOperationIdentifierV1Schema.optional(),
-  sourceWorkspace: WorkspaceAddressV1Schema.optional(),
-  script: z.object({
-    name: z.string().min(1).optional(),
+  lastCleanSyncAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)))),
+  terminalId: z.optional(ActionOperationIdentifierV1Schema),
+  sourceWorkspace: z.optional(WorkspaceAddressV1Schema),
+  script: z.optional(z.strictObject({
+    name: z.optional(z.string().check(z.minLength(1))),
     source: ProjectCommandSourceV1Schema,
-  }).strict().optional(),
-  exitCode: z.number().int().optional(),
-  originRun: z.object({
+  })),
+  exitCode: z.optional(z.number().check(z.int())),
+  originRun: z.optional(z.strictObject({
     kind: z.literal('workflow_run'),
     serverId: ActionOperationIdentifierV1Schema,
     runId: ActionOperationIdentifierV1Schema,
-  }).strict().optional(),
-}).strict().superRefine((attachment, context) => {
+  })),
+}).check(z.superRefine((attachment, context) => {
   if (attachment.script && !attachment.sourceWorkspace) {
     context.addIssue({ code: 'custom', path: ['sourceWorkspace'], message: 'Script identity requires its original qualified Source workspace.' });
   }
   if (attachment.exitCode !== undefined && !attachment.terminalId) {
     context.addIssue({ code: 'custom', path: ['exitCode'], message: 'Observed process exit requires its actual terminal association.' });
   }
-}));
+})));
 export type ProjectCommandAttachmentV1 = Readonly<z.infer<typeof ProjectCommandAttachmentV1Schema>>;
 
 export const ActionOperationDomainRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('forkRequest'),
     id: ActionOperationIdentifierV1Schema,
-    strategy: SessionForkStrategySchema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('spawnAttempt'), id: ActionOperationIdentifierV1Schema }).strict(),
-  z.object({ kind: z.literal('managedMachine'), id: ActionOperationIdentifierV1Schema,
+    strategy: z.optional(SessionForkStrategySchema),
+  }),
+  z.strictObject({ kind: z.literal('spawnAttempt'), id: ActionOperationIdentifierV1Schema }),
+  z.strictObject({ kind: z.literal('managedMachine'), id: ActionOperationIdentifierV1Schema,
     /** Enrollment and native boot recovery share this exact retained resource. */
-    controller: z.lazy(() => ManagedControllerV1Schema).optional(),
-    resource: z.lazy(() => ManagedResourceV1Schema).optional(),
-    bootstrapTask: z.object({ id: ActionOperationIdentifierV1Schema,
+    controller: z.optional(z.lazy(() => ManagedControllerV1Schema)),
+    resource: z.optional(z.lazy(() => ManagedResourceV1Schema)),
+    bootstrapTask: z.optional(z.strictObject({ id: ActionOperationIdentifierV1Schema,
       taskKind: z.literal('remote.ssh.bootstrapMachine.v1'),
-    }).strict().optional(),
-  }).strict(),
-  z.object({
+    })),
+  }),
+  z.strictObject({
     kind: z.literal('systemTask'),
     id: ActionOperationIdentifierV1Schema,
     taskKind: z.literal('remote.ssh.bootstrapMachine.v1'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('handoff'),
     id: ActionOperationIdentifierV1Schema,
-    targetMachineId: ActionOperationIdentifierV1Schema.optional(),
-  }).strict(),
+    targetMachineId: z.optional(ActionOperationIdentifierV1Schema),
+  }),
   ProjectCommandAttachmentV1Schema,
-  z.object({
+  z.strictObject({
     kind: z.literal('machineEnvironment'),
     serverId: ActionOperationIdentifierV1Schema,
     machineId: ActionOperationIdentifierV1Schema,
-    preset: z.object({ id: ActionOperationIdentifierV1Schema, revision: z.number().int().nonnegative() }).strict(),
-    managedId: ActionOperationIdentifierV1Schema.optional(),
-    terminalId: ActionOperationIdentifierV1Schema.optional(),
-    terminals: z.object({
-      install: ActionOperationIdentifierV1Schema.optional(),
-      setup: ActionOperationIdentifierV1Schema.optional(),
-    }).strict().optional(),
-    exitCode: z.number().int().optional(),
-  }).strict(),
-  z.object({
+    preset: z.strictObject({ id: ActionOperationIdentifierV1Schema, revision: z.number().check(z.int(), z.nonnegative()) }),
+    managedId: z.optional(ActionOperationIdentifierV1Schema),
+    terminalId: z.optional(ActionOperationIdentifierV1Schema),
+    terminals: z.optional(z.strictObject({
+      install: z.optional(ActionOperationIdentifierV1Schema),
+      setup: z.optional(ActionOperationIdentifierV1Schema),
+    })),
+    exitCode: z.optional(z.number().check(z.int())),
+  }),
+  z.strictObject({
     kind: z.literal('projectService'),
     purpose: z.literal('relocation'),
     workspace: WorkspaceAddressV1Schema,
     declaration: ProjectServiceDeclarationRefV1Schema,
-    currentTarget: LocalServiceManagedServiceActionTargetV1Schema.optional(),
-  }).strict(),
-]).superRefine((reference, context) => {
+    currentTarget: z.optional(LocalServiceManagedServiceActionTargetV1Schema),
+  }),
+]).check(z.superRefine((reference, context) => {
   if (reference.kind === 'machineEnvironment' && reference.exitCode !== undefined && !reference.terminalId) {
     context.addIssue({ code: 'custom', path: ['exitCode'],
       message: 'Observed process exit requires its actual terminal association.' });
@@ -207,41 +204,41 @@ export const ActionOperationDomainRefV1Schema = lazyZodSchema(() => z.discrimina
         message: 'Observed native identity must match its Project workspace and declaration.' });
     }
   }
-}));
+})));
 export type ActionOperationDomainRefV1 = Readonly<z.infer<typeof ActionOperationDomainRefV1Schema>>;
 
-const ActionOperationTimestampV1Schema = lazyZodSchema(() => z.number().finite().int().nonnegative());
+const ActionOperationTimestampV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
-export const ActionOperationObservationV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationObservationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['outcome_uncertain', 'stop_unconfirmed']),
   code: ActionOperationErrorCodeV1Schema,
-}).strict());
+}));
 export type ActionOperationObservationV1 = Readonly<z.infer<typeof ActionOperationObservationV1Schema>>;
 
-export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   operationId: ActionOperationIdentifierV1Schema,
-  revision: z.number().int().positive(),
+  revision: z.number().check(z.int(), z.positive()),
   actionId: ActionOperationIdentifierV1Schema,
   state: ActionOperationStateV1Schema,
-  scope: z.object({
+  scope: z.strictObject({
     accountId: ActionOperationIdentifierV1Schema,
     machineId: ActionOperationIdentifierV1Schema,
-    sessionId: ActionOperationIdentifierV1Schema.optional(),
-  }).strict(),
-  title: z.string().trim().min(1).max(ACTION_OPERATION_TITLE_MAX_LENGTH_V1),
-  requestId: ActionOperationIdentifierV1Schema.optional(),
+    sessionId: z.optional(ActionOperationIdentifierV1Schema),
+  }),
+  title: z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_TITLE_MAX_LENGTH_V1)),
+  requestId: z.optional(ActionOperationIdentifierV1Schema),
   createdAt: ActionOperationTimestampV1Schema,
-  startedAt: ActionOperationTimestampV1Schema.optional(),
-  settledAt: ActionOperationTimestampV1Schema.optional(),
-  progress: ActionOperationProgressV1Schema.optional(),
-  result: z.unknown().optional(),
-  error: ActionOperationFailureV1Schema.optional(),
-  domainRef: ActionOperationDomainRefV1Schema.optional(),
-  observation: ActionOperationObservationV1Schema.optional(),
-  setupReview: ProjectSetupConsentFailureDetailsV1Schema.optional(),
+  startedAt: z.optional(ActionOperationTimestampV1Schema),
+  settledAt: z.optional(ActionOperationTimestampV1Schema),
+  progress: z.optional(ActionOperationProgressV1Schema),
+  result: z.optional(z.unknown()),
+  error: z.optional(ActionOperationFailureV1Schema),
+  domainRef: z.optional(ActionOperationDomainRefV1Schema),
+  observation: z.optional(ActionOperationObservationV1Schema),
+  setupReview: z.optional(ProjectSetupConsentFailureDetailsV1Schema),
   cancellation: z.enum(['unsupported', 'supported']),
-}).strict().superRefine((snapshot, context) => {
+}).check(z.superRefine((snapshot, context) => {
   const terminal = snapshot.state === 'succeeded'
     || snapshot.state === 'failed'
     || snapshot.state === 'cancelled';
@@ -274,7 +271,7 @@ export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.object({
   if (snapshot.settledAt !== undefined && snapshot.startedAt !== undefined && snapshot.settledAt < snapshot.startedAt) {
     context.addIssue({ code: 'custom', path: ['settledAt'], message: 'settledAt cannot precede startedAt.' });
   }
-}));
+})));
 export type ActionOperationSnapshotV1 = Readonly<z.infer<typeof ActionOperationSnapshotV1Schema>>;
 
 /** The closed ../0.2 reader at 37a6541578749067b49d4579be8c752c9591b8c8
@@ -296,81 +293,79 @@ export function projectActionOperationSnapshotForV1Reader(snapshot: ActionOperat
   };
 }
 
-export const ActionOperationSnapshotPushV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationSnapshotPushV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   machineId: ActionOperationIdentifierV1Schema,
-  ciphertext: z.string().min(1),
-}).strict());
+  ciphertext: z.string().check(z.minLength(1)),
+}));
 export type ActionOperationSnapshotPushV1 = Readonly<z.infer<typeof ActionOperationSnapshotPushV1Schema>>;
 
-export const ActionOperationSnapshotEphemeralV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationSnapshotEphemeralV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal(ACTION_OPERATION_SNAPSHOT_EPHEMERAL_TYPE_V1),
   machineId: ActionOperationIdentifierV1Schema,
-  ciphertext: z.string().min(1),
-}).strict());
+  ciphertext: z.string().check(z.minLength(1)),
+}));
 export type ActionOperationSnapshotEphemeralV1 = Readonly<z.infer<typeof ActionOperationSnapshotEphemeralV1Schema>>;
 
-export const ActionOperationRevisionEphemeralV1Schema = lazyZodSchema(() => z.object({
+export const ActionOperationRevisionEphemeralV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal(ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1),
   machineId: ActionOperationIdentifierV1Schema,
   content: z.discriminatedUnion('t', [
-    z.object({ t: z.literal('encrypted'), c: z.string().trim().min(1) }).strict(),
-    z.object({ t: z.literal('plain'), v: ActionOperationSnapshotV1Schema }).strict(),
+    z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.trim(), z.minLength(1)) }),
+    z.strictObject({ t: z.literal('plain'), v: ActionOperationSnapshotV1Schema }),
   ]),
-}).strict());
+}));
 export type ActionOperationRevisionEphemeralV1 = Readonly<z.infer<typeof ActionOperationRevisionEphemeralV1Schema>>;
 
-export const ActionOperationListV1RequestSchema = lazyZodSchema(() => z.object({
-  states: z.array(ActionOperationStateV1Schema)
-    .max(ActionOperationStateV1Schema.options.length)
-    .optional(),
-  sessionId: ActionOperationIdentifierV1Schema.optional(),
-  cursor: ActionOperationIdentifierV1Schema.optional(),
-}).strict().superRefine((request, context) => {
+export const ActionOperationListV1RequestSchema = lazyZodSchema(() => z.strictObject({
+  states: z.optional(z.array(ActionOperationStateV1Schema).check(z.maxLength(ActionOperationStateV1Schema.options.length))),
+  sessionId: z.optional(ActionOperationIdentifierV1Schema),
+  cursor: z.optional(ActionOperationIdentifierV1Schema),
+}).check(z.superRefine((request, context) => {
   if (request.states && new Set(request.states).size !== request.states.length) {
     context.addIssue({ code: 'custom', path: ['states'], message: 'states must not contain duplicates.' });
   }
-}));
+})));
 export type ActionOperationListV1Request = z.infer<typeof ActionOperationListV1RequestSchema>;
 
-export const ActionOperationListV1ResponseSchema = lazyZodSchema(() => z.object({
+export const ActionOperationListV1ResponseSchema = lazyZodSchema(() => z.strictObject({
   items: z.array(ActionOperationSnapshotV1Schema),
-  nextCursor: ActionOperationIdentifierV1Schema.nullable(),
-}).strict());
+  nextCursor: z.nullable(ActionOperationIdentifierV1Schema),
+}));
 export type ActionOperationListV1Response = z.infer<typeof ActionOperationListV1ResponseSchema>;
 
-export const ActionOperationGetV1RequestSchema = lazyZodSchema(() => z.object({
+export const ActionOperationGetV1RequestSchema = lazyZodSchema(() => z.strictObject({
   operationId: ActionOperationIdentifierV1Schema,
-  waitForTerminal: z.literal(true).optional(),
+  waitForTerminal: z.optional(z.literal(true)),
   /** FIN may observe an explicit no-effect review before process settlement. */
-  includeSetupReview: z.literal(true).optional(),
-}).strict().refine(request => !request.includeSetupReview || request.waitForTerminal === true, {
+  includeSetupReview: z.optional(z.literal(true)),
+}).check(z.refine(request => !request.includeSetupReview || request.waitForTerminal === true, {
   path: ['includeSetupReview'], message: 'Setup review observation requires the existing wait owner.',
-}));
+})));
 export type ActionOperationGetV1Request = z.infer<typeof ActionOperationGetV1RequestSchema>;
-export const ActionOperationGetV2RequestSchema = lazyZodSchema(() => ActionOperationGetV1RequestSchema.safeExtend({
+export const ActionOperationGetV2RequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(ActionOperationGetV1RequestSchema, {
   /** Remeasure a held effect before a human decision without waiting for command exit. */
-  refreshSetupReview: z.literal(true).optional(),
-}).strict());
+  refreshSetupReview: z.optional(z.literal(true)),
+})));
 export type ActionOperationGetV2Request = z.infer<typeof ActionOperationGetV2RequestSchema>;
 
-const ActionOperationNotFoundV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('not_found') }).strict());
+const ActionOperationNotFoundV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('not_found') }));
 
 export const ActionOperationGetV1ResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('found'), operation: ActionOperationSnapshotV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('found'), operation: ActionOperationSnapshotV1Schema }),
   ActionOperationNotFoundV1Schema,
 ]));
 export type ActionOperationGetV1Response = z.infer<typeof ActionOperationGetV1ResponseSchema>;
 
-export const ActionOperationCancelV1RequestSchema = lazyZodSchema(() => z.object({
+export const ActionOperationCancelV1RequestSchema = lazyZodSchema(() => z.strictObject({
   operationId: ActionOperationIdentifierV1Schema,
-}).strict());
+}));
 export type ActionOperationCancelV1Request = z.infer<typeof ActionOperationCancelV1RequestSchema>;
 
 export const ActionOperationCancelV1ResponseSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('unsupported') }).strict(),
-  z.object({ kind: z.literal('requested') }).strict(),
-  z.object({ kind: z.literal('already_settled') }).strict(),
+  z.strictObject({ kind: z.literal('unsupported') }),
+  z.strictObject({ kind: z.literal('requested') }),
+  z.strictObject({ kind: z.literal('already_settled') }),
   ActionOperationNotFoundV1Schema,
 ]));
 export type ActionOperationCancelV1Response = z.infer<typeof ActionOperationCancelV1ResponseSchema>;

@@ -24,6 +24,8 @@ import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 
 import type { VoiceAttemptIdleTarget } from './useVoiceAttemptControl';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -127,8 +129,8 @@ async function installElevenLabsLifecycle(target: SessionAddress | null = null) 
     if (!owner.ok) throw new Error('Voice History owner metadata was not admitted');
     const sharedMetadata = projectSessionSharedMetadataV1({ metadata, agentState: null });
     const conversation = createSessionFixture({ id: 'attempt-history', serverId: recoveryRuntime.serverId, encryptionMode: 'plain', active: false,
-        metadataLayoutVersion: 1, metadata: sharedMetadata,
-        ownerMetadataView: projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: owner.ownerMetadata }) });
+        metadataLayoutVersion: 1, metadata: parseDecryptedSessionMetadata(sharedMetadata, 1),
+        ownerMetadataView: MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: owner.ownerMetadata })) });
     // The hosted History producer writes the current shared/owner tuple. Keep
     // both its HTTP record and hydrated fixture at that same real codec shape.
     sessionHttp.createSessionFromPost(conversation.id, { method: 'POST', body: JSON.stringify({ tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
@@ -433,6 +435,7 @@ describe('presentation follows the running attempt, not the next selection', () 
         // Off selects the next idle admission. It does not retire the running attempt, so hiding
         // the surface would leave the microphone open with nothing left to stop it.
         expect(hook.getCurrent().model).not.toBeNull();
+        // The running Local agent owns a cancellable response even when Off is selected next.
         expect(hook.getCurrent().model!.canCancelTurn).toBe(true);
         expect(hook.getCurrent().control.canStop).toBe(true);
 
@@ -451,7 +454,7 @@ describe('presentation follows the running attempt, not the next selection', () 
             });
         });
 
-        // The newly selected provider cannot cancel a response; the one actually running can.
+        // The running Local agent's cancellation capability must not be replaced by the next selection.
         expect(hook.getCurrent().model).not.toBeNull();
         expect(hook.getCurrent().model!.canCancelTurn).toBe(true);
         expect(hook.getCurrent().control.canStop).toBe(true);

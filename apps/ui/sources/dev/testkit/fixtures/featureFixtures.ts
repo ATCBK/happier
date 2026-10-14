@@ -10,7 +10,7 @@ import { DEFAULT_PEER_MEDIATION_CAPABILITIES } from '@happier-dev/protocol/featu
 import { DEFAULT_PETS_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/petsCapabilities';
 import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
 import { DEFAULT_SHARING_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sharingCapabilities';
-import { type FeaturesResponse as RootLayoutFeatures } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import type { FeaturesResponse as RootLayoutFeatures } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 export const DEFAULT_AUTH_KEY_CHALLENGE_CAPABILITIES = {
     v2: false,

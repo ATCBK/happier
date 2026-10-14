@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema, ProviderModelIdSchema } from '../providers/ids.js';
@@ -86,14 +87,14 @@ describe('provider machine RPC contracts', () => {
   });
 
   it('preserves classic JSON Schema projection for concrete and composed RPC requests', () => {
-    const identity = z.object({
+    const identity = z.strictObject({
       connectionId: ProviderConnectionIdSchema,
       machineId: ProviderMachineIdSchema,
-    }).strict();
-    const modelLoadIdentity = identity.extend({ modelId: ProviderModelIdSchema }).strict();
+    });
+    const modelLoadIdentity = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(identity, { modelId: ProviderModelIdSchema }));
     const modelLoad = z.discriminatedUnion('action', [
-      modelLoadIdentity.extend({ action: z.literal('load') }).strict(),
-      modelLoadIdentity.extend({ action: z.literal('cancel') }).strict(),
+      (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(modelLoadIdentity, { action: z.literal('load') })),
+      (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(modelLoadIdentity, { action: z.literal('cancel') })),
     ]);
 
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
@@ -101,16 +102,16 @@ describe('provider machine RPC contracts', () => {
         .toEqual(zodSchemaToJsonSchemaObject(identity, { target }));
       expect(zodSchemaToJsonSchemaObject(DaemonProviderModelLoadRequestV1Schema, { target }))
         .toEqual(zodSchemaToJsonSchemaObject(modelLoad, { target }));
-      const derived = DaemonProviderModelsRequestV1Schema.extend({
-        label: z.string().trim().min(1).optional(),
-      }).strict();
+      const derived = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonProviderModelsRequestV1Schema, {
+        label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+      })));
       expect(zodSchemaToJsonSchemaObject(derived, { target }))
-        .toEqual(zodSchemaToJsonSchemaObject(identity.extend({
-          label: z.string().trim().min(1).optional(),
-        }).strict(), { target }));
+        .toEqual(zodSchemaToJsonSchemaObject((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(identity, {
+          label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        })), { target }));
     }
     expect(DaemonProviderModelsRequestV1Schema.shape.connectionId).toBe(ProviderConnectionIdSchema);
-    expect(DaemonProviderModelsRequestV1Schema.extend({ enabled: z.boolean().default(true) })
+    expect(lazyZodSchema(() => z.extend(DaemonProviderModelsRequestV1Schema, { enabled: z._default(z.boolean(), true) }))
       .parse({ connectionId: 'pc_test', machineId: 'machine-1' }))
       .toEqual({ connectionId: 'pc_test', machineId: 'machine-1', enabled: true });
   });
@@ -121,7 +122,7 @@ describe('provider machine RPC contracts', () => {
     });
     expect(structural.success).toBe(false);
     if (!structural.success) {
-      expect(structural.error).toBeInstanceOf(z.ZodError);
+      expect(structural.error).toBeInstanceOf(z.core.$ZodError);
       expect(structural.error.issues).toMatchObject([
         { code: 'invalid_type', path: ['machineId'], expected: 'string' },
         { code: 'unrecognized_keys', path: [], keys: ['extra'] },
@@ -129,14 +130,14 @@ describe('provider machine RPC contracts', () => {
     }
     expect(() => DaemonProviderModelsRequestV1Schema.parse({
       connectionId: 'pc_test', machineId: 42,
-    })).toThrow(z.ZodError);
+    })).toThrow(z.core.$ZodError);
     const refined = DaemonProviderModelProjectionRequestV1Schema.safeParse({
       machineId: 'machine-1', agentTargetKey: 'backend:codex',
       refreshPolicy: 'current_only', forceRefresh: true,
     });
     expect(refined.success).toBe(false);
     if (!refined.success) {
-      expect(refined.error).toBeInstanceOf(z.ZodError);
+      expect(refined.error).toBeInstanceOf(z.core.$ZodError);
       expect(refined.error.issues).toMatchObject([{ code: 'custom', path: ['forceRefresh'] }]);
     }
   });

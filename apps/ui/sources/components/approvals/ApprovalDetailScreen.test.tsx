@@ -850,6 +850,8 @@ vi.mock('@/sync/store/hooks', async (importOriginal) => ({
     accountId: 'account-1',
   }),
   useSessionListHomeObservations: () => ({}),
+  useServerScopedMachine: (serverId: string | null | undefined, machineId: string) =>
+    serverId ? (machineFixturesByServerId[serverId]?.[machineId] ?? null) : null,
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
@@ -925,6 +927,35 @@ describe('ApprovalDetailScreen', () => {
     expect(readRenderedText(screen)).toContain('approvals.status.failed');
     expect(readRenderedText(screen)).not.toContain('approvals.status.executed');
     expect(dismissToSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps settled capability review fields readable without offering another approval', async () => {
+    const { getActionSpec } = await import('@happier-dev/protocol/actions');
+    const { settleApprovalRequestActionArgs } = await import('@happier-dev/protocol/approvals/approvalRequestTransition');
+    const spec = getActionSpec('skills.rules.set');
+    const input = spec.inputSchema.parse({ items: [{ skillId: 'skill-reviewed' }],
+      change: { kind: 'write', write: { place: { t: 'machine', machineId: 'machine-1' }, state: 'on' } } });
+    const artifact = createBuiltInApprovalArtifact({ actionId: spec.id, actionArgs: input, summary: spec.title,
+      preview: { actionId: spec.id, actionArgs: spec.projectObservationInput?.(input) } });
+    const open = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
+    const settled = ApprovalRequestV2Schema.parse({ ...open, status: 'executed', updatedAtMs: 3,
+      actionArgs: settleApprovalRequestActionArgs(open), decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 3, ok: true } });
+    currentArtifact = { ...artifact, body: JSON.stringify(settled), header: buildApprovalRequestArtifactHeaderV1(settled) };
+    const screen = await renderScreen(<approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />);
+    const text = await readRenderedTextWithRowContent(screen);
+    expect(text).toContain('Turn on');
+    expect(text).toContain('Where');
+    expect(text).not.toContain('approvals.unsafeDetailsBody');
+    expect(screen.findAllByTestId('approvals.approve')).toHaveLength(0);
+    // History already consumed by an older development writer cannot reconstruct the change.
+    // It reports unavailable history without claiming another decision can be made.
+    const reduced = ApprovalRequestV2Schema.parse({ ...settled, actionArgs: spec.projectObservationInput?.(input) });
+    currentArtifact = { ...artifact, body: JSON.stringify(reduced), header: buildApprovalRequestArtifactHeaderV1(reduced) };
+    const history = await renderScreen(<approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />);
+    expect(await readRenderedTextWithRowContent(history)).toContain('common.unavailable');
+    expect(await readRenderedTextWithRowContent(history)).not.toContain('approvals.unsafeDetailsBody');
+    expect(history.findAllByTestId('approvals.approve')).toHaveLength(0);
   });
 
   it('uses the typed stale outcome even when execution carries another diagnostic message', async () => {
@@ -2270,6 +2301,22 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.open-session')).toBeNull();
   });
 
+  it('asks for a Project setup by machine name and the setup review facts, never by ids or three decisions', async () => {
+    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'projects.prepare', summary: 'Set up a project',
+      actionArgs: { workspace: { serverId: 'server-cache', machineId: 'machine-target', workspaceId: 'ws-8e7638ae', rootPath: '/home/happier/tidewater' }, phase: 'setup' } });
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" />);
+
+    const text = readRenderedText(screen);
+    expect(text).toContain('projects.authoring.sessionAsk');
+    expect(text).toContain('Rebound workstation');
+    expect(screen.findByTestId('approvals.project-command')).not.toBeNull();
+    for (const raw of ['ws-8e7638ae', 'machine-target', 'Qualified checkout', 'Preparation phase']) expect(text).not.toContain(raw);
+    expect(screen.findByTestId('approvals.approve')).not.toBeNull();
+    expect(screen.findByTestId('approvals.reject')).not.toBeNull();
+    expect(screen.findByTestId('approvals.cancel')).toBeNull();
+  });
+
   it('places the primary approve action before the reject action', async () => {
     const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
 
@@ -2414,6 +2461,19 @@ describe('ApprovalDetailScreen', () => {
     const visual = screen.findByTestId('approvals.visual');
     expect(visual).not.toBeNull();
     expect(screen.getTextContent()).toContain('Ship the payment retries on Thursday.');
+  });
+
+  it('names the asking Session once, in Requested by, when the visual is for that same Session', async () => {
+    currentArtifact = createBuiltInApprovalArtifact({ actionId: 'session.board.item.upsert', summary: 'Show a visual',
+      actionArgs: { sessionId: 'session-1', itemId: 'release-plan', expectedItemRevision: null, destination: 'transcript',
+        item: { v: 1, title: 'Release plan', source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Plan' } } } } } });
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" />);
+    const card = screen.tree.root.findAll(node => node.props?.anatomy === 'page' && Array.isArray(node.props?.presentation?.rows))[0];
+    const rows = (card?.props.presentation.rows ?? []) as readonly Record<string, unknown>[];
+    expect(rows.length).toBeGreaterThan(0);
+    // The exact identity stays one disclosure away; the readable rows do not repeat the requester.
+    expect(rows.find(row => row.path === 'sessionId')).toMatchObject({ technical: true });
   });
 
   it('says the recorded answer while the request still reads open, and offers no second answer', async () => {

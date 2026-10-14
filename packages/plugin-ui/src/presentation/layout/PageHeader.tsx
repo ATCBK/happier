@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { useOptionalHappierUiTheme, useOptionalHappierUiTypography } from '../../environment/context.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierStyleProp } from '../portableTypes.js';
 import { HappierText, useHappierTextPresentation } from '../text/Text.js';
-import { useHappierCollectionLayout } from '../collection/collectionLayout.js';
+import { useHappierCollectionDetailWidth, useHappierCollectionLayout } from '../collection/collectionLayout.js';
 import { HAPPIER_PAGE_METRICS, resolveHappierPageBackMeasuringLine, resolveHappierPageBackPlacement } from './pageMetrics.js';
 import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle, type HappierPageTextRole } from './pageText.js';
 
@@ -147,6 +147,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   const renderBack = props.renderBack ?? null;
   const showsBack = showTitle && renderBack !== null;
   const collectionMode = useHappierCollectionLayout()?.mode ?? null;
+  const detailWidthPx = useHappierCollectionDetailWidth();
   // The pane's width decides whether back fits in the gutter left of the
   // column. Every header measures it: a back control often arrives after the
   // pane's one mount layout (it follows the route), and a handler attached
@@ -229,7 +230,8 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   const columnMaxWidthPx = props.columnMaxWidthPx ?? Number.POSITIVE_INFINITY;
   const centered = props.compactPresentation === 'centered' && paneWidthPx !== null && paneWidthPx < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx;
   const inlineActions = !centered && props.actionsLayout === 'inline';
-  const backPlacement = resolveHappierPageBackPlacement({ paneWidthPx, columnMaxWidthPx, backShown: showsBack });
+  // The header's own measurement wins; until it arrives, the split's detail width places back.
+  const backPlacement = resolveHappierPageBackPlacement({ paneWidthPx: paneWidthPx ?? detailWidthPx, columnMaxWidthPx, backShown: showsBack });
 
   // In the gutter the arrow is outside the flow, anchored to what sits on the
   // content's left edge (the mark, else the text), so that keeps its place and
@@ -238,7 +240,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   // where it will most likely land (the line, beside a collection's list; the
   // gutter elsewhere), so nothing moves on arrival.
   const measuring = showsBack && backPlacement === null;
-  const measuringOnLine = measuring && resolveHappierPageBackMeasuringLine({ backShown: showsBack, collectionMode });
+  const measuringOnLine = measuring && resolveHappierPageBackMeasuringLine({ backShown: showsBack, collectionMode, detailWidthPx });
   const titleRole = props.titleProminence === 'hero' ? 'heroTitle' : 'pageTitle';
   const titleLineHeight = HAPPIER_PAGE_TEXT[titleRole].lineHeight;
   const backLine = renderBack && !centered && (backPlacement === 'above-title' || measuringOnLine) ? (

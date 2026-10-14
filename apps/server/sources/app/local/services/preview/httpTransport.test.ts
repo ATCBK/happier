@@ -86,6 +86,50 @@ async function echoRequest(request: import("node:http").IncomingMessage, respons
 }
 
 describe("preview native HTTP transport", () => {
+    it.each([
+        { collector: true, configured: true, publicExposure: false },
+        { collector: false, configured: true, publicExposure: false },
+        { collector: false, configured: false, publicExposure: false },
+        { collector: false, configured: false, publicExposure: true },
+    ])('preserves only the proxy transport refusal through the metadata probe (collector=$collector, configured=$configured, public=$publicExposure)', async ({ collector, configured, publicExposure }) => {
+        const fixture = await upstream((_request, response) => {
+            response.writeHead(503, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: 'preview_transport_unavailable', reasonCode: 'pms_tunnel_unavailable', privateDetail: 'do not disclose' }));
+        });
+        const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+            collector: { collectorId: 'c', nonce: 'n', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        let transportAvailable = false;
+        if (publicExposure) registerLocalServicePublicRoutes(app as never, {
+            resolvePreview: () => fixture.preview,
+            createExposure: () => ({ ok: false, reasonCode: 'public_origin_unavailable' }),
+            revokeExposure: () => ({ ok: true }),
+            validateAccess: () => ({ ok: true, preview: fixture.preview }),
+        });
+        else registerLocalServicePreviewRoutes(app as never, { resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: () => fixture.preview, hostOriginBaseDomain: 'example.test',
+            validateAccess: () => ({ ok: true }), ...(configured ? { openTunnel: async (input: Parameters<OpenLocalServicePreviewTunnel>[0]) => {
+                if (!transportAvailable) throw new Error('transport unavailable');
+                return fixture.openTunnel(input);
+            } } : {}) });
+        try {
+            const request = { method: 'GET' as const, url: `${publicExposure ? '/v1/local-services/public/exposure/' : '/'}?${collector ? `__happierCollector=${encodeURIComponent(JSON.stringify(config))}&` : ''}__happierCollectorState=1`,
+                headers: { host: 'preview.example.test', origin: config.webPostMessageTargetOrigin } };
+            const refused = await app.inject(request);
+            expect(refused.statusCode).toBe(503);
+            expect(refused.json()).toEqual({ error: 'preview_transport_unavailable', reasonCode: 'pms_tunnel_unavailable' });
+            expect(refused.headers['access-control-allow-origin']).toBe(config.webPostMessageTargetOrigin);
+            expect(refused.headers['access-control-allow-credentials']).toBe('true');
+            if (!configured) return;
+            transportAvailable = true;
+            const applicationFailure = await app.inject(request);
+            expect(applicationFailure.statusCode).toBe(200);
+            expect(applicationFailure.json()).toEqual({ state: 'runtime_unavailable' });
+            expect(applicationFailure.body).not.toContain('do not disclose');
+        } finally { await app.close(); }
+    });
+
     it("bootstraps only cooperative HTML navigations, preserves CSP and decodes upstream gzip", async () => {
         const { gzipSync } = await import("node:zlib");
         const html = '<!doctype html><html><head><title>Preview</title></head><body>café</body></html>';

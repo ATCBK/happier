@@ -27,6 +27,11 @@ export type SlimProfileEditableDraft = Readonly<{
      */
     placement?: LaunchProfileV2['placement'];
     checkout?: LaunchProfileV2['checkout'];
+    /**
+     * The library skills added to every session started with this Profile (D21). An empty list is an
+     * answer: it is written explicitly so removing the last seed removes it.
+     */
+    skillSeeds?: readonly string[];
 }>;
 
 export type SlimProfileSaveResult =
@@ -77,6 +82,7 @@ export function buildSlimProfileSave(
         codingPromptBehaviorOverrides: draft.codingPromptBehaviorOverrides,
         placement: draft.placement,
         checkout: draft.checkout,
+        ...(draft.skillSeeds === undefined ? {} : { skillSeeds: draft.skillSeeds }),
         updatedAt: now(),
     });
     if (parsed.success) {

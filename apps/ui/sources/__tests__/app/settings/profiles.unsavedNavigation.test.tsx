@@ -9,12 +9,13 @@ import {
     createExpoRouterMock,
     createReactNavigationNativeMock,
     createReactNativeWebMock,
-    createStorageModuleStub,
     flushHookEffects,
     renderScreen,
     standardCleanup,
     type RenderScreenResult,
 } from '@/dev/testkit';
+import {
+    createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import { createCapturingComponent, createPassThroughComponent } from '@/dev/testkit/mocks/components';
 import { installProfilesCommonModuleMocks } from '@/components/profiles/profilesTestHelpers';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';

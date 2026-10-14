@@ -1,12 +1,7 @@
 import { conjoinSessionListWhereInputs } from "./query";
 import type { Prisma } from "@prisma/client";
 
-import {
-    decodeV2SessionListCursorV1,
-    decodeV2SessionListCursorV2,
-    encodeV2SessionListCursorV2,
-    type V2SessionListCursorV2,
-} from "@happier-dev/protocol";
+import { decodeV2SessionListCursorV1, decodeV2SessionListCursorV2, encodeV2SessionListCursorV2, type V2SessionListCursorV2 } from '@happier-dev/protocol/sessions/control/contract';
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";

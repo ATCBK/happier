@@ -20,16 +20,16 @@ import { StyleSheet } from 'react-native-unistyles';
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        padding: theme.margins.xxl,
-        gap: theme.margins.sm,
+        padding: theme.space.s24,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     title: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     body: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -2,14 +2,14 @@
 
 import { cloneElement, type ReactElement } from 'react';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
-import type { RenderContext, ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
+import type { PluginUiResourceReference, RenderContext, ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
 import {
   CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1,
   ConversationBindingReadResultV1Schema,
-  MAX_CONVERSATION_OBSERVATION_AGE_MS,
+  DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
 } from '@happier-dev/channels-protocol/v1';
 import {
   createPluginUiTestkit,
@@ -63,6 +63,12 @@ const PAIRING_RESOURCE = {
   pluginId: 'happier.channels',
   localId: 'pairing-v1',
 } as const;
+
+function resourceFixtureLocalId(resource: PluginUiResourceReference): string {
+  if (typeof resource === 'string') return resource;
+  if ('hostRead' in resource) throw new Error(`Unexpected host read: ${resource.hostRead}`);
+  return resource.localId;
+}
 
 function providerProtocol() {
   return {
@@ -823,7 +829,7 @@ function bindingResourceReader(
   readBindings: () => ResourceContent | Promise<ResourceContent> = () => bindingsResource,
 ): NonNullable<PluginUiTestkitHostHandlers['readResource']> {
   return async ({ resource }) => {
-    const localId = typeof resource === 'string' ? resource : resource.localId;
+    const localId = resourceFixtureLocalId(resource);
     if (localId === BINDINGS_RESOURCE.localId) return await readBindings();
     if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
     throw new Error(`Unexpected Resource: ${localId}`);
@@ -1399,7 +1405,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectActionInput,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -1536,7 +1542,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectedTransport: 'socket',
         // Setup seeds the Channels domain freshness default, not the smallest
         // value an owner is allowed to configure.
-        maximumObservationAgeMs: MAX_CONVERSATION_OBSERVATION_AGE_MS,
+        maximumObservationAgeMs: DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
       });
       expect(createRequest?.selectedActionInput).toEqual(selectedActionInput);
       // Prepare may reuse the exact selected settlement. Create is the one
@@ -1833,7 +1839,7 @@ describe('Channels mounted provider setup recovery', () => {
         throw new Error(`Unexpected mounted Action: ${String(action)}`);
       }) as NonNullable<Parameters<typeof createHostApiStub>[1]>['executeAction'],
       readResource: async (resource) => {
-        const localId = typeof resource === 'string' ? resource : resource.localId;
+        const localId = resourceFixtureLocalId(resource);
         if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
         if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
         throw new Error(`Unexpected Resource: ${localId}`);
@@ -1932,7 +1938,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectActionInput,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -2003,7 +2009,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectActionInput,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId !== CONNECTIONS_RESOURCE.localId) {
             throw new Error(`Unexpected Resource: ${localId}`);
@@ -2391,7 +2397,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResourceWithoutSharedAllMessages;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -2663,7 +2669,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return durablePushConnectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -2827,6 +2833,54 @@ describe('Channels mounted binding creation', () => {
     }
   });
 
+  it('requires an explicit retry after a Session candidate page fails during pairing', async () => {
+    let sessionReads = 0;
+    let finishUnexpectedRead: ((value: JsonValue) => void) | undefined;
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
+        return (input as Readonly<{ kind?: unknown }>).kind === 'endpoint'
+          ? { kind: 'endpointCandidates', candidates: [bindingEndpointCandidate] }
+          : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
+      }
+      if (action === 'session.list') {
+        sessionReads += 1;
+        if (sessionReads === 1) throw new PluginError('plugin_service_unavailable', 'Session listing unavailable');
+        return new Promise((resolve) => { finishUnexpectedRead = resolve; });
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'session-page-retry', mountNonce: 'session-page-retry-mount' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(),
+      },
+    });
+    try {
+      await openBindingEndpointSelection(fixture);
+      await searchBindingPrincipal(fixture);
+      await vi.waitFor(() => {
+        expect(sessionReads).toBeGreaterThan(0);
+      });
+      await act(async () => { await Promise.resolve(); });
+      expect(sessionReads).toBe(1);
+      await fixture.press(await fixture.getByRole('button', { name: 'Reload Sessions' }));
+      await vi.waitFor(() => { expect(sessionReads).toBe(2); });
+      await act(async () => {
+        finishUnexpectedRead?.({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null });
+      });
+      await expect(fixture.getByRole('button', { name: 'Recovered Session' })).resolves.toBeDefined();
+    } finally {
+      await fixture.dispose();
+      finishUnexpectedRead?.({ sessions: [], nextCursor: null });
+    }
+  });
+
   it('expires a pairing challenge locally and announces the transition exactly once', async () => {
     // The daemon owns real expiry, but nothing rereads the pairing Resource on
     // its own. Without a local transition the token, link, and deep link stay
@@ -2880,7 +2934,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === PAIRING_RESOURCE.localId) return expiringPairingResource;
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
@@ -3088,7 +3142,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === PAIRING_RESOURCE.localId) {
             if (outcomeRefreshRequested) {
               outcomeRefreshReads += 1;
@@ -3283,7 +3337,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) {
             bindingsReads += 1;
             return bindingsResource;
@@ -3383,7 +3437,7 @@ describe('Channels mounted binding creation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           if (localId === PAIRING_RESOURCE.localId) {
@@ -3496,7 +3550,7 @@ describe('Channels mounted binding creation', () => {
           selectActionInput: async () => ({ kind: 'cancelled' as const }),
           executeAction,
           readResource: async ({ resource }) => {
-            const localId = typeof resource === 'string' ? resource : resource.localId;
+            const localId = resourceFixtureLocalId(resource);
             if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
             if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
             if (localId === PAIRING_RESOURCE.localId) return fixtureCase.resource;
@@ -4459,7 +4513,7 @@ describe('Channels mounted binding editor', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return foreignConnectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -5488,6 +5542,65 @@ describe('Channels thread router conversation', () => {
       await fixture.dispose();
     }
   });
+
+  it('seeds the current route recipe through the host selector and saves its strict edited settlement', async () => {
+    const recipe = {
+      executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/srv/wilson/intake' },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+      profileId: 'intake', allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny',
+      organizationPlacement: { folderId: 'intake', tagIds: ['email'] },
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: false,
+        forceIncludeServerIds: ['wilson-intake'], forceExcludeServerIds: [] } },
+    };
+    const editedRecipe = { ...recipe, directory: { kind: 'path', path: '/srv/edited' } };
+    const readReply = ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1,
+      binding: { ...routerBinding, target: { ...routerBinding.target,
+        routes: [{ ...routerBinding.target.routes[0], recipe }] } } });
+    const updateInputs: unknown[] = [];
+    const selectActionInput = vi.fn(async (input: PluginUiTestkitSelectActionInputInput) => {
+      expect(input.request).toEqual({
+        hostAction: { action: 'session.spawn_new', projection: 'serverStartDraft' },
+        draft: { existingDraft: recipe },
+      });
+      return { kind: 'serverStartDraft' as const, draft: editedRecipe };
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-recipe', mountNonce: 'fixture-router-recipe' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(), subPath: 'router-1', adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput,
+        executeAction: async ({ action, input }) => {
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) return readReply;
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
+            updateInputs.push(input);
+            return { kind: 'updated', bindingId: 'router-1', revision: 2, authorityEpoch: 1 };
+          }
+          throw new Error(`Unexpected mounted Action: ${String(action)}`);
+        },
+        readResource: bindingResourceReader(() => routerBindingsResource),
+      },
+    });
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
+      await vi.waitFor(async () => {
+        const choose = await fixture.getByRole('button', { name: 'Choose recipe' });
+        expect(choose.state?.disabled).not.toBe(true);
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Choose recipe' }));
+      await vi.waitFor(() => expect(selectActionInput).toHaveBeenCalledOnce());
+      await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
+      await vi.waitFor(() => expect(updateInputs).toHaveLength(1));
+      expect(updateInputs[0]).toMatchObject({ target: { routes: [{ recipe: editedRecipe }] } });
+    } finally {
+      await fixture.dispose();
+    }
+  });
 });
 
 describe('Channels binding enablement presentation', () => {
@@ -5712,7 +5825,7 @@ describe('Channels binding deletion presentation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return finalizingBindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -5798,7 +5911,7 @@ describe('Channels connection policy editing across a source change', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return current;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -5880,7 +5993,7 @@ describe('Channels connection policy editing across a source change', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return current;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -5931,7 +6044,7 @@ describe('Channels connection policy editing across a source change', () => {
           throw new Error('A clean rebase must not invoke an Action.');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return current;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -5978,7 +6091,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource: requested }) => {
-          const localId = typeof requested === 'string' ? requested : requested.localId;
+          const localId = resourceFixtureLocalId(requested);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return resource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6015,7 +6128,7 @@ describe('Channels connection lifecycle actions', () => {
           throw new Error('Provider readiness disclosure must not invoke an Action.');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return providerReadiness;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6056,7 +6169,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return providerReadiness;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6136,7 +6249,7 @@ describe('Channels connection lifecycle actions', () => {
           throw new Error('Rendering both recovery controls must not invoke an Action.');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return ambiguousDelivery;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6236,7 +6349,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) {
             connectionsReadCount += 1;
@@ -6351,7 +6464,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => submittedProviderSetup,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6758,7 +6871,7 @@ describe('Channels connection lifecycle actions', () => {
           throw new Error('No transfer confirmation was pressed.');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResourceForTransport('durablePush');
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6806,7 +6919,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -6880,7 +6993,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) {
             connectionReads += 1;
@@ -6943,7 +7056,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return current;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -7003,7 +7116,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) {
             connectionReads += 1;
@@ -7069,7 +7182,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return oldTransportStopUnconfirmedConnectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -7124,7 +7237,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return endpointRetargetOwedConnectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -7184,7 +7297,7 @@ describe('Channels connection lifecycle actions', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return acceptedPossibleLossConnectionsResource;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -7858,7 +7971,7 @@ describe('Channels Session destination', () => {
       }),
       ...(openSurface === undefined ? {} : { openSurface: openSurface as never }),
       readResource: async (resource) => {
-        const localId = typeof resource === 'string' ? resource : resource.localId;
+        const localId = resourceFixtureLocalId(resource);
         if (localId === 'session-conversations-v1') {
           if (sessionConversations === 'unavailable') {
             throw new PluginError({
@@ -7910,7 +8023,7 @@ describe('Channels Session destination', () => {
     const hostApi = createHostApiStub(surface, {
       version: () => ({ ...baseHostApi.version(), methods: ['readResource'] }),
       readResource: async (resource) => {
-        const localId = typeof resource === 'string' ? resource : resource.localId;
+        const localId = resourceFixtureLocalId(resource);
         if (localId === 'session-conversations-v1') return sessionConversationsResource;
         if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
         throw new Error(`Unexpected Resource: ${localId}`);
@@ -7964,7 +8077,7 @@ describe('Channels Session destination', () => {
         methods: ['readResource', 'watchResource'],
       }),
       readResource: async (resource) => {
-        const localId = typeof resource === 'string' ? resource : resource.localId;
+        const localId = resourceFixtureLocalId(resource);
         if (localId === 'session-conversations-v1') {
           if (failReads) {
             throw new PluginError({ code: 'unavailable', message: 'The daemon transport is unavailable.' });
@@ -7974,16 +8087,11 @@ describe('Channels Session destination', () => {
         if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
         throw new Error(`Unexpected Resource: ${localId}`);
       },
-      watchResource: (async (
-        resource: unknown,
-        listener: (event: ResourceSubscriptionEvent) => void,
-      ) => {
-        const localId = typeof resource === 'string'
-          ? resource
-          : (resource as { localId: string }).localId;
+      watchResource: async (resource, listener) => {
+        const localId = resourceFixtureLocalId(resource);
         if (localId === 'session-conversations-v1') deliver = listener;
         return { dispose: () => {} };
-      }) as never,
+      },
     });
     const context = Object.freeze({
       plugin: Object.freeze({ id: 'happier.channels', version: '0.0.0' }),
@@ -8229,7 +8337,7 @@ describe('Channels Session tab (round 2)', () => {
           input.opened?.push([typeof view === 'string' ? view : view.localId, subPath ?? '']);
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === 'session-conversations-v1') return input.readConversations?.() ?? input.conversations;
           if (localId === CONNECTIONS_RESOURCE.localId) return botConnections;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -8382,7 +8490,7 @@ describe('Channels connection row placement presentation', () => {
           throw new Error(`Unexpected mounted Action: ${String(action)}`);
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return connections;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -8558,7 +8666,7 @@ describe('Channels collapsed row identity', () => {
           throw new Error('Unexpected mounted Action');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return identityBindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return labeledConnectionConnections;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -8608,7 +8716,7 @@ describe('Channels collapsed row identity', () => {
           throw new Error('Unexpected mounted Action');
         },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return identityBindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) return labeledConnectionConnections;
           throw new Error(`Unexpected Resource: ${localId}`);
@@ -8688,7 +8796,7 @@ describe('Channels Connected Services handoff', () => {
         executeAction,
         openConnectedAccounts: ({ request }) => { openConnectedAccountsRequests.push(request); },
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) {
             return connectionsResourceWithProviderReadiness({ code: 'providerCredentialInvalid' });
@@ -8804,7 +8912,7 @@ describe('Channels first connection continuation', () => {
         selectActionInput: async () => submittedProviderSetup,
         executeAction,
         readResource: async ({ resource }) => {
-          const localId = typeof resource === 'string' ? resource : resource.localId;
+          const localId = resourceFixtureLocalId(resource);
           if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
           if (localId === CONNECTIONS_RESOURCE.localId) {
             return connectionCreated ? createdConnectionsResource : emptyConnectionsResource;
@@ -8875,9 +8983,12 @@ describe('Channels page (the one owner of linked conversations)', () => {
   }, '4');
   const noBindingsResource = jsonResource({ bindings: [] }, '5');
   const noConnectionsResource = jsonResource({ connections: [] }, '7');
-  const readerFor = (bindings: ResourceContent, connections: ResourceContent = connectionsResource) => (
-    async ({ resource }: Readonly<{ resource: string | Readonly<{ localId: string }> }>) => {
-      const localId = typeof resource === 'string' ? resource : resource.localId;
+  const readerFor = (
+    bindings: ResourceContent,
+    connections: ResourceContent = connectionsResource,
+  ): NonNullable<PluginUiTestkitHostHandlers['readResource']> => (
+    async ({ resource }) => {
+      const localId = resourceFixtureLocalId(resource);
       if (localId === BINDINGS_RESOURCE.localId) return bindings;
       if (localId === CONNECTIONS_RESOURCE.localId) return connections;
       throw new Error(`Unexpected Resource: ${localId}`);

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 
 import { SidechainIdSchema } from '../idsV1.js';
@@ -18,13 +18,7 @@ export { SidechainIdSchema };
  */
 export const MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS = 2_000;
 
-export const ExternalSessionTranscriptItemIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS)
-  .refine(
-    (value) => value === value.trim(),
-    'External Session transcript item id must already be trimmed.',
-  ));
+export const ExternalSessionTranscriptItemIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS), z.refine((value) => value === value.trim(), 'External Session transcript item id must already be trimmed.')));
 export type ExternalSessionTranscriptItemIdV1 = z.infer<
   typeof ExternalSessionTranscriptItemIdV1Schema
 >;
@@ -34,10 +28,7 @@ export type ExternalSessionTranscriptItemIdV1 = z.infer<
  * nonnegative integer in milliseconds. Admission boundaries consume this
  * instead of restating a numeric predicate that then differs by placement.
  */
-export const ExternalSessionTranscriptSourceTimestampV1Schema = lazyZodSchema(() => z.number()
-  .int()
-  .nonnegative()
-  .max(Number.MAX_SAFE_INTEGER));
+export const ExternalSessionTranscriptSourceTimestampV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 /**
  * Canonical known-field owner for one Agent-produced External Session source
@@ -45,8 +36,8 @@ export const ExternalSessionTranscriptSourceTimestampV1Schema = lazyZodSchema(()
  * unknown-field policies without independently redeclaring the field census.
  */
 export function createExternalSessionTranscriptSourceItemV1Schema<
-  IdentifierSchema extends z.ZodType<string>,
-  RawSchema extends z.ZodType,
+  IdentifierSchema extends z.ZodMiniType<string>,
+  RawSchema extends z.ZodMiniType,
 >(options: Readonly<{
   identifier: IdentifierSchema;
   raw: RawSchema;
@@ -54,20 +45,20 @@ export function createExternalSessionTranscriptSourceItemV1Schema<
   return z.object({
     id: options.identifier,
     createdAtMs: ExternalSessionTranscriptSourceTimestampV1Schema,
-    localId: options.identifier.nullable().optional(),
-    sidechainId: SidechainIdSchema.nullable().optional(),
-    messageRole: SessionMessageRoleSchema.nullable().optional(),
-    userProjection: ExternalSessionUserProjectionSchema.optional(),
+    localId: z.optional(z.nullable(options.identifier)),
+    sidechainId: z.optional(z.nullable(SidechainIdSchema)),
+    messageRole: z.optional(z.nullable(SessionMessageRoleSchema)),
+    userProjection: z.optional(ExternalSessionUserProjectionSchema),
     raw: options.raw,
   });
 }
 
 /** Nonvisual native evidence admitted only by an ordered terminal source follow. */
-export const ExternalSessionTerminalSourceObservationV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTerminalSourceObservationV1Schema = lazyZodSchema(() => z.strictObject({
   id: ExternalSessionTranscriptItemIdV1Schema,
   createdAtMs: ExternalSessionTranscriptSourceTimestampV1Schema,
-  raw: z.object({
+  raw: z.strictObject({
     role: z.literal('source_observation'),
     content: StrictJsonValueSchema,
-  }).strict(),
-}).strict());
+  }),
+}));

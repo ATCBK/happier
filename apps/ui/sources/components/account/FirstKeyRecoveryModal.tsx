@@ -9,6 +9,7 @@ import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { Modal } from '@/modal';
 import { t, tLoose } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type FirstKeyRecoveryActionResult =
     | Readonly<{ kind: 'completed' }>
@@ -150,7 +151,7 @@ export function FirstKeyRecoveryModal(
         closeButtonTestID: 'first-key-recovery-close',
         footer,
         dimensions: {
-            width: 420,
+            width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
             maxHeightRatio: 0.85,
             size: 'dialog',
         },

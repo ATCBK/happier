@@ -1,12 +1,12 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ScmCapabilities } from './workingSnapshot.js';
 import type { ScmOperationOutcome } from './operationOutcome.js';
 
 export const ScmRemotePolicyFields = {
-  dirtyPolicy: z.enum(['refuse', 'autostash', 'allow_git']).optional(),
-  reconcile: z.enum(['ff_only', 'rebase', 'merge']).optional(),
-  pushMode: z.enum(['ordinary', 'force_with_lease']).optional(),
-  expectedRemoteOid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/).optional(),
+  dirtyPolicy: z.optional(z.enum(['refuse', 'autostash', 'allow_git'])),
+  reconcile: z.optional(z.enum(['ff_only', 'rebase', 'merge'])),
+  pushMode: z.optional(z.enum(['ordinary', 'force_with_lease'])),
+  expectedRemoteOid: z.optional(z.string().check(z.regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/))),
 };
 export type ScmRemotePolicy = {
   dirtyPolicy?: 'refuse' | 'autostash' | 'allow_git';

@@ -203,7 +203,7 @@ const styles = StyleSheet.create((theme, _runtime) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     row: {
         flex: 1,
@@ -212,7 +212,7 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         alignItems: 'center',
         paddingHorizontal: 0,
         paddingVertical: 0,
-        gap: 6,
+        gap: theme.space.s6,
         borderRadius: 10,
         minHeight: 30,
     },
@@ -256,13 +256,11 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         minWidth: 0,
         alignItems: 'center',
         justifyContent: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
         fontSize: 13,
     },
     title: {
-        fontSize: 13,
-        lineHeight: 20,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
         // The title keeps its width and the subtitle gives way first, but a long title still ends in an
         // ellipsis on a narrow row instead of pushing the row past its edge (lab `.l12-tl .tt`).
@@ -274,23 +272,21 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         lineHeight: 18,
     },
     subtitleInline: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        ...Typography.default('regular'),
         minWidth: 0,
         flexShrink: 1,
     },
     statusInline: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        ...Typography.default('regular'),
         minWidth: 0,
         flexShrink: 1,
     },
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
         flexShrink: 1,
         justifyContent: 'flex-end',
@@ -305,7 +301,7 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         justifyContent: 'flex-end',
     },
     open: {
-        padding: 4,
+        padding: theme.space.s4,
         borderRadius: 10,
     },
     openPressed: {

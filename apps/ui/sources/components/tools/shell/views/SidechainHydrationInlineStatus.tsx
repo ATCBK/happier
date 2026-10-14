@@ -55,8 +55,8 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 28,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingVertical: 4,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     text: {
         color: theme.colors.text.secondary,

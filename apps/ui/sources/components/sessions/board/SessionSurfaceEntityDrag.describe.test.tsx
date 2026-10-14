@@ -1,10 +1,14 @@
 import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import { Text } from '@/components/ui/text/Text';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 afterEach(() => { standardCleanup(); });
 
 const SCOPE = { serverId: 'home-1', accountId: 'account-1' };
@@ -17,4 +21,33 @@ it('carries a widget’s mark and state line, not its title alone, as Session ca
         getItem: () => ({ kind: 'home-section', scope: SCOPE, sectionId: 'period' }),
     }))).getCurrent();
     expect(drag.runtime.describeSource(drag.sourceId)).toEqual({ title: 'Period summary', subtitle: 'Account · Medium', renderMark });
+});
+
+it('clears the surface-owned announcement when its real move settles without changing the admission', async () => {
+    const { useSessionSurfaceEntityDrag, SessionSurfaceEntityFeedback } = await import('./SessionSurfaceEntityDrag');
+    const receipt = createDeferred<void>();
+    let drag: ReturnType<typeof useSessionSurfaceEntityDrag> | undefined;
+    function Surface() {
+        drag = useSessionSurfaceEntityDrag({ scope: SCOPE, isCurrent: () => true, title: 'Capacity',
+            getItem: () => ({ kind: 'home-section', scope: SCOPE, sectionId: 'capacity' }),
+            target: { acceptedKinds: ['home-section'], resolve: () => ({ status: 'allowed', effect: {
+                actionId: 'home.hub.layout.update', input: { intent: { kind: 'move_to', sectionId: 'capacity',
+                    position: { anchorId: 'start', placement: 'before' } } },
+                preview: { glyph: 'above', verb: 'Move above Start a session', target: 'Start a session' },
+            } }), execute: async () => { await receipt.promise; return { status: 'applied' }; } },
+        });
+        return <SessionSurfaceEntityFeedback kind="home-section" scope={SCOPE} address={null} testID="surface" />;
+    }
+    const screen = await renderScreen(<Surface />);
+    const announcement = () => screen.findByTestId('surface-live-region')!.findAllByType(Text)
+        .map(node => node.props.children).join('');
+    let move: Promise<unknown> | undefined;
+    try {
+        await act(async () => { move = drag!.runtime.perform(drag!.sourceId, drag!.targetId); });
+        expect(drag!.runtime.getSnapshot().phase).toBe('pending');
+        expect(announcement()).not.toBe('');
+        await act(async () => { receipt.resolve(); await move; });
+        expect(drag!.runtime.getSnapshot().phase).toBe('settled');
+        expect(announcement()).toBe('');
+    } finally { receipt.resolve(); await move; await act(async () => { drag?.runtime.cancel('test-end'); }); }
 });

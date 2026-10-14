@@ -1,8 +1,8 @@
-import type { TeamInvitationAcceptResultV1 } from "@happier-dev/protocol/teams";
+import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol/teams/invitation';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { normalizeVerifiedEmail } from "@happier-dev/protocol";
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import { upsertVerifiedMailboxEvidenceInTx } from "@/app/auth/verifiedMailboxEvidence";
 import { admitTeamMemberInTx } from "../memberships/membershipService";
 import { publishTeamChangedInTx } from "../teamChanges";

@@ -277,14 +277,18 @@ descriptors (`attachmentId`, `name`, `mediaType`, optional `byteLength`). An
 attachment-only message uses empty `text` and a nonempty descriptor list.
 Observations never contain file bytes or filesystem paths. Providers offering
 files bind the optional safe `attachmentFetch` role. Its input carries the
-current connection fields plus `messageId` and `attachmentId`; success is
-`{ kind: 'fetched', path }`, naming a provider-owned local file, or the existing
+current connection fields plus `messageId` and `attachmentIds`; success is
+`{ kind: 'fetched', attachments: [{ attachmentId, base64 }] }`, or the existing
 `notReady` failure. Apply `assertConversationChannelsCoreCallerV1` before I/O,
-as with every other role. The provider owns the fetched file's lifecycle.
+as with every other role. Providers fetch and parse the message once for the
+consuming batch and retain no staged files. Channels owns secure temporary
+files only until each Session transfer settles, including cancellation.
 V1 places files in the Session only when its machine matches the connection's
-captured provider origin. The Channels input owner extracts text and PDF
-text-layer content on the connection machine and includes it once in the
-ordinary message text before `session.send`, independently of Session placement.
+captured provider origin. On that machine, the resolver extracts text and PDF
+text-layer content from the same live bytes it materializes and includes it
+once in the attachment's untrusted context. For a remote Session, the Channels
+input owner includes text/PDF content in ordinary message text before
+`session.send`; dispatch does not fetch the files again.
 For a Session on another machine, the attachment resolver reports
 `data.file: { kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' }`
 through the existing ready attachment result. The context also tells the Agent
@@ -300,7 +304,7 @@ without promising cross-machine file delivery or storing bytes in Collections.
 | `endpointResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `principalResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `observationsPoll` | optional; required when setup selects `checkpointedPull` | Channels | Channels | `surface: plugin`, `danger: safe` |
-| `attachmentFetch` | optional | Channels connection + message/file ids | local file or typed failure | `surface: plugin`, `danger: safe` |
+| `attachmentFetch` | optional | Channels connection + message/file ids | live byte batch or typed failure | `surface: plugin`, `danger: safe` |
 | `messageDeliver` | required | Channels | Channels | `surface: plugin`, `danger: writesRemote` |
 | `deliveryReconcile` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `connectionStop` | optional; required when setup selects `socket` | Channels | Channels | `surface: plugin`, `danger: writesRemote` |
@@ -396,8 +400,10 @@ child creation. No separate thread or shaping store exists.
 
 In current 0.3 development source, setup may return
 `recommendedMaximumObservationAgeMs`. Preparation preserves it and the setup
-form seeds that value; a provider without a recommendation uses the supported
-freshness range's maximum. Telegram recommends 24 hours because of its
+form seeds that value; a provider without a recommendation uses the existing
+30-day suggestion. Freshness values and provider retry hints accept nonnegative
+safe-integer milliseconds, without a one-minute floor or 30-day/24-hour ceiling.
+Telegram recommends 24 hours because of its
 [update retention](https://core.telegram.org/bots/api#getting-updates).
 GitHub and Discord recommend 30 days as provider-owned policy, not a retention
 promise: GitHub exposes [comment history with `since`](https://docs.github.com/en/rest/issues/comments#list-issue-comments-for-a-repository),

@@ -13,6 +13,7 @@ import {
 import { isRecord } from '@happier-dev/plugin-sdk';
 
 import { GEMINI_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
+import { buildGeminiAcpToolNameResolver } from '../acp/toolNames.js';
 import {
   GEMINI_ACP_AUTH_META_ENV,
   GEMINI_ACP_AUTH_METHOD_ENV,
@@ -122,7 +123,7 @@ async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void |
           toolCallMs: GEMINI_ACP_RUNTIME_DEFINITION.timeouts.toolCallMs,
         },
       },
-      definition: GEMINI_ACP_RUNTIME_DEFINITION,
+      definition: { ...GEMINI_ACP_RUNTIME_DEFINITION, toolNameResolver: buildGeminiAcpToolNameResolver(request) },
     });
     let disposed = false;
     return {

@@ -15,11 +15,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         paddingVertical: 3,
     },
     text: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
     },

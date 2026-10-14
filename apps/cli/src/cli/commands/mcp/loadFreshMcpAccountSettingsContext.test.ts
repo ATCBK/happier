@@ -1,15 +1,14 @@
 import axios from 'axios';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpServerCatalogRowMutationV1Schema, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
-import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { McpCommandDeps } from './deps';
 import { loadFreshMcpAccountSettingsContext } from './loadFreshMcpAccountSettingsContext';
 import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
-import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import type { Settings } from '@/persistence';
 
 // HTTP and cache-file I/O are boundaries. Catalog admission, semantic edits,
@@ -41,7 +40,7 @@ let onRead: (() => void) | undefined;
 let writes: unknown[];
 let machineSettings: Settings;
 
-function commandReadDeps(): Pick<McpCommandDeps, 'readStoredCredentials' | 'bootstrapAccountSettingsContext' | 'fetchServerFeaturesSnapshot' | 'randomUUID' | 'nowMs'> {
+function commandReadDeps(): Pick<McpCommandDeps, 'readStoredCredentials' | 'bootstrapAccountSettingsContext' | 'fetchServerFeaturesSnapshot'> {
   return {
     readStoredCredentials: async () => credentials,
     bootstrapAccountSettingsContext: input => bootstrapAccountSettingsContext({ ...input,
@@ -52,17 +51,7 @@ function commandReadDeps(): Pick<McpCommandDeps, 'readStoredCredentials' | 'boot
       },
     }),
     fetchServerFeaturesSnapshot: async () => ({ status: 'error', reason: 'network' }),
-    randomUUID: () => 'created-id', nowMs: () => 10,
   };
-}
-
-async function commandDeps() {
-  return commandReadDeps();
-}
-
-async function jsonCommand(run: () => Promise<void>) {
-  const output = captureStdoutJsonOutput<unknown>();
-  try { await run(); return output.json(); } finally { output.restore(); }
 }
 
 async function changeRules(state: 'on' | 'inherit') {
@@ -117,10 +106,6 @@ describe('MCP command catalog admission', () => {
     const result = await loadFreshMcpAccountSettingsContext(credentials, commandReadDeps());
     expect(result.mcpServerCatalog).toMatchObject({ status: 'ready', revision: 7, catalog });
     expect(result.settings.mcpServersStrictMode).toBe(true);
-    const { cmdMcpServersList } = await import('./servers/list');
-    const deps = commandReadDeps();
-    expect(await jsonCommand(() => cmdMcpServersList([], deps, { json: true })))
-      .toMatchObject({ ok: true, data: { strictMode: true, servers: [{ id: 'server-1', name: 'first' }] } });
   });
 
   it('refuses unavailable catalog facts instead of reporting a successful empty list', async () => {
@@ -136,16 +121,6 @@ describe('MCP command catalog admission', () => {
     };
     await expect(loadFreshMcpAccountSettingsContext(credentials, commandReadDeps())).rejects.toMatchObject({ code: 'mcp_catalog_unavailable' });
     expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe('another-account');
-  });
-
-  it('adds with default reach through catalog row CAS while preserving the existing server', async () => {
-    const { cmdMcpServersAdd } = await import('./servers/add');
-    const deps = await commandDeps();
-    expect(await jsonCommand(() => cmdMcpServersAdd(['--name', 'second', '--command', 'second-fixture'], deps, { json: true })))
-      .toMatchObject({ ok: true, data: { created: { id: 'created-id', name: 'second' } } });
-    expect(catalog.servers.map(entry => entry.id)).toEqual(['server-1', 'created-id']);
-    expect(catalog.bindings).toMatchObject([{ serverId: 'created-id', enabled: true, target: { t: 'allMachines' } }]);
-    expect(writes).toMatchObject([{ expectedRevision: 7 }]);
   });
 
   it('reports a durable row conflict without claiming rules removal succeeded', async () => {
@@ -170,65 +145,13 @@ describe('MCP command catalog admission', () => {
     expect(submissions).toBe(1);
   });
 
-  describe('real MCP command entrypoint', () => {
-    let handleMcpCommand: typeof import('../mcp')['handleMcpCommand'];
-    beforeAll(async () => {
-      // Keep aggregate dispatcher setup outside command/output lifetimes.
-      // Focused command-owner cases do not load this unrelated plugin graph.
-      ({ handleMcpCommand } = await import('../mcp'));
-    });
-
-    it('preserves typed catalog unavailability through the real MCP command entrypoint', async () => {
-      refuseRead = true;
-      expect(await jsonCommand(() => handleMcpCommand(['servers', 'list', '--json'], commandReadDeps())))
-        .toMatchObject({ ok: false, kind: 'mcp_servers_list', error: { code: 'mcp_catalog_unavailable' } });
-      expect(process.exitCode).toBe(1);
-    });
-
-    it('reports an invalid semantic mutation through the real MCP command entrypoint without a row write', async () => {
-      expect(await jsonCommand(() => handleMcpCommand(['servers', 'add', '--name', 'first', '--command', 'fixture', '--json'], commandReadDeps())))
-        .toMatchObject({ ok: false, kind: 'mcp_servers_add', error: { code: 'invalid-mutation' } });
-      expect(writes).toEqual([]);
-      expect(catalog.servers).toEqual([server]);
-      expect(process.exitCode).toBe(1);
-    });
-
-    it('preserves argument and unexpected-failure exits through the real MCP command entrypoint', async () => {
-      expect(await jsonCommand(() => handleMcpCommand(['servers', 'add', '--json'], commandReadDeps())))
-        .toMatchObject({ ok: false, error: { code: 'invalid_arguments' } });
-      expect(process.exitCode).toBe(1);
-      expect(await jsonCommand(() => handleMcpCommand(['servers', 'list', '--json'], { ...commandReadDeps(),
-        readStoredCredentials: async () => { throw new Error('Credential file invariant failed'); },
-      })))
-        .toMatchObject({ ok: false, error: { code: 'unknown_error' } });
-      expect(process.exitCode).toBe(2);
-    });
-  });
-
-  it('refuses private list output after same-Account reentry across the original capture handoff', async () => {
-    const { cmdMcpServersList } = await import('./servers/list');
-    let scheduled = false;
-    let reentered = false;
-    const stop = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
-      if (scheduled || next?.mcpServerCatalog?.status !== 'ready') return;
-      scheduled = true;
-      queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => {
-        setActiveAccountSettingsSnapshot({ ...next, scopeKey: 'retired-account' });
-        setActiveAccountSettingsSnapshot({ ...next, mcpServerCatalog: { status: 'ready', authority: 'active', revision: 8,
-          catalog: { v: 1, servers: [], bindings: [] }, diagnostics: [] } });
-        reentered = true;
-      }))));
-    });
-    const output = captureStdoutJsonOutput<unknown>();
-    try {
-      await expect(cmdMcpServersList([], commandReadDeps(), { json: true }))
-        .rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'scope-retired' });
-      expect(reentered).toBe(true);
-      expect(output.chunks).toEqual([]);
-    } finally {
-      output.restore();
-      stop();
-    }
+  it('refuses an admitted operation after same-Account reentry', async () => {
+    const snapshot = await loadFreshMcpAccountSettingsContext(credentials, commandReadDeps());
+    const active = getActiveAccountSettingsSnapshot();
+    if (!active) throw new Error('Expected admitted Account');
+    setActiveAccountSettingsSnapshot({ ...active, scopeKey: 'retired-account' });
+    setActiveAccountSettingsSnapshot(active);
+    await expect(snapshot.operationContext.isCurrent()).resolves.toBe(false);
   });
 
 });

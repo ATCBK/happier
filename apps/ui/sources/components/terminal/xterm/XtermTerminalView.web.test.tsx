@@ -351,7 +351,7 @@ describe('XtermTerminalView.web', () => {
         expect(requireTerminalHandle(ref).find?.getSnapshot()).toMatchObject({ open: false, query: '' });
     });
 
-    it('allows the content material to clear the terminal background without fading foreground text', async () => {
+    it('paints no background of its own, so the pane material shows through in glass and solid alike, without fading foreground text', async () => {
         const { XtermTerminalView } = await import('./XtermTerminalView.web');
         const { storage } = await import('@/sync/domains/state/storage');
         const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
@@ -369,7 +369,7 @@ describe('XtermTerminalView.web', () => {
                 storage.setState({ settings: { ...previous, glassBlurEnabled: true, glassSurfaceMaterials: { ...materials, content: { blur: 'off', opacity: 1 } } } });
             });
             expect(terminalInstances).toHaveLength(1);
-            expect(terminal.options.theme).toEqual(expect.objectContaining({ background: '#000000', foreground: '#ffffff' }));
+            expect(terminal.options.theme).toEqual(expect.objectContaining({ background: '#00000000', foreground: '#ffffff' }));
         } finally {
             await act(async () => { storage.setState({ settings: previous }); });
         }
@@ -426,6 +426,18 @@ describe('XtermTerminalView.web', () => {
         });
 
         expect(focusSpy.mock.calls.length).toBe(initialFocusCalls + 1);
+    });
+
+    it('keeps the renderer canvases in their own stacking context so they never cover controls beside the terminal', async () => {
+        const { XtermTerminalView } = await import('./XtermTerminalView.web');
+
+        await act(async () => {
+            root.render(<XtermTerminalView testID="terminal" fontSize={14} onInput={() => {}} onResize={() => {}} onReady={() => {}} />);
+        });
+
+        const terminalContainer = container.querySelector<HTMLElement>('[data-testid="terminal"]');
+        expect(terminalContainer?.style.isolation).toBe('isolate');
+        expect(terminalContainer?.style.overflow).toBe('hidden');
     });
 
     it('skips fit while the xterm renderer is unavailable', async () => {

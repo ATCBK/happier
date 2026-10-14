@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import type { LocalServicePreviewTokenV1 } from "@happier-dev/protocol";
+import type { LocalServicePreviewTokenV1 } from '@happier-dev/protocol/local/services/preview/v1';
 
 export type LocalServicePreviewTokenRecord = LocalServicePreviewTokenV1 & Readonly<{
     tokenHash: string;

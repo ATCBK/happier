@@ -3,17 +3,18 @@ import * as privacyKit from 'privacy-kit';
 import { artifactConversionBlobKey, artifactConversionBlobCustody, type PreparedArtifactAccountEncryptionConversionBlob, type PreparedArtifactAccountEncryptionConversionBlobs } from './artifactEncryptionConversionBlobService';
 import { db } from '@/storage/db';
 import { deletePrivateFile } from '@/storage/blob/files';
-import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol';
+import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
 import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
-import type {
-    AccountEncryptionMigrateArtifactsDirective,
-} from "@happier-dev/protocol";
-import { ArtifactRecipientKeyEnvelopesV1Schema, ArtifactBlobReferenceV1Schema, decodePlainArtifactStoredContent, parseEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
-import { buildPluginDomainAccountChangeEntityId } from "@happier-dev/protocol/changes";
+import type { AccountEncryptionMigrateArtifactsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import { ArtifactRecipientKeyEnvelopesV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactBlobReferenceV1Schema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 import { checkArtifactStorageBudgetInTx, retainArtifactBodyRevisionInTx, type ArtifactQuotaExceeded } from "./artifactStorageService";
 import {
     artifactDataKeyMatchesAccountMode,

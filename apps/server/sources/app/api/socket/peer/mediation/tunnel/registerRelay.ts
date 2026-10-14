@@ -1,26 +1,11 @@
-import {
-    decodePeerApplicationEncryptedFrameV1,
-    decodePeerTcpTunnelBinaryFrameV2,
-    encodePeerTcpTunnelBinaryFrameV2,
-    PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    PEER_TCP_TUNNEL_MAX_WINDOW_BYTES,
-    PeerTcpTunnelRelayEnvelopeSchema,
-    PeerTcpTunnelRelayEnvelopeV1Schema,
-    isLiteralLoopbackHostname,
-    normalizeHostnameForLoopbackCheck,
-    verifyPeerTcpTunnelRelayAuthorizationV2,
-    type PeerTcpTunnelBinaryFrameHeaderV2,
-    type PeerTcpTunnelEncoding,
-    type PeerTcpTunnelFrameV1,
-    type PeerTcpTunnelRelayBinaryEnvelopeV2,
-    type PeerTcpTunnelRelayEnvelope,
-    type PeerTcpTunnelRelayEnvelopeV1,
-    type PeerTcpTunnelRelayAuthorizationPayloadV2,
-    type PeerTcpTunnelRelayAuthorizationTrustRootV1,
-    type PeerTcpTunnelRelayParticipantV1,
-    type PeerTcpTunnelOpenV1,
-} from '@happier-dev/protocol';
+import { decodePeerApplicationEncryptedFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/peerApplicationEncryptionV1';
+import { decodePeerTcpTunnelBinaryFrameV2, encodePeerTcpTunnelBinaryFrameV2, type PeerTcpTunnelBinaryFrameHeaderV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v2';
+import { PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2, type PeerTcpTunnelEncoding } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, PeerTcpTunnelRelayEnvelopeSchema, PeerTcpTunnelRelayEnvelopeV1Schema, type PeerTcpTunnelRelayBinaryEnvelopeV2, type PeerTcpTunnelRelayEnvelope, type PeerTcpTunnelRelayEnvelopeV1, type PeerTcpTunnelRelayParticipantV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
+import { PEER_TCP_TUNNEL_MAX_WINDOW_BYTES, type PeerTcpTunnelFrameV1, type PeerTcpTunnelOpenV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v1';
+import { isLiteralLoopbackHostname, normalizeHostnameForLoopbackCheck } from '@happier-dev/protocol/server/urls/loopbackHostname';
+import { verifyPeerTcpTunnelRelayAuthorizationV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorization';
+import { type PeerTcpTunnelRelayAuthorizationPayloadV2, type PeerTcpTunnelRelayAuthorizationTrustRootV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
 
 import { getSocketRooms } from '../../../../socketRooms';
 import { resolveMachineAdmission } from '@/app/machines/machineAccess';

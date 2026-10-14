@@ -1,5 +1,8 @@
-import type { z } from 'zod';
+import { z } from 'zod/mini';
+export * from './providerAccountUsagePageProjection.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { buildProviderAccountUsagePageProjectionV1, packProviderAccountUsagePageProjectionV1,
+  getProviderAccountUsageQuotaHistoryV1, type PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
 import { serializeProviderAccountUsageSnapshotMaterialV1 } from './providerAccountUsagePrimitives.js';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from './legacyConnectedServiceCompatibility.js';
 export { ProviderAccountUsageHistoryCursorV1Schema, ProviderAccountUsageHistoryWitnessV1Schema } from './providerAccountUsagePrimitives.js';
@@ -26,10 +29,10 @@ export {
 } from './providerAccountUsageHistorySchemasV1.js';
 
 const QuotaReadProjectionFieldsSchema = lazyZodSchema(() =>
-  ConnectedServiceQuotaGetResultV1Schema.omit({ current: true, history: true }));
+  z.omit(ConnectedServiceQuotaGetResultV1Schema, { current: true, history: true, pageProjection: true }));
 
-export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; /** New page following an already coalesced prefix from this same read. */ appendHistory?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1; coalesceHistory?: boolean }>): ConnectedServiceQuotaGetResultV1 {
-  const history = input.appendHistory ? appendCoalescedHistory(input.history, input.appendHistory)
+export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; pageProjection?: z.infer<typeof PackedProviderAccountUsagePageProjectionV1Schema>; /** New page following an already coalesced prefix from this same read. */ appendHistory?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1; coalesceHistory?: boolean }>): ConnectedServiceQuotaGetResultV1 {
+  const history = input.pageProjection ? getProviderAccountUsageQuotaHistoryV1(input) : input.appendHistory ? appendCoalescedHistory(input.history, input.appendHistory)
     : input.history && input.coalesceHistory ? coalesceHistory(input.history) : input.history;
   const snapshots = history?.entries.map(entry => entry.snapshot);
   const projected = QuotaReadProjectionFieldsSchema.parse({ source: input.input.source,
@@ -39,7 +42,9 @@ export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: 
   // current-snapshot cache). Re-parsing them here clones the whole accumulated
   // history on every progressive page. Action and Resource boundaries still
   // validate the complete outward result; validate only new projection fields here.
-  return { source: projected.source, current: input.current, ...(history ? { history } : {}),
+  const pageProjection = input.pageProjection ?? (input.input.projection && history?.nextCursor === null
+    ? packProviderAccountUsagePageProjectionV1(buildProviderAccountUsagePageProjectionV1({ recordId: input.current?.recordId ?? history.entries[0]?.snapshot.recordId ?? '', range: input.input.projection.range, history })) : undefined);
+  return { source: projected.source, current: input.current, ...(pageProjection ? { pageProjection } : history ? { history } : {}),
     unusedCapacity: projected.unusedCapacity, pace: projected.pace, targets: projected.targets, waitingWork: projected.waitingWork };
 }
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const CodingPromptBehaviorModeV1Schema = lazyZodSchema(() => z.enum(['agent', 'disabled']));
 export type CodingPromptBehaviorModeV1 = z.infer<typeof CodingPromptBehaviorModeV1Schema>;
@@ -7,17 +7,15 @@ export type CodingPromptBehaviorModeV1 = z.infer<typeof CodingPromptBehaviorMode
 export const CodingPromptSessionTitleUpdatesModeV1Schema = lazyZodSchema(() => z.enum(['disabled', 'initial', 'ongoing']));
 export type CodingPromptSessionTitleUpdatesModeV1 = z.infer<typeof CodingPromptSessionTitleUpdatesModeV1Schema>;
 
-const CodingPromptSessionTitleUpdatesInputV1Schema = lazyZodSchema(() => z
-  .enum(['agent', 'disabled', 'initial', 'ongoing'])
-  .transform((mode): CodingPromptSessionTitleUpdatesModeV1 => (mode === 'agent' ? 'ongoing' : mode)));
+const CodingPromptSessionTitleUpdatesInputV1Schema = lazyZodSchema(() => z.pipe(z
+  .enum(['agent', 'disabled', 'initial', 'ongoing']), z.transform((mode): CodingPromptSessionTitleUpdatesModeV1 => (mode === 'agent' ? 'ongoing' : mode))));
 
-export const CodingPromptBehaviorV1Schema = lazyZodSchema(() => z
+export const CodingPromptBehaviorV1Schema = lazyZodSchema(() => z.catch(z
   .object({
-    v: z.literal(1).default(1),
-    sessionTitleUpdates: CodingPromptSessionTitleUpdatesInputV1Schema.default('ongoing'),
-    responseOptions: CodingPromptBehaviorModeV1Schema.default('agent'),
-  })
-  .catch({
+    v: z._default(z.literal(1), 1),
+    sessionTitleUpdates: z._default(CodingPromptSessionTitleUpdatesInputV1Schema, 'ongoing'),
+    responseOptions: z._default(CodingPromptBehaviorModeV1Schema, 'agent'),
+  }), {
     v: 1,
     sessionTitleUpdates: 'ongoing',
     responseOptions: 'agent',
@@ -32,12 +30,10 @@ export type CodingPromptBehaviorV1 = z.infer<typeof CodingPromptBehaviorV1Schema
  * never expressed an opinion. This carries no prompt text: profile-specific
  * system stacks are owned by `PromptStacksV1.surfaces.profilesById`.
  */
-export const CodingPromptBehaviorOverridesV1Schema = lazyZodSchema(() => z
-  .object({
-    sessionTitleUpdates: CodingPromptSessionTitleUpdatesInputV1Schema.optional(),
-    responseOptions: CodingPromptBehaviorModeV1Schema.optional(),
-  })
-  .strict());
+export const CodingPromptBehaviorOverridesV1Schema = lazyZodSchema(() => z.strictObject({
+    sessionTitleUpdates: z.optional(CodingPromptSessionTitleUpdatesInputV1Schema),
+    responseOptions: z.optional(CodingPromptBehaviorModeV1Schema),
+  }));
 
 export type CodingPromptBehaviorOverridesV1 = z.infer<typeof CodingPromptBehaviorOverridesV1Schema>;
 
@@ -47,13 +43,12 @@ export type CodingPromptBehaviorOverridesV1 = z.infer<typeof CodingPromptBehavio
  * `codingPromptBehaviorOverrides` instead. Keep this while supported stored
  * legacy profiles can carry the predecessor field.
  */
-export const HistoricalCodingPromptBehaviorProfileOverrideV1Schema = lazyZodSchema(() => z
+export const HistoricalCodingPromptBehaviorProfileOverrideV1Schema = lazyZodSchema(() => z.catch(z
   .object({
-    v: z.literal(1).default(1),
-    sessionTitleUpdates: CodingPromptSessionTitleUpdatesInputV1Schema.optional(),
-    responseOptions: CodingPromptBehaviorModeV1Schema.optional(),
-  })
-  .catch({ v: 1 }));
+    v: z._default(z.literal(1), 1),
+    sessionTitleUpdates: z.optional(CodingPromptSessionTitleUpdatesInputV1Schema),
+    responseOptions: z.optional(CodingPromptBehaviorModeV1Schema),
+  }), { v: 1 }));
 
 export type HistoricalCodingPromptBehaviorProfileOverrideV1 = z.infer<
   typeof HistoricalCodingPromptBehaviorProfileOverrideV1Schema

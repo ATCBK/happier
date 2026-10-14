@@ -24,7 +24,8 @@ export function useSessionCommitPlan(params: Readonly<{
         const scope = bound.scope;
         const prompt = buildCommitHookFixPrompt(proposal);
         if (!scope || !prompt || !bound.isCurrent() || !bound.canSend || !params.onOpenComposer) return;
-        const existing = getSessionDraftSnapshot(scope, { kind: 'session', sessionId: params.sessionId })?.document.composer.text.value;
+        const document = getSessionDraftSnapshot(scope, { kind: 'session', sessionId: params.sessionId })?.document;
+        const existing = document && 'composer' in document ? document.composer.text.value : undefined;
         const text = typeof existing === 'string' && existing.trim() ? `${existing.replace(/\s+$/, '')}\n\n${prompt}` : prompt;
         writeExistingSessionDraft({ scope, sessionId: params.sessionId, patch: { text,
             routing: { recipient: StrictJsonValueSchema.parse({ mode: 'manual', recipient: null }) } }, materializationIntent: 'userEdit' });

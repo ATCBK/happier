@@ -160,7 +160,7 @@ export function SourceControlRemotesSection(props: Readonly<{
             testID="scm-update-remotes-section"
         >
             {remotes.length === 0 ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                     {t('files.sourceControlOperations.update.remotes.empty')}
                 </Text>
             ) : (
@@ -179,7 +179,7 @@ export function SourceControlRemotesSection(props: Readonly<{
                             }}
                         >
                             <View style={{ gap: 2 }}>
-                                <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                                <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.primary,  }}>
                                     {remote.name}
                                 </Text>
                                 <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.mono() }} numberOfLines={1}>
@@ -215,7 +215,7 @@ export function SourceControlRemotesSection(props: Readonly<{
 
             <View style={{ gap: 8 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.primary,  }}>
                         {editing.mode === 'add'
                             ? t('files.sourceControlOperations.update.remotes.addTitle')
                             : t('files.sourceControlOperations.update.remotes.editTitle', { name: editing.remote.name })}

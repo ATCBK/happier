@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
@@ -16,7 +16,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
  * identifier that tells two devices apart when they are signed in to different Accounts.
  */
 export const AccountIdentifier = React.memo(function AccountIdentifier(props: Readonly<{ accountId: string }>) {
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const copy = React.useCallback(async () => {
         if (!await setClipboardStringSafe(props.accountId)) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));

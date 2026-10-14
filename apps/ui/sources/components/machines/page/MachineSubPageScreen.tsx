@@ -160,7 +160,7 @@ function MachineSubPageBody(props: Readonly<{
         case 'terminal':
             return <MachineTerminalPageBody machine={machine} serverId={serverId} isServerSwitching={target.isServerSwitching} refreshKey={props.refreshKey} />;
         case 'connection':
-            return <MachineDirectConnectionSection machineId={machine.id} machineName={target.machineName} />;
+            return <MachineDirectConnectionSection serverId={serverId} machineId={machine.id} machineName={target.machineName} />;
         case 'installables':
             return <MachineInstallablesSection machineId={machine.id} serverId={serverId} />;
         case 'doctor':

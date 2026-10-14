@@ -1,5 +1,6 @@
 export {
     describeApprovalActionFields,
+    describeApprovalRequestFields,
     formatApprovalFieldValues,
     getApprovalFieldValues,
     projectApprovalStructuredAnswers,

@@ -5,17 +5,20 @@ import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import {
   AccountEncryptionCurrentnessResponseSchema, V2SessionByIdResponseSchema, SessionOwnerMetadataV1Schema,
   createPlainSessionOwnerMetadataEnvelopeV1, ExternalShareableTranscriptPageV1Schema, FeaturesResponseSchema, accountSettingsParse,
-  SessionInputRequestV1Schema, SessionMessageProvenanceV1Schema, settleSessionInputRequestV1, settleSessionMessageProvenanceV1,
+  SessionInputRequestV1Schema, SessionMessageProvenanceV1Schema, settleSessionInputRequestV1, settleSessionMessageProvenanceV1, withSessionInputAuthorityV1,
   type SessionPendingEnqueueByMachineRequestV1, type SessionPendingExecutionRunEnqueueByMachineRequestV2,
-  SessionTurnV1Schema, type SessionTurnV1,
+  SessionTurnV1Schema, type SessionTurnV1, materializeWorkflowAcceptedSnapshotV1, type WorkflowDefinitionV1,
 } from '@happier-dev/protocol';
 import {
   ConversationObservationV1Schema, ConversationPollResultV1Schema, ConversationDeliveryInputV1Schema,
   ConversationProvidersContributionProtocolV1, type ConversationObservationV1, type ConversationDeliveryInputV1,
   ConversationBindingTargetV1Schema,
+  ConversationDeliveryResolveInputV1Schema,
+  ConversationDeliveryResolveResultV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 import { createConversationProviderSetupResultV1Fixture } from '@happier-dev/channels-protocol/testing/v1';
-import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
 
 import { createCliActionExecutorHarness } from '../actions/createCliActionExecutorHarness';
 import { executePluginSessionMessageAction } from './executePluginSessionMessageAction';
@@ -24,13 +27,23 @@ import { projectExternalShareableTranscriptPage } from './transcript/projectExte
 import { createChannelsJourneyFixture } from '../../../../../packages/plugins/channels/src/testkit/channelsJourney';
 import { createCurrentConversationConnectionFixture } from '../../../../../packages/plugins/channels/src/testkit/currentConnectionFixture';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../../packages/plugins/channels/src/collections';
-import { CHANNELS_PROVIDER_POINT_REF } from '../../../../../packages/plugins/channels/src/manifest';
+import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF } from '../../../../../packages/plugins/channels/src/manifest';
 import { createConversationSessionProjectionFrontierRow } from '../../../../../packages/plugins/channels/src/sessionProjection';
+import { readConversationOutwardDeliveryResolutionPage } from '../../../../../packages/plugins/channels/src/outwardDelivery';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
+import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
+import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
+import { createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
+import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { buildWorkflowActionContext } from '@/daemon/workflows/daemonRuntime';
+import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
+import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
 
 // External authentication and RPC transport are system boundaries. The real
 // Session Action executor beneath them owns spawn, archive and turn control.
@@ -63,7 +76,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean } = {}) {
+async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean } = {}) {
   const pending: ConversationObservationV1[] = [];
   const delivered: ConversationDeliveryInputV1[] = [];
   const roles = ConversationProvidersContributionProtocolV1.operations;
@@ -91,6 +104,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         if (input.wrongDelivery) roles.connectionTest.declaration.input.schema.parse(request);
         const value = ConversationDeliveryInputV1Schema.parse(request);
         delivered.push(value);
+        if (value.newThread && input.ambiguousStart) return { kind: 'outcomeUnknown' };
         return { kind: 'delivered', providerMessageIds: [`receipt-${delivered.length}`],
           ...(value.newThread ? { endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: endpoint.id } } : {}) };
       } },
@@ -116,6 +130,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
   }
   addSession('session-journey-1');
   const spawnRequests: ReturnType<typeof SpawnDaemonSessionRequestSchema.parse>[] = [];
+  const transcriptPages: unknown[] = [];
   const rpcRequests: string[] = [];
   vi.mocked(callSessionRpc).mockImplementation(async request => {
     rpcRequests.push(request.method);
@@ -195,7 +210,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         requestedProvenance: SessionMessageProvenanceV1Schema.parse(meta.happierProvenanceV1), inputAdmissionReceipt: receipt });
       rows.push({ id: `user-${rows.length + 1}`, seq: rows.length + 1, localId: request.localId, createdAt: Date.now(),
         messageRole: 'user', sidechainId: null, externalShareableActor: 'machine',
-        content: { t: 'plain', v: { ...body, meta: { ...meta, happierInputAuthorityV1: authority, happierProvenanceV1: provenance } } } });
+        content: { t: 'plain', v: { ...body, meta: { ...withSessionInputAuthorityV1(meta, authority), happierProvenanceV1: provenance } } } });
       return { status: 'accepted', localId: request.localId };
     } });
   const unavailable = async (): Promise<never> => { throw new Error('This journey does not use external Session or system record boundaries'); };
@@ -229,9 +244,14 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         ctx: null, callerPluginId: 'happier.channels', cursorSeq: Number(request.cursor ?? 0), limit: 100,
         upstreamHasMore: false, publicationBlocked: false });
       ExternalShareableTranscriptPageV1Schema.parse(page);
+      transcriptPages.push(page);
       return { ok: true, result: { ok: true, sessionId: String(request.sessionId), projection: 'externalShareableV1', ...page } };
     }
-    return await executor.execute(action, value, context);
+    const result = await executor.execute(action, value, context);
+    if (action === 'session.spawn_new' && (!result.ok || record(result.result).type === 'error')) {
+      throw new Error(`Session birth boundary refused the journey: ${JSON.stringify(result)}`);
+    }
+    return result;
   } }, invokeContributedAction: unavailable });
   const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1',
     ...(input.socket ? { transport: { kind: 'socket' as const }, replayContinuity: 'sessionBound' as const } : {}), authority: {
@@ -271,13 +291,76 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(compiled, row.value), row.rowId).toBe(true);
     }
   }
-  return { ...core, pending, delivered, admissions, sessions, creations, spawnRequests, answer, validateWrites, rpcRequests,
+  return { ...core, pending, delivered, admissions, sessions, creations, spawnRequests, transcriptPages, answer, validateWrites, rpcRequests,
     async dispose() { await core.dispose(); await provider.dispose(); http.mockRestore(); writes.mockRestore();
       activeCore = undefined;
       vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); } };
 }
 
-describe('registered Channels composed journeys through real CLI Session admission', () => {
+describe('registered Channels composed journeys through real CLI Session admission', { timeout: 60_000 }, () => {
+  it('reads accepted custody through the registered safe delivery Action before and after provider delivery', async () => {
+    const fixture = await journey({ router: true });
+    try {
+      const admitted = record(await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private read subject',
+        content: { text: 'Private read body' }, sessionId: 'session-journey-1',
+      }));
+      const request = { custodyId: String(admitted.custodyId) };
+      const queued = await fixture.invoke('delivery/read-v1', request);
+      expect(queued).toMatchObject({ kind: 'ready', delivery: {
+        custodyId: request.custodyId, revision: expect.any(Number), state: 'ready', lastOutcome: 'pending',
+      } });
+      expect(JSON.stringify(queued)).not.toContain('Private read');
+      await fixture.outward();
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: {
+        custodyId: request.custodyId, state: 'delivered', lastOutcome: 'delivered',
+      } });
+    } finally { await fixture.dispose(); }
+  });
+
+  it('projects the missing started-thread endpoint and accepts its current custody without resending', async () => {
+    const fixture = await journey({ router: true, ambiguousStart: true });
+    try {
+      await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private brief subject',
+        content: { text: 'Private brief body' }, sessionId: 'session-journey-1',
+      });
+      await fixture.outward();
+      const page = await readConversationOutwardDeliveryResolutionPage({
+        deliveriesCollection: fixture.deliveries as never, connectionId: 'connection-1',
+      });
+      expect(page.rows).toEqual([expect.objectContaining({
+        state: 'outcomeUnknown', createdThreadEndpointRequired: { parentId: 'mailbox' },
+      })]);
+      expect(JSON.stringify(page)).not.toContain('Private brief');
+      const row = page.rows[0]!;
+      const request = { custodyId: row.custodyId, expectedRevision: row.revision, resolution: 'accepted' } as const;
+      await expect(fixture.invoke('delivery/resolve-v1', request))
+        .rejects.toMatchObject({ code: 'channels_delivery_resolve_endpoint_required' });
+      await expect(fixture.invoke('delivery/resolve-v1', { ...request,
+        endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: 'another-mailbox' },
+      })).rejects.toMatchObject({ code: 'channels_delivery_resolve_endpoint_required' });
+      const accepted = ConversationDeliveryResolveInputV1Schema.parse({ ...request,
+        endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: 'mailbox' },
+      });
+      expect(ConversationDeliveryResolveResultV1Schema.parse(await fixture.invoke('delivery/resolve-v1', accepted)))
+        .toMatchObject({ kind: 'resolved', custodyId: row.custodyId, resolution: 'accepted' });
+      await fixture.outward();
+      await fixture.outward();
+      expect(fixture.delivered).toHaveLength(1);
+      const children = [...fixture.state.rows.values()].filter(child => child.value['record-kind'] === 'binding'
+        && record(child.value.payload).parentBindingId === 'binding-1');
+      expect(children).toHaveLength(1);
+      expect(children[0]?.value.payload).toMatchObject({
+        endpoint: accepted.endpoint, target: { kind: 'session', sessionId: 'session-journey-1' },
+      });
+      fixture.pending.push(observation('confirmed-brief-reply', 'Merci', true));
+      await fixture.poll();
+      expect(fixture.admissions.map(admission => admission.sessionId)).toEqual(['session-journey-1']);
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
   it('projects an admitted input through custody and the registered provider with its exact reply relation', async () => {
     const fixture = await journey();
     try {
@@ -295,7 +378,7 @@ describe('registered Channels composed journeys through real CLI Session admissi
       fixture.answer('Bonjour, votre demande est reçue.');
       await fixture.outward();
       await fixture.outward();
-      expect(fixture.delivered).toEqual([expect.objectContaining({ content: { text: 'Bonjour, votre demande est reçue.' },
+      expect(fixture.delivered, JSON.stringify(fixture.transcriptPages)).toEqual([expect.objectContaining({ content: { text: 'Bonjour, votre demande est reçue.' },
         replyContext: expect.objectContaining({ replyToMessageId: 'inbound-1' }) })]);
       fixture.validateWrites();
     } finally { await fixture.dispose(); }
@@ -341,6 +424,12 @@ describe('registered Channels composed journeys through real CLI Session admissi
       const routedSessionId = fixture.admissions[0]?.sessionId;
       const session = routedSessionId ? fixture.sessions.get(routedSessionId) : undefined;
       if (!session) throw new Error('Missing routed Session');
+      expect(session.ownerMetadata).toMatchObject({ t: 'plain', v: { system: { attestedContext: {
+        externalPrincipalId: 'sender-1', sourceMessageId: expect.stringMatching(/^thread-(first|concurrent)$/u),
+      } } } });
+      const child = [...fixture.state.rows.values()].find(row => row.deleted !== true
+        && record(row.value.payload).parentBindingId === 'binding-1');
+      expect(child?.value.payload).toMatchObject({ allowedPrincipalIds: ['sender-1'], target: { sessionId: routedSessionId } });
       fixture.sessions.set(session.id, { ...session, archivedAt: Date.now() });
       await admit(socketObservation('thread-follow', 'One more detail'));
       expect(fixture.admissions.map(request => request.sessionId)).toEqual([routedSessionId, routedSessionId, routedSessionId]);
@@ -354,19 +443,147 @@ describe('registered Channels composed journeys through real CLI Session admissi
     } finally { await fixture.dispose(); }
   });
 
-  it('starts through the registered Action and ordinary custody, then admits the reply to its named Session', async () => {
+  it('records unknown and unmatched router observations without content or Session creation', async () => {
+    const fixture = await journey({ router: true, socket: true });
+    try {
+      const router = await fixture.state.get('binding-1');
+      if (!router) throw new Error('Missing router');
+      const payload = record(router.value.payload);
+      const target = record(payload.target);
+      const routes = target.routes;
+      if (!Array.isArray(routes)) throw new Error('Missing routes');
+      await fixture.state.put({ ...router.value, payload: { ...payload, target: { ...target,
+        routes: routes.map(route => ({ ...record(route), when: { group: 'brief', forwarded: true } })),
+      } } }, { expectedRevision: router.revision });
+      for (const [id, principalId] of [['unknown-drop', 'outsider'], ['unmatched-drop', 'sender-1']] as const) {
+        const observed = ConversationObservationV1Schema.parse({ ...observation(id, `Private content ${id}`, true),
+          transport: { kind: 'socket' }, actor: { principalId, label: 'Sender', kind: 'human', isIntegrationSelf: false } });
+        await fixture.ingest({ connectionId: 'connection-1', entry: { observation: { kind: 'fullText', observation: observed }, eventCandidate: null } });
+      }
+      expect(fixture.admissions).toEqual([]);
+      expect(fixture.creations.size).toBe(0);
+      const obligations = [...fixture.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-obligation');
+      expect(obligations.map(row => record(record(row.value.payload).nonAdmission).reason)).toEqual(['actorNotAllowed', 'routeNotMatched']);
+      expect(JSON.stringify(obligations)).not.toContain('Private content');
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
+  it('stops child admission with its router and rejoins the immutable Session birth after child deletion', async () => {
+    const fixture = await journey({ router: true, socket: true });
+    try {
+      const admit = async (id: string) => fixture.ingest({ connectionId: 'connection-1', entry: {
+        observation: { kind: 'fullText', observation: ConversationObservationV1Schema.parse({ ...observation(id, id, true), transport: { kind: 'socket' } }) },
+        eventCandidate: null,
+      } });
+      await admit('birth');
+      const sessionId = fixture.admissions[0]?.sessionId;
+      const child = [...fixture.state.rows.values()].find(row => row.deleted !== true
+        && record(row.value.payload).parentBindingId === 'binding-1');
+      const router = await fixture.state.get('binding-1');
+      if (!child || !router || !sessionId) throw new Error('Missing routed birth');
+      await fixture.state.put({ ...router.value, payload: { ...record(router.value.payload), enabled: false } }, { expectedRevision: router.revision });
+      await admit('disabled');
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual([sessionId]);
+      const disabled = await fixture.state.get(router.rowId);
+      if (!disabled) throw new Error('Missing disabled router');
+      await fixture.state.put(router.value, { expectedRevision: disabled.revision });
+      await fixture.state.forget(child.rowId, { expectedRevision: child.revision });
+      for (const row of fixture.state.rows.values()) if (row.value['record-kind'] === 'projection-frontier'
+        && row.value['binding-id'] === child.rowId) await fixture.state.forget(row.rowId, { expectedRevision: row.revision });
+      await admit('rejoin');
+      expect(fixture.creations.size).toBe(1);
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual([sessionId, sessionId]);
+      expect(fixture.sessions.get(sessionId)?.ownerMetadata).toMatchObject({ t: 'plain', v: { system: {
+        attestedContext: { externalPrincipalId: 'sender-1', sourceMessageId: 'birth' },
+      } } });
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
+  it('starts through a workflow and registered Action custody, then admits the reply to its named Session', async () => {
     const fixture = await journey({ router: true });
+    const localId = 'conversation/start-v1';
+    const actionId = `happier.channels/actions/${localId}`;
+    const manifest = parsePluginManifest(CHANNELS_PLUGIN.manifest);
+    if (!manifest.ok) throw new Error('The actual Channels manifest is invalid');
+    const declaration = manifest.manifest.contributes.actions.find(action => action.id === localId);
+    if (!declaration?.inputSchema || !declaration.resultSchema) throw new Error('The activated start Action contract is missing');
+    const content = { text: 'Votre brief', html: `<main>${'x'.repeat(120 * 1024)}</main>` };
+    const authorization = { principal: { kind: 'host' as const }, admittedPermissionCeiling: 'default' as const };
+    const occurrenceId = createPluginRuntimeOccurrenceId('happier.channels');
+    const confirmations: unknown[] = [];
+    const registry = createTargetActionInvocationRegistry({ actions: [{ pluginId: 'happier.channels', pluginVersion: '0.0.0',
+      occurrenceId, sourceCustody: createManagedPluginSourceCustody('channels-workflow-journey'), localId,
+      definition: declaration,
+      // The target transport crosses into the actual activated SDK test host;
+      // its registered handler, schemas, storage and custody remain real.
+      handler: value => fixture.invoke(localId, value),
+    }], readCurrentPluginOccurrenceId: () => occurrenceId,
+    resolveAuthorizationFacts: action => ({ generation: { targetGeneration: action.occurrenceId,
+      desiredGeneration: action.occurrenceId, appliedGeneration: action.occurrenceId },
+      resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
+    createServices: createUnavailablePluginServicesFactory(), resolveHostBinding: createTargetActionHostBindingResolver() });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), invokeContributedAction: async request => {
+      const result = await registry.invoke({ ...request.action, input: request.input, surface: 'agent',
+        initiatingActionCaller: request.context.actionCaller, signal: request.signal,
+        requestCurrentIntent: async confirmation => {
+          confirmations.push(confirmation.action.input);
+          return { status: 'approved', fingerprint: confirmation.fingerprint };
+        } });
+      if (result.status === 'executed') return { ok: true, result: result.value };
+      if (result.status === 'deferred') throw new Error('The approved workflow start must execute');
+      return { ok: false, errorCode: result.code, error: result.message };
+    } });
     try {
       await fixture.poll();
-      await fixture.invoke('conversation/start-v1', { routerBindingId: 'binding-1', audienceGroupId: 'brief', sessionId: 'session-journey-1',
-        subject: 'Morning brief', content: { text: 'Votre brief', html: `<main>${'brief '.repeat(20_000)}</main>` } });
+      const workflow: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget: {
+        kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
+      } }, blocks: [
+        { kind: 'step', id: 'brief', document: { text: 'Produce the brief', references: [], attachments: [] }, input: [],
+          result: { kind: 'json', schema: { type: 'object', properties: { content: {
+            type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } }, required: ['text'], additionalProperties: false,
+          } }, required: ['content'], additionalProperties: false } } },
+        { kind: 'action', id: 'send', actionId, input: {
+          routerBindingId: { kind: 'literal', value: 'binding-1' }, audienceGroupId: { kind: 'literal', value: 'brief' },
+          sessionId: { kind: 'literal', value: 'session-journey-1' }, subject: { kind: 'literal', value: 'Morning brief' },
+          content: { kind: 'result', producer: { blockId: 'brief', scope: { kind: 'current' } }, path: ['content'] },
+        } },
+      ] };
+      const workspace = { machineId: 'machine-1', directory: '/repo/channels', checkoutRootPath: '/repo/channels' };
+      const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: workflow,
+        context: { source: { kind: 'inline' }, inputs: {}, machineId: workspace.machineId, executionTarget: { kind: 'session' },
+          workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization }, admission: { kind: 'user' },
+        effects: { resolveTargetAvailability: async () => true, readActionContract: async id => id === actionId
+          ? { inputSchema: declaration.inputSchema!, outputSchema: declaration.resultSchema! } : null } });
+      if (!accepted.ok) throw new Error(accepted.error.code);
+      const coordinator = createWorkflowCoordinator({ store: createInMemoryWorkflowCoordinatorStore(),
+        executeStep: async params => {
+          await params.beforeInputAdmission();
+          await params.onInputAccepted({ kind: 'session', sessionId: 'session-journey-1', localInputId: params.invocationRecordId! });
+          return { kind: 'completed', result: { content }, resultEncoding: 'typed' };
+        }, resolveWorkspace: async () => ({ ok: true, workspace }), isAcceptedAuthorizationCurrent: async () => true,
+        action: { executor, buildContext: async params => buildWorkflowActionContext(params),
+          observeRun: async () => { throw new Error('The immediate start Action does not observe a Run'); } } });
+      const run = { ...accepted.snapshot, runId: 'channels-brief-journey' };
+      expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+      expect(confirmations).toEqual([{ routerBindingId: 'binding-1', audienceGroupId: 'brief', sessionId: 'session-journey-1', subject: 'Morning brief', content }]);
+      await coordinator.run(run);
+      expect(confirmations).toHaveLength(1);
+      await fixture.outward();
       await fixture.outward();
       expect(fixture.delivered).toHaveLength(1);
+      expect(fixture.delivered[0]?.content.html).toBe(content.html);
       expect(fixture.delivered[0]?.newThread).toEqual({ recipients: ['sender-1'], subject: 'Morning brief' });
+      expect([...fixture.state.rows.values()].filter(row => row.value['record-kind'] === 'binding'
+        && record(row.value.payload).parentBindingId === 'binding-1').map(row => row.value.payload),
+      JSON.stringify({ state: [...fixture.state.rows.values()], deliveries: [...fixture.deliveries.rows.values()] }))
+        .toEqual([expect.objectContaining({ target: expect.objectContaining({ sessionId: 'session-journey-1' }) })]);
       fixture.pending.push(observation('brief-reply', 'Merci, une question', true)); await fixture.poll();
       expect(fixture.admissions.map(request => request.sessionId)).toEqual(['session-journey-1']);
       expect(fixture.creations.size).toBe(0);
+      expect(fixture.sessions.get('session-journey-1')?.ownerMetadata).toMatchObject({ t: 'plain', v: { system: {} } });
       fixture.validateWrites();
-    } finally { await fixture.dispose(); }
+    } finally { registry.dispose(); await fixture.dispose(); }
   });
 });

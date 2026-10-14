@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 
@@ -41,20 +41,20 @@ export const AUTOMATION_TRIGGER_DEFINITION_ACCOUNT_SCOPED_BLOB_KIND_V1 =
  * AutomationTrigger row; PR selectors need only the common identity tuple. This
  * prevents private content replay onto another trigger kind, definition or revision.
  */
-const AutomationTriggerDefinitionBindingBaseV1Schema = lazyZodSchema(() => z.object({
+const AutomationTriggerDefinitionBindingBaseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  automationId: z.string().min(1).max(256),
+  automationId: z.string().check(z.minLength(1), z.maxLength(256)),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
-}).strict());
+}));
 export const AutomationTriggerDefinitionBindingV1Schema = lazyZodSchema(() => z.discriminatedUnion('triggerKind', [
-  AutomationTriggerDefinitionBindingBaseV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationTriggerDefinitionBindingBaseV1Schema, {
     triggerKind: z.literal('pluginEvent'),
     eventRef: asProtocolZod(AutomationQualifiedPluginContributionRefV1Schema),
     sourceSelectorId: AutomationSourceSelectorIdV1Schema,
-  }).strict(),
-  AutomationTriggerDefinitionBindingBaseV1Schema.extend({ triggerKind: z.literal('prComment') }).strict(),
-  AutomationTriggerDefinitionBindingBaseV1Schema.extend({ triggerKind: z.literal('ciFailed') }).strict(),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationTriggerDefinitionBindingBaseV1Schema, { triggerKind: z.literal('prComment') })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationTriggerDefinitionBindingBaseV1Schema, { triggerKind: z.literal('ciFailed') })),
 ]));
 export type AutomationTriggerDefinitionBindingV1 = z.infer<
   typeof AutomationTriggerDefinitionBindingV1Schema
@@ -96,11 +96,11 @@ export function sealAutomationPluginEventTriggerInputV1(params: Readonly<{
  * The outer stored-content envelope stays canonical. Its plain or encrypted
  * payload is this strict binding wrapper, never a second envelope format.
  */
-export const AutomationTriggerDefinitionStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AutomationTriggerDefinitionStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: AutomationTriggerDefinitionBindingV1Schema,
   definition: PluginJsonValueV2Schema,
-}).strict());
+}));
 export type AutomationTriggerDefinitionStoredPayloadV1 = z.infer<
   typeof AutomationTriggerDefinitionStoredPayloadV1Schema
 >;

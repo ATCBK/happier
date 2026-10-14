@@ -25,6 +25,12 @@ export type SessionAgentTransitionActionInputById = {
         };
     };
     readonly "session.agent.transition": {
+        input: {
+            text: string;
+            localId: string;
+            meta?: Record<string, unknown> | undefined;
+        };
+        sessionId: string;
         selection: {
             v: 1;
             agentId: string;
@@ -41,12 +47,6 @@ export type SessionAgentTransitionActionInputById = {
                     value: string | number | boolean | null;
                 }>;
             } | undefined;
-        };
-        sessionId: string;
-        input: {
-            text: string;
-            localId: string;
-            meta?: Record<string, unknown> | undefined;
         };
         expectedCurrentAgentId: string;
     };

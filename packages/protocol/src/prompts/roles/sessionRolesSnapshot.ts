@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { migrateRetainedSessionWorkContextV1 } from '../../sessions/context/sessionContextV1.js';
 import { RoleInstructionsOverrideV1Schema, ResolvedRolesSnapshotV1Schema, type ResolvedRolesSnapshotV1 } from './rolesV1.js';
 
-export const SessionRoleIdV1Schema = lazyZodSchema(() => z.string().min(1));
-export const SessionRolesV1Schema = lazyZodSchema(() => z.object({
-  roleId: SessionRoleIdV1Schema.optional(),
-  inheritedFrom: z.string().min(1).optional(),
-  overrides: z.record(z.string().min(1), RoleInstructionsOverrideV1Schema),
+export const SessionRoleIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+export const SessionRolesV1Schema = lazyZodSchema(() => z.strictObject({
+  roleId: z.optional(SessionRoleIdV1Schema),
+  inheritedFrom: z.optional(z.string().check(z.minLength(1))),
+  overrides: z.record(z.string().check(z.minLength(1)), RoleInstructionsOverrideV1Schema),
   sessionRoles: ResolvedRolesSnapshotV1Schema,
   notes: z.string(),
-}).strict());
+}));
 export type SessionRolesV1 = z.infer<typeof SessionRolesV1Schema>;
-export const SessionRoleConfigurationV1Schema = lazyZodSchema(() => SessionRolesV1Schema.omit({ roleId: true }));
+export const SessionRoleConfigurationV1Schema = lazyZodSchema(() => z.omit(SessionRolesV1Schema, { roleId: true }));
 /** Persistence restore only; configuration requests and writes use the canonical schema. */
 export const StoredSessionRoleConfigurationV1Schema = createStoredReadSchema(SessionRoleConfigurationV1Schema);
 export type SessionRoleConfigurationV1 = z.infer<typeof SessionRoleConfigurationV1Schema>;
-export const SessionRolesConfigurationSetRpcV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1), configuration: SessionRoleConfigurationV1Schema,
-}).strict());
+export const SessionRolesConfigurationSetRpcV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)), configuration: SessionRoleConfigurationV1Schema,
+}));
 
 export function readSessionRolesV1(metadata: unknown): SessionRolesV1 | null {
   if (!metadata || typeof metadata !== 'object' || !('work' in metadata)) return null;

@@ -3,6 +3,7 @@ import type { ReachRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { ReachPlaceV1 } from '@happier-dev/protocol/reach/reachPlaceV1';
 import { resolveReachV1, type ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import { projectReachForMachinesV1 } from '@happier-dev/protocol/reach/projectReachV1';
+import { t } from '@/text';
 import {
     describeReach,
     describeReachRule,
@@ -91,6 +92,15 @@ describe('describeReachRule', () => {
 });
 
 describe('describeReach', () => {
+    it.each(['skill', 'mcp_server'] as const)('does not call unknown empty %s inventory unavailable while preserving confirmed reach', kind => {
+        const machines = [{ machineId: 'mbp', online: true }];
+        const incomplete = [{ machineId: 'mbp', agents: [], agentInventoryComplete: false }];
+        expect(formatWhereItsOnConsequence(describeReach(incomplete, machines, names, () => 'full', kind), names)).toBe('—');
+        const known = [{ ...incomplete[0]!, agents: [{ agentId: 'codex', enabled: true, decidedBy: null }] }];
+        expect(formatWhereItsOnConsequence(describeReach(known, machines, names, () => 'full', kind), names)).toContain('Codex');
+        const complete = [{ ...incomplete[0]!, agentInventoryComplete: true }];
+        expect(formatWhereItsOnConsequence(describeReach(complete, machines, names, () => 'full', kind), names)).toBe(t('capabilities.where.availableNowhere'));
+    });
     it('describes project-only availability on the actual project machines and keeps Agent exceptions', () => {
         const rules = [everywhere(false), project('client-site', true), agent('gemini', false)];
         const facts = [{ machineId: 'mbp', platform: 'posix' as const, agentIds: ['claude', 'gemini'] },

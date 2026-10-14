@@ -17,23 +17,24 @@ export function ApprovalDetailPage() {
     completionFocusTo?: string;
   }>();
   if (!id) return null;
-  const normalizedCompletionHref = normalizeInternalReturnPath(single(completionHref)) as Href | null;
+  const normalizedCompletionHref = (normalizeInternalReturnPath(single(completionHref)) ?? undefined) as Href | undefined;
 
   const headerTitle = t('approvals.title');
   const screenOptions = React.useMemo(() => {
     return { title: headerTitle } as const;
   }, [headerTitle]);
+  const detailProps: React.ComponentProps<typeof ApprovalDetailScreen> = {
+    artifactId: id,
+    serverId: single(serverId),
+    completionHref: normalizedCompletionHref,
+    completionFocusFrom: single(completionFocusFrom),
+    completionFocusTo: single(completionFocusTo),
+  };
 
   return (
     <>
       <Stack.Screen options={screenOptions} />
-      <ApprovalDetailScreen
-        artifactId={id}
-        serverId={single(serverId)}
-        completionHref={normalizedCompletionHref ?? undefined}
-        completionFocusFrom={single(completionFocusFrom)}
-        completionFocusTo={single(completionFocusTo)}
-      />
+      {React.createElement(ApprovalDetailScreen, detailProps)}
     </>
   );
 }

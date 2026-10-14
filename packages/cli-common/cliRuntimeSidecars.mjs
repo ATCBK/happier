@@ -9,6 +9,7 @@ export const CLI_RUNTIME_SIDECAR_ENTRIES = Object.freeze([
   Object.freeze(['ripgrep_runtime_paths.cjs']),
   Object.freeze(['statusline_forwarder.cjs']),
   Object.freeze(['terminal_launch_spec_runner.cjs']),
+  Object.freeze(['native_process_exit.cjs']),
   Object.freeze(['process_tree.cjs']),
   Object.freeze(['node_pty_relay.cjs']),
   Object.freeze(['runtime']),

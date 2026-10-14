@@ -20,10 +20,20 @@ describe('resolveSessionCapabilitiesV1', () => {
     const result = resolveSessionCapabilitiesV1({ context, mcp: settings, skills: null, selection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['s'], forceExcludeServerIds: [] } }, agentAcceptsUserMcp: false });
     expect(result.mcp.items[0]).toMatchObject({ selected: false, selectable: false, reason: 'agent_unsupported' });
   });
-  it('allows a session include over managed Off but refuses an out-of-scope machine item', () => {
+  it('allows a session include over managed Off', () => {
     const portable = resolveSessionCapabilitiesV1({ context, mcp: settings, skills: null, selection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['s'], forceExcludeServerIds: [] } }, agentAcceptsUserMcp: true });
     expect(portable.mcp.items[0]).toMatchObject({ selected: true, reason: 'session_added' });
-    const local = resolveSessionCapabilitiesV1({ context, mcp: { ...settings, bindings: [{ ...settings.bindings[0]!, target: { t: 'machine', machineId: 'elsewhere' } }] }, skills: null, selection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['s'], forceExcludeServerIds: [] } }, agentAcceptsUserMcp: true });
-    expect(local.mcp.items[0]).toMatchObject({ selected: false, selectable: false, reason: 'not_portable' });
+  });
+  it.each([
+    { bindings: [] },
+    { bindings: [{ ...settings.bindings[0]!, target: { t: 'machine' as const, machineId: 'elsewhere' } }] },
+    { bindings: [{ ...settings.bindings[0]!, agentId: 'gemini' }] },
+  ])('admits explicit Session includes regardless of default rules %j', ({ bindings }) => {
+    const input = { context, mcp: { ...settings, bindings }, skills: null, agentAcceptsUserMcp: true };
+    expect(resolveSessionCapabilitiesV1({ ...input, selection: {} }).mcp.items[0])
+      .toMatchObject({ selected: false, selectable: true, reason: 'no_rule' });
+    expect(resolveSessionCapabilitiesV1({ ...input, selection: { mcp: { v: 1, managedServersEnabled: true,
+      forceIncludeServerIds: ['s'], forceExcludeServerIds: [] } } }).mcp.items[0])
+      .toMatchObject({ selected: true, selectable: true, reason: 'session_added', sessionOverride: 'added' });
   });
 });

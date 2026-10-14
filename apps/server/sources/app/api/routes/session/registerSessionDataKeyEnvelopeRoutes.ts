@@ -1,12 +1,6 @@
 import { z } from "zod";
 
-import {
-    decodeSessionDataKeyEnvelopeCursorV1,
-    PatchSessionDataKeyEnvelopesResultV1Schema,
-    PatchSessionDataKeyEnvelopesV1Schema,
-    SessionDataKeyEnvelopePageQueryV1Schema,
-    SessionDataKeyEnvelopePageV1Schema,
-} from "@happier-dev/protocol";
+import { decodeSessionDataKeyEnvelopeCursorV1, PatchSessionDataKeyEnvelopesResultV1Schema, PatchSessionDataKeyEnvelopesV1Schema, SessionDataKeyEnvelopePageQueryV1Schema, SessionDataKeyEnvelopePageV1Schema } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 
 import {
     applySessionDataKeyEnvelopes,

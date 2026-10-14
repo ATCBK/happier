@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const TeamIdentityErrorCodeV1Schema = lazyZodSchema(() => z.enum([
   'home_forbidden',
@@ -22,7 +22,7 @@ export const TeamIdentityErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type TeamIdentityErrorCodeV1 = z.infer<typeof TeamIdentityErrorCodeV1Schema>;
 
-export const TeamIdentityErrorV1Schema = lazyZodSchema(() => z.object({ error: TeamIdentityErrorCodeV1Schema }).strict());
+export const TeamIdentityErrorV1Schema = lazyZodSchema(() => z.strictObject({ error: TeamIdentityErrorCodeV1Schema }));
 
 export function teamIdentityErrorHttpStatusV1(
   error: TeamIdentityErrorCodeV1,

@@ -1,7 +1,7 @@
 import type { FeaturesPayloadDelta } from "@/app/features/types";
 
 import { readEncryptionFeatureEnv } from "./catalog/readFeatureEnv";
-import { resolveEffectiveDefaultAccountEncryptionMode } from "@happier-dev/protocol";
+import { resolveEffectiveDefaultAccountEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 
 export function resolveEncryptionFeature(env: NodeJS.ProcessEnv): FeaturesPayloadDelta {
     const featureEnv = readEncryptionFeatureEnv(env);

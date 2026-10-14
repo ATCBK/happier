@@ -1,4 +1,4 @@
-import type { LiveActivityApnsDeliveryClassification } from "@happier-dev/protocol";
+import type { LiveActivityApnsDeliveryClassification } from '@happier-dev/protocol/activity/live/apnsDelivery';
 import type { Prisma } from "@prisma/client";
 
 import { parseIntEnv } from "@/config/env";

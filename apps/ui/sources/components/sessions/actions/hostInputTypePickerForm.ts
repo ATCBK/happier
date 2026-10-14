@@ -1,10 +1,9 @@
-import { isSameInputOptionValue, type InputFieldHint, type InputOption } from '@happier-dev/protocol/inputs';
+import type { InputFieldHint } from '@happier-dev/protocol/inputs';
 import { validateHostInputTypeValue, type InputTypePickerHostV1 } from '@happier-dev/protocol/inputs/runtime';
 import { normalizeUsageQuery, UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
 
 import { createActionInputForm, type ActionInputFormAccountLifetime } from '@/components/plugins/actions/actionInputForm';
-import { USAGE_PERIODS, getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
 import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
 import { t } from '@/text';
 
@@ -28,17 +27,8 @@ export function createHostInputTypePickerForm(params: Readonly<{
     let initial: Readonly<Record<string, unknown>> = reference.hostType === 'usageQuery' && projection === undefined && current !== undefined
         ? normalizeUsageQuery(current) : normalizeUsageQuery({});
 
-    if (projection === 'period') {
-        const options: InputOption[] = USAGE_PERIODS.map(period => ({
-            value: { relative: period },
-            label: t(getUsagePeriodDefinition(period).translationKey),
-        }));
-        if (current !== undefined && !options.some(option => isSameInputOptionValue(option.value, current))) {
-            options.unshift({ value: current, label: describeHostInputTypePickerValue(reference, current) ?? t('usage.allTime') });
-        }
-        fields = [{ path: 'value', title: t('usage.board.page.periodLabel'), widget: 'select', required: true, options }];
-        initial = { value: current ?? options[0]!.value };
-    } else if (projection === 'session') {
+    // The Period offers its few choices in place (`usage.query.period`); only the Session list is a picker.
+    if (projection === 'session') {
         const ids = typeof current === 'string' ? [current] : Array.isArray(current) ? current : [];
         fields = [{ path: 'value', title: t('usage.summary.export.session'), widget: 'multiselect', optionsSourceId: 'sessions' }];
         initial = { value: ids.map(sessionId => ({ serverId: params.serverId, sessionId })) };
@@ -47,8 +37,7 @@ export function createHostInputTypePickerForm(params: Readonly<{
     let settle: (value: unknown) => void = () => {};
     const result = new Promise<unknown>(resolve => { settle = resolve; });
     const form = createActionInputForm({
-        presentation: { title: projection === 'period' ? t('usage.board.page.periodLabel')
-            : projection === 'session' ? t('usage.summary.export.session') : t('usage.summary.title'),
+        presentation: { title: projection === 'session' ? t('usage.summary.export.session') : t('usage.summary.title'),
             description: null, inputHints: { fields: [...fields], submitLabel: t('common.done') } },
         accountLifetime: params.accountLifetime, signal: request.signal, isCurrent: params.isCurrent,
         submit: async candidate => {

@@ -2,9 +2,9 @@ import { ACCOUNT_SETTING_DEFINITIONS, resolveNewSessionWizardSectionPresentation
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
 import { normalizeActionsSettingsV1, setActionApprovalOverride, type ActionSurfaceKey } from '../actionSettings.js';
 import { accountNotificationStorageBinding } from './notificationPreferenceMutations.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { DEFAULT_AGENT_ID } from '../../agents/defaultAgent.js';
-import { readDirectConnectionsEnabled, withDirectConnectionsEnabled } from '../../account/settings/peerMediationPreferencesV1.js';
+import { readDirectConnectionsEnabled, withDirectConnectionsEnabled, readMachineDirectConnectionChoice, withMachineDirectConnectionChoice } from '../../account/settings/peerMediationPreferencesV1.js';
 import { MachineRetentionDefaultsV1Schema, updateMachineRetentionCategoryPreferenceV1, type MachineRetentionCategoryV1 } from '../../account/settings/machineRetentionDefaultsV1.js';
 import { UI_FEATURE_REGISTRY, listUiFeatureToggleDefinitions, resolveUiFeatureToggleEnabled, buildUiFeatureToggleChange, buildUiFeatureExperimentsChange } from './featurePreferenceMutations.js';
 import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, GLASS_TINT_STEPS, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
@@ -54,7 +54,7 @@ export type PreparedPortableAccountSettingBindingV1 = PortableAccountSettingBind
 const boolean = (value: unknown) => typeof value === 'boolean' ? { success: true as const, value } : { success: false as const };
 const owner = { scope: 'account', kind: 'owner', access: 'read_write' } as const;
 type AgentPreferenceKey = 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey';
-const AgentPreferenceIntentSchema = z.object({ agentTargetKey: BackendTargetKeyV2InputSchema, value: StrictJsonValueSchema }).strict();
+const AgentPreferenceIntentSchema = z.strictObject({ agentTargetKey: BackendTargetKeyV2InputSchema, value: StrictJsonValueSchema });
 /** One target-sized intent, revalidated and rebased by the existing Settings CAS owner. */
 function agentPreferenceStorage(key: AgentPreferenceKey): PortableAccountSettingBindingV1 {
     function parse(value: unknown) {
@@ -127,6 +127,23 @@ export const directConnectionsStorage: PortableAccountSettingBindingV1 = { ...ow
     read: settings => readDirectConnectionsEnabled(settings.peerMediationPreferencesV1), parse: boolean,
     mutate: (settings, value) => typeof value === 'boolean' ? { peerMediationPreferencesV1: withDirectConnectionsEnabled(settings.peerMediationPreferencesV1, value) } : null,
 };
+/** The keyed Action and the Machine row share the existing peer-preference mutation and Account CAS. */
+const MachineDirectConnectionKeySchema = z.string().check(z.trim(), z.minLength(1), z.refine(value => value !== '__proto__'));
+const MachineDirectConnectionChoiceSchema = z.enum(['default', 'direct', 'relay']);
+export const machineDirectConnectionStorage = {
+    scope: 'account', kind: 'machineDirectConnection', access: 'read_write',
+    allowedValues: ['default', 'direct', 'relay'],
+    key: MachineDirectConnectionKeySchema,
+    value: MachineDirectConnectionChoiceSchema,
+    read: (settings: Pick<AccountSettings, 'peerMediationPreferencesV1'>, machineId: string) =>
+        readMachineDirectConnectionChoice(settings.peerMediationPreferencesV1, machineId),
+    mutate: (settings: Pick<AccountSettings, 'peerMediationPreferencesV1'>, machineId: string, value: unknown) => {
+        const key = MachineDirectConnectionKeySchema.safeParse(machineId);
+        const choice = MachineDirectConnectionChoiceSchema.safeParse(value);
+        if (!key.success || !choice.success) return null;
+        return { peerMediationPreferencesV1: withMachineDirectConnectionChoice(settings.peerMediationPreferencesV1, key.data, choice.data) };
+    },
+} as const;
 export const defaultEnvironmentShowFirstStorage: PortableAccountSettingBindingV1 = { ...owner,
     read: settings => settings.favoriteProfiles.includes(''), parse: boolean,
     mutate: (settings, value) => typeof value === 'boolean' ? { favoriteProfiles: value
@@ -279,7 +296,7 @@ export const terminalHostStorage: PortableAccountSettingBindingV1 = { ...owner, 
     parse: value => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { success: true, value } : { success: false },
     mutate: (_settings, value) => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { sessionTerminalHost: value, sessionUseTmux: value === 'tmux' } : null,
 };
-const commandValueSchema = z.object({ enabled: z.boolean(), binding: z.string().trim().nullable() }).strict();
+const commandValueSchema = z.strictObject({ enabled: z.boolean(), binding: z.nullable(z.string().check(z.trim())) });
 export function commandStorage(commandId: string): PortableAccountSettingBindingV1 { return { ...owner,
     read: settings => ({ enabled: !settings.keyboardShortcutDisabledCommandIdsV1.includes(commandId) && (commandId !== 'commandPalette.open' || settings.commandPaletteEnabled), binding: settings.keyboardShortcutOverridesV1[commandId]?.[0]?.binding ?? null }),
     parse: value => {

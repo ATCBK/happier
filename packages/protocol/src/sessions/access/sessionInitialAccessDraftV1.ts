@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PrincipalRefV1 } from '../../teams/principal.js';
 import { SessionGrantIntentV1Schema, SessionGrantMutationV1Schema } from './sessionAccessGrantV1.js';
 
 function enforceUniqueSubjects(
   draft: Readonly<{ grants: readonly Readonly<{ subject: PrincipalRefV1 }>[] }>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ) {
   const subjects = new Set<string>();
   for (const [index, grant] of draft.grants.entries()) {
@@ -22,13 +22,13 @@ function enforceUniqueSubjects(
 }
 
 /** Public desired-state access authored before a Session exists. */
-export const SessionInitialAccessDraftV1Schema = lazyZodSchema(() => z.object({
+export const SessionInitialAccessDraftV1Schema = lazyZodSchema(() => z.strictObject({
   grants: z.array(SessionGrantIntentV1Schema),
-}).strict().superRefine(enforceUniqueSubjects));
+}).check(z.superRefine(enforceUniqueSubjects)));
 export type SessionInitialAccessDraftV1 = z.infer<typeof SessionInitialAccessDraftV1Schema>;
 
 /** Private create-request shape after the trusted creator host seals ready recipients. */
-export const SessionInitialAccessMaterializedV1Schema = lazyZodSchema(() => z.object({
+export const SessionInitialAccessMaterializedV1Schema = lazyZodSchema(() => z.strictObject({
   grants: z.array(SessionGrantMutationV1Schema),
-}).strict().superRefine(enforceUniqueSubjects));
+}).check(z.superRefine(enforceUniqueSubjects)));
 export type SessionInitialAccessMaterializedV1 = z.infer<typeof SessionInitialAccessMaterializedV1Schema>;

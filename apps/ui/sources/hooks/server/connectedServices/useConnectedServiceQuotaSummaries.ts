@@ -40,8 +40,10 @@ import {
 import type {
     ConnectedServiceQuotaProfileRefInput,
 } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
+import { normalizeConnectedServiceQuotaProfileRefs } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
 import {
     resolveConnectedServiceRegistryEntryDisplayName,
+    resolveQualifiedConnectedServiceRegistryDisplayName,
     resolveQualifiedConnectedServiceRegistryEntry,
 } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import {
@@ -92,6 +94,9 @@ export type ConnectedServiceAccountWithoutUsage = Readonly<{
     state: 'loading' | 'unavailable';
 } & ConnectedServiceQuotaAccountIdentity>;
 
+export type ConnectedServiceQuotaAccountPresentation = ConnectedServiceQuotaAccountIdentity & Pick<ConnectedServiceQuotaSummary,
+    'key' | 'service' | 'legacyServiceId' | 'serviceLabel' | 'profileId' | 'profileLabel'>;
+
 /** A connected account that needs a new sign-in: no usage is read for it until it signs in again. */
 export type ConnectedServiceAccountNeedingSignIn = Readonly<{
     key: string;
@@ -117,9 +122,8 @@ function resolveQualifiedSummaryService(params: Readonly<{
     return {
         service: params.ref.service,
         legacyServiceId,
-        serviceLabel: entry
-            ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, params.localizePluginText)
-            : t('connectedServices.fallbackName'),
+        serviceLabel: resolveQualifiedConnectedServiceRegistryDisplayName(
+            { entries: params.registryEntries }, params.ref.service, t, params.localizePluginText),
         profileId: params.ref.accountId,
         profileLabel: resolveQualifiedConnectedAccountLabel({
             labelsByKey: params.labelsByKey,
@@ -181,6 +185,8 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
     fetchPolicy?: ConnectedServiceQuotaSnapshotsFetchPolicy;
 }>): Readonly<{
     summaries: ReadonlyArray<ConnectedServiceQuotaSummary>;
+    /** Profile and last-known catalog identity, independent of whether any quota meters have arrived. */
+    accountIdentities: ReadonlyArray<ConnectedServiceQuotaAccountPresentation>;
     /**
      * Connected accounts with no usage to show, each with why. A `cache_only` read claims nothing
      * about an account it has not read.
@@ -211,7 +217,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         connectedServicesQuotaPinnedMeterIdsByKey: settings.connectedServicesQuotaPinnedMeterIdsByKey,
         connectedServicesQuotaSummaryStrategyByKey: settings.connectedServicesQuotaSummaryStrategyByKey,
     }));
-    const labelsByKey = useConnectedMetadataCatalog(quotasEnabled ? undefined : null, selectConnectedMetadataLabels);
+    const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
     const connectedServicesRegistrySnapshot = useProjectedConnectedServicesRegistry();
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
     const serverFeatures = useServerFeaturesRuntimeSnapshot({
@@ -275,20 +281,19 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         refresh,
     } = useConnectedServiceQuotaSnapshots(quotaProfileInputs, { fetchPolicy: options?.fetchPolicy });
     const readsAccounts = (options?.fetchPolicy ?? 'poll') !== 'cache_only';
+    // Identity is already Account data; feature/transport discovery only admits
+    // quota reads. It cannot make a known account nameless before the first read.
+    const identityProfiles = React.useMemo(() => normalizeConnectedServiceQuotaProfileRefs([
+        ...profile.connectedAccountsV4.map(account => ({ ref: account.ref })),
+        ...connectedProfiles.filter(entry => entry.kind === 'legacy'),
+    ]), [profile.connectedAccountsV4, connectedProfiles]);
 
-    const { summaries, accountsWithoutUsage, keysWithoutLimits } = React.useMemo(() => {
-        if (!quotasEnabled) {
-            return {
-                summaries: [] as ConnectedServiceQuotaSummary[],
-                accountsWithoutUsage: [] as ConnectedServiceAccountWithoutUsage[],
-                keysWithoutLimits: 0,
-            };
-        }
-
+    const { summaries, accountIdentities, accountsWithoutUsage, keysWithoutLimits } = React.useMemo(() => {
         const next: ConnectedServiceQuotaSummary[] = [];
+        const accountIdentities: ConnectedServiceQuotaAccountPresentation[] = [];
         const withoutUsage: ConnectedServiceAccountWithoutUsage[] = [];
         let keysWithoutLimits = 0;
-        for (const entry of connectedProfiles) {
+        for (const entry of identityProfiles) {
             const summaryService = entry.kind === 'qualified'
                 ? resolveQualifiedSummaryService({
                     ref: entry.ref,
@@ -322,6 +327,8 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
                 email: presentation?.providerIdentity?.email ?? legacyProfile?.providerEmail ?? null,
                 accountId: summaryService.profileId,
             });
+            accountIdentities.push({ key: entry.key, ...summaryService, ...identity });
+            if (!quotasEnabled || !connectedProfiles.some(profile => profile.key === entry.key)) continue;
             const snapshot = snapshotsByKey[entry.key];
             if (!snapshot || snapshot.meters.length === 0) {
                 // In flight (or not started yet) reads as loading; a finished read without usage is
@@ -380,11 +387,13 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
                     : left.key.localeCompare(right.key);
             }),
             accountsWithoutUsage: withoutUsage,
+            accountIdentities,
             keysWithoutLimits,
         };
     }, [
         connectedServicesRegistrySnapshot,
         connectedProfiles,
+        identityProfiles,
         quotasEnabled,
         localizePluginText,
         loadingByKey,
@@ -449,6 +458,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
 
     return {
         summaries,
+        accountIdentities,
         accountsWithoutUsage,
         accountsNeedingSignIn,
         keysWithoutLimits,

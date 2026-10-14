@@ -3,6 +3,7 @@ import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString'
 
 import {
     listPersistedVoiceBindingsFromState,
+    mergeVoiceConversationBindings,
     pickNewerVoiceBinding,
     voiceSessionBindingStore,
 } from './voiceConversationBindingStore';
@@ -11,12 +12,18 @@ import type { VoiceSessionBinding } from './voiceConversationBindingTypes';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { getVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+import type { VoiceSessionSnapshot } from '@/voice/session/types';
 
 type VoiceConversationBindingStoreLike = typeof voiceSessionBindingStore;
 
 type ResolverState = Readonly<{
     sessions?: Record<string, any>;
 }>;
+
+function isSyncedBindingForLiveControl(binding: VoiceSessionBinding, snapshot: VoiceSessionSnapshot): boolean {
+    return snapshot.canStop && snapshot.sessionId === binding.controlSessionId;
+}
 
 function isBindingAvailableInState(
     binding: VoiceSessionBinding | null,
@@ -36,6 +43,19 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
     const getState = params?.getState ?? (() => storage.getState() as ResolverState);
     const store = params?.store ?? voiceSessionBindingStore;
 
+    const readAvailableBindings = (state: ResolverState) => {
+        const snapshot = getVoiceSessionSnapshot();
+        return Object.values(mergeVoiceConversationBindings(
+            Object.fromEntries(Object.entries(store.getState().runtimeBindingsByConversationSessionId)
+                .filter(([, binding]) => isBindingAvailableInState(binding, state))),
+            Object.fromEntries([
+                ...Object.values(store.getState().persistedBindingsByConversationSessionId),
+                ...listPersistedVoiceBindingsFromState(state),
+            ].filter(binding => isBindingAvailableInState(binding, state) && !isSyncedBindingForLiveControl(binding, snapshot))
+                .map(binding => [binding.conversationSessionId, binding])),
+        ));
+    };
+
     const resolveByConversationSessionId = (input: Readonly<{
         conversationSessionId: string;
         sessionMetadata?: unknown;
@@ -44,6 +64,8 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
         if (!conversationSessionId) return null;
         const state = getState();
         const storeBinding = store.getState().getByConversationSessionId(conversationSessionId);
+        const localBinding = store.getState().runtimeBindingsByConversationSessionId[conversationSessionId] ?? null;
+        if (isBindingAvailableInState(localBinding, state)) return localBinding;
         const canonicalSession = state.sessions?.[conversationSessionId] ?? null;
         const sourceServerId = normalizeNonEmptyString(canonicalSession?.serverId)
             ?? normalizeNonEmptyString(getActiveServerSnapshot().serverId);
@@ -60,9 +82,10 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
             directMetadata: canonicalSession ? null : input.sessionMetadata ?? null,
             sourceServerId,
         });
+        const snapshot = getVoiceSessionSnapshot();
         return pickNewerVoiceBinding(
-            isBindingAvailableInState(storeBinding, state) ? storeBinding : null,
-            isBindingAvailableInState(persistedBinding, state) ? persistedBinding : null,
+            isBindingAvailableInState(storeBinding, state) && !isSyncedBindingForLiveControl(storeBinding, snapshot) ? storeBinding : null,
+            isBindingAvailableInState(persistedBinding, state) && !isSyncedBindingForLiveControl(persistedBinding, snapshot) ? persistedBinding : null,
         );
     };
 
@@ -74,19 +97,10 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
         if (!controlSessionId) return null;
         const requestedAdapterId = normalizeNonEmptyString(input.adapterId);
         const state = getState();
-        // Single read+merge algorithm (audit F1/F7): merge the store's runtime view with
-        // persisted bindings derived from `getState()` through the SAME shared persisted
-        // reader and the SAME `pickNewerVoiceBinding` tie-break the store uses. The store
-        // merge already dedupes its own persisted layer, so this no longer applies a
-        // divergent tie-break, and it still honors a getState snapshot the store has not
-        // yet ingested.
+        // The store's merge owns local admission versus synced discovery here too,
+        // including current metadata the store has not ingested yet.
         let resolved: VoiceSessionBinding | null = null;
-        const candidates = [
-            ...store.getState().list(),
-            ...listPersistedVoiceBindingsFromState(state as any),
-        ];
-        for (const candidate of candidates) {
-            if (!isBindingAvailableInState(candidate, state)) continue;
+        for (const candidate of readAvailableBindings(state)) {
             if (candidate.controlSessionId !== controlSessionId) continue;
             if (requestedAdapterId && candidate.adapterId !== requestedAdapterId) continue;
             resolved = pickNewerVoiceBinding(resolved, candidate);
@@ -106,12 +120,7 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
         );
         let resolved: VoiceSessionBinding | null = null;
         const state = getState();
-        const candidates = [
-            ...store.getState().list(),
-            ...listPersistedVoiceBindingsFromState(state as any),
-        ];
-        for (const candidate of candidates) {
-            if (!isBindingAvailableInState(candidate, state)) continue;
+        for (const candidate of readAvailableBindings(state)) {
             if (requestedAdapterId && candidate.adapterId !== requestedAdapterId) continue;
             if (requestedControlSessionIds.size > 0 && !requestedControlSessionIds.has(candidate.controlSessionId)) continue;
             resolved = pickNewerVoiceBinding(resolved, candidate);

@@ -459,8 +459,8 @@ describe('Home and Teams Action family', () => {
    * and Team transactions are Account-placed; the shared transport family also
    * carries intents answered by Session or client owners.
    */
-  it('retains Session placement for exact Session mutations and Account placement for Home resources', () => {
-    const sessionMutations = new Set(['session.delete', 'session.folder.set', 'session.tags.set']);
+  it('keeps organization mutations Session-placed and durable deletion Account-placed', () => {
+    const sessionMutations = new Set(['session.folder.set', 'session.tags.set']);
     for (const actionId of HOME_DOMAIN_ACTION_IDS_V1) {
       expect(getActionSpec(actionId).executionPlacement, actionId)
         .toBe(sessionMutations.has(actionId) ? 'session' : 'account');

@@ -340,6 +340,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     sessionId?: string | null;
     serverId?: string | null;
     emphasis?: TranscriptEventEmphasis;
+    /** A failed turn or rejected input: the same row, with its glyph in the failure colour. */
+    tone?: 'failure';
     navigationEnabled?: boolean;
     /** On the worker update that opens a context-only wake: how many updates woke the session. */
     hostWakeCount?: number;
@@ -354,7 +356,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     // Host accounting evidence is retained for Usage/Coach, not a conversation
     // notification. Keep unknown event types on the visible fallback below.
     if (props.event.type === 'mcp-binding-usage') return null;
-    const eventColor = deemphasized ? theme.colors.text.tertiary : theme.colors.text.secondary;
+    const eventColor = props.tone === 'failure' ? theme.colors.state.danger.foreground
+        : deemphasized ? theme.colors.text.tertiary : theme.colors.text.secondary;
     let iconName: IconName = 'info';
     let text = t('message.unknownEvent');
     let detailText: string | undefined;
@@ -413,7 +416,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         iconName = 'arrows-left-right';
         text = t('message.switchedToMode', { mode: props.event.mode });
     } else if (props.event.type === 'message') {
-        iconName = 'info';
+        iconName = props.tone === 'failure' ? 'warning' : 'info';
+        if (props.tone === 'failure') testID = 'transcript-event-runtime-issue';
         capabilityNotice = describeCapabilityNotice(props.event);
         // The Follow wake commits one fixed Protocol sentence as the persisted
         // event content so every host recognises it; the reader localizes it the

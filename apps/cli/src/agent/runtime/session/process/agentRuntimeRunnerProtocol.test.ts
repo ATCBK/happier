@@ -155,9 +155,10 @@ describe('Runner Agent protocol', () => {
       items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review' }],
       nativeDisables: [{ name: 'native-review', path: '/native/review/SKILL.md' }],
     } satisfies NonNullable<AgentSessionOpenRequest['skills']>;
-    const deliveredRequest = { ...request, skills };
+    const deliveredRequest = { ...request, skills, mcpServersStrictMode: true };
     expect(AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(deliveredRequest).skills).toEqual(skills);
-    expect(projectAgentRuntimeDaemonSessionOpenAttestationRequestV1(deliveredRequest)).toEqual(request);
+    expect(AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(deliveredRequest).mcpServersStrictMode).toBe(true);
+    expect(projectAgentRuntimeDaemonSessionOpenAttestationRequestV1(deliveredRequest)).toEqual({ ...request, mcpServersStrictMode: true });
     expect(AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema.safeParse(deliveredRequest).success).toBe(false);
     for (const invalidSkills of [
       { ...skills, unexpected: true },

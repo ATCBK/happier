@@ -17,6 +17,7 @@
 
 /** @type {{ source: string, destination: string, permanent: boolean }[]} */
 export const REDIRECTS = [
+    { source: '/extending/prompts-and-skills', destination: '/extending/prompts', permanent: true },
     // Historical: docs used to live under /docs. Keep old URLs working.
     { source: '/docs', destination: '/', permanent: true },
     { source: '/docs/:path*', destination: '/:path*', permanent: true },

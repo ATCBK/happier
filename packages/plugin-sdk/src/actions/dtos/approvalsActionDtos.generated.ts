@@ -47,16 +47,8 @@ export type ApprovalsActionInputById = {
     };
 };
 export type ApprovalsActionResultById = {
-    readonly "approval.request.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "approval.request.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "approval.request.create": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "approval.request.decide": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "approval.request.list": JsonValue;
+    readonly "approval.request.get": JsonValue;
+    readonly "approval.request.create": JsonValue;
+    readonly "approval.request.decide": JsonValue;
 };

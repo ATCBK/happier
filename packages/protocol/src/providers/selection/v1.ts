@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
@@ -10,48 +10,48 @@ import {
 import { ProviderAgentTargetKeySchema, ProviderConnectionIdSchema, ProviderModelIdSchema } from '../ids.js';
 import { PROVIDER_SETTINGS_LIMITS_V1 } from '../settings/limits.js';
 
-const NativeModelRefSchema = lazyZodSchema(() => z.object({
+const NativeModelRefSchema = lazyZodSchema(() => z.strictObject({
   agentTargetKey: ProviderAgentTargetKeySchema,
   providerConnectionId: z.null(),
   modelId: ProviderModelIdSchema,
-}).strict());
-const ConnectionModelRefSchema = lazyZodSchema(() => z.object({
+}));
+const ConnectionModelRefSchema = lazyZodSchema(() => z.strictObject({
   agentTargetKey: ProviderAgentTargetKeySchema,
   providerConnectionId: ProviderConnectionIdSchema,
   modelId: ProviderModelIdSchema,
-}).strict());
+}));
 export const ProviderBoundModelRefSchema = lazyZodSchema(() => z.union([NativeModelRefSchema, ConnectionModelRefSchema]));
 export type ProviderBoundModelRef = z.infer<typeof ProviderBoundModelRefSchema>;
 
-export const SessionModelSelectionV1Schema = lazyZodSchema(() => z.object({
+export const SessionModelSelectionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   ref: ProviderBoundModelRefSchema,
-  updatedAt: z.number().finite().nonnegative(),
-}).strict());
+  updatedAt: z.number().check(z.nonnegative()),
+}));
 export type SessionModelSelectionV1 = z.infer<typeof SessionModelSelectionV1Schema>;
 
 /** Intent is a preference, not proof that its connection is currently reachable. */
 export const ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema = lazyZodSchema(() => z.record(
   ProviderAgentTargetKeySchema, SessionModelSelectionV1Schema,
-).superRefine((defaults, context) => {
+).check(z.superRefine((defaults, context) => {
   if (Object.keys(defaults).length > PROVIDER_SETTINGS_LIMITS_V1.defaultsByAgentTargetKey) {
     context.addIssue({ code: 'custom', message: 'Too many per-agent defaults' });
   }
   for (const [key, selection] of Object.entries(defaults)) {
     if (selection.ref.agentTargetKey !== key) context.addIssue({ code: 'custom', path: [key], message: 'Default selection Agent target must match its key' });
   }
-}));
+})));
 export type ProviderDefaultModelSelectionsByAgentTargetKeyV1 = z.infer<typeof ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema>;
 export const ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema = createStoredReadSchema(ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema);
 
-export const ProviderDefaultModelSelectionMutationV1Schema = lazyZodSchema(() => z.object({
+export const ProviderDefaultModelSelectionMutationV1Schema = lazyZodSchema(() => z.strictObject({
   agentTargetKey: ProviderAgentTargetKeySchema,
-  selection: SessionModelSelectionV1Schema.nullable(),
-}).strict().superRefine((input, context) => {
+  selection: z.nullable(SessionModelSelectionV1Schema),
+}).check(z.superRefine((input, context) => {
   if (input.selection && input.selection.ref.agentTargetKey !== input.agentTargetKey) {
     context.addIssue({ code: 'custom', path: ['selection', 'ref', 'agentTargetKey'], message: 'Default selection Agent target must match its key' });
   }
-}));
+})));
 export type ProviderDefaultModelSelectionMutationV1 = z.output<typeof ProviderDefaultModelSelectionMutationV1Schema>;
 
 /** Changes intent only; reachability and grants are not preference-write preconditions. */
@@ -67,15 +67,15 @@ export function applyProviderDefaultModelSelectionV1(
   return { ...raw, [key]: ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema.parse(next) };
 }
 
-export const SessionActiveModelSelectionV1Schema = lazyZodSchema(() => z.object({
+export const SessionActiveModelSelectionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   selection: ProviderBoundModelRefSchema,
   source: z.enum(['runtime_readback', 'runtime_apply']),
-  runner: z.object({
-    pid: z.number().int().positive(),
-    processStartTimeMs: z.number().int().nonnegative(),
-  }).strict(),
-}).strict());
+  runner: z.strictObject({
+    pid: z.number().check(z.int(), z.positive()),
+    processStartTimeMs: z.number().check(z.int(), z.nonnegative()),
+  }),
+}));
 export type SessionActiveModelSelectionV1 = z.infer<
   typeof SessionActiveModelSelectionV1Schema
 >;
@@ -90,13 +90,13 @@ export const SESSION_APPLIED_MODEL_V1_METADATA_KEY = 'sessionAppliedModelV1';
  * readers ignore the additive field and Dev readers accept predecessor records
  * without it.
  */
-export const SessionAppliedModelV1Schema = lazyZodSchema(() => z.object({
+export const SessionAppliedModelV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  provider: z.string().min(1).max(256),
-  updatedAt: z.number().finite().nonnegative(),
+  provider: z.string().check(z.minLength(1), z.maxLength(256)),
+  updatedAt: z.number().check(z.nonnegative()),
   modelId: ProviderModelIdSchema,
-  selection: ProviderBoundModelRefSchema.optional(),
-}).strict().superRefine((value, ctx) => {
+  selection: z.optional(ProviderBoundModelRefSchema),
+}).check(z.superRefine((value, ctx) => {
   if (value.selection && value.selection.modelId !== value.modelId) {
     ctx.addIssue({
       code: 'custom',
@@ -104,13 +104,12 @@ export const SessionAppliedModelV1Schema = lazyZodSchema(() => z.object({
       message: 'Structured applied-model selection must match modelId',
     });
   }
-}));
+})));
 export type SessionAppliedModelV1 = z.infer<typeof SessionAppliedModelV1Schema>;
 
 export const SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY = 'modelSelectionV1';
 
-export const SessionMessageModelSelectionV1Schema = lazyZodSchema(() => SessionModelSelectionV1Schema.superRefine(
-  (selection, ctx) => {
+export const SessionMessageModelSelectionV1Schema = lazyZodSchema(() => SessionModelSelectionV1Schema.check(z.superRefine((selection, ctx) => {
     if (selection.ref.providerConnectionId === null && selection.ref.modelId === 'default') {
       ctx.addIssue({
         code: 'custom',
@@ -118,8 +117,7 @@ export const SessionMessageModelSelectionV1Schema = lazyZodSchema(() => SessionM
         message: 'Native per-message model selection cannot use the legacy default reset token',
       });
     }
-  },
-));
+  })));
 
 export type SessionMessageModelSelectionV1ReadResult =
   | Readonly<{ status: 'absent' }>
@@ -179,11 +177,11 @@ export function projectSessionMessageModelSelectionToLegacyModelV1(
     : undefined;
 }
 
-export const SessionModelSelectionIntentV1Schema = lazyZodSchema(() => z.object({
+export const SessionModelSelectionIntentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  updatedAt: z.number().finite().nonnegative(),
-  selection: ProviderBoundModelRefSchema.nullable(),
-}).strict());
+  updatedAt: z.number().check(z.nonnegative()),
+  selection: z.nullable(ProviderBoundModelRefSchema),
+}));
 export type SessionModelSelectionIntentV1 = z.infer<typeof SessionModelSelectionIntentV1Schema>;
 
 export type LegacyModelOverrideProjectionV1 = Readonly<{
@@ -431,9 +429,9 @@ export function resolveSessionModelSelectionIntentV1(input: Readonly<{
 }
 
 export const ModelVisibilityRefV1Schema = lazyZodSchema(() => z.union([
-  z.object({ scope: z.literal('agent'), agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: z.null(), modelId: ProviderModelIdSchema }).strict(),
-  z.object({ scope: z.literal('agent'), agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: ProviderConnectionIdSchema, modelId: ProviderModelIdSchema }).strict(),
-  z.object({ scope: z.literal('allAgents'), providerConnectionId: ProviderConnectionIdSchema, modelId: ProviderModelIdSchema }).strict(),
+  z.strictObject({ scope: z.literal('agent'), agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: z.null(), modelId: ProviderModelIdSchema }),
+  z.strictObject({ scope: z.literal('agent'), agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: ProviderConnectionIdSchema, modelId: ProviderModelIdSchema }),
+  z.strictObject({ scope: z.literal('allAgents'), providerConnectionId: ProviderConnectionIdSchema, modelId: ProviderModelIdSchema }),
 ]));
 export type ModelVisibilityRefV1 = z.infer<typeof ModelVisibilityRefV1Schema>;
 

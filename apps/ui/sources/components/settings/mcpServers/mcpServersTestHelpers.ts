@@ -10,6 +10,7 @@ type McpServersStorageModuleFactory = (
 ) => unknown | Promise<unknown>;
 
 type InstallMcpServersCommonModuleMocksOptions = Readonly<{
+    realComponents?: boolean;
     modal?: McpServersModuleFactory;
     reactNative?: McpServersModuleFactory;
     router?: McpServersModuleFactory;
@@ -187,6 +188,7 @@ export function installMcpServersCommonModuleMocks(
 
     vi.mock('@/components/ui/buttons/RoundButton', () => ({
         RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
+        RoundButtonSizeScope: (props: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, props.children),
     }));
 
     vi.mock('@/components/ui/navigation/SegmentedTabBar', () => ({
@@ -232,6 +234,23 @@ export function installMcpServersCommonModuleMocks(
         useLayoutMaxWidth: () => 960,
         useLayoutMaxWidthStyle: () => ({ maxWidth: 960 }),
     }));
+
+    if (options.realComponents) {
+        for (const module of [
+            '@/components/ui/text/Text',
+            '@/components/ui/lists/ItemList',
+            '@/components/ui/lists/ItemGroup',
+            '@/components/ui/lists/Item',
+            '@/components/ui/lists/ItemRowActions',
+            '@/components/ui/buttons/RoundButton',
+            '@/components/ui/navigation/SegmentedTabBar',
+            '@/components/ui/forms/Switch',
+            '@/components/ui/forms/dropdown/DropdownMenu',
+            '@/components/ui/pathBrowser/PathInputBrowseButton',
+            '@/components/ui/pathBrowser/openMachinePathBrowserModal',
+            '@/components/ui/layout/layout',
+        ]) vi.doUnmock(module);
+    }
 }
 
 export { mcpServersModuleState };

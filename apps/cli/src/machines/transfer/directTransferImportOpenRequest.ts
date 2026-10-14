@@ -55,10 +55,5 @@ export const DirectTransferImportOpenRequestSchema = z.discriminatedUnion('t', [
       sha256: z.unknown().optional(),
     }).strict(),
     SessionAttachmentUploadInitRequestV1Schema.extend(directTransferImportOpenCommonFields),
-    z.object({
-      ...directTransferImportOpenCommonFields,
-      t: z.literal('prompt_asset_upload_v1'),
-      sizeBytes: z.unknown(),
-    }).strict(),
     ComposerMediaStageUploadOpenRequestSchema,
   ]);

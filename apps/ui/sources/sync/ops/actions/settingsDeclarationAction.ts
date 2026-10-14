@@ -5,6 +5,7 @@ import type { AutomationV3Settings } from '@happier-dev/protocol/automations/aut
 import { executeAutomationSettingDeclaration } from '@happier-dev/protocol/actions';
 import type { FeatureId } from '@happier-dev/protocol/features/catalog';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isAccountSettingActionSurfaceAllowedV1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 import { getSettingsPageDeclarations } from '@/components/settings/catalog/settingsPageDeclarations';
@@ -32,6 +33,7 @@ import { MachineInstallablePolicyKeySchema, MachineInstallablePolicyChangeSchema
     readMachineInstallablePolicySetting, buildMachineInstallablePolicySettingMutation } from '@happier-dev/protocol/actions/settings/machineInstallablePolicySetting';
 import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
     readMachineOfflineAlertSetting, buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
+import { machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -72,7 +74,7 @@ function refuse(errorCode: string) {
 
 class RejectedSettingMutation extends Error {}
 type SettingsDeclarationActionResult = z.output<(typeof SettingsDeclarationActionOutputSchemasV1)[SettingsDeclarationActionIdV1]>
-    | ReturnType<typeof refuse>;
+    | ReturnType<typeof refuse> | ActionApprovalRequestCreatedResult;
 class ConditionalSettingConflict extends Error {}
 const CapturedSettingMutationSchema = z.object({
     beforeVersion: SettingsDeclarationMutationReversalV1Schema.shape.beforeVersion,
@@ -169,6 +171,12 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             const items = await Promise.all(declarations
                 .filter((page) => !parsed.pageId || page.pageId === parsed.pageId)
                 .flatMap((page) => Object.values(page.settings).map((ref) => descriptor(page.pageId, ref, context, readHome))));
+            const connection = readBuiltInSettingDeclarationV1('machines.connection.direct');
+            if (connection && (!parsed.pageId || parsed.pageId === 'machines')) {
+                items.push({ anchor: connection.anchor, pageId: connection.pageId, title: connection.title,
+                    description: connection.description, readable: true, writable: true, sensitive: false,
+                    storageScope: 'account', allowedValues: [...machineDirectConnectionStorage.allowedValues] });
+            }
             const machineHost = readBuiltInSettingDeclarationV1('machines.terminal.host');
             if (machineHost && (!parsed.pageId || parsed.pageId === 'machines')) {
                 items.push({ anchor: machineHost.anchor, pageId: machineHost.pageId, title: machineHost.title,
@@ -238,6 +246,36 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             }
             return { anchor: parsed.anchor, value: change.data };
         }
+        if (parsed.anchor === 'machines.connection.direct') {
+            if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
+            if (!currentOwner()) return refuse('setting_not_bound');
+            if ('target' in parsed && parsed.target) return refuse('setting_target_mismatch');
+            const key = machineDirectConnectionStorage.key.safeParse('key' in parsed ? parsed.key : undefined);
+            if (!key.success) return refuse('setting_key_required');
+            if (actionId === 'settings.get') {
+                if ('includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
+                const settings = await owner.readAccountSettings();
+                if (!currentOwner()) return refuse('setting_not_bound');
+                return { anchor: parsed.anchor, value: machineDirectConnectionStorage.read(settings, key.data) };
+            }
+            const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
+            if (requested.reversal || requested.expectedSettingsVersion !== undefined) return refuse('setting_conditional_mutation_unsupported');
+            const change = machineDirectConnectionStorage.value.safeParse(requested.value);
+            if (!change.success) return refuse('invalid_setting_value');
+            try {
+                await owner.mutateAccountSettings(raw => {
+                    throwIfAborted(context?.signal);
+                    if (!currentOwner()) throw new RejectedSettingMutation();
+                    const patch = machineDirectConnectionStorage.mutate(settingsParse(raw), key.data, change.data);
+                    if (!patch) throw new RejectedSettingMutation();
+                    return { ...raw, ...patch };
+                });
+            } catch (error) {
+                if (error instanceof RejectedSettingMutation) return refuse('invalid_setting_value');
+                throw error;
+            }
+            return { anchor: parsed.anchor, value: change.data };
+        }
         if (parsed.anchor === 'machines.terminal.host') {
             if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
             const key = MachineTerminalHostSettingKeySchema.safeParse('key' in parsed ? parsed.key : undefined);
@@ -269,7 +307,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             if (!key.success) return refuse('setting_key_required');
             if (actionId === 'settings.get') {
                 const settings = await owner.readAccountSettings();
-                return { anchor: parsed.anchor, value: readMachineInstallablePolicySetting(settings, key.data) };
+                const output = SettingsDeclarationActionOutputSchemasV1['settings.get'].safeParse({
+                    anchor: parsed.anchor, value: readMachineInstallablePolicySetting(settings, key.data),
+                });
+                return output.success ? output.data : refuse('invalid_action_output');
             }
             const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
             const change = MachineInstallablePolicyChangeSchema.safeParse(requested.value);
@@ -363,14 +404,16 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 services: owner.mutationServices,
                 isFeatureEnabled: owner.isFeatureEnabled,
                 readSettings: owner.readAccountSettings,
-                mutateSettings: async (mutate) => owner.mutateAccountSettings((raw) => {
-                    throwIfAborted(context?.signal);
-                    if (!isCurrent()) throw new RejectedSettingMutation();
-                    const settings = settingsParse(raw);
-                    const delta = mutate(settings);
-                    if (!delta) throw new RejectedSettingMutation();
-                    return { ...raw, ...normalizeVoiceSettingsLocalDelta(delta, settings) };
-                }),
+                mutateSettings: async (mutate) => {
+                    await owner.mutateAccountSettings((raw) => {
+                        throwIfAborted(context?.signal);
+                        if (!isCurrent()) throw new RejectedSettingMutation();
+                        const settings = settingsParse(raw);
+                        const delta = mutate(settings);
+                        if (!delta) throw new RejectedSettingMutation();
+                        return { ...raw, ...normalizeVoiceSettingsLocalDelta(delta, settings) };
+                    });
+                },
             });
             return { anchor: ref.anchor, ...result };
         }
@@ -465,8 +508,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 if (!result) return refuse('setting_conditional_mutation_unsupported');
                 if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
                 const restored = settingsParse('unset' in before ? {} : { [key]: before.value })[key];
-                if (restored === undefined) return { anchor: ref.anchor, unset: true as const };
-                return { anchor: ref.anchor, value: binding.invertBoolean ? !restored : restored };
+                const output = SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(restored === undefined
+                    ? { anchor: ref.anchor, unset: true }
+                    : { anchor: ref.anchor, value: binding.invertBoolean ? !restored : restored });
+                return output.success ? output.data : refuse('invalid_action_output');
             }
             if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
             if (binding.invertBoolean && typeof requested.value !== 'boolean') return refuse('invalid_setting_value');
@@ -558,8 +603,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             const snapshot = await owner.readAccountSettingsSnapshot();
             if (!isCurrent()) return refuse('setting_not_bound');
             const value = settingsParse(snapshot.raw)[binding.key];
-            if (value === undefined) return { anchor: ref.anchor, unset: true as const, settingsVersion: snapshot.version };
-            return { anchor: ref.anchor, value: binding.invertBoolean ? !value : value, settingsVersion: snapshot.version };
+            const output = SettingsDeclarationActionOutputSchemasV1['settings.get'].safeParse(value === undefined
+                ? { anchor: ref.anchor, unset: true, settingsVersion: snapshot.version }
+                : { anchor: ref.anchor, value: binding.invertBoolean ? !value : value, settingsVersion: snapshot.version });
+            return output.success ? output.data : refuse('invalid_action_output');
         }
         const current = !('key' in binding)
             ? binding.kind === 'localOwner' ? binding.read(owner.readLocalSettings()) : binding.read(await owner.readAccountSettings())

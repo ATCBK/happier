@@ -13,6 +13,11 @@ import { VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY } from '@/app/api/sock
 import { createFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { activityCache } from './sessionCache';
 import { runPresenceTimeoutTick } from './timeout';
+import { inTx } from '@/storage/inTx';
+import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { MachineRemoteAlertV1Schema } from '@happier-dev/protocol/push/machineRemoteAlert';
 
 // Only the external Expo delivery boundary is replaced; policy, presence,
 // authentication, ownership and persistence run through their real owners.
@@ -130,6 +135,61 @@ describe('opted-in Machine offline presence alerts (real SQLite)', () => {
             await db.account.update({ where: { id: owner.id }, data: { settingsVersion: { increment: 1 } } });
             await getSocketHandler(socket, 'machine-alive')({ machineId: row.id, time: Date.now() });
             expect(messages()).toEqual([]);
+        } finally { activityCache.invalidateMachine(row.id); }
+    });
+    it.each([{ online: false, optOut: false }, { online: true, optOut: false }, { online: false, optOut: true }])(
+        'composes settings enrollment ($online, optOut=$optOut) with one requested return and quiet ordinary recovery', async ({ online, optOut }) => {
+        const owner = await account();
+        const row = await machine(owner.id);
+        const pushToken = `ExponentPushToken[${randomUUID()}]`;
+        const recoveryRequests = () => db.simpleCache.count({ where: { key: {
+            startsWith: `machine-remote-alert:recovery:${JSON.stringify(owner.id)}:`,
+        } } });
+        const visibleMessages = () => messages().filter(message => typeof message.body === 'string' && message.body.trim().length > 0);
+        await db.accountPushToken.create({ data: { accountId: owner.id, token: pushToken, remoteAlerts: device } });
+        await db.machine.update({ where: { id: row.id }, data: { active: online } });
+        // UI and agent settings Actions share this keyed mutation producer.
+        const settings = accountSettingsParse(buildMachineOfflineAlertSettingMutation(accountSettingsParse({}), row.id, true));
+        const write = (expectedVersion: number, nextSettings: typeof settings) => inTx(tx => writeAccountSettingsInTx({
+            tx, accountId: owner.id, expectedVersion,
+            next: { kind: 'v2', content: { t: 'plain', v: nextSettings }, remoteAlertPolicy: deriveAccountRemoteAlertPolicyV1(nextSettings) },
+        }));
+        expect(await write(0, settings)).toEqual({ status: 'success', version: 1 });
+        // An unrelated settings save must retain, not re-arm, the same request.
+        expect(await write(1, settings)).toEqual({ status: 'success', version: 2 });
+        if (optOut) {
+            const disabled = accountSettingsParse(buildMachineOfflineAlertSettingMutation(settings, row.id, false));
+            expect(await write(2, disabled)).toEqual({ status: 'success', version: 3 });
+        }
+        await db.machine.update({ where: { id: row.id }, data: { active: false } });
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const socket = Object.assign(createFakeSocket({ data: { clientType: 'machine-scoped', machineId: row.id,
+            [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: row.installationId } }), { handshake: { auth: { token } }, disconnect: vi.fn() });
+        machineUpdateHandler(owner.id, socket as unknown as Socket, { operationSocketBatchLimits: {
+            ok: true, limits: { maxItems: 200, maxSerializedBytes: 524_288 } } });
+        try {
+            const alive = getSocketHandler(socket, 'machine-alive');
+            await Promise.all([alive({ machineId: row.id, time: Date.now() }), alive({ machineId: row.id, time: Date.now() })]);
+            if (optOut) {
+                expect(messages()).toEqual([]);
+                expect(await recoveryRequests()).toBe(0);
+                return;
+            }
+            expect(messages()).toHaveLength(2);
+            for (const message of messages()) {
+                expect(message).toMatchObject({ to: pushToken });
+                expect(MachineRemoteAlertV1Schema.parse(message.data)).toMatchObject({ phase: 'recovered', machineId: row.id });
+            }
+            expect(visibleMessages()).toHaveLength(online ? 0 : 1);
+            expect(await recoveryRequests()).toBe(0);
+            expect(JSON.stringify(messages())).not.toContain('private-machine-name');
+            await alive({ machineId: row.id, time: Date.now() });
+            expect(visibleMessages()).toHaveLength(online ? 0 : 1);
+            expect(messages()[2]).not.toHaveProperty('body');
+            // Re-saving consent after delivery and a later outage stay ordinary.
+            expect(await write(2, settings)).toEqual({ status: 'success', version: 3 });
+            await alive({ machineId: row.id, time: Date.now() });
+            expect(visibleMessages()).toHaveLength(online ? 0 : 1);
         } finally { activityCache.invalidateMachine(row.id); }
     });
 });

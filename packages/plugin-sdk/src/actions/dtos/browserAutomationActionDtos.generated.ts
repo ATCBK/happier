@@ -15,7 +15,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -33,7 +33,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -51,7 +51,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -69,7 +69,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -87,7 +87,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -105,7 +105,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -127,7 +127,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -145,7 +145,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -163,7 +163,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -181,7 +181,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -199,7 +199,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -217,7 +217,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -235,7 +235,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -253,7 +253,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -271,7 +271,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -289,7 +289,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -307,7 +307,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -325,7 +325,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -343,7 +343,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -385,7 +385,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -403,7 +403,7 @@ export type BrowserAutomationActionInputById = {
             kind: string;
             id: string;
         };
-        actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+        actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
     } & {
@@ -528,7 +528,7 @@ export type BrowserAutomationActionResultById = {
             automationRequestId: string;
             browserSessionId: string;
             viewId: string;
-            actionKind: 'getStatus' | 'type' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
+            actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
             requesterKind: 'user' | 'agent' | 'plugin' | 'system';
             status: 'succeeded' | 'failed' | 'interrupted' | 'canceled' | 'timed_out' | 'stale' | 'policy_denied' | 'unsupported';
             adapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';

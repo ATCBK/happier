@@ -31,7 +31,8 @@ export type VoiceAgentSendTurnOptions = Readonly<{
 
 export type VoiceAgentStartParams = Readonly<{
   sessionId: string;
-  profileId?: string | null;
+  /** Account Launch Profile; distinct from plugin-owned execution Profile custody. */
+  launchProfileId?: string | null;
   agentSource?: VoiceAgentAgentSource;
   agentId?: string;
   verbosity?: VoiceAgentVerbosity;

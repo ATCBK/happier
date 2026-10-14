@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { parseAgentPermissionIntentV1Alias } from '../../runtime/permissionIntentV1.js';
 import { actionCliDerivedDefault, type ActionCliProjection } from '../actionCliProjection.js';
@@ -55,14 +55,11 @@ export const SessionPermissionModeSetApplyTimingSchema = lazyZodSchema(() => z.l
   error: 'Permission-mode changes apply immediately. Use session.message.send with permissionModeOverride to apply a mode with the next prompt.',
 }));
 
-export const SessionPermissionModeSetCliInputSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  permissionMode: z.string().trim().min(1).refine(
-    (value) => parseAgentPermissionIntentV1Alias(value) !== null,
-    { message: 'Invalid permission mode' },
-  ),
-  applyTiming: SessionPermissionModeSetApplyTimingSchema.optional(),
-}).strict());
+export const SessionPermissionModeSetCliInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  permissionMode: z.string().check(z.trim(), z.minLength(1), z.refine((value) => parseAgentPermissionIntentV1Alias(value) !== null, { message: 'Invalid permission mode' })),
+  applyTiming: z.optional(SessionPermissionModeSetApplyTimingSchema),
+}));
 export type SessionPermissionModeSetCliInput = z.infer<typeof SessionPermissionModeSetCliInputSchema>;
 
 export function bindSessionPermissionModeSetCliInput(
@@ -103,11 +100,11 @@ export const SESSION_PERMISSION_MODE_SET_CLI_PROJECTION: ActionCliProjection = {
  * Action contract represents as a null connection id. Omitting the flag leaves
  * the current selection untouched.
  */
-export const SessionModelSetCliInputSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  modelId: z.string().trim().min(1),
-  providerConnection: z.string().trim().min(1).optional(),
-}).strict());
+export const SessionModelSetCliInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  modelId: z.string().check(z.trim(), z.minLength(1)),
+  providerConnection: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type SessionModelSetCliInput = z.infer<typeof SessionModelSetCliInputSchema>;
 
 export function bindSessionModelSetCliInput(
@@ -152,10 +149,10 @@ export const SESSION_MODEL_SET_CLI_PROJECTION: ActionCliProjection = {
  * accepted range, so the clamp lives in this caller projection rather than
  * widening the Action.
  */
-export const SessionWaitIdleCliInputSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  timeoutSeconds: z.number().int().min(1).optional(),
-}).strict());
+export const SessionWaitIdleCliInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  timeoutSeconds: z.optional(z.number().check(z.int(), z.minimum(1))),
+}));
 export type SessionWaitIdleCliInput = z.infer<typeof SessionWaitIdleCliInputSchema>;
 
 /**

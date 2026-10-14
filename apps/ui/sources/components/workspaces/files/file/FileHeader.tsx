@@ -18,7 +18,7 @@ export function FileHeader({ theme, fileName, filePathDir, rightElement }: FileH
     return (
         <View
             style={{
-                padding: 16,
+                padding: theme.space.s16,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                 borderBottomColor: theme.colors.border.default,
                 backgroundColor: theme.colors.surface.inset,
@@ -31,7 +31,7 @@ export function FileHeader({ theme, fileName, filePathDir, rightElement }: FileH
                 style={{
                     fontSize: 14,
                     color: theme.colors.text.secondary,
-                    marginLeft: 8,
+                    marginLeft: theme.space.s8,
                     flex: 1,
                     ...Typography.mono(),
                 }}

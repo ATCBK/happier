@@ -110,8 +110,8 @@ export const BashView = React.memo<ToolViewProps>((props) => {
 
 const styles = StyleSheet.create((theme) => ({
     commandDiffHint: {
-        marginHorizontal: 12,
-        marginBottom: 8,
+        marginHorizontal: theme.space.s12,
+        marginBottom: theme.space.s8,
         color: theme.colors.text.secondary,
     },
 }));

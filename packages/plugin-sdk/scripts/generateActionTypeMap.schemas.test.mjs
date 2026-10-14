@@ -8,18 +8,19 @@ import { deriveActionDtoSchemas } from './deriveActionDtos.mjs';
 import { prepareActionTypeMap } from './generateActionTypeMap.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
-test('tuple-backed Action specs derive their keyed canonical input and output schemas', async t => {
+for (const dialect of ['zod', 'zod/mini']) test(`tuple-backed ${dialect} Action specs derive their keyed canonical input and output schemas`, async t => {
   const cache = resolve('packages/plugin-sdk/node_modules/.cache');
   mkdirSync(cache, { recursive: true });
   const root = mkdtempSync(resolve(cache, 'schema-action-tuples-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const actions = resolve(root, 'packages/protocol/src/actions');
   mkdirSync(actions, { recursive: true });
+  mkdirSync(resolve(actions, 'specs'), { recursive: true });
   writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { processes: ['processes.read', 'processes.stop'] } as const;");
   writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
-  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { PROCESS_ACTION_SPECS } from './processes.js';
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { PROCESS_ACTION_SPECS } from './specs/processes.js';
     export const ACTION_SPECS = [...PROCESS_ACTION_SPECS];`);
-  writeFileSync(resolve(actions, 'processes.ts'), `import { z } from 'zod';
+  writeFileSync(resolve(actions, 'specs/processes.ts'), `import { z } from '${dialect}';
     const INPUTS = { 'processes.read': z.object({ machineId: z.string() }), 'processes.stop': z.object({ processId: z.number() }) };
     const OUTPUTS = { 'processes.read': z.object({ count: z.number() }), 'processes.stop': z.object({ stopped: z.boolean() }) };
     const rows = [['processes.read', 'Read'], ['processes.stop', 'Stop']] as const;
@@ -36,6 +37,36 @@ test('tuple-backed Action specs derive their keyed canonical input and output sc
   assert.equal(fieldType('ProcessesActionResultById', 'processes.read', 'count'), ts.SyntaxKind.NumberKeyword);
   assert.equal(fieldType('ProcessesActionInputById', 'processes.stop', 'processId'), ts.SyntaxKind.NumberKeyword);
   assert.equal(fieldType('ProcessesActionResultById', 'processes.stop', 'stopped'), ts.SyntaxKind.BooleanKeyword);
+});
+
+for (const dialect of ['zod', 'zod/mini']) test(`closed ${dialect} schema DTOs compile while empty-record contracts stay closed`, async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-closed-dto-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { inventory: ['inventory.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { z } from '${dialect}';
+    const closed = ${dialect === 'zod/mini' ? 'z.catchall(z.object({ v: z.literal(1), title: z.string() }), z.never())' : 'z.object({ v: z.literal(1), title: z.string() }).catchall(z.never())'};
+    const empty = z.record(z.string(), z.never());
+    const schema = z.object({ closed, empty });
+    export const ACTION_SPECS = [{ id: 'inventory.list', inputSchema: schema, outputSchema: schema }];`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['inventory'] });
+  writeFileSync(resolve(root, 'dto.ts'), derived.outputs.get(resolve(actions, 'inventoryActionDtos.ts')));
+  writeFileSync(resolve(root, 'consumer.ts'), `import type { InventoryActionInputById, InventoryActionResultById } from './dto.js';
+    const input: InventoryActionInputById['inventory.list'] = { closed: { v: 1, title: 'valid' }, empty: {} };
+    const output: InventoryActionResultById['inventory.list'] = input;
+    // @ts-expect-error A genuine empty-record operand must still reject every key.
+    const nonempty: InventoryActionInputById['inventory.list']['empty'] = { unexpected: true };
+    // @ts-expect-error A fresh closed operand must still reject unknown fields.
+    const unknownField: InventoryActionInputById['inventory.list']['closed'] = { v: 1, title: 'valid', unexpected: true };
+    void output; void nonempty; void unknownField;`);
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: process.cwd() });
+  const compiled = spawnSync(invocation.command, [...invocation.argsPrefix, '--ignoreConfig', '--strict', '--skipLibCheck', '--noEmit',
+    '--target', 'ES2022', '--module', 'ESNext', '--moduleResolution', 'Bundler', '--types', 'node', resolve(root, 'consumer.ts')], { encoding: 'utf8' });
+  assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
 });
 
 test('multi-argument family factories derive imported canonical schema maps without metadata evaluation', async t => {
@@ -568,6 +599,33 @@ test('deferred canonical Team credential maps supply concrete input and result D
   assert.ok(ts.isUnionTypeNode(cursor.type));
   assert.ok(cursor.type.types.some(type => type.kind === ts.SyntaxKind.StringKeyword));
   assert.ok(cursor.type.types.some(type => ts.isLiteralTypeNode(type) && type.literal.kind === ts.SyntaxKind.NullKeyword));
+});
+
+for (const dialect of ['zod', 'zod/mini']) test(`composer effect support derives the ${dialect} schema output instead of its authored alias`, t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-composer-effect-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = resolve(root, 'packages/protocol/src/plugins/contributions/ui');
+  mkdirSync(source, { recursive: true });
+  writeFileSync(resolve(source, 'v2.ts'), `import { z } from '${dialect}';
+    export const PluginDeclarativeComposerApplyEffectV1Schema = z.strictObject({
+      kind: z.literal('composerApply'), text: z.string(), cursor: ${dialect === 'zod/mini' ? 'z._default(z.number(), 0)' : 'z.number().default(0)'}
+    });
+    export type PluginDeclarativeComposerApplyEffectV1 = { authoredAliasOnly: true };`);
+  const request = resolve(root, 'request.json'), resultPath = resolve(root, 'result.json');
+  writeFileSync(request, JSON.stringify({ repoRoot: root, bindings: [
+    ['plugins/contributions/ui/v2.ts', 'PluginDeclarativeComposerApplyEffectV1'],
+  ] }));
+  const generated = spawnSync(process.execPath, [resolve('packages/plugin-sdk/scripts/deriveActionDtos.mjs'), request, resultPath], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stdout + generated.stderr);
+  const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+  const declaration = result.declarations.find(([name]) => name === 'PluginDeclarativeComposerApplyEffectV1')?.[1];
+  assert.ok(declaration);
+  assert.match(declaration, /kind: ["']composerApply["']/u);
+  assert.match(declaration, /text: string/u);
+  assert.match(declaration, /cursor: number/u, 'output owns the defaulted required cursor, not optional input');
+  assert.doesNotMatch(declaration, /authoredAliasOnly|zod|Zod|_zod/u);
 });
 
 test('public support roots preserve canonical mutable projections and recursive readonly interfaces', t => {

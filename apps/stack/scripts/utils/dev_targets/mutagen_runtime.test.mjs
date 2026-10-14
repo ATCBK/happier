@@ -16,6 +16,23 @@ test('routed repositories and QA consumers share one daemon while repository ses
   assert.notEqual(resolveMutagenSessionName('worker', '/workspace/0.3'), resolveMutagenSessionName('worker', '/other/0.3'));
 });
 
+test('candidate producer projects share the daemon and reject malformed owner identities', () => {
+  const input = { stackBaseDir: '/state/stacks/candidate', sourceDir: '/workspace/0.3', env: { HAPPIER_STACK_STORAGE_DIR: '/state/stacks' } };
+  const ordinary = resolveDevTargetMutagenRuntime(input);
+  const candidate = resolveDevTargetMutagenRuntime({ ...input, ownerId: 'execution-host-candidate-0.3' });
+  const legacy = resolveDevTargetMutagenRuntime({ ...input, ownerId: 'execution-host-candidate' });
+  assert.equal(candidate.dataDir, ordinary.dataDir);
+  assert.equal(candidate.opensshDir, ordinary.opensshDir);
+  assert.notEqual(candidate.projectFile, ordinary.projectFile);
+  assert.notEqual(candidate.projectFile, legacy.projectFile);
+  const namedProjects = ['a.b', 'a-b', 'A', 'a'].map(id => resolveDevTargetMutagenRuntime({ ...input, ownerId: `execution-host-candidate-${id}` }).projectFile.toLowerCase());
+  assert.equal(new Set(namedProjects).size, namedProjects.length, 'valid workspace identities cannot alias on a case-insensitive filesystem');
+  assert.equal(resolveDevTargetMutagenRuntime({ ...input, ownerId: 'ordinary-consumer' }).projectFile, ordinary.projectFile);
+  for (const ownerId of ['execution-host-candidate-', 'execution-host-candidate-../outside', 'execution-host-candidate-a/b', 'execution-host-candidate-a\\b']) {
+    assert.throws(() => resolveDevTargetMutagenRuntime({ ...input, ownerId }), /candidate.*owner/i);
+  }
+});
+
 import {
   assertDevTargetMutagenRuntimeIsolation,
   parseMutagenSyncList,

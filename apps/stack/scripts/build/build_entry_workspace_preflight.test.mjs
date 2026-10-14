@@ -14,7 +14,7 @@ const buildDir = dirname(fileURLToPath(import.meta.url));
 const stackDir = resolve(buildDir, '..', '..');
 const buildScriptPath = resolve(stackDir, 'scripts', 'build.mjs');
 
-test('direct Stack artifact entry delegates runtime locking to the canonical artifact owner', async (t) => {
+test('direct Stack artifact entry reaches worker placement before publication and reports missing source', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-build-entry-owner-', registerCleanup: false });
   const lockPath = fixture.path('stacks', 'repo-producer', 'runtime', 'publication.lock');
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -25,8 +25,8 @@ test('direct Stack artifact entry delegates runtime locking to the canonical art
   const holder = withWorkspaceBundleLock(async () => { admitted(); await gate; }, { lockPath });
   await admission;
 
-  // Exercise the real command and publication owner. Missing source is the
-  // filesystem boundary: preparation must not inspect it before admission.
+  // Finite construction is admitted before the short publication transaction.
+  // An unrelated publication owner must not block source/worker inspection.
   const child = spawnTestProcess(process.execPath, [buildScriptPath, '--daemon', '--json'], {
     cwd: stackDir,
     env: {
@@ -43,14 +43,9 @@ test('direct Stack artifact entry delegates runtime locking to the canonical art
   });
   let stderr = '';
   let stdout = '';
-  let observedWait;
-  const waiting = new Promise(resolve => { observedWait = resolve; });
   child.stdout.on('data', chunk => { stdout += String(chunk); });
   child.stderr.on('data', chunk => {
     stderr += String(chunk);
-    // Observe the owning lock path, not an obsolete diagnostic label. The
-    // canonical admission now reports runtime publication without "flight".
-    if (stderr.includes(lockPath)) observedWait();
   });
   const completion = once(child, 'exit').then(([code]) => ({ code, stdout, stderr }));
   t.after(async () => {
@@ -60,17 +55,9 @@ test('direct Stack artifact entry delegates runtime locking to the canonical art
     await fixture.cleanup();
   });
 
-  await Promise.race([
-    waiting,
-    completion.then(result => {
-      assert.fail(`command exited before canonical publication admission: ${JSON.stringify(result)}`);
-    }),
-  ]);
-  assert.equal(child.exitCode, null, 'the command must wait for the producer flight before preparation');
-  release();
-  await holder;
   const result = await completion;
-  assert.notEqual(result.code, 0, 'the real missing-source preparation must fail after admission');
+  assert.notEqual(result.code, 0, 'missing worker source must fail before entering publication');
   assert.equal(result.stdout, '', 'failed publication must not emit a successful JSON result');
-  assert.match(result.stderr, /missing-source/);
+  assert.match(result.stderr, /missing-source[\\/]apps[\\/]stack[\\/]bin[\\/]hstack-exec/);
+  assert.match(result.stderr, /ENOENT/);
 });

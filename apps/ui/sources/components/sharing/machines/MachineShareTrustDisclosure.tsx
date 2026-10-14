@@ -58,8 +58,8 @@ const styles = StyleSheet.create((theme) => ({
   block: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    padding: 12,
+    gap: theme.space.s10,
+    padding: theme.space.s12,
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface.elevated,
   },
@@ -69,7 +69,7 @@ const styles = StyleSheet.create((theme) => ({
   text: {
     flex: 1,
     minWidth: 0,
-    gap: 6,
+    gap: theme.space.s6,
   },
   lead: {
     ...Typography.default('semiBold'),

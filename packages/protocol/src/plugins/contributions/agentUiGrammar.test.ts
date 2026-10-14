@@ -1,3 +1,5 @@
+import * as z from 'zod/mini';
+import type { core } from 'zod/mini';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import { compileProtocolJsonSchema } from '../actions/jsonSchemaCompiler.js';
 import { createPluginManifestJsonSchemaV2 } from '../manifest/jsonSchema.js';
@@ -394,7 +396,7 @@ describe('Agent UI grammar in the full public Manifest projection', () => {
       { schema: createPluginManifestJsonSchemaV2(), dialect: 'draft-2020-12' },
     ];
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      projections.push({ schema: PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }),
+      projections.push({ schema: z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' }),
         dialect: target === 'draft-7' ? 'draft-07' : 'draft-2020-12' });
       // Custom authoring nodes are intentionally unrepresentable by the strict action helper.
       expect(() => zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target }))

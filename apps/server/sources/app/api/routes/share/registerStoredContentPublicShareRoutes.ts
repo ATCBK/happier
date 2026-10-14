@@ -1,6 +1,6 @@
 import { type Fastify } from "../../types";
 import { z } from "zod";
-import { StoredContentPublicShareCreateRequestV1Schema } from "@happier-dev/protocol";
+import { StoredContentPublicShareCreateRequestV1Schema } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { createHash } from "node:crypto";

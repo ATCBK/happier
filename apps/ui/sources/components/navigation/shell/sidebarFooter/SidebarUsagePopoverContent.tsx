@@ -175,7 +175,7 @@ export function useUsagePopoverData(): Readonly<{
         keysWithoutLimits: quota.keysWithoutLimits,
         accounts,
     }), [accounts, quota.accountsNeedingSignIn, quota.keysWithoutLimits]);
-    const privacy = useConnectedAccountIdentityPrivacy();
+    const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
     const refresh = React.useMemo((): UsagePopoverRefresh => ({
         keys: quota.refreshableKeys,
         refreshingByKey: quota.refreshingByKey,

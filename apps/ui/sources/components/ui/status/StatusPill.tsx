@@ -92,23 +92,6 @@ export type StatusPillProps = Readonly<{
     style?: StyleProp<ViewStyle>;
 }>;
 
-function resolvePillLabelTypography() {
-    const helpers = Typography as Readonly<{
-        pillLabel?: () => object;
-        default?: (weight?: 'regular' | 'italic' | 'semiBold') => object;
-    }>;
-    return typeof helpers.pillLabel === 'function'
-        ? helpers.pillLabel()
-        : (helpers.default?.('semiBold') ?? {});
-}
-
-function resolveTabularTypography() {
-    const helpers = Typography as Readonly<{
-        tabular?: () => object;
-    }>;
-    return helpers.tabular?.() ?? {};
-}
-
 const stylesheet = StyleSheet.create(() => ({
     plainContainer: {
         gap: 4,
@@ -120,7 +103,7 @@ const stylesheet = StyleSheet.create(() => ({
         opacity: 0,
     },
     label: {
-        ...resolvePillLabelTypography(),
+        ...Typography.variant('micro', 'semiBold'),
     },
     // Ordinary 11px chrome type, matching the status text a phrase pill sits beside.
     phraseLabel: {
@@ -188,7 +171,7 @@ export function StatusPill(props: StatusPillProps): React.ReactElement {
                 {props.count !== undefined ? (
                     <Text
                         testID={props.testID ? `${props.testID}:count` : undefined}
-                        style={[styles.label, labelVariantStyle, resolveTabularTypography(), { color: foregroundColor }]}
+                        style={[styles.label, labelVariantStyle, Typography.tabular(), { color: foregroundColor }]}
                     >
                         {props.count}
                     </Text>

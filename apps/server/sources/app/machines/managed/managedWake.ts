@@ -1,14 +1,13 @@
-import {
-    ManagedWakeTargetV1Schema, ManagedWakeTargetsReadRequestV1Schema,
-    SessionInputAdmissionReceiptV1Schema, createStoredReadSchema,
-    type ManagedWakeTargetV1, type ManagedWakeTargetsReadRequestV1,
-    type ExternalActionExecutionAuthorizationV1,
-    ManagedFiniteWakeRequestV1Schema, MANAGED_FINITE_WAKE_RPC_METHOD, ManagedIntentResultSchema,
-    MachineInstallationPublicKeySchema, encodeBase64,
-} from '@happier-dev/protocol';
+import { ManagedWakeTargetV1Schema, ManagedWakeTargetsReadRequestV1Schema, type ManagedWakeTargetV1, type ManagedWakeTargetsReadRequestV1, ManagedIntentResultSchema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { ManagedFiniteWakeRequestV1Schema, MANAGED_FINITE_WAKE_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { MachineInstallationPublicKeySchema } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'socket.io';
-import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/rpc';
+import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { resolveEffectiveMachineRoleInTx, resolveCurrentMachineRecipientAccountIdsInTx, resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';

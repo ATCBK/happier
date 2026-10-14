@@ -1,6 +1,6 @@
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import * as z from 'zod/mini';
-import { z as classicZ } from 'zod';
+import { z as classicZ } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { GlassSurfaceMaterialsSchema, GlassSurfaceMaterialsStoredSchema } from './glassSurfaceMaterials.js';
 import { HomeAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE } from './homeAtmosphere.js';
@@ -52,6 +52,7 @@ import {
 } from '../../marketplace/pluginUpdatePolicyV1.js';
 import {
   HappierReplayRecentMessagesCountSchema,
+  HappierReplayWireMaxSeedCharsSchema,
   HappierReplayWritableMaxSeedCharsSchema,
 } from '../../sessions/replaySeedBudget.js';
 import {
@@ -892,7 +893,10 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     // Bounds come from the one Replay-budget owner. A stored value outside them
     // recovers to the default: a budget below the floor produced no seed at all.
     sessionReplayRecentMessagesCount: accountPreference(HappierReplayRecentMessagesCountSchema, 250, 'session replay'),
-    sessionReplayMaxSeedChars: accountPreference(HappierReplayWritableMaxSeedCharsSchema, 120000, 'session replay'),
+    sessionReplayMaxSeedChars: accountCatalogDefinition(z.union([HappierReplayWritableMaxSeedCharsSchema, z.pipe(HappierReplayWireMaxSeedCharsSchema, z.transform(() => 120000))]), 120000, {
+        semanticDomain: 'session replay', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
+        mutationSchema: HappierReplayWritableMaxSeedCharsSchema,
+    }),
     executionRunsGuidanceEnabled: accountPreference(z.boolean(), true, 'execution guidance'),
     executionRunsNotifyParentOnCompletionDefault: accountPreference(z.boolean(), false, 'execution guidance'),
     executionRunsGuidanceMaxChars: accountPreference(z.number().check(z.int(), z.minimum(1), z.maximum(64 * 1024)), 4000, 'execution guidance'),
@@ -1156,7 +1160,10 @@ const ACCOUNT_SCM_AND_FILES_CATALOG_DEFINITIONS = {
     scmCommitMessageGeneratorInstructions: accountPreference(accountBoundedString(16 * 1024), '', 'source control', 16 * 1024),
     'scm.diffSummary.enabled': accountPreference(z.boolean(), true, 'source control'),
     'scm.diffSummary.prefetch': accountPreference(z.boolean(), false, 'source control'),
+    'scm.diffSummary.investigateSurroundingFiles': accountPreference(z.boolean(), false, 'source control'),
     'scm.diffSummary.modelProfileOverride': accountPreference(accountBoundedString(256), '', 'source control'),
+    // Reuse the Account language preference's scalar storage boundary; empty follows the UI locale.
+    'scm.diffSummary.outputLanguage': accountPreference(accountBoundedString(256), '', 'source control'),
     filesDiffSyntaxHighlightingMode: accountPreference(z.enum(['off', 'simple', 'advanced']), 'simple', 'file presentation'),
     filesDiffRendererMode: accountPreference(z.enum(['happier', 'pierre']), 'pierre', 'file presentation'),
     filesDiffPresentationStyle: accountPreference(z.enum(['unified', 'split']), 'unified', 'file presentation'),
@@ -1301,7 +1308,7 @@ const ACCOUNT_SETTING_CANDIDATES = {
     peerMediationPreferencesV1: accountCatalogDefinition(z._default(z.catch(PeerMediationPreferencesV1Schema, DEFAULT_PEER_MEDIATION_PREFERENCES_V1), DEFAULT_PEER_MEDIATION_PREFERENCES_V1), DEFAULT_PEER_MEDIATION_PREFERENCES_V1, { semanticDomain: 'peer mediation', classification: 'policy', maximumSerializedValueBytes: 32 * 1024 }),
     usageLimitRecoverySettingsV1: accountCatalogDefinition(z._default(UsageLimitRecoverySettingsV1Schema, DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1), DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1, { semanticDomain: 'usage recovery', classification: 'policy', maximumSerializedValueBytes: 8 * 1024 }),
     usagePacingTargetsV1: accountPreference(UsagePacingTargetsV1Schema, [], 'usage pacing advice', ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES),
-    usageNightHoursV1: accountPreference(UsageNightHoursV1Schema.nullable(), null, 'recorded activity night hours'),
+    usageNightHoursV1: accountPreference(z.nullable(UsageNightHoursV1Schema), null, 'recorded activity night hours'),
     usageQuotaNotificationsV1: accountPreference(UsageQuotaNotificationsV1Schema, DEFAULT_USAGE_QUOTA_NOTIFICATIONS_V1, 'usage notifications'),
     /** The agent/model picker's routing hint section; display only, never an account switch. */
     usageRoutingHintsEnabled: accountPreference(z.catch(z._default(z.boolean(), true), true), true, 'usage routing hints', 8),

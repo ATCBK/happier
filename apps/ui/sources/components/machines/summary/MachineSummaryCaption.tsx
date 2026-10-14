@@ -34,7 +34,7 @@ export const MachineSummaryCaption = React.memo(function MachineSummaryCaption(p
 
 const stylesheet = StyleSheet.create((theme) => ({
     caption: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.tertiary,
     },
 }));

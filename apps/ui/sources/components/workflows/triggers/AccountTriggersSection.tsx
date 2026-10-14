@@ -361,5 +361,5 @@ export function NewAccountTriggerPopover(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     // The column's row inset, so the line's edges sit on the rows' edges.
-    stale: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingTop: theme.margins.xs },
+    stale: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingTop: theme.space.s4 },
 }));

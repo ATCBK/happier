@@ -5,7 +5,7 @@ import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encry
 import { writeSessionDataKeyEnvelopeInTx } from "@/app/session/encryption/sessionDataKeyEnvelopePersistence";
 import { SessionOwnerEnvelopeError } from "./layout1SessionRowWrite";
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
-import type { ExternalActionExecutionAuthorizationBindingV1 } from "@happier-dev/protocol/actions";
+import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
 
 /**

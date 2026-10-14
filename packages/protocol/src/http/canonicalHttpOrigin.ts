@@ -1,8 +1,8 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Canonical origin only: no credentials, path, query, fragment or trailing slash. */
-export const CanonicalHttpOriginSchema = lazyZodSchema(() => z.string().superRefine((value, ctx) => {
+export const CanonicalHttpOriginSchema = lazyZodSchema(() => z.string().check(z.superRefine((value, ctx) => {
   try {
     const url = new URL(value);
     // HTTP(S) host parsing must decode percent escapes; a canonical hostname never retains them.
@@ -11,4 +11,4 @@ export const CanonicalHttpOriginSchema = lazyZodSchema(() => z.string().superRef
   } catch {
     ctx.addIssue({ code: 'custom', message: 'Expected a canonical http/https origin without credentials.' });
   }
-}));
+})));

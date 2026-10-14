@@ -13,7 +13,8 @@ import {
     type LocalServicePublicPolicyV1,
     type LocalServicePublicPreviewSnapshotV1,
 } from "@happier-dev/protocol/local/services/public/v1";
-import type { LocalServicePreviewDiagnosticV1, LocalServicePreviewResourceV1 } from '@happier-dev/protocol';
+import type { LocalServicePreviewDiagnosticV1 } from '@happier-dev/protocol/local/services/preview/diagnostics/v1';
+import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 
 import {
     isLocalServicePublicExposureAccessible,
@@ -107,6 +108,7 @@ export type LocalServicePublicRuntime = Readonly<{
         rateLimitProfileId: string;
     }>): LocalServicePublicRuntimeCreateResult;
     resolveExposure(exposureId: string): LocalServicePublicExposureV1 | null;
+    resolveExposureByHost(hostname: string): LocalServicePublicExposureV1 | null;
     retainConnection(exposureId: string, close: () => void, actorAccountId?: string): () => void;
     retireMachineAccess(input: Readonly<{ machineId: string; accountId: string }>): void;
     validateAccess(input: LocalServicePublicRuntimeAccessInput): LocalServicePublicRuntimeAccessResult;
@@ -231,6 +233,7 @@ export function createLocalServicePublicRuntime(
     input: CreateLocalServicePublicRuntimeInput,
 ): LocalServicePublicRuntime {
     const entries = new Map<string, ExposureEntry>();
+    const exposureIdByHostname = new Map<string, string>();
     const nowMs = input.nowMs ?? Date.now;
     const generateExposureId = input.generateExposureId ?? randomUUID;
     const generateSecretToken = input.generateSecretToken ?? defaultSecretToken;
@@ -399,11 +402,18 @@ export function createLocalServicePublicRuntime(
             actorId: createInput.actorId,
             connections: new Set(),
         });
+        exposureIdByHostname.set(new URL(exposure.publicUrl).hostname, exposureId);
         return { ok: true, exposure };
     }
 
     function resolveExposure(exposureId: string): LocalServicePublicExposureV1 | null {
         return entries.get(exposureId)?.exposure ?? null;
+    }
+
+    function resolveExposureByHost(hostname: string): LocalServicePublicExposureV1 | null {
+        const exposureId = exposureIdByHostname.get(hostname.toLowerCase().replace(/\.$/u, ''));
+        // Keep revoked/expired identities addressable so their owner refuses access.
+        return exposureId ? resolveExposure(exposureId) : null;
     }
 
     function expireExposureIfNeeded(
@@ -715,6 +725,7 @@ export function createLocalServicePublicRuntime(
     return {
         createExposure,
         resolveExposure,
+        resolveExposureByHost,
         retainConnection,
         retireMachineAccess,
         validateAccess,

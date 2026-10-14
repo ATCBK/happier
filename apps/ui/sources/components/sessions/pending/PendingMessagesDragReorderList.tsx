@@ -8,7 +8,7 @@ import { resolvePendingReorderIds } from '@/sync/domains/pending/pendingReorder'
 import { t } from '@/text';
 import {
     EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, entityReorderRefused,
-    executeEntityReorderAction, type EntityFlatReorderBinding,
+    useEntityReorderAction, type EntityFlatReorderBinding,
 } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 
 export type PendingMessagesDragReorderListProps = Readonly<{
@@ -33,6 +33,7 @@ function durableId(message: PendingMessage): string { return message.localId ?? 
 
 /** Rows stay in normal flow: the shared realm owns carry feedback, measurement and cancellation. */
 export const PendingMessagesDragReorderList = React.memo<PendingMessagesDragReorderListProps>((props) => {
+    const executeReorder = useEntityReorderAction(props.scope);
     const binding: EntityFlatReorderBinding = React.useMemo(() => {
         const { scope, sessionId, recipient, messages } = props;
         const items = messages.map(message => ({ id: durableId(message), title: String(message.displayText ?? message.text ?? '') }));
@@ -55,10 +56,10 @@ export const PendingMessagesDragReorderList = React.memo<PendingMessagesDragReor
                 return { status: 'allowed', effect: { actionId: 'session.pending.reorder', input,
                     preview: entityReorderPreview(position, items) } };
             },
-            execute: effect => scope ? executeEntityReorderAction(effect, scope)
+            execute: effect => scope ? executeReorder(effect)
                 : Promise.resolve({ status: 'refused', reason: { code: 'pending_reorder_unavailable', message: t('entityDragDrop.reasons.gone') } }),
         };
-    }, [props.scope, props.sessionId, props.recipient, props.messages]);
+    }, [props.scope, props.sessionId, props.recipient, props.messages, executeReorder]);
 
     return (
         <EntityFlatReorderList binding={binding} testID="pendingMessages.reorder"

@@ -1,14 +1,6 @@
-import {
-    encodePluginCollectionIndexTuplePrefixV1,
-    getPluginCollectionScalarKindV1,
-    nextPluginCollectionIndexPrefixV1,
-    resolveEffectivePluginCollectionLimitsV1,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginCollectionIndexScalarV1,
-    type PluginCollectionQuotaDimensionV1,
-    type PluginCollectionQuotaRequestV1,
-    type PluginDataCollectionsCapabilities,
-} from '@happier-dev/protocol';
+import { encodePluginCollectionIndexTuplePrefixV1, getPluginCollectionScalarKindV1, nextPluginCollectionIndexPrefixV1, resolveEffectivePluginCollectionLimitsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionIndexScalarV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { type PluginCollectionQuotaRequestV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { type PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
 
 import type { Tx } from '@/storage/inTx';
 

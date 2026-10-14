@@ -82,6 +82,8 @@ export type CodexExternalSessionIndexCursor = Readonly<{
   active: CodexExternalSessionNativeCandidateCursorState;
   archived: CodexExternalSessionNativeCandidateCursorState;
   search?: Readonly<{ target: 'metadata' | 'content'; term: string }>;
+  /** Native projection progress is parsed by its owning transcript codec. */
+  contentProgress?: unknown;
 }>;
 
 const INITIAL_NATIVE_CANDIDATE_CURSOR_STATE: CodexExternalSessionNativeCandidateCursorState = Object.freeze({
@@ -198,7 +200,7 @@ export function decodeCodexExternalSessionIndexCursor(
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     const record = parsed as Record<string, unknown>;
-    if (!hasOnlyKeys(record, ['v', 'kind', 'rolloutOffset', 'rolloutScan', 'suppressedRolloutIds', 'active', 'archived', ...(record.search === undefined ? [] : ['search'])])) return null;
+    if (!hasOnlyKeys(record, ['v', 'kind', 'rolloutOffset', 'rolloutScan', 'suppressedRolloutIds', 'active', 'archived', ...(record.search === undefined ? [] : ['search']), ...(record.contentProgress === undefined ? [] : ['contentProgress'])])) return null;
     let search: CodexExternalSessionIndexCursor['search'];
     if (record.search !== undefined) {
       if (!record.search || typeof record.search !== 'object' || Array.isArray(record.search)) return null;
@@ -235,6 +237,7 @@ export function decodeCodexExternalSessionIndexCursor(
         active,
         archived,
         ...(search ? { search } : {}),
+        ...(record.contentProgress === undefined ? {} : { contentProgress: record.contentProgress }),
       })
       : null;
   } catch {

@@ -6,6 +6,8 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { installApprovalCommonModuleMocks } from '../../approvals/approvalsTestHelpers';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,6 +51,18 @@ afterEach(async () => {
 });
 
 describe('ApprovalInboxCard', () => {
+  it('distinguishes an older saved-group approval by the name in its admitted body', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'widgets.fragment.update', summary: 'Update saved group',
+      actionArgs: { account: { serverId: serverIdB, accountId: 'owner' }, artifactId: 'opaque-library-id', patch: { name: 'Capacity and PRs' } },
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'rename-group',
+        surface: 'cli', serverId: serverIdB, actionId: 'widgets.fragment.update' } });
+    const artifact: DecryptedArtifact = { ...createApprovalArtifact(), header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const screen = await renderScreen(<ApprovalInboxCard artifact={artifact} onPress={() => {}} />);
+    expect(screen.getTextContent()).toContain('Capacity and PRs');
+    expect(screen.getTextContent()).not.toContain('opaque-library-id');
+  });
   it('shows the qualified plugin action without interpreting it as a built-in action', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const artifact = {

@@ -237,7 +237,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     attentionWithKeys: { paddingRight: theme.space.s6 },
     attentionPhone: { height: 26, borderRadius: 13, gap: theme.space.s4, paddingLeft: theme.space.s8, paddingRight: theme.space.s8 },
-    attentionLabel: { ...Typography.rowMeta(), ...Typography.default('semiBold'), ...Typography.tabular() },
+    attentionLabel: { ...Typography.variant('meta'), ...Typography.default('semiBold'), ...Typography.tabular() },
     keys: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2 },
     // Composer: the Next capsule (Find lab `.fd-next`, phone `.fd-pnext`).
     composer: { alignItems: 'center', paddingBottom: theme.space.s12, paddingHorizontal: theme.space.s12 },
@@ -247,16 +247,16 @@ const styles = StyleSheet.create((theme) => ({
     row: { minHeight: 44, gap: theme.space.s10, paddingLeft: 14, paddingRight: theme.space.s6, justifyContent: 'flex-start', maxWidth: 640, minWidth: 0 },
     phoneRow: { minHeight: 52, gap: theme.space.s10, paddingLeft: 14, paddingRight: theme.space.s6, paddingVertical: theme.space.s6, justifyContent: 'flex-start' },
     phoneText: { flex: 1, minWidth: 0 },
-    kicker: { ...Typography.rowMeta(), color: theme.colors.text.tertiary },
-    title: { ...Typography.rowMeta(), flexShrink: 1, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    kicker: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
+    title: { ...Typography.variant('meta'), flexShrink: 1, color: theme.colors.text.primary, ...Typography.default('semiBold') },
     // The session's name keeps its width (up to a cap); the reason gives way first.
     titleBesideReason: { flexShrink: 0, maxWidth: 260 },
-    reason: { ...Typography.rowMeta(), flexShrink: 1, maxWidth: 300, color: theme.colors.text.secondary },
-    reasonPhone: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
+    reason: { ...Typography.variant('meta'), flexShrink: 1, maxWidth: 300, color: theme.colors.text.secondary },
+    reasonPhone: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
     go: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, height: 32, borderRadius: 16, paddingHorizontal: theme.space.s12, flexShrink: 0 },
     goPhone: { height: 38, borderRadius: 19, paddingHorizontal: 14 },
     // The fill is the attention ink; its label is knocked out in the surface colour (AA in every profile).
-    goLabel: { ...Typography.rowMeta(), color: theme.colors.surface.base, ...Typography.default('semiBold') },
-    goLabelPhone: { ...Typography.rowTitle() },
+    goLabel: { ...Typography.variant('meta'), color: theme.colors.surface.base, ...Typography.default('semiBold') },
+    goLabelPhone: { ...Typography.variant('label', 'semiBold') },
     dismiss: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
 }));

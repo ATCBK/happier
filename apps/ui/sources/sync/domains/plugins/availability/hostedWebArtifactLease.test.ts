@@ -312,6 +312,45 @@ function createReader(snapshot: PluginAccountAvailabilitySnapshot) {
 }
 
 describe('hosted-web Artifact lease acquisition', () => {
+    it.each([
+        'artifact_bytes_rpc_unavailable',
+        'artifact_bytes_response_invalid',
+        'artifact_bytes_fetch_failed',
+        'plugin_host_access_disclosure_mismatch',
+    ] as const)('preserves the safe daemon refusal %s through the real source and lease', async (code) => {
+        const current = fixture({ materialized: true });
+        const acquired = await acquire({
+            reader: createReader(current.snapshot),
+            artifactGraph: current.graph,
+            cacheIdentity: current.cacheIdentity,
+            daemon: { machineId: 'machine-a', serverId: scope.serverId },
+            // The byte fetcher is the machine transport boundary; decoding,
+            // selection, fallback and Artifact verification remain real.
+            fetchDaemonArtifactBytes: async () => ({
+                ok: false, code: 'artifact_unavailable', diagnostics: [code, 'private detail must not propagate'],
+            }),
+        });
+        expect(acquired).toEqual({ kind: 'unavailable', code });
+    });
+
+    it('tries Account-hosted bytes after a daemon refusal instead of turning a source failure into admission', async () => {
+        const current = fixture({ materialized: true });
+        const acquired = await acquire({
+            reader: createReader(current.snapshot),
+            artifactGraph: current.graph,
+            cacheIdentity: current.cacheIdentity,
+            daemon: { machineId: 'machine-a', serverId: scope.serverId },
+            fetchDaemonArtifactBytes: async () => ({
+                ok: false, code: 'artifact_unavailable', diagnostics: ['artifact_bytes_fetch_failed'],
+            }),
+            accountHosted: { kind: 'accountHosted', fetch: async () => current.bytesByPath },
+        });
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') throw new Error('Expected fallback bytes');
+        expect(acquired.lease.sourceKind).toBe('accountHosted');
+        acquired.lease.dispose();
+    });
+
     it('uses a current daemon projection to select exact app bytes without an Account release', async () => {
         const current = fixture();
         const appRead = vi.fn(async () => current.bytesByPath);

@@ -4,6 +4,7 @@ import { createSessionFixture, createSessionListRenderableSessionFixture, standa
 import { buildVoiceAgentRunMetadataV1, parseVoiceAgentRunMetadataV1 } from '@happier-dev/protocol/voice/voiceAgentRunMetadataV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { ExecutionRunResumeHandleSchema } from '@happier-dev/protocol/execution/runs/index';
+import { LegacyBackendTargetRefSchema } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -11,8 +12,9 @@ vi.mock('socket.io-client', async original =>
 let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness').createVoiceSettingsAccountTestHarness>>;
 let storage: typeof import('@/sync/domains/state/storage').storage;
 let sessionHttp: ReturnType<typeof import('@/dev/testkit/harness/sessionMetadataHttpBoundary').createSessionMetadataHttpBoundary>;
-const claudeTarget = { kind: 'builtInAgent', agentId: 'claude' } as const;
-const codexTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
+// The persisted V1 run producer still owns V1 targets; resume handles normalize to V2.
+const claudeTarget = LegacyBackendTargetRefSchema.parse({ kind: 'builtInAgent', agentId: 'claude' });
+const codexTarget = LegacyBackendTargetRefSchema.parse({ kind: 'builtInAgent', agentId: 'codex' });
 
 function runMetadata(runId: string, updatedAtMs: number, welcomedEpoch?: number) {
   const metadata = buildVoiceAgentRunMetadataV1({ runId, updatedAtMs, backendTarget: claudeTarget,
@@ -72,7 +74,7 @@ describe('voiceAgentRunMetadata through real storage and Sync', () => {
   it('persists a canonical owner tuple and restores the published run through Sync', async () => {
     const { writeVoiceAgentRunMetadataToSession, readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
     await writeVoiceAgentRunMetadataToSession({ sessionId: 'sys_voice', runId: 'run_2', backendTarget: codexTarget,
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: codexTarget, providerSessionId: 'vs_2' }, updatedAtMs: 999, welcomedEpoch: 4 });
+      resumeHandle: ExecutionRunResumeHandleSchema.parse({ kind: 'provider_session.v1', backendTarget: codexTarget, providerSessionId: 'vs_2' }), updatedAtMs: 999, welcomedEpoch: 4 });
     expect(sessionHttp.writes).toContain('sys_voice');
     const produced = readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' });
     expect(produced).toMatchObject({ runId: 'run_2', backendTarget: codexTarget, backendId: 'codex', updatedAtMs: 999, welcomedEpoch: 4 });
@@ -123,13 +125,15 @@ describe('voiceAgentRunMetadata through real storage and Sync', () => {
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toBeNull();
   });
 
-  it('prefers fresh visible lookup metadata over stale raw session metadata', async () => {
+  it('keeps private run identity at the hydrated owner instead of the shared list projection', async () => {
     seedRun('s1', runMetadata('run_raw', 111));
     storage.setState({ sessionListRowsByServerId: { [account.scope.serverId]: { s1: createSessionListRenderableSessionFixture({
-      id: 's1', active: true, metadata: { ...createSessionFixture().metadata!, voiceAgentRunV1: runMetadata('run_cached', 222) },
+      id: 's1', active: true, metadata: { path: '/shared-row', host: 'shared.test' },
     }) } }, ordinarySessionListMembershipByServerId: { [account.scope.serverId]: ['s1'] } });
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
-    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toEqual(runMetadata('run_cached', 222));
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toEqual(runMetadata('run_raw', 111));
+    seedRun('s1', runMetadata('run_current_owner', 222));
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toEqual(runMetadata('run_current_owner', 222));
   });
 
   it('reads the welcomed epoch retained with persisted run identity', async () => {

@@ -13,7 +13,7 @@ import { resolveReviewNarratorPolicy, ReviewEngineCapabilitiesSchema } from '../
 import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue, type ActionBackendTargetSelection } from '../actions/resolveActionBackendTargetSelection.js';
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
-import { parseInputTypeOptionsSourceId } from './inputTypes.js';
+import { inputTypeOptionsSourceId, parseInputTypeOptionsSourceId } from './inputTypes.js';
 import { resolveInputTypeOptions, narrowInputFieldOptions } from './inputTypeRuntime.js';
 import type { InputOption, InputFieldHint } from './inputFields.js';
 import type { InputOptionsConsumerV1 } from './inputOptionsConsumer.js';
@@ -23,7 +23,7 @@ import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/avail
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
-import { normalizeUsageQuery, readUsageGroupByOptions } from './usageQuery.js';
+import { normalizeUsageQuery, readUsageGroupByOptions, readUsagePeriodOptions } from './usageQuery.js';
 import { executeUsageAction } from '../actions/executor/usageActions.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
 import { readUsageScopeOptions } from '../usage/usageFilterOptions.js';
@@ -235,6 +235,11 @@ export async function resolveInputOptions(params: Readonly<{
   const modelId = readDynamicOptionModelId(input, actionId);
   const directory = readDynamicOptionDirectory(input, actionId);
 
+  if (optionsSourceId === 'usage.query.period' || optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'period' })) {
+    const draft = isRecord(params.input.query) ? params.input.query : params.input;
+    return { ok: true, result: readUsagePeriodOptions(draft.period) };
+  }
+
   if (optionsSourceId === 'usage.query.breakdown') {
     const draft = isRecord(params.input.query) ? params.input.query : params.input;
     return { ok: true, result: readUsageGroupByOptions(draft.breakdown) };
@@ -282,16 +287,18 @@ export async function resolveInputOptions(params: Readonly<{
     ctx.signal?.throwIfAborted();
     const machines = readRecordListProperty(result, 'items');
     const options: InputOption[] = [];
+    const offline: InputOption[] = [];
     for (const machine of machines) {
       if (typeof machine.revokedAt === 'number' && machine.revokedAt > 0 || readNonEmptyString(machine.replacedByMachineId)) continue;
       const target = MachineTargetV1Schema.safeParse({ serverId: readNonEmptyString(machine.serverId) ?? selectedServerId,
         machineId: readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id) });
       if (!target.success || target.data.serverId !== selectedServerId) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
       const online = machine.presence === 'online' || (machine.presence === undefined && machine.active === true);
-      options.push({ value: target.data, label: readNonEmptyString(machine.label) ?? target.data.machineId,
+      (online ? options : offline).push({ value: target.data, label: readNonEmptyString(machine.label) ?? target.data.machineId,
         description: online ? 'Online' : 'Offline' });
     }
-    return { ok: true, result: options };
+    // A machine that can answer now leads; offline ones stay choosable after it, in their listed order.
+    return { ok: true, result: [...options, ...offline] };
   }
 
   if (optionsSourceId === 'machines.volumes.available') {
@@ -306,6 +313,15 @@ export async function resolveInputOptions(params: Readonly<{
     const disk = snapshot.data.sample?.disk;
     if (!disk?.reported) return { ok: false, errorCode: 'machine_volumes_unavailable', error: 'machine_volumes_unavailable' };
     return { ok: true, result: disk.volumes.map(volume => ({ value: volume.id, label: volume.label, description: volume.mount })) };
+  }
+
+  if (optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'session' })) {
+    // The Usage Session type stores a session id on the current Home: the same Home sessions, by name,
+    // chosen in place like the Period (no picker dialog).
+    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions' });
+    if (!sessions.ok) return sessions;
+    return { ok: true, result: sessions.result.map(option => ({ ...option,
+      value: VoiceTrackedSessionAddressV1Schema.parse(option.value).sessionId })) };
   }
 
   const inputTypeIdentity = parseInputTypeOptionsSourceId(optionsSourceId);

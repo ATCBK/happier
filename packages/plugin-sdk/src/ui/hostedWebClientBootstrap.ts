@@ -571,6 +571,9 @@ function createHostedWebBootstrapController(
                     const applyContext = (context: Awaited<ReturnType<typeof api.context>>) => {
                         if (state !== 'bootstrapped') return;
                         applyPluginUiThemeCssVariables(context.theme, root);
+                        // Unstyled HTML inherits the theme's text colour, so it reads on either paper;
+                        // the guest's own styles still win.
+                        root.style.setProperty('color', context.theme.colors.text);
                         reportHeight();
                     };
                     applyContext(await api.context());

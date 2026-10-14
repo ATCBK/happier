@@ -302,6 +302,9 @@ describe('useSessionListScrollRetention', () => {
 
         expect(scrollToIndex).not.toHaveBeenCalled();
         expect(scrollToOffset).not.toHaveBeenCalled();
+        // A same-index anchor still needs restoration when the preceding content changes.
+        await hook.rerender({ nodeIds: ['header:filtered', 'session:home:a', 'session:home:c', 'session:home:b'] });
+        expect(scrollToIndex).toHaveBeenCalledWith({ index: 1, animated: false, viewOffset: 26, viewPosition: 0 });
         await hook.unmount();
     });
 

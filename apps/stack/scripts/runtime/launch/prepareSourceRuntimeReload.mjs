@@ -9,6 +9,7 @@ import { parseArgs } from '../../utils/cli/args.mjs';
 import { resolveSourceQaUiMode } from '../shared/borrowed_expo.mjs';
 import { beginPendingSourceStart, emitSourcePreparationPhase } from '../shared/pending_source_start.mjs';
 import { resolveControlledRuntimePlacement } from '../../utils/dev_targets/service_placement.mjs';
+import { applyServerHostDatabaseProviderEnv } from '../../utils/server/apply_runtime_server_database_env.mjs';
 import { applyEffectiveDbProviderEnv } from '../../utils/server/effective_db_provider.mjs';
 import { resolveStackDaemonStartRequested } from '../../utils/auth/daemon_gate.mjs';
 import { writeJsonAtomic } from '../../utils/fs/json.mjs';
@@ -57,10 +58,13 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
       if (serverComponent !== 'happier-server-light' && connection.startServer) {
         throw new Error('[reload] full-server smoke requires isolated managed infrastructure; incumbent retained');
       }
-      const dbProvider = applyEffectiveDbProviderEnv({ serverComponentName: serverComponent, env: { ...env } });
+      const serverEnv = { ...env };
+      const dbProvider = connection.startServer && !placement?.target
+        ? applyServerHostDatabaseProviderEnv({ serverComponentName: serverComponent, env: serverEnv })
+        : applyEffectiveDbProviderEnv({ serverComponentName: serverComponent, env: serverEnv });
       const components = {};
       if (connection.startServer && !placement?.target) components.server = await buildSourceRuntimeBundle({ repoDir,
-        stackBaseDir, pending, component: 'server', serverComponent, dbProvider, env, signal: pending.signal });
+        stackBaseDir, pending, component: 'server', serverComponent, dbProvider, env: serverEnv, signal: pending.signal });
       if (!placement?.daemonTarget && resolveStackDaemonStartRequested({ env, noDaemon: flags.has('--no-daemon') })) {
         components.daemon = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending,
           component: 'daemon', env, signal: pending.signal });
@@ -70,7 +74,7 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
       await log('[reload] build complete; checking replacement daemon loader, server health and UI boot');
       await pending.setPhase({ phase: 'checking' });
       const admitted = await admitSourceRuntimeReload({ stackBaseDir, components, ui, pending,
-        env: { ...env, HAPPIER_STACK_REPO_DIR: repoDir } });
+        env: { ...serverEnv, HAPPIER_STACK_REPO_DIR: repoDir } });
       await pending.setPhase({ phase: 'prepared' });
       await onPrepared({ ui });
       if (!await activation) throw new Error('[reload] preparation cancelled before selection; incumbent retained');

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
+import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { createVoiceSettingsOwner } from '@happier-dev/protocol/voice/settings/voiceSettings';
@@ -7,9 +10,78 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
-import { encodeScmDiffSummaryModelOverride } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { encodeScmDiffSummaryModelOverride, scmDiffSummarySettingBinding, SCM_DIFF_SUMMARY_SETTING_KEYS, type ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 describe('exact remote Voice Agent catalog admission', () => {
+    it('offers automatic native models only when the canonical native sign-in probe proves executable credentials', async () => {
+        const home = createTempDirSync('summary-native-catalog-');
+        const fileName = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+        writeExecutableShimSync({ dir: home, fileName,
+            contents: process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n' });
+        for (const key of ['HOME', 'USERPROFILE', 'HAPPIER_HOME_DIR', 'CODEX_HOME']) vi.stubEnv(key, home);
+        vi.stubEnv('HAPPIER_CODEX_PATH', join(home, fileName));
+        vi.stubEnv('CODEX_API_KEY', undefined);
+        vi.stubEnv('OPENAI_API_KEY', undefined);
+        const admitted = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+        try {
+            const services = createCliSettingsCatalogServices({});
+            const settings = accountSettingsParse({});
+            const isCodex = (profile: ScmDiffSummaryCatalogProfile) =>
+                profile.modelSelector?.backendTargetKey === 'agent:happier.agent.codex/codex';
+            const signedOut = await services.readScmDiffSummaryCatalog!(settings, '');
+            expect(signedOut?.profiles.filter(isCodex)).toEqual([]);
+            vi.stubEnv('CODEX_API_KEY', 'fixture-api-key');
+            const signedIn = await services.readScmDiffSummaryCatalog!(settings, '');
+            expect(signedIn?.profiles.some(profile => isCodex(profile) && profile.structuredOutput === 'supported')).toBe(true);
+            expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+        } finally {
+            await admitted.dispose();
+            vi.unstubAllEnvs();
+            removeTempDirSync(home);
+        }
+    });
+    it('enumerates an admitted external Agent for an unset summary model without persisted identity resolution', async () => {
+        const admitted = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            plugins: [{ manifest: createPluginManifestV2Fixture({ id: 'acme.summary-catalog', contributes: {
+                agents: [{ id: 'claude', title: 'External Agent', primary: 'executionRuns', runtime: { kind: 'custom' },
+                    capabilities: { executionRuns: { open: ['create'], stop: true, checkpoint: false },
+                        structuredOutput: { formats: ['json'] } } }],
+            } }), files: {
+                'daemon.mjs': `export function createAgent() { throw new Error('Catalog enumeration must not execute an Agent'); }
+                    export function activate(api) {
+                        api.agents.register('claude', createAgent, { sessionRunnerFactory: {
+                            module: './daemon.mjs', export: 'createAgent', runtimeApiVersion: 1
+                        } });
+                    }`,
+            } }],
+        });
+        try {
+            const external = [...readCurrentContributionRegistry().agentDefinitionsById.values()]
+                .find(entry => entry.identity?.pluginId === 'acme.summary-catalog');
+            expect(external?.id).toBe('acme.summary-catalog/claude');
+            const settings = accountSettingsParse({});
+            const catalog = await createCliSettingsCatalogServices({}).readScmDiffSummaryCatalog!(settings, '');
+            expect(catalog).not.toBeNull();
+            expect(catalog?.isCurrent(settings)).toBe(true);
+            expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+        } finally {
+            await admitted.dispose();
+        }
+    });
+    it('admits prefetch with the catalog-owned low-cost default while leaving the override unset', async () => {
+        const settings = accountSettingsParse({});
+        const services = createCliSettingsCatalogServices({});
+        const catalog = await services.readScmDiffSummaryCatalog!(settings, '');
+        expect(catalog?.profiles.some(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported')).toBe(true);
+        const binding = scmDiffSummarySettingBinding(SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch);
+        const prepared = await binding.prepare(settings, true, services);
+        expect(prepared?.(settings)).toEqual({ [SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch]: true });
+        expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+    });
     it('refuses an unknown model target without treating the Custom ACP declaration as executable', async () => {
         expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => entry.id === 'custom-acp')).toBe(true);
         const services = createCliSettingsCatalogServices({});

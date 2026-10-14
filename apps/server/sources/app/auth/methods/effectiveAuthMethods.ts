@@ -5,7 +5,7 @@ import type {
     AuthMethodUnavailableReason,
     EffectiveAuthMethodAction,
 } from "@/app/auth/methods/types";
-import type { HomeAuthenticationPolicyReadV1 } from "@happier-dev/protocol";
+import type { HomeAuthenticationPolicyReadV1 } from '@happier-dev/protocol/home/governance';
 import type { TeamIdentityProviderKindV1 } from "@happier-dev/protocol/teams";
 
 import { resolveAuthPolicyFromEnv } from "@/app/auth/authPolicy";

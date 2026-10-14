@@ -36,11 +36,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s2,
     },
     askTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     askBody: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     askActions: {
@@ -64,7 +64,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     action: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -72,7 +72,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     outcome: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 2,
     },

@@ -120,7 +120,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s6,
     },
     previewName: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
         width: 44,
     },

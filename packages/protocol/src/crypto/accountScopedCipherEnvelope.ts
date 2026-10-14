@@ -1,4 +1,4 @@
-import { decodeBase64 } from './base64.js';
+import { decodeBase64, readCanonicalPaddedBase64DecodedLength } from './base64.js';
 
 /**
  * Versioned Account ciphertext domains. The envelope reader owns this wire
@@ -36,6 +36,7 @@ export type AccountScopedBlobKind =
   | 'connected_service_credential'
   | 'connected_service_quota_snapshot'
   | 'provider_account_usage_snapshot'
+  | 'provider_account_usage_page_projection'
   | 'qualified_connected_account_attempt_transaction'
   | 'qualified_connected_account_configuration'
   | 'plugin_declarative_settings'
@@ -105,6 +106,7 @@ const ACCOUNT_SCOPED_KIND_BYTE = Object.freeze({
   account_notification_channels: 46,
   account_connected_presentation_catalog: 47,
   account_connected_acknowledgement_catalog: 48,
+  provider_account_usage_page_projection: 49,
 } satisfies Record<AccountScopedBlobKind, number>);
 
 /**
@@ -136,6 +138,25 @@ export function getAccountScopedBlobKindByte(kind: AccountScopedBlobKind): numbe
 export function readAccountScopedCiphertextKindByte(
   ciphertext: string,
 ): number | null {
+  const minimumBytes = ACCOUNT_SCOPED_BLOB_V1_PREFIX_BYTES
+    + ACCOUNT_SCOPED_SECRETBOX_NONCE_BYTES
+    + ACCOUNT_SCOPED_SECRETBOX_OVERHEAD_BYTES;
+  const canonicalLength = typeof ciphertext === 'string'
+    ? readCanonicalPaddedBase64DecodedLength(ciphertext)
+    : null;
+  if (canonicalLength !== null) {
+    if (canonicalLength < minimumBytes) return null;
+    // Structural admission only needs the first two bytes. The complete string
+    // has already passed canonical alphabet, length and padding-bit validation.
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const first = alphabet.indexOf(ciphertext[0]);
+    const second = alphabet.indexOf(ciphertext[1]);
+    const third = alphabet.indexOf(ciphertext[2]);
+    if (((first << 2) | (second >> 4)) !== ACCOUNT_SCOPED_BLOB_V1_MAGIC) return null;
+    return ((second & 15) << 4) | (third >> 2);
+  }
+  // This reader historically accepts lenient Base64. Preserve that contract
+  // for noncanonical spellings; strict envelope callers validate separately.
   let bytes: Uint8Array;
   try {
     bytes = decodeBase64(ciphertext, 'base64');
@@ -143,11 +164,7 @@ export function readAccountScopedCiphertextKindByte(
     return null;
   }
   if (
-    bytes.length < (
-      ACCOUNT_SCOPED_BLOB_V1_PREFIX_BYTES
-      + ACCOUNT_SCOPED_SECRETBOX_NONCE_BYTES
-      + ACCOUNT_SCOPED_SECRETBOX_OVERHEAD_BYTES
-    )
+    bytes.length < minimumBytes
     || bytes[0] !== ACCOUNT_SCOPED_BLOB_V1_MAGIC
   ) {
     return null;

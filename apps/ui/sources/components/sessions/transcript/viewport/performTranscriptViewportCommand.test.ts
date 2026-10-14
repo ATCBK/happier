@@ -1,7 +1,7 @@
 import type { MutableRefObject } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resetChatListHarness } from '@/dev/testkit';
+import { resetChatListHarness } from '@/dev/testkit/harness/chatListHarness';
 import type {
     LastNativeRestoreIndexCommand,
     ScrollableChatListRef,

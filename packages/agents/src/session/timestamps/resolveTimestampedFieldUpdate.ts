@@ -30,7 +30,8 @@ export function resolveTimestampedFieldUpdate<TValue>(params: Readonly<{
   const currentUpdatedAt = normalizeUpdatedAt(params.current?.updatedAt ?? 0);
   const candidateUpdatedAt = normalizeUpdatedAt(params.candidate.updatedAt);
 
-  if (candidateUpdatedAt > currentUpdatedAt) {
+  // An absent value has no stored timestamp competing with the initial intent.
+  if (params.current == null || candidateUpdatedAt > currentUpdatedAt) {
     return {
       accepted: true,
       value: params.candidate.value,

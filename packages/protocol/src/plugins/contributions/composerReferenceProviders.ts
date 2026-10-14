@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -42,20 +42,20 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
-function boundedUtf8String(maxBytes: number, message: string): z.ZodString {
-  return z.string().min(1).superRefine((value, context) => {
+function boundedUtf8String(maxBytes: number, message: string): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (utf8ByteLength(value) > maxBytes) {
       context.addIssue({ code: 'custom', message });
     }
-  });
+  }));
 }
 
-function boundedCodePointString(maxCodePoints: number, message: string): z.ZodString {
-  return z.string().min(1).superRefine((value, context) => {
+function boundedCodePointString(maxCodePoints: number, message: string): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (codePointLength(value) > maxCodePoints) {
       context.addIssue({ code: 'custom', message });
     }
-  });
+  }));
 }
 
 function jsonByteLength(value: unknown): number {
@@ -67,36 +67,32 @@ function jsonByteLength(value: unknown): number {
  * deliberately absent: a provider must be manifest-declared before activation
  * can bind its `search` and `resolve` functions.
  */
-export const PluginComposerReferenceProviderPresentationV1Schema = lazyZodSchema(() => z.object({
+export const PluginComposerReferenceProviderPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
   icon: PluginUiIconTokenV1Schema,
-  triggers: z.array(ComposerReferenceTriggerV1Schema)
-    .min(1)
-    .max(MAX_COMPOSER_REFERENCE_TRIGGERS_V1)
-    .superRefine((triggers, context) => {
+  triggers: z._default(z.array(ComposerReferenceTriggerV1Schema).check(z.minLength(1), z.maxLength(MAX_COMPOSER_REFERENCE_TRIGGERS_V1), z.superRefine((triggers, context) => {
       const seen = new Set<string>();
       triggers.forEach((trigger, index) => {
         if (seen.has(trigger)) {
           context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: [index],
             message: 'Composer reference triggers must be unique.',
           });
         }
         seen.add(trigger);
       });
-    })
-    .default(['@']),
-}).strict());
+    })), ['@']),
+}));
 export type PluginComposerReferenceProviderPresentationV1 = z.infer<
   typeof PluginComposerReferenceProviderPresentationV1Schema
 >;
 
 export const PluginComposerReferenceProviderContributionV1Schema =
-  lazyZodSchema(() => PluginComposerReferenceProviderPresentationV1Schema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginComposerReferenceProviderPresentationV1Schema, {
     id: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict());
+  })));
 export type PluginComposerReferenceProviderContributionV1 = z.infer<
   typeof PluginComposerReferenceProviderContributionV1Schema
 >;
@@ -116,16 +112,14 @@ export const ComposerReferenceContextV1Schema = boundedUtf8String(
   `Composer reference context must be at most ${MAX_COMPOSER_REFERENCE_CONTEXT_UTF8_BYTES_V1} UTF-8 bytes.`,
 );
 
-export const ComposerReferenceCandidateV1Schema = lazyZodSchema(() => z.object({
+export const ComposerReferenceCandidateV1Schema = lazyZodSchema(() => z.strictObject({
   id: ComposerReferenceCandidateIdV1Schema,
   label: ComposerReferenceCandidateLabelV1Schema,
-  description: ComposerReferenceCandidateDescriptionV1Schema.optional(),
-}).strict());
+  description: z.optional(ComposerReferenceCandidateDescriptionV1Schema),
+}));
 export type ComposerReferenceCandidateV1 = z.infer<typeof ComposerReferenceCandidateV1Schema>;
 
-export const ComposerReferenceCandidatePageV1Schema = lazyZodSchema(() => z.array(ComposerReferenceCandidateV1Schema)
-  .max(MAX_COMPOSER_REFERENCE_CANDIDATES_V1)
-  .superRefine((candidates, context) => {
+export const ComposerReferenceCandidatePageV1Schema = lazyZodSchema(() => z.array(ComposerReferenceCandidateV1Schema).check(z.maxLength(MAX_COMPOSER_REFERENCE_CANDIDATES_V1), z.superRefine((candidates, context) => {
     const ids = new Set<string>();
     candidates.forEach((candidate, index) => {
       if (ids.has(candidate.id)) {
@@ -143,19 +137,19 @@ export const ComposerReferenceCandidatePageV1Schema = lazyZodSchema(() => z.arra
         message: `Composer reference candidate pages must be at most ${MAX_COMPOSER_REFERENCE_PAGE_JSON_BYTES_V1} JSON bytes.`,
       });
     }
-  }));
+  })));
 export type ComposerReferenceCandidatePageV1 = z.infer<typeof ComposerReferenceCandidatePageV1Schema>;
 
-export const ComposerReferenceResolutionV1Schema = lazyZodSchema(() => ComposerReferenceCandidateV1Schema.extend({
+export const ComposerReferenceResolutionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ComposerReferenceCandidateV1Schema, {
   context: ComposerReferenceContextV1Schema,
-}).strict().superRefine((resolution, context) => {
+})).check(z.superRefine((resolution, context) => {
   if (jsonByteLength(resolution) > MAX_COMPOSER_REFERENCE_RESOLUTION_JSON_BYTES_V1) {
     context.addIssue({
       code: 'custom',
       message: `Composer reference resolutions must be at most ${MAX_COMPOSER_REFERENCE_RESOLUTION_JSON_BYTES_V1} JSON bytes.`,
     });
   }
-}));
+})));
 export type ComposerReferenceResolutionV1 = Readonly<{
   id: string;
   label: string;

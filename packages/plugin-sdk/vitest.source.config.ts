@@ -63,6 +63,7 @@ export default defineConfig({
     )],
     test: {
         ...resolveVitestWorkers(),
+        setupFiles: ['./src/ui/configureZodLocale.ts'],
         // Keep source validation rooted at the authored tree. Prepared API
         // publishers intentionally create complete package-local `.tmp.*`
         // copies, and a concurrent copy must never become a second test tree.

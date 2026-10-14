@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BackendTargetKeySchema,
@@ -80,7 +80,7 @@ function readDefaultValueAtPath(value: unknown, pathParts: readonly string[]): u
 }
 
 function readSchemaSeedDefaultAtPath(
-  schema: z.ZodTypeAny,
+  schema: z.ZodMiniType,
   path: string,
 ): Readonly<{ hasDefault: boolean; value: unknown }> {
   const pathParts = splitPath(path);
@@ -101,10 +101,10 @@ function readSchemaSeedDefaultAtPath(
     return { hasDefault: false, value: undefined };
   }
 
-  if (unwrapped.schema instanceof z.ZodObject) {
+  if (unwrapped.schema instanceof z.ZodMiniObject) {
     const shape = (unwrapped.schema as any).shape ?? (unwrapped.schema as any)._def?.shape ?? {};
     const [head, ...rest] = pathParts;
-    const childSchema = (shape as Record<string, z.ZodTypeAny>)[head];
+    const childSchema = (shape as Record<string, z.ZodMiniType>)[head];
     if (childSchema) {
       return readSchemaSeedDefaultAtPath(childSchema, rest.join('.'));
     }

@@ -38,14 +38,15 @@ import {
 } from '@/sync/domains/skills/useSkillsLibrary';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { useOpenSkillAddModal, useSkillAddRouteParams } from './add/useOpenSkillAddModal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { SkillsList } from './SkillsRail';
 import {
   SKILLS_COLLECTION_ROUTE,
-  SKILLS_NEW_ROUTE,
   buildSkillsReach,
   skillHref,
+  SKILLS_NEW_ROUTE,
   skillSource,
   type SkillsPresent,
   type SkillsReach,
@@ -55,6 +56,14 @@ import { usePreviewedSkill } from './skillsPreviewStore';
 import { arrivedReachDots } from './skillsReachTravel';
 import { skillStatus } from './status/skillStatus';
 import { useSkillsHomepageModel } from './useSkillsHomepageModel';
+import { SkillsRegistryShelf } from './SkillsRegistryShelf';
+import { SKILLS_CHOOSE_ROUTE } from './firstRun/useSkillsFirstRun';
+import { SKILLS_UPDATES_ROUTE, needsALookDestination } from './updates/skillsUpdatesModel';
+import { SkillsFoundBlock, useOpenSkillsFound } from './found/SkillsFoundBlock';
+import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
+import type { SkillNeedsALookEntry } from './status/skillStatus';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
 
 /**
  * The reach map's box beside its legend (lab hs-A: a 284 × 264 scene around a 42 px planet). The orbits
@@ -77,8 +86,6 @@ const REACH_GAP_PX = 24;
 const MAP_MIN_WIDTH_PX = 300;
 /** Under this content width the legend moves beneath the map. */
 const REACH_SIDE_BY_SIDE_MIN_PX = MAP_MIN_WIDTH_PX + REACH_GAP_PX + LEGEND_MIN_PX;
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
-  Object.freeze([]);
 
 /**
  * `/settings/skills`: beside the list it is the selected "All skills" page (the homepage, P6 §4.2);
@@ -127,6 +134,8 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
 ) {
   const { library } = props;
   const open = useOpen();
+  const openAdd = useOpenSkillAddModal();
+  useSkillAddRouteParams();
   const { theme } = useUnistyles();
   const router = useRouter();
   const pathname = usePathname().replace(/\/+$/, '');
@@ -146,10 +155,13 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   const { names } = useWhereItsOnNames({
     agentIds,
     machines: placeMachines,
-    projects: NO_PROJECTS,
   });
-  const { reach, needs, firstVisit, present } = useSkillsHomepageModel(library, machines);
+  const { reach, needs, firstVisit, present, registryShelf } = useSkillsHomepageModel(library, machines);
   const previewed = usePreviewedSkill();
+  const machineIds = React.useMemo(() => machines.map((machine) => machine.machineId), [machines]);
+  // Anticipation on an empty library: this device's last known scans, never a machine read on open.
+  const foundCount = useFoundSkillsCount(machineIds);
+  const openFound = useOpenSkillsFound();
   const filterMachine = React.useCallback(
     (machineId: string) => {
       const href = `${SKILLS_COLLECTION_ROUTE}?machine=${encodeURIComponent(machineId)}`;
@@ -201,7 +213,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
                   variant="plain"
                   accessibilityLabel={t('capabilities.skills.addSkill')}
                   tooltip={t('capabilities.skills.addSkill')}
-                  onPress={() => open(SKILLS_NEW_ROUTE)}
+                  onPress={() => openAdd()}
                 />
               ),
             }
@@ -232,13 +244,44 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
       {loading || unavailable ? null : (
         <PresentSentence present={present} />
       )}
+      {firstVisit && !empty ? (
+        <View style={styles.acts}>
+          <RoundButton
+            testID="skills.home.choose"
+            title={t('capabilities.skills.home.choose')}
+            onPress={() => open(SKILLS_CHOOSE_ROUTE)}
+          />
+          <Text variant="meta" style={styles.actsNote}>
+            {t('capabilities.skills.home.nothingElse')}
+          </Text>
+        </View>
+      ) : null}
       {empty ? (
         <View style={styles.acts}>
           <RoundButton
             testID="skills.home.empty.add"
             title={t('capabilities.skills.addSkill')}
             leading={<Icon name="plus" size={16} color={theme.colors.button.primary.tint} />}
+            onPress={() => openAdd()}
+          />
+          <RoundButton
+            testID="skills.home.empty.write"
+            display="secondary"
+            title={t('capabilities.skills.home.writeOwn')}
             onPress={() => open(SKILLS_NEW_ROUTE)}
+          />
+        </View>
+      ) : null}
+      {/* Anticipation (P6 §4.2): what this device last saw on the machines, never a machine read. */}
+      {empty && foundCount > 0 ? (
+        <View style={styles.anticipation}>
+          <Text variant="meta" style={styles.actsNote}>
+            {t('capabilities.skillsFound.alreadyOnMachines', { count: foundCount })}
+          </Text>
+          <TextLinkButton
+            testID="skills.home.empty.reviewFound"
+            label={t('capabilities.skills.home.review')}
+            onPress={openFound}
           />
         </View>
       ) : null}
@@ -261,60 +304,88 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
             </Text>
           }
         >
-          {needs.map((item) => (
+          {needs.map((entry) => (
             <NeedsALookRow
-              key={item.skillId}
-              item={item}
+              key={`${entry.kind}:${entry.key}`}
+              entry={entry}
               names={names}
-              onOpen={() => open(skillHref(item.skillId))}
+              onOpen={() => {
+                // Unreadable: read the library again. Masked: Compare lives on Found. Updates: the
+                // Updates page; a dropped source: the skill itself.
+                if (entry.kind === 'unreadable') library.retry();
+                else if (entry.kind === 'masked') open(SKILLS_FOUND_ROUTE);
+                else open(needsALookDestination(entry.item) === 'updates' ? SKILLS_UPDATES_ROUTE : skillHref(entry.item.skillId));
+              }}
             />
           ))}
         </ItemGroup>
       ) : null}
+      {loading || unavailable ? null : (
+        <SkillsRegistryShelf library={library} shelf={registryShelf} brandNew={empty} />
+      )}
+      {/* A first visit asks one thing (Choose what's on); a phone reaches Found through its destination row.
+          An empty library shows it too (lab hs A4): the thing itself, under Review. */}
+      {loading || unavailable || firstVisit || props.phone ? null : (
+        <SkillsFoundBlock machines={machines} />
+      )}
     </>
   );
 });
 
 function NeedsALookRow(
   props: Readonly<{
-    item: SkillListItemV1;
+    entry: SkillNeedsALookEntry;
     names: ReturnType<typeof useWhereItsOnNames>['names'];
     onOpen: () => void;
   }>,
 ) {
-  const { item } = props;
-  // Its source dropped it: the choice is the person's (keep the copy or remove it), not an update.
-  const removed = item.upstream?.state === 'removed_from_source';
+  const { entry } = props;
+  if (entry.kind === 'unreadable') {
+    // Identity is all that is known: no description, source or cost is invented for it.
+    return (
+      <CapabilityRow
+        testID={`skills.home.needs.${entry.key}`}
+        title={entry.unavailable.title ?? entry.key}
+        description={t('capabilities.skills.home.unreadable')}
+        status={{ kind: 'error' }}
+        action={
+          <RoundButton size="small" display="secondary" title={t('common.retry')} onPress={props.onOpen} />
+        }
+      />
+    );
+  }
+  const { item } = entry;
+  const description =
+    entry.kind === 'masked'
+      ? t('capabilities.skills.home.maskedOn', { machine: entry.machineName })
+      : entry.kind === 'removed'
+        ? t('capabilities.skills.home.removedFromSource')
+        : item.modified
+          ? t('capabilities.skills.home.modifiedUpstream')
+          : t('capabilities.skills.home.updateWaiting');
+  const fix =
+    entry.kind === 'masked'
+      ? t('capabilities.skillsFound.compare')
+      : entry.kind === 'removed'
+        ? t('capabilities.skills.home.decide')
+        : t('capabilities.skills.home.review');
   return (
     <CapabilityRow
       testID={`skills.home.needs.${item.skillId}`}
       title={item.name}
-      description={
-        removed
-          ? t('capabilities.skills.home.removedFromSource')
-          : item.modified
-            ? t('capabilities.skills.home.modifiedUpstream')
-            : t('capabilities.skills.home.updateWaiting')
-      }
+      description={description}
       whereSummary={shortWhereItsOn(item.rules, props.names)}
       facts={{
         presentation: 'row',
         source: skillSource(item, props.names.machineName),
         trust: item.trust,
       }}
-      status={pickMostBlockingCapabilityStatus(skillStatus(item), 'row')}
-      action={
-        <RoundButton
-          size="small"
-          display="secondary"
-          title={
-            removed
-              ? t('capabilities.skills.home.decide')
-              : t('capabilities.skills.home.review')
-          }
-          onPress={props.onOpen}
-        />
+      status={
+        entry.kind === 'masked'
+          ? { kind: 'masked', machineName: entry.machineName }
+          : pickMostBlockingCapabilityStatus(skillStatus(item), 'row')
       }
+      action={<RoundButton size="small" display="secondary" title={fix} onPress={props.onOpen} />}
       onPress={props.onOpen}
     />
   );
@@ -408,7 +479,8 @@ const ReachBlock = React.memo(function ReachBlock(
         agentIds: row.supportedAgentIds,
         noSkillAgents:
           row.machine.agentIds.length > 0 && row.supportedAgentIds.length === 0,
-        count: props.firstVisit ? 0 : row.skillIds.length,
+        inventoryUnknown: row.machine.agentInventoryComplete === false,
+        count: row.machine.agentInventoryComplete === false ? null : props.firstVisit ? 0 : row.skillIds.length,
       })),
     [props.firstVisit, folded.shown],
   );
@@ -570,7 +642,6 @@ function useAgentTitles(agentIds: readonly string[]): string[] {
   const { names } = useWhereItsOnNames({
     agentIds,
     machines: NO_MACHINES,
-    projects: NO_PROJECTS,
   });
   return React.useMemo(() => agentIds.map(names.agentName), [agentIds, names]);
 }
@@ -598,6 +669,8 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
   },
-  acts: { flexDirection: 'row', marginBottom: theme.space.s16 },
+  acts: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16, marginBottom: theme.space.s16 },
+  actsNote: { color: theme.colors.text.secondary },
+  anticipation: { flexDirection: 'row', alignItems: 'baseline', gap: theme.space.s8, flexWrap: 'wrap', marginBottom: theme.space.s16 },
 }));
 

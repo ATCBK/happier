@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 
-import {
-    isStoredJsonContentEnvelopeModeCompatible,
-    type StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
+import { isStoredJsonContentEnvelopeModeCompatible, type StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { z } from "zod";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

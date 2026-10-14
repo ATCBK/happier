@@ -5,19 +5,18 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
 
 import { createSessionPromptPlanResolver } from './sessionPromptPlan';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { resolveSessionNativeToolDescriptors } from '@/agent/tools/happierTools/resolveSessionNativeToolBridge';
 import { shouldDenyAgentSessionTitleToolCall } from '@/agent/permissions/codingPromptTitlePermission';
 import { createApiSessionClientFixture, createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
-import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, beginActivePromptLibraryCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken, getActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog, commitActiveProfileCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
-import { TranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applyInitialSessionCreationFactsToMetadata } from '@/agent/runtime/createSessionMetadata';
 import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1,
@@ -51,13 +50,15 @@ function createProjectedIdentityTestMetadata(params: Parameters<typeof projectSe
 describe('session prompt-plan producer', () => {
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-  it('prepares a usable turn and commits a private-safe typed notice when optional library context is unavailable', async () => {
+  it('withdraws the prepared turn while optional or required selected context is unavailable, then recovers', async () => {
     const events: unknown[] = [];
     let required = false;
+    let available = false;
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (new URL(String(url)).pathname === '/v1/account/encryption')
         return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      return { status: 503, data: { error: 'unavailable' } };
+      return available ? { status: 200, data: plainPromptDocument('private-document', 'Current selected context') }
+        : { status: 503, data: { error: 'unavailable' } };
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'optional-context-token', encryption: null } },
@@ -70,17 +71,17 @@ describe('session prompt-plan producer', () => {
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
-    const result = await resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true });
-    expect(result.text).toContain('Required base instructions');
-    expect(result.admittedEntries).toMatchObject([{ outcome: 'unavailable', reason: 'unavailable' }]);
-    const record = TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'event', id: 'notice', data: events[0] } });
-    expect(readSessionCapabilityNoticeV1(record.content.type === 'event' ? record.content.data : null)).toEqual({
-      v: 1, items: [{ kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' }],
-    });
-    expect(JSON.stringify(events)).not.toMatch(/private-entry|private-document|optional-context-token/);
+    await expect(resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true }))
+      .rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    expect(resolve.readStartupInstructions?.()).toBeNull();
+    expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+    expect(resolve.readComposition?.()).toBeNull();
     required = true;
     await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ reason: 'unavailable' });
-    expect(events).toHaveLength(1);
+    expect(events).toEqual([]);
+    available = true;
+    expect(await resolve({ baseOverride: 'Required base instructions' })).toContain('Current selected context');
+    expect(resolve.readStartupInstructions?.()).not.toBeNull();
   });
 
   it('keeps opaque plan evidence scoped to the prepared Session and withdraws it with the current Profile', async () => {
@@ -104,6 +105,7 @@ describe('session prompt-plan producer', () => {
     expect(readOther()).not.toEqual(first);
     metadata = createTestMetadata({ profileId: 'different-profile' });
     expect(read()).toBeNull();
+    expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'profile-selection-changed' }));
   });
 
   it('keeps the created-as-Bot first-message rule and caller guidance stable across preparations and native identity changes', async () => {
@@ -162,12 +164,16 @@ describe('session prompt-plan producer', () => {
     expect(await resolve()).not.toMatch(/focus question/i);
   });
 
-  it('demand-loads the current Account prompt rows before the first preparation', async () => {
+  it.each(['network', 'none'] as const)('demand-loads the current Account prompt rows before the first preparation from %s Settings', async source => {
     const credentials = { token: 'first-context-token', encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const settings = accountSettingsParse({});
-    setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, scopeKey,
-      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    setActiveAccountSettingsSnapshot({ source, settings, ...(source === 'network' ? { rawSettings: {} } : {}), scopeKey,
+      settingsVersion: source === 'network' ? 1 : 0, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    const snapshot = getActiveAccountSettingsSnapshot();
+    if (!snapshot) throw new Error('Missing initial Account snapshot');
+    const operationContext = source === 'none' ? createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+      serverHttpBaseUrl: 'http://localhost:3005', isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey }) : undefined;
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -184,14 +190,62 @@ describe('session prompt-plan producer', () => {
       if (path === '/v1/artifacts/first') return { status: 200, data: row };
       throw new Error(`Unexpected first preparation HTTP path: ${path}`);
     });
+    const preparationBridge = source === 'none' ? { ...daemonBridge, resolvePrompt: async () => {
+      // The background bootstrap confirms equal Settings through the actual
+      // publication owner while the captured prompt preparation is in flight.
+      setActiveAccountSettingsSnapshot({ ...snapshot, source: 'network', rawSettings: {}, settingsVersion: 1 });
+      return await daemonBridge.resolvePrompt({ sessionId: 'test-session', machineId: 'test-machine', featureIds: [], signal: new AbortController().signal });
+    } } : daemonBridge;
     const resolve = createSessionPromptPlanResolver({
-      opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
-        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
+      opts: { credentials, accountSettingsContext: { ...snapshot, whenRefreshed: null } },
       session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
-      readNativeSessionId: () => 'native', daemonBridge,
+      readNativeSessionId: () => 'native', daemonBridge: preparationBridge,
+      ...(operationContext ? { readOperationContext: () => operationContext } : {}),
     });
     expect(await resolve({ baseOverride: 'Base' })).toContain('First admitted Account context');
+    // Captured and Active Account catalogues are separate projections. The
+    // catalogue refresh assertions below belong to the ordinary Active reader.
+    if (operationContext) {
+      expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+      setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!,
+        settings: accountSettingsParse({ codingPromptBehaviorV1: { v: 1, sessionTitleUpdates: 'disabled' } }), settingsVersion: 2 });
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-settings-changed' }));
+      setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, source: 'none', settings, settingsVersion: 3 });
+      // This plan started without Settings availability. Once its captured
+      // read confirms the source, losing that availability still refuses it.
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-availability-changed' }));
+      return;
+    }
+    const catalog = getActiveAccountSettingsSnapshot()?.promptLibraryCatalog;
+    if (!catalog || catalog.status !== 'ready') throw new Error('First demand did not admit the prompt catalog');
+    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+    expect(commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken, catalog: { ...catalog,
+      cleanup: { status: 'cleanup-pending', reason: 'history-incomplete' } } })).toBe(true);
+    // Source/history bookkeeping never withdraws already-admitted destination instructions.
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()?.instructions).toContain('First admitted Account context');
+    expect(beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken })).toBe(true);
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()?.instructions).toContain('First admitted Account context');
+    expect(commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken, catalog: { ...catalog,
+      rows: catalog.rows.filter(row => row.record.key !== 'coding') } })).toBe(true);
+    // Same-lifetime catalog changes apply at the next preparation, without
+    // withdrawing the already admitted startup plan.
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()?.instructions).toContain('First admitted Account context');
+    expect(await resolve({ baseOverride: 'Base' })).not.toContain('First admitted Account context');
+    const admitted = getActiveAccountSettingsSnapshot();
+    if (!admitted) throw new Error('Missing admitted Account');
+    setActiveAccountSettingsSnapshot({ ...admitted, settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: admitted.settingsVersion + 1, loadedAtMs: 2, settingsSecretsReadKeys: [] });
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()).not.toBeNull();
+    setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!,
+      settings: accountSettingsParse({ codingPromptBehaviorV1: { v: 1, sessionTitleUpdates: 'disabled' } }),
+      settingsVersion: admitted.settingsVersion + 2 });
+    expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-settings-changed' }));
+    expect(resolve.readStartupInstructions?.()).toBeNull();
   });
 
   it('refuses a captured Account context when its credentials belong to another Account scope', async () => {
@@ -252,7 +306,7 @@ describe('session prompt-plan producer', () => {
     expect(resolve.readStartupInstructions?.()).toBeNull();
   });
 
-  it('withdraws prepared policy after a catalog-only Profile change without a Settings revision change', async () => {
+  it.each([null, 'focused'])('withdraws prepared policy after a catalog-only Profile change only for the selected Profile (%s)', async profileId => {
     const credentials = { token: 'current-profile-context-token', encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const settings = accountSettingsParse({});
@@ -272,14 +326,49 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId: 'focused' }) },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId }) },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
     await resolve();
-    expect(resolve.readCodingPromptBehavior?.()?.sessionTitleUpdates).toBe('ongoing');
+    let preparedBehavior = resolve.readCodingPromptBehavior?.();
+    expect(preparedBehavior).not.toBeNull();
+    if (profileId) expect(preparedBehavior?.sessionTitleUpdates).toBe('ongoing');
+    const catalog = getActiveAccountSettingsSnapshot()?.profileCatalog;
+    if (catalog?.status !== 'ready') throw new Error('Missing prepared Profile catalog');
+    commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
+      ...catalog, referenceGuardRevision: 2, records: [...catalog.records, { revision: 1, record: ProfileRecordV1Schema.parse({
+        v: 1, id: 'unrelated', enabled: true, promptStack: [], secretBindings: {},
+        definition: { kind: 'inline', profile: { v: 2, id: 'unrelated', name: 'Unrelated', createdAt: 1, updatedAt: 1 } },
+      }) }],
+    } });
+    expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
+      ...catalog, referenceGuardRevision: 3, records: catalog.records.map(row => row.record.id !== 'focused'
+        || row.record.definition.kind !== 'inline' ? row : { revision: row.revision + 1, record: ProfileRecordV1Schema.parse({
+          ...row.record, definition: { ...row.record.definition, profile: { ...row.record.definition.profile,
+            codingPromptBehaviorOverrides: { sessionTitleUpdates: 'disabled' } } },
+        }) }),
+    } });
+    if (profileId) {
+      expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-profile-changed' }));
+      await resolve();
+      preparedBehavior = resolve.readCodingPromptBehavior?.();
+      expect(preparedBehavior?.sessionTitleUpdates).toBe('disabled');
+    } else {
+      expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+      expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    }
     beginActiveProfileCatalogRefresh({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
-    expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+    if (profileId) {
+      expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-profile-changed' }));
+    } else {
+      expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+      expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    }
   });
 
   it('prepares the current Session context without an Account stack and never reuses its previous document', async () => {

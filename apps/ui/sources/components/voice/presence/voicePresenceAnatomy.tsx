@@ -57,14 +57,14 @@ export function VoiceOrbAnatomy(props: Readonly<{ anchorRef?: React.RefObject<Vi
 const styles = StyleSheet.create((theme) => ({
     pill: {
         maxWidth: '100%', minWidth: 0, flexShrink: 1, height: VOICE_TOP_BAR_PILL_HEIGHT,
-        flexDirection: 'row', alignItems: 'center', paddingRight: 2,
+        flexDirection: 'row', alignItems: 'center', paddingRight: theme.space.s2,
         borderRadius: VOICE_TOP_BAR_PILL_HEIGHT / 2, backgroundColor: theme.colors.state.neutral.background,
     },
     // Concentric: the trailing well sits as far from the capsule's end as from its top and bottom
     // ((56 − 32) / 2 desktop, (58 − 34) / 2 phone).
-    capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 4, paddingRight: 12 },
-    pillLabel: { minWidth: 0, flexShrink: 1, justifyContent: 'center', paddingLeft: 2, paddingRight: 9 },
-    divider: { width: 1, height: 14, marginHorizontal: 2, backgroundColor: theme.colors.border.default },
+    capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, paddingLeft: theme.space.s4, paddingRight: theme.space.s12 },
+    pillLabel: { minWidth: 0, flexShrink: 1, justifyContent: 'center', paddingLeft: theme.space.s2, paddingRight: theme.space.s8 },
+    divider: { width: 1, height: 14, marginHorizontal: theme.space.s2, backgroundColor: theme.colors.border.default },
     islandMark: { alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     islandBody: { flex: 1, minWidth: 0, justifyContent: 'center', gap: 1, alignSelf: 'stretch' },
     orb: { width: VOICE_ORB_BODY_SIZE, height: VOICE_ORB_BODY_SIZE, alignItems: 'center', justifyContent: 'center' },

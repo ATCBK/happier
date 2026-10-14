@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
@@ -114,7 +114,7 @@ describe('workflow progress v1', () => {
       invocationPath: { blockId: '$root', scope: [] }, blockKind: 'step', attempt: '0', logicalInvocationRecordId: 'invocation' });
     expect(invalid.success).toBe(false);
     if (!invalid.success) {
-      expect(invalid.error).toBeInstanceOf(z.ZodError);
+      expect(invalid.error).toBeInstanceOf(z.core.$ZodError);
       expect(invalid.error.issues).toContainEqual(expect.objectContaining({ code: 'custom', path: ['invocationPath', 'blockId'] }));
     }
   });

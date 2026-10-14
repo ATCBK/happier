@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
     CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1,
@@ -19,7 +19,7 @@ import {
     mutateConnectedAcknowledgementsRowInTx,
 } from './presentationRows';
 
-const internal = z.object({ error: z.literal('internal') }).strict();
+const internal = z.strictObject({ error: z.literal('internal') });
 
 /** Singleton catalogs are addressed solely by the authenticated Account, never an external key or Account id. */
 export function registerConnectedMetadataRoutes(app: Fastify): void {

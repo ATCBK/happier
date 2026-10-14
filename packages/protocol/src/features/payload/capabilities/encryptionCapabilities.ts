@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const EncryptionStoragePolicySchema = lazyZodSchema(() => z.enum(['required_e2ee', 'optional', 'plaintext_only']));
 export type EncryptionStoragePolicy = z.infer<typeof EncryptionStoragePolicySchema>;
@@ -14,8 +14,8 @@ export const EncryptionCapabilitiesSchema = lazyZodSchema(() => z.object({
   storagePolicy: EncryptionStoragePolicySchema,
   allowAccountOptOut: z.boolean(),
   defaultAccountMode: AccountEncryptionModeSchema,
-  plainAccountSettingsAtRest: PlainAccountAtRestPolicySchema.optional().default('server_sealed'),
-  plainAccountCredentialsAtRest: PlainAccountAtRestPolicySchema.optional().default('server_sealed'),
+  plainAccountSettingsAtRest: z._default(z.optional(PlainAccountAtRestPolicySchema), 'server_sealed'),
+  plainAccountCredentialsAtRest: z._default(z.optional(PlainAccountAtRestPolicySchema), 'server_sealed'),
 }));
 
 export type EncryptionCapabilities = z.infer<typeof EncryptionCapabilitiesSchema>;

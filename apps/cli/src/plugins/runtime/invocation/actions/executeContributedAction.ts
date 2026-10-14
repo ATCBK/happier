@@ -6,7 +6,7 @@ import type { ActionId, QualifiedPluginActionId } from '@happier-dev/protocol/ac
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { ActionsSettingsV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
-import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginUiSelectedActionInputCarrierV1 } from '@happier-dev/protocol/plugins/ui';
 import type {
   PluginInvocationCaller,
@@ -233,7 +233,7 @@ async function resolveCurrentTargetExecutionOrigin(
   try {
     const origin = await resolver(pluginId, signal);
     if (signal?.aborted) return Object.freeze({ status: 'aborted' as const });
-    if (!origin || !('materializationRef' in origin) || origin.materializationRef.pluginId !== pluginId) {
+    if (!origin || getPluginMachineExecutionOriginRef(origin).pluginId !== pluginId) {
       return Object.freeze({ status: 'unavailable' as const });
     }
     return Object.freeze({ status: 'resolved' as const, origin });

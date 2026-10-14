@@ -31,7 +31,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     const activeAccountLifetime = React.useRef(accountLifetime);
     const mounted = React.useRef(false);
     const pendingAttemptId = React.useRef(0);
-    const [pending, setPending] = React.useState(false);
+    const [pending, setPending] = React.useState<Readonly<{ modelName: string }> | null>(null);
     const [failure, setFailure] = React.useState<
         | Readonly<{
             error: ProviderErrorV1;
@@ -53,12 +53,12 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         const controller = invocationLifetime.controller;
         mounted.current = true;
         pendingAttemptId.current += 1;
-        setPending(false);
+        setPending(null);
         setFailure(null);
         const registration = accountLifetime?.onRetire(() => {
             controller.abort();
             pendingAttemptId.current += 1;
-            setPending(false);
+            setPending(null);
             setFailure(null);
         });
         return () => {
@@ -136,15 +136,18 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         return true;
     }, [accountLifetime, invocationLifetime, mutateProviderModelSettings, input.agentTargetKey, input.enabled, input.machineId, input.refresh, input.serverId, scopeKey]);
 
-    const runPending = React.useCallback(async (operation: () => Promise<boolean>): Promise<boolean> => {
+    const runPending = React.useCallback(async (
+        confirmation: SessionModelPickerExperimentalConfirmation,
+        operation: () => Promise<boolean>,
+    ): Promise<boolean> => {
         const attemptId = pendingAttemptId.current + 1;
         pendingAttemptId.current = attemptId;
-        setPending(true);
+        setPending({ modelName: confirmation.modelName });
         try {
             return await operation();
         } finally {
             if (pendingAttemptId.current === attemptId) {
-                setPending(false);
+                setPending(null);
             }
         }
     }, []);
@@ -154,7 +157,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         commitSelection: () => void,
     ): Promise<boolean> => {
         if (!input.enabled || !input.agentTargetKey || confirmation.agentTargetKey !== input.agentTargetKey) return false;
-        return await runPending(async () => {
+        return await runPending(confirmation, async () => {
             setFailure(null);
             // The Action's configurable approval default owns Ask first. A
             // second modal would ignore a waiver and ask twice otherwise.
@@ -163,7 +166,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     }, [input.agentTargetKey, input.enabled, persist, runPending]);
     const retry = React.useCallback(async (): Promise<boolean> => {
         if (!input.enabled || !failure?.retryAttempt) return false;
-        return await runPending(() => persist(
+        return await runPending(failure.retryAttempt.confirmation, () => persist(
             failure.retryAttempt.confirmation,
             failure.retryAttempt.commitSelection,
         ));
@@ -172,7 +175,8 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
 
     return React.useMemo(() => ({
         confirm,
-        pending: input.enabled && pending,
+        pending: input.enabled && pending !== null,
+        pendingModelName: input.enabled ? pending?.modelName ?? null : null,
         pendingApproval: input.enabled ? pendingApproval : null,
         error: input.enabled ? failure?.error ?? null : null,
         retry: input.enabled && failure?.retryAttempt ? retry : null,

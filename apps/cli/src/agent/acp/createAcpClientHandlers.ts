@@ -129,15 +129,23 @@ export function createAcpClientHandlers(params: Readonly<{
         return { outcome: { outcome: 'selected', optionId: cachedOptionId } };
       }
 
-      toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
+      try {
+        toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
+
+        if (knownCall && shouldReplaceCachedPermissionToolName(knownCall.toolName, toolName)) {
+          toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
+        }
+      } catch (error) {
+        logger.debug('[AcpBackend] Cannot resolve permission tool identity:', error);
+        if (!permissionRequest.isCurrent()) return withdraw();
+        await cancelOwnedPrompt();
+        return { outcome: { outcome: 'cancelled' } };
+      }
 
       if (toolName !== (toolCall?.kind || toolCall?.toolName || extendedParams.kind || 'Unknown tool')) {
         logger.debug(`[AcpBackend] Detected tool name: ${toolName} from toolCallId: ${toolCallId}`);
       }
 
-      if (knownCall && shouldReplaceCachedPermissionToolName(knownCall.toolName, toolName)) {
-        toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
-      }
       if (tracksForeground) {
         params.toolCalls.observePermission({ toolCallId, toolName, input });
         markToolCallWaitingForPermission(toolCallId, params.createHandlerContext());

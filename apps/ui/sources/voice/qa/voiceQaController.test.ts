@@ -68,6 +68,14 @@ function prepareLocalQaSession(options: Readonly<{ welcome?: boolean }> = {}) {
   return createVoiceQaController();
 }
 
+function selectLocalVoiceAgentFixture() {
+  const settings = storage.getState().settings;
+  const config = readLocalConversationVoiceSettings(settings.voice);
+  const voice = writeVoiceProviderSettingsConfig({ ...settings.voice, providerId: 'local_conversation' },
+    'local_conversation', { ...config, conversationMode: 'agent' });
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice }, settings));
+}
+
 function createAcceptedPendingPort() {
   return {
     enqueuePendingMessage: vi.fn(async ({ localId }: Readonly<{ localId: string }>) => ({
@@ -302,7 +310,8 @@ describe('voiceQaController', () => {
     await expect(sync.ensureSessionVisibleForMessageRoute('s1', { serverId: localVoiceHomeId, forceRefresh: true }))
       .resolves.toMatchObject({ kind: 'available', sessionId: 's1' });
     const target = storage.getState().sessions.s1;
-    const remoteTarget = createSessionFixture({ ...target, updatedAt: Date.now(), agentState: {
+    const remoteTarget = createSessionFixture({ ...target, updatedAt: Date.now(),
+      agentStateVersion: (target.agentStateVersion ?? 0) + 1, agentState: {
       requests: { actual_question: { kind: 'user_action', tool: 'AskUserQuestion',
         arguments: { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }] }, createdAt: 1,
       } }, completedRequests: {},
@@ -312,7 +321,7 @@ describe('voiceQaController', () => {
     if (!response) throw new Error('Missing canonical target response');
     const held = createDeferred<Response>();
     setLocalVoiceHttpResponder(request => request.method === 'GET' && request.path === '/v2/sessions/s1'
-      ? held.promise : undefined);
+      && useVoiceQaStore.getState().status === 'running' ? held.promise : undefined);
     const controller = prepareLocalQaSession();
     let starting: ReturnType<typeof controller.start> | null = null;
     // Runner timeouts do not reject the suspended test body. Release its HTTP
@@ -437,12 +446,7 @@ describe('voiceQaController', () => {
       },
     } as any);
 
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -486,109 +490,38 @@ describe('voiceQaController', () => {
 
 
   it('forces a target-session refresh when the known session state is stale before building local QA context', async () => {
-    fixtureStorage.__setState({
-      ...(storage.getState() as any),
-      sessions: {
-        ...((storage.getState() as any).sessions ?? {}),
-        s1: {
-          id: 's1',
-          encryptionMode: 'plain',
-          presence: 'online',
-          active: true,
-          updatedAt: 1,
-          metadata: { path: '/tmp/project-a', host: 'test-machine', summary: { text: 'Target summary' } },
-          agentState: null,
-        },
-      },
-      sessionMessages: {
-        ...((storage.getState() as any).sessionMessages ?? {}),
-        s1: { messages: [] },
-      },
-    } as any);
-
-    const ensureSessionVisibleForMessageRoute = vi.fn(async (_address: SessionAddress, options?: { forceRefresh?: boolean }) => {
-      if (options?.forceRefresh !== true) return;
-      storage.setState((state: any) => ({
-        ...state,
-        sessions: {
-          ...(state.sessions ?? {}),
-          s1: {
-            ...(state.sessions?.s1 ?? {}),
-            agentState: {
-              requests: {
-                req_question: {
-                  tool: 'AskUserQuestion',
-                  kind: 'user_action',
-                  arguments: {
-                    questions: [{ question: 'Continue with local voice QA?', options: [{ label: 'Yes' }, { label: 'No' }] }],
-                  },
-                  createdAt: 1,
-                },
-              },
-              completedRequests: {},
-            },
-          },
-        },
-      }));
+    const target = storage.getState().sessions.s1;
+    const remoteTarget = createSessionFixture({ ...target, updatedAt: Date.now(),
+      agentStateVersion: (target.agentStateVersion ?? 0) + 1,
+      agentState: { requests: { req_question: {
+        tool: 'AskUserQuestion', kind: 'user_action', createdAt: 1,
+        arguments: { questions: [{ question: 'Continue with local voice QA?', options: [{ label: 'Yes' }, { label: 'No' }] }] },
+      } }, completedRequests: {} },
     });
-
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
-    const controller = createVoiceQaController({
-      getSettings: () => storage.getState().settings,
-      getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
-      ensureLocalBinding: vi.fn(async () => ({
-        adapterId: 'local_conversation',
-        controlSessionId: '__voice_agent__',
-        conversationSessionId: 'voice-hidden-s1',
-        conversationSessionAddress: qaAddress('voice-hidden-s1'),
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: qaAddress('s1'),
-        updatedAt: 1,
-      })),
-      ensureLocalRunningAndMaybeWelcome: vi.fn(async () => null),
-      ensureSessionVisibleForMessageRoute,
-      refreshSessionMessages: vi.fn(async () => {}),
-      pendingPort: createAcceptedPendingPort(),
-      sendLocalTurn: vi.fn(async () => ({ assistantText: 'ok', actions: [] })),
-      stopLocal: vi.fn(async () => {}),
-      appendLocalContextUpdate: vi.fn(),
-      startRealtime: vi.fn(async () => {}),
-      isRealtimeStarted: () => false,
-      stopRealtime: vi.fn(async () => {}),
-      getRealtimeSession: () => null,
-      getRealtimeBinding: () => null,
-      sendRealtimeTextTurn: vi.fn(async () => {}),
-      waitForInterruptedLocalAssistantTurn: vi.fn(async () => null),
-      qaStore: useVoiceQaStore,
+    const remote = createSessionMetadataHttpBoundary(() => ({ s1: remoteTarget }));
+    setLocalVoiceHttpResponder(request => request.method === 'GET' && request.path === '/v2/sessions/s1'
+      && useVoiceQaStore.getState().status === 'running'
+      ? remote.handle('https://local-voice-actions.example.test/v2/sessions/s1') ?? undefined : undefined);
+    const controller = prepareLocalQaSession();
+    onTestFinished(async () => {
+      setLocalVoiceHttpResponder(null);
+      await voiceAgentSessions.stop('voice-hidden-s1');
     });
-
     await controller.start({ sessionAddress: qaAddress('s1') });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith(qaAddress('s1'), { forceRefresh: true });
-    expect(
-      useVoiceQaStore.getState().entries.some(
-        (entry) =>
-          entry.kind === 'system' &&
-          entry.text.includes('Pending requests detected in target-session context') &&
-          entry.text.includes('yes'),
-      ),
-    ).toBe(true);
-    expect(
-      useVoiceQaStore.getState().entries.some(
-        (entry) =>
-          entry.kind === 'system' &&
-          entry.text.includes('Pending request breakdown:') &&
-          entry.text.includes('user_action=1(req_question)') &&
-          entry.text.includes('permission=0(none)') &&
-          entry.text.includes('transcript=0(none)'),
-      ),
-    ).toBe(true);
+    await vi.waitFor(() => expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
+      && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true));
+    expect(readLocalVoiceHttpRequests().some(request => request.path === '/v2/sessions/s1')).toBe(true);
+    const breakdowns = useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'system'
+      && entry.text.includes('Pending request breakdown:')).map(entry => entry.text);
+    expect(breakdowns, breakdowns.join('\n')).toContain(
+      'Pending request breakdown: user_action=1(req_question) permission=0(none) transcript=1(req_question)',
+    );
+    await controller.sendPrompt({ prompt: 'Describe the refreshed pending question.' });
+    const starts = localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2)
+      .map(request => ExecutionRunTurnStreamStartV2RequestSchema.parse(request.input));
+    expect(starts.some(start => start.message.includes('## Pending Requests')
+      && start.message.includes('Continue with local voice QA?'))).toBe(true);
+    await controller.stop();
   });
 
   it('re-runs target-session message hydration after a forced visibility refresh when pending transcript requests only appear once the session becomes visible', async () => {
@@ -667,12 +600,7 @@ describe('voiceQaController', () => {
       }));
     });
 
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -756,12 +684,7 @@ describe('voiceQaController', () => {
     });
     const appendLocalContextUpdate = vi.fn();
 
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -824,12 +747,7 @@ describe('voiceQaController', () => {
     const getLocalBinding = vi.fn(() => binding);
     const sendLocalTurn = vi.fn(async () => ({ assistantText: 'Retargeted.', actions: [] }));
 
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState,
@@ -885,12 +803,7 @@ describe('voiceQaController', () => {
       };
       return { assistantText: 'Teleported.', actions: [] };
     });
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: null, lastFocusedSessionAddress: null }),
@@ -1001,12 +914,7 @@ describe('voiceQaController', () => {
       updatedAt: 1,
     }));
     const waitForInterruptedLocalAssistantTurn = vi.fn(async () => 'A read-only permission request is pending. Should I allow or deny it?');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -1128,12 +1036,7 @@ describe('voiceQaController', () => {
       updatedAt: 1,
     }));
     const waitForInterruptedLocalAssistantTurn = vi.fn(async () => 'The coding session finished and needs your approval.');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -1216,12 +1119,7 @@ describe('voiceQaController', () => {
       updatedAt: 1,
     }));
     const waitForInterruptedLocalAssistantTurn = vi.fn(async () => 'The coding session is now asking which color you prefer: Red or Blue.');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-        voice: {
-          providerId: 'local_conversation',
-          providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-        },
-      }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),
@@ -1318,12 +1216,7 @@ describe('voiceQaController', () => {
       targetSessionAddress: qaAddress('s1'),
       updatedAt: 1,
     }));
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
-      voice: {
-        providerId: 'local_conversation',
-        providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } },
-      },
-    }, storage.getState().settings));
+    selectLocalVoiceAgentFixture();
     const controller = createVoiceQaController({
       getSettings: () => storage.getState().settings,
       getVoiceTargetState: () => ({ primaryActionSessionAddress: qaAddress('s1'), lastFocusedSessionAddress: null }),

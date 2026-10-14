@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { StyleSheet } from 'react-native';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol';
 import { createSessionSurfaceNoteDocumentV1, SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
@@ -45,7 +46,11 @@ function CompanionProbe(props: Readonly<{
 }
 
 /** Keep Sync, record decoding, preferences and presentation policy real; replace only HTTP/Socket transport. */
-async function renderReference(options: Readonly<{ foreignRevealPort?: boolean }> = {}) {
+async function renderReference(options: Readonly<{
+    foreignRevealPort?: boolean;
+    beforeRepeatedRecordRead?: () => Promise<void>;
+    onReferenceCommit?: () => void;
+}> = {}) {
     const previous = storage.getState();
     retirePresentationNotice();
     const record = SessionSystemRecordStoredSchema.parse({
@@ -56,7 +61,11 @@ async function renderReference(options: Readonly<{ foreignRevealPort?: boolean }
     });
     const fixture = createSessionSystemRecordHttpFixture({ sessionId: 'session-1', records: [record] });
     const connection = await restoreServerAccountForTest({
-        serverUrl: 'https://inline-reference-presentation.test', request: fixture.request,
+        serverUrl: 'https://inline-reference-presentation.test', request: async (...args) => {
+            const response = await fixture.request(...args);
+            if (fixture.recordReads.length > 1) await options.beforeRepeatedRecordRead?.();
+            return response;
+        },
     });
     // Device-local state is a genuine fixture boundary. Start without a saved preference.
     storage.setState(state => ({ localSettings: { ...state.localSettings, sessionCompanionPreferencesBySessionV1: {} } }));
@@ -78,17 +87,21 @@ async function renderReference(options: Readonly<{ foreignRevealPort?: boolean }
     const revealedMutations: SessionCompanionMutationOutcome[] = [];
     const probe: { controller: SessionCompanionController | null } = { controller: null };
     const capture = (controller: SessionCompanionController) => { probe.controller = controller; };
-    const screen = await renderScreen(
+    const referenceElementForDemand = (contentDemand = true) => (
         <SessionCompanionRevealPortProvider
             address={{ serverId: options.foreignRevealPort ? 'another-home' : serverId, sessionId: 'session-1' }}
             openFullSurface={openFullSurface}
             revealAfterMutation={outcome => { revealedMutations.push(outcome); }}
             revealBoardItem={itemId => { revealedItems.push(itemId); }}
         >
-            <SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="session-1" />
+            <React.Profiler id="reference" onRender={() => options.onReferenceCommit?.()}>
+                <SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="session-1" contentDemand={contentDemand} />
+            </React.Profiler>
             <CompanionProbe serverId={serverId} capture={capture} />
-        </SessionCompanionRevealPortProvider>,
+        </SessionCompanionRevealPortProvider>
     );
+    const referenceElement = referenceElementForDemand();
+    const screen = await renderScreen(referenceElement);
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('Ship the release'));
     const readController = () => {
         if (!probe.controller) throw new Error('Companion observer did not mount');
@@ -105,10 +118,41 @@ async function renderReference(options: Readonly<{ foreignRevealPort?: boolean }
         // Invoke the real rendered menu action; its domain controller and local persistence remain real.
         await act(async () => { action?.onPress?.(); });
     };
-    return { screen, fixture, readController, readActions, addToCompanion, revealedItems, revealedMutations };
+    return { screen, fixture, referenceElement, referenceElementForDemand, readController, readActions, addToCompanion, revealedItems, revealedMutations };
 }
 
 describe('inline reference exact presentation and local Companion operations', () => {
+    it('commits retained content at its measured height on the first remount frame', async () => {
+        const commits: string[] = [];
+        let readCommittedText: (() => string) | undefined;
+        const { screen, fixture, referenceElement, referenceElementForDemand } = await renderReference({
+            onReferenceCommit: () => { if (readCommittedText) commits.push(readCommittedText()); },
+        });
+        const root = () => screen.findByTestId('transcript-board-item-item-1');
+        await act(async () => { root()?.props.onLayout({ nativeEvent: { layout: { height: 265, width: 800 } } }); });
+        await screen.update(<></>);
+        readCommittedText = () => screen.getTextContent();
+        await screen.update(referenceElement);
+        expect(commits.length).toBeGreaterThan(0);
+        expect(commits.every(text => text.includes('Ship the release'))).toBe(true);
+        expect(StyleSheet.flatten(root()?.props.style)?.minHeight).toBe(265);
+        await screen.update(referenceElementForDemand(false));
+        expect(StyleSheet.flatten(root()?.props.style)?.height).toBe(265);
+        expect(fixture.recordReads).toEqual(['item-1']);
+    });
+
+    it('redisplays a remounted widget from retained records without loading or another content GET', async () => {
+        let release: (() => void) | undefined;
+        const heldResponse = new Promise<void>(resolve => { release = resolve; });
+        onTestFinished(() => { release?.(); });
+        const { screen, fixture, referenceElement } = await renderReference({ beforeRepeatedRecordRead: () => heldResponse });
+        await screen.update(<></>);
+        await screen.update(referenceElement);
+        expect(screen.getTextContent()).toContain('Ship the release');
+        expect(screen.findByTestId('transcript-board-widget-item-1-state')).toBeNull();
+        expect(fixture.recordReads).toEqual(['item-1']);
+    });
+
     it('reveals the acknowledged item through its exact Home/Session presentation port', async () => {
         const { screen, fixture, revealedItems } = await renderReference();
         await screen.pressByTestIdAsync('transcript-board-item-item-1-open');

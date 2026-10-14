@@ -11,8 +11,11 @@ import {
   type WidgetDefinitionActionIdV1,
 } from '../../widgets/definitionActionsV1.js';
 import { WidgetSnapshotPostInputV1Schema, WidgetSnapshotPostOutputV1Schema } from '../../widgets/widgetSnapshotV1.js';
+import { readBuiltinWidgetDescriptorV1 } from '../../widgets/builtinWidgetDescriptorV1.js';
+import { WidgetDefinitionRefV1Schema } from '../../widgets/widgetInstanceV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1, WidgetLayoutFragmentActionInputSchemasV1, WidgetLayoutFragmentActionOutputSchemasV1,
   type WidgetLayoutFragmentActionIdV1 } from '../../widgets/fragmentActionsV1.js';
+import { readWidgetLayoutFragmentApprovalNameV1 } from '../../widgets/fragmentActionsV1.js';
 
 /** What a person reads in Settings, approvals and the form. Agents read `description`. */
 const WIDGET_INSTANCE_ACTION_COPY = {
@@ -128,6 +131,27 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> {
     : {};
 }
 
+function widgetApprovalName(raw: unknown): string | null {
+  const instance = readRecord(raw);
+  if (typeof instance.displayName === 'string' && instance.displayName.trim()) return instance.displayName.trim();
+  const definition = WidgetDefinitionRefV1Schema.safeParse(instance.definition);
+  return definition.success ? readBuiltinWidgetDescriptorV1(definition.data)?.title ?? null : null;
+}
+
+/** A widget the input names reads by that name; one it cannot name is described, never quoted as "widget". */
+function widgetApprovalPhrase(raw: unknown): string {
+  const name = widgetApprovalName(raw);
+  if (name) return quote(name);
+  return WidgetDefinitionRefV1Schema.safeParse(readRecord(raw).definition).data?.kind === 'artifact' ? 'a saved widget' : 'the widget';
+}
+
+function widgetGroupApprovalContents(raw: unknown): string {
+  const group = readRecord(raw);
+  const children = Array.isArray(group.children) ? group.children : [];
+  const names = children.map(child => widgetApprovalName(readRecord(child).instance) ?? 'Widget');
+  return names.length ? ` with ${names.join(' · ')}` : '';
+}
+
 /** Domain-owned approval sentence for widget mutations; raw structured operands stay in Details. */
 function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1, input: unknown): string | null {
   const value = readRecord(input);
@@ -137,24 +161,26 @@ function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1,
   const group = readRecord(value.group);
   const capture = readRecord(value.capture);
   const captureSurface = readWidgetActionSurfaceV1({ surface: capture.surface });
-  const itemName = sentenceCaseIdentifier(instance.displayName, 'selected widget');
-  const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'selected group');
+  const item = widgetApprovalPhrase(instance);
+  const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'group');
   const size = typeof value.size === 'string' ? value.size : null;
   const width = typeof value.width === 'string' ? `${value.width} width` : null;
 
   switch (actionId) {
-    case 'widgets.item.add': return `Add ${quote(itemName)}${size ? ` (${size})` : ''} to ${target}.`;
-    case 'widgets.item.remove': return `Remove ${quote(itemName)} from ${target}.`;
-    case 'widgets.item.move': return `Move ${quote(itemName)} to ${widgetSurfaceApprovalLabel(readWidgetActionDestinationV1(input) ?? surface)}.`;
-    case 'widgets.item.rename': return `Rename ${quote(itemName)} to ${value.displayName === null ? 'its default name' : quote(sentenceCaseIdentifier(value.displayName, 'widget'))} on ${target}.`;
-    case 'widgets.item.size.set': return `Resize ${quote(itemName)} to ${size ?? width ?? 'the selected size'} on ${target}.`;
-    case 'widgets.item.frame.set': return `Show ${quote(itemName)} with ${value.frameStyle === null ? 'the surface default frame' : `${String(value.frameStyle)} framing`} on ${target}.`;
-    case 'widgets.item.network.set': return `Change network access for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.inputs.set': return `Change settings for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.inputs.reset': return `Reset settings for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.refresh': return `Refresh ${quote(itemName)} on ${target}.`;
+    case 'widgets.item.add': return `Add ${item}${size ? ` (${size})` : ''} to ${target}.`;
+    case 'widgets.item.remove': return `Remove ${item} from ${target}.`;
+    case 'widgets.item.move': return `Move ${item} to ${widgetSurfaceApprovalLabel(readWidgetActionDestinationV1(input) ?? surface)}.`;
+    case 'widgets.item.rename': return `Rename ${item} to ${value.displayName === null ? 'its default name' : quote(sentenceCaseIdentifier(value.displayName, 'widget'))} on ${target}.`;
+    case 'widgets.item.size.set': return `Resize ${item} to ${size ?? width ?? 'the selected size'} on ${target}.`;
+    case 'widgets.item.frame.set': return `Show ${item} with ${value.frameStyle === null ? 'the surface default frame' : `${String(value.frameStyle)} framing`} on ${target}.`;
+    case 'widgets.item.network.set': return `Change network access for ${item} on ${target}.`;
+    case 'widgets.item.inputs.set': return `Change settings for ${item} on ${target}.`;
+    case 'widgets.item.inputs.reset': return `Reset settings for ${item} on ${target}.`;
+    case 'widgets.item.refresh': return `Refresh ${item} on ${target}.`;
     case 'widgets.group.create': return `Create ${quote(groupName)} on ${target}.`;
-    case 'widgets.group.add': return `Add ${quote(groupName)} to ${target}.`;
+    case 'widgets.group.add': {
+      return `Add ${quote(groupName)} to ${target}${widgetGroupApprovalContents(group)}.`;
+    }
     case 'widgets.group.ungroup': return `Ungroup ${quote(groupName)} on ${target}.`;
     case 'widgets.group.set': return `Change ${quote(groupName)}${width ? ` to ${width}` : ''} on ${target}.`;
     case 'widgets.group.inputs.set': return `Change shared settings for ${quote(groupName)} on ${target}.`;
@@ -373,6 +399,24 @@ export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActi
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: WidgetLayoutFragmentActionInputSchemasV1[id], outputSchema: WidgetLayoutFragmentActionOutputSchemasV1[id],
+    approvalPresentation: { summary: input => {
+      const value = readRecord(input);
+      const fragment = readRecord(value.fragment);
+      const name = readWidgetLayoutFragmentApprovalNameV1(input);
+      // Without a captured original name, a rename only supplies its new name.
+      const targetName = id === 'widgets.fragment.update'
+        ? typeof fragment.name === 'string' && fragment.name.trim() ? fragment.name.trim() : null : name;
+      const target = targetName ? quote(targetName) : 'the saved group';
+      const patch = readRecord(value.patch);
+      switch (id) {
+        case 'widgets.fragment.create': return `Save ${name ? quote(name) : 'the group'} to Your widgets${widgetGroupApprovalContents(fragment.group)}.`;
+        case 'widgets.fragment.update': return typeof patch.name === 'string' && patch.name.trim()
+          ? `Rename ${target} to ${quote(patch.name.trim())} in Your widgets.` : `Change ${target} in Your widgets.`;
+        case 'widgets.fragment.duplicate': return `Duplicate ${target} in Your widgets.`;
+        case 'widgets.fragment.delete': return `Delete ${target} from Your widgets.`;
+        default: return null;
+      }
+    } },
     inputHints: { description: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][1], fields: WIDGET_LAYOUT_FRAGMENT_ACTION_FIELDS[id] }, cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;
 });

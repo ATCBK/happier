@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Socket } from "socket.io";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { UpdateBodySchema } from "@happier-dev/protocol";
+import { eventRouter, type ClientConnection } from "@/app/events/eventRouter";
 import { db } from "@/storage/db";
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -38,6 +41,9 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
                 tag: `tag-${randomUUID()}`,
                 metadata: "{}",
                 active: true,
+                pendingPermissionRequestCount: 2,
+                pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: new Date(1_500),
                 lastActiveAt: new Date(1_000),
                 runtimeActivityState: "active",
                 runtimeActivityActiveCount: 1,
@@ -58,39 +64,69 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             authentication,
         })).resolves.toMatchObject({ ok: true, didApply: true });
 
-        await expect(applyReleasedUiV021SessionEnd({
-            accountId: other.id,
-            sessionId: session.id,
-            observedAt: 2_000,
-        })).resolves.toEqual({ status: "rejected", reason: "unauthorized" });
-        await expect(applyReleasedUiV021SessionEnd({
-            accountId: owner.id,
-            sessionId: session.id,
-            observedAt: 2_000,
-        })).resolves.toEqual({ status: "applied" });
-        await expect(applyReleasedUiV021SessionEnd({
-            accountId: owner.id,
-            sessionId: session.id,
-            observedAt: 2_000,
-        })).resolves.toEqual({ status: "unchanged" });
+        const { createAuthenticatedFakeSocket } = await import("@/app/api/testkit/socketHarness");
+        const socket = createAuthenticatedFakeSocket();
+        const connection: ClientConnection = {
+            connectionType: "user-scoped", userId: owner.id,
+            // The canonical fake replaces only the Socket.IO network endpoint.
+            socket: socket as unknown as Socket,
+        };
+        eventRouter.addConnection(owner.id, connection);
+        const updates = vi.spyOn(eventRouter, "emitUpdate");
+        try {
+            await expect(applyReleasedUiV021SessionEnd({
+                accountId: other.id,
+                sessionId: session.id,
+                observedAt: 2_000,
+            })).resolves.toEqual({ status: "rejected", reason: "unauthorized" });
+            await expect(applyReleasedUiV021SessionEnd({
+                accountId: owner.id,
+                sessionId: session.id,
+                observedAt: 2_000,
+                connection,
+            })).resolves.toEqual({ status: "applied" });
+            await expect(applyReleasedUiV021SessionEnd({
+                accountId: owner.id,
+                sessionId: session.id,
+                observedAt: 2_000,
+            })).resolves.toEqual({ status: "unchanged" });
 
-        await expect(db.session.findUniqueOrThrow({
-            where: { id: session.id },
-            select: {
-                active: true,
-                lastActiveAt: true,
-                latestTurnStatus: true,
-                runtimeActivityState: true,
-                runtimeActivityActiveCount: true,
-                runtimeActivityRevision: true,
-            },
-        })).resolves.toEqual({
-            active: false,
-            lastActiveAt: new Date(2_000),
-            latestTurnStatus: "cancelled",
-            runtimeActivityState: "unknown",
-            runtimeActivityActiveCount: 0,
-            runtimeActivityRevision: BigInt(2),
-        });
+            await expect(db.session.findUniqueOrThrow({
+                where: { id: session.id },
+                select: {
+                    active: true,
+                    pendingPermissionRequestCount: true,
+                    pendingUserActionRequestCount: true,
+                    pendingRequestObservedAt: true,
+                    lastActiveAt: true,
+                    latestTurnStatus: true,
+                    runtimeActivityState: true,
+                    runtimeActivityActiveCount: true,
+                    runtimeActivityRevision: true,
+                },
+            })).resolves.toEqual({
+                active: false,
+                pendingPermissionRequestCount: 0,
+                pendingUserActionRequestCount: 0,
+                pendingRequestObservedAt: null,
+                lastActiveAt: new Date(2_000),
+                latestTurnStatus: "cancelled",
+                runtimeActivityState: "unknown",
+                runtimeActivityActiveCount: 0,
+                runtimeActivityRevision: BigInt(2),
+            });
+            await Promise.all(updates.mock.results.map(result => result.type === "return" ? result.value : undefined));
+            const terminalUpdates = socket.emit.mock.calls
+                .filter(([event, payload]) => event === "update" && payload.body?.latestTurnStatus === "cancelled");
+            expect(terminalUpdates).toHaveLength(1);
+            expect(UpdateBodySchema.parse(terminalUpdates[0]![1].body)).toMatchObject({
+                pendingPermissionRequestCount: 0,
+                pendingUserActionRequestCount: 0,
+                pendingRequestObservedAt: null,
+            });
+        } finally {
+            updates.mockRestore();
+            eventRouter.removeConnection(owner.id, connection);
+        }
     });
 });

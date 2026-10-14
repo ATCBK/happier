@@ -19,6 +19,44 @@ const { createDefaultActionExecutor } = await import('@/sync/ops/actions/default
 beforeEach(async () => { standardCleanup(); await homes.reset(); retirePresentationNotice(); });
 afterEach(standardCleanup);
 
+it('settles a dashboard refresh cancelled by scope retirement without rejecting', async () => {
+    const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-cancel.test', accountId: 'account-a' });
+    const surface = { serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-a' } };
+    const hook = await renderHook(() => useWidgetAreaLayouts({ surface }));
+    await vi.waitFor(() => expect(hook.getCurrent().state.status).toBe('ready'));
+    let started = false;
+    // Genuine fetch cancellation; the hook, admission and Artifact inventory owners stay real.
+    homes.answer(serverId, '/v1/artifacts', { select: async (_input, { signal }) => {
+        started = true;
+        await new Promise<void>((_resolve, reject) => {
+            const abort = () => reject(signal?.reason);
+            if (signal?.aborted) abort();
+            else signal?.addEventListener('abort', abort, { once: true });
+        });
+        return undefined;
+    } });
+    const refresh = hook.getCurrent().reload();
+    // Attach before unmount so RED is an asserted rejection, not a loose rejection.
+    const settlement = expect(refresh).resolves.toBeNull();
+    await vi.waitFor(() => expect(started).toBe(true));
+    await hook.unmount();
+    await settlement;
+    expect(readPresentationNotice()).toBeNull();
+});
+
+it('keeps an unexpected network failure observable while the dashboard scope is current', async () => {
+    const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-offline.test', accountId: 'account-a' });
+    const surface = { serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-a' } };
+    const hook = await renderHook(() => useWidgetAreaLayouts({ surface }));
+    await vi.waitFor(() => expect(hook.getCurrent().state.status).toBe('ready'));
+    const failure = new TypeError('Failed to fetch');
+    homes.answer(serverId, '/v1/artifacts', { select: async () => { throw failure; } });
+    // The real Action owner maps this HTTP failure to an unavailable result.
+    await act(async () => { await expect(hook.getCurrent().reload()).resolves.toBeNull(); });
+    expect(hook.getCurrent().state.status).toBe('offline');
+    await hook.unmount();
+});
+
 it.each(['approve', 'reject'] as const)('keeps named-layout creation pending until the exact approval is %s', async decision => {
     const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-approval.test', accountId: 'account-a' });
     await homes.requireUiApproval(serverId, 'widgets.area.layout.create');

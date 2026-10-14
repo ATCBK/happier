@@ -1,10 +1,6 @@
-import {
-    NATIVE_AUTH_EMAIL_VERIFY_APP_PATH_V1,
-    NATIVE_AUTH_PASSWORD_RECOVERY_APP_PATH_V1,
-    NATIVE_AUTH_PASSWORD_RESET_APP_PATH_V1,
-    type NormalizedVerifiedEmail,
-    type NativeAuthOneTimeOperationV1,
-} from "@happier-dev/protocol";
+import { NATIVE_AUTH_EMAIL_VERIFY_APP_PATH_V1, NATIVE_AUTH_PASSWORD_RECOVERY_APP_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_APP_PATH_V1 } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
+import { type NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
+import { type NativeAuthOneTimeOperationV1 } from '@happier-dev/protocol/auth/nativeAuthOneTimeOperation';
 
 import { inTx } from "@/storage/inTx";
 import type {

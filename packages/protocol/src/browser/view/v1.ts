@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserAdapterCapabilitiesV1Schema } from '../adapters/v1.js';
 import {
@@ -18,29 +18,27 @@ export type BrowserPlatformV1 = z.infer<typeof BrowserPlatformV1Schema>;
 export const BrowserViewLoadingStateV1Schema = lazyZodSchema(() => z.enum(['idle', 'loading', 'ready', 'failed']));
 export type BrowserViewLoadingStateV1 = z.infer<typeof BrowserViewLoadingStateV1Schema>;
 
-export const BrowserViewV1Schema = lazyZodSchema(() => z
-  .object({
-    viewId: z.string().trim().min(1).max(256),
-    browserSessionId: z.string().trim().min(1).max(256),
+export const BrowserViewV1Schema = lazyZodSchema(() => z.strictObject({
+    viewId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    browserSessionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     target: BrowserViewTargetV1Schema,
     state: BrowserViewStateV1Schema,
     platform: BrowserPlatformV1Schema,
-    currentUrl: BrowserHttpUrlV1Schema.nullable().optional(),
-    currentUrlExpiresAt: z.number().int().nonnegative().nullable().optional(),
-    pendingUrl: BrowserHttpUrlV1Schema.nullable().optional(),
-    title: z.string().trim().max(512).nullable().optional(),
-    faviconUrl: BrowserHttpUrlV1Schema.nullable().optional(),
-    loadingState: BrowserViewLoadingStateV1Schema.optional(),
-    loadingProgress: z.number().min(0).max(1).nullable().optional(),
-    canGoBack: z.boolean().optional().default(false),
-    canGoForward: z.boolean().optional().default(false),
-    securityOrigin: BrowserHttpOriginV1Schema.nullable().optional(),
-    lastError: z.string().trim().min(1).max(128).nullable().optional(),
-    adapterKind: BrowserSemanticAdapterKindV1Schema.optional(),
-    engineKind: BrowserRenderEngineKindV1Schema.exclude(['unavailable']).optional(),
-    adapterCapabilities: BrowserAdapterCapabilitiesV1Schema.optional(),
-    openerViewId: z.string().trim().min(1).max(256).nullable().optional(),
-    errorCode: z.string().trim().min(1).max(128).optional(),
-  })
-  .strict());
+    currentUrl: z.optional(z.nullable(BrowserHttpUrlV1Schema)),
+    currentUrlExpiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    pendingUrl: z.optional(z.nullable(BrowserHttpUrlV1Schema)),
+    title: z.optional(z.nullable(z.string().check(z.trim(), z.maxLength(512)))),
+    faviconUrl: z.optional(z.nullable(BrowserHttpUrlV1Schema)),
+    loadingState: z.optional(BrowserViewLoadingStateV1Schema),
+    loadingProgress: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(1)))),
+    canGoBack: z._default(z.optional(z.boolean()), false),
+    canGoForward: z._default(z.optional(z.boolean()), false),
+    securityOrigin: z.optional(z.nullable(BrowserHttpOriginV1Schema)),
+    lastError: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)))),
+    adapterKind: z.optional(BrowserSemanticAdapterKindV1Schema),
+    engineKind: z.optional(z.enum(BrowserRenderEngineKindV1Schema.options.filter((value): value is Exclude<(typeof BrowserRenderEngineKindV1Schema.options)[number], 'unavailable'> => !(['unavailable'] as readonly string[]).includes(value)))),
+    adapterCapabilities: z.optional(BrowserAdapterCapabilitiesV1Schema),
+    openerViewId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
+    errorCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+  }));
 export type BrowserViewV1 = z.infer<typeof BrowserViewV1Schema>;

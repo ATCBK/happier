@@ -1,90 +1,64 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import fastify from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
-import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
-import * as persistence from '@/persistence';
-import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
-import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
-
 import { createHappierMcpServer } from './createHappierMcpServer';
 
 describe('createHappierMcpServer goal parity', () => {
-  let pluginRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
-
-  beforeAll(async () => {
-    pluginRuntime = await createAdmittedPluginRuntimeFixture({
-      controller: pluginReloadController,
-      runtimeOptions: { pluginIds: ['happier.agent.claude'] },
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  afterAll(async () => await pluginRuntime?.dispose());
-  afterEach(() => vi.restoreAllMocks());
-
-  it('routes a Claude goal Action through the canonical durable work-state owner', async () => {
-    const sessionId = 'claude-goal-action-session';
-    const queued: RegisteredSessionStateFieldMutationV1[] = [];
+  it('routes Claude runner goal tools through the bound live Session RPC', async () => {
+    const sessionId = 'claude-live-goal-session';
     const metadata = createTestMetadata({ flavor: 'claude', machineId: 'machine-1', path: '/repo' });
-    vi.spyOn(persistence, 'readSettings').mockResolvedValue({
-      ...await persistence.readSettings(),
-      machineId: 'machine-1',
-    });
-    const app = fastify();
-    const restoreHttp = installAxiosFastifyAdapter({ app, origin: 'https://test-home.example.test' });
-    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
-    app.get('/v2/sessions/:sessionId', async () => ({ session: createSessionRecordFixture({
-      id: sessionId,
-      active: false,
-      encryptionMode: 'plain',
-      metadata: JSON.stringify(metadata),
-    }) }));
-    const runtime = createHappierMcpServer({
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const setGoal = vi.fn(async (raw: unknown) => ({
+      ok: true,
+      workState: {
+        v: 1,
+        items: [{ id: 'goal:claude', kind: 'goal', status: 'active', title: (raw as { objective: string }).objective, updatedAt: 1 }],
+        primaryItemId: 'goal:claude',
+      },
+    }));
+    rpcHandlerManager.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_SET, setGoal);
+    const session = {
       sessionId,
       getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }),
-      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
-      updateMetadata() {},
+      rpcHandlerManager,
+      updateMetadata: () => undefined,
       getMetadataSnapshot: () => metadata,
       getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: '/repo' }),
-      enqueueRegisteredSessionStateFieldMutation: async (mutation) => { queued.push(mutation); },
+      getPermissionMode: () => 'default',
       getWorkDepth: () => 0,
-      getHostTurnWorkDepth: (turnId) => turnId === 'goal-turn' ? 0 : undefined,
+      getHostTurnWorkDepth: (turnId: string) => turnId === 'goal-turn' ? 0 : undefined,
       getActiveTurnPermissionWitness: () => ({
         turnId: 'goal-turn',
-        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' },
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
       }),
-    }, {
+    };
+    const runtime = createHappierMcpServer(session, {
       credentials: { token: 'claude-goal-account', encryption: null },
       accountSettings: accountSettingsParse({}),
     });
     try {
-      const result = await runtime.executeTool({
+      const dedicated = await runtime.executeTool({
         toolName: 'session_goal_set',
-        args: { objective: 'Ship owner parity' },
+        args: { objective: 'Ship dedicated goal parity' },
       });
-      expect(result).toMatchObject({ ok: true, result: { status: 'applied' } });
-      expect(queued).toEqual([
-        expect.objectContaining({
-          sessionId,
-          fieldId: 'runtime.workState',
-          source: 'daemon',
-          deliveryClass: 'durable_required',
-          op: expect.objectContaining({
-            kind: 'set',
-            value: expect.objectContaining({
-              items: [expect.objectContaining({ kind: 'goal', title: 'Ship owner parity' })],
-            }),
-          }),
-        }),
-      ]);
+      const generic = await runtime.executeTool({
+        toolName: 'action_execute',
+        args: { actionId: 'session.goal.set', input: { objective: 'Ship generic goal parity' } },
+      });
+
+      if (!dedicated.ok) throw new Error(JSON.stringify(dedicated));
+      expect(generic).toMatchObject({ ok: true });
+      expect(setGoal).toHaveBeenNthCalledWith(1, expect.objectContaining({ objective: 'Ship dedicated goal parity' }), expect.anything());
+      expect(setGoal).toHaveBeenNthCalledWith(2, expect.objectContaining({ objective: 'Ship generic goal parity' }), expect.anything());
     } finally {
       await runtime.mcp.close();
-      restoreHttp();
-      await app.close();
     }
   });
 });

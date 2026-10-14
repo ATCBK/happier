@@ -95,7 +95,7 @@ export function initializeSessionClientConnection(
         if (data.body?.t === 'account-change') {
             params.onSessionFollowInvalidated?.();
             void params.onAccountCatalogInvalidated?.().catch(() => {
-                logger.debug('[MCP] Captured Account catalog refresh unavailable');
+                logger.debug('[API] Captured Account catalog refresh unavailable');
             });
         }
         params.handleUserScopedUpdate(data, userSocket);

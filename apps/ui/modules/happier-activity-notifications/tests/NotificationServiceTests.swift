@@ -158,6 +158,12 @@ private func serializedBody(_ payload: [AnyHashable: Any]) -> String {
     recoveredPayload["phase"] = "recovered"
     precondition(MachineRemoteAlert(remoteUserInfo: ["body": serializedBody(recoveredPayload)])?.threadIdentifier
                    == machineAlert.threadIdentifier, "quiet recovery lost the established Machine identity")
+    var returnDelivered: UNNotificationContent?
+    HappierActivityNotificationService().didReceive(makeRequest(userInfo: ["body": recoveredPayload])) {
+      returnDelivered = $0
+    }
+    precondition(returnDelivered?.threadIdentifier == machineAlert.threadIdentifier,
+                 "a visible return notice lost the existing Machine notification grouping")
     for (key, invalid) in [("v", true as Any), ("machineId", " " as Any), ("unexpected", true as Any)] {
       var malformedMachine = machinePayload
       malformedMachine[key] = invalid

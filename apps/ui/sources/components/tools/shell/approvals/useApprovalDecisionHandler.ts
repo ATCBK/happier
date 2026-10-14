@@ -48,7 +48,7 @@ export function getApprovalDecisionErrorMessage(error: unknown, fallbackMessage 
     }
     // Retain the typed code, never opaque transport prose or private details.
     return typeof code === 'string' && /^[a-z][a-z0-9_]*$/.test(code)
-        ? `${fallbackMessage} (${code})` : fallbackMessage;
+        ? fallbackMessage === code ? code : `${fallbackMessage} (${code})` : fallbackMessage;
 }
 
 type ApprovalDecisionArtifact = Pick<DecryptedArtifact, 'id' | 'header'>;
