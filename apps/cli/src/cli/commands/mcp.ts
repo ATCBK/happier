@@ -5,7 +5,10 @@ import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import type { EphemeralResolvedServerSelection } from '@/server/serverSelection';
 
 import { resolveMcpCommandDeps, type McpCommandDeps } from './mcp/deps';
-import { runMcpServersSubcommand } from './mcp/servers/subcommands';
+import { tryHandleMcpServerCliCommand } from '@/cli/actions/adapters/mcpServersArgv';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
+import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+import { renderActionCliRootHelp } from '@/cli/actions/rootCommand';
 import { fail } from '@happier-dev/cli-common/output';
 
 function isHelpToken(value: string): boolean {
@@ -16,20 +19,11 @@ function isHelpToken(value: string): boolean {
 function printMcpUsage(): void {
   console.log('happier mcp serve [--session <session-id>]');
   console.log('happier --server <saved-home> mcp serve [--session <session-id>]  # pin one Home for this process');
-  console.log('happier mcp servers list [--dir <path>] [--json]');
-  console.log('happier mcp servers add --name <name> --transport stdio --command <cmd> [--arg <arg>] [--json]');
-  console.log('happier mcp on|off|inherit <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
-  console.log('happier mcp servers bind|unbind <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
-  console.log('happier mcp servers detect --provider <provider-id> [--json]');
-  console.log('happier mcp servers test --mcp-server <name|id> [--dir <path>] [--json]');
+  console.log(renderActionCliRootHelp('mcp'));
 }
 
 function printMcpServersUsage(): void {
-  console.log('happier mcp servers list [--dir <path>] [--json]');
-  console.log('happier mcp servers add --name <name> --transport stdio --command <cmd> [--arg <arg>] [--json]');
-  console.log('happier mcp servers bind|unbind <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
-  console.log('happier mcp servers detect --provider <provider-id> [--json]');
-  console.log('happier mcp servers test --mcp-server <name|id> [--dir <path>] [--json]');
+  console.log(renderActionCliRootHelp('mcp', ['mcp', 'servers']));
 }
 
 function resolveCommandKind(args: readonly string[]): string {
@@ -56,8 +50,6 @@ export async function handleMcpCommand(
   const subcommand = String(args[1] ?? '').trim();
   const kind = resolveCommandKind(args);
 
-  const resolvedDeps = resolveMcpCommandDeps(deps);
-
   try {
     if (!group || isHelpToken(group)) {
       printMcpUsage();
@@ -71,7 +63,7 @@ export async function handleMcpCommand(
         return;
       }
       const { runMcpServeCommand } = await import('./mcp/serve');
-      await runMcpServeCommand(args, resolvedDeps, explicitServerSelection);
+      await runMcpServeCommand(args, resolveMcpCommandDeps(deps), explicitServerSelection);
       return;
     }
 
@@ -84,10 +76,16 @@ export async function handleMcpCommand(
       return;
     }
 
-    const handled = await runMcpServersSubcommand(subcommand ?? '', args, resolvedDeps, { json });
-    if (handled) return;
+    const argv = ['mcp', ...args];
+    const actionExecutionDeps = deps?.readStoredCredentials ? { readCredentialsFn: deps.readStoredCredentials } : undefined;
+    if (await tryHandleMcpServerCliCommand({ argv, actionExecutionDeps })) return;
+    const command = findCompiledActionCliCommand(argv, listCompiledActionCliCommands());
+    if (command) {
+      await runCompiledActionCliCommand({ command, argv, deps: actionExecutionDeps });
+      return;
+    }
 
-    throw new Error(`Unknown mcp servers subcommand: ${subcommand ?? ''}`);
+    throw Object.assign(new Error(`Unknown mcp servers subcommand: ${subcommand ?? ''}`), { code: 'unknown_subcommand' });
   } catch (error) {
     if (!json) throw error;
     const mapped = mapUnknownErrorToControlError(error);

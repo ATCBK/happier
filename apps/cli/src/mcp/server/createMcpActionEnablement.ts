@@ -6,6 +6,8 @@ import type { AccountSettings, ActionId, ActionSurfaces } from '@happier-dev/pro
 
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import type { StoredCredentials } from '@/persistence';
+import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 import {
   createActionSettingsProvider,
@@ -16,8 +18,24 @@ import {
 /** @deprecated Use the settings-owned ActionSettingsProvider outside MCP. */
 export type McpActionSettingsProvider = ActionSettingsProvider;
 
-/** @deprecated Use createActionSettingsProvider outside MCP. */
-export const createMcpActionSettingsProvider = createActionSettingsProvider;
+/** Bind Session ingress to its admitted policy; standalone callers retain CLI precedence. */
+export function createMcpActionSettingsProvider(params: NonNullable<Parameters<typeof createActionSettingsProvider>[0]> & Readonly<{
+  credentials?: Pick<StoredCredentials, 'token'> | null;
+  sessionCredentials?: Pick<StoredCredentials, 'token'> | null;
+  authorityScope?: 'account' | 'session';
+}> = {}): ActionSettingsProvider {
+  const credentials = params.authorityScope === 'session' ? null : params.credentials;
+  return createActionSettingsProvider({
+    accountSettings: params.accountSettings,
+    // Credential-derived MCP bindings follow the canonical Account snapshot.
+    // Legacy host callbacks read ambient focus and cannot prove that scope;
+    // explicitly scoped invocation getters retain their admitted authority.
+    getAccountSettings: credentials && !params.scopeKey ? undefined : params.getAccountSettings,
+    scopeKey: params.scopeKey ?? (credentials ? resolveAccountSettingsScopeKeyForToken(credentials.token) : null),
+    allowEnvironmentOverride: params.sessionCredentials || params.credentials
+      ? false : params.allowEnvironmentOverride,
+  });
+}
 
 export function createMcpActionEnablement(params: Readonly<{
   accountSettings?: AccountSettings | null;

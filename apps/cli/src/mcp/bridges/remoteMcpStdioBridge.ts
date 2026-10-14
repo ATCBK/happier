@@ -23,6 +23,7 @@ import {
   CallToolResultSchema, InitializeResultSchema, JSONRPCMessageSchema,
   JSONRPCNotificationSchema, JSONRPCRequestSchema, JSONRPCResultResponseSchema,
   ListToolsResultSchema, ProgressNotificationSchema, ProgressTokenSchema, RequestIdSchema,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createConnectedAccountRequestAuthClient } from '@happier-dev/plugin-sdk/connected-accounts/request-auth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
@@ -110,7 +111,14 @@ async function connectRemoteClient(config: RemoteBridgeConfig): Promise<Client> 
   if (config.auth && canonicalMcpOAuthResourceUrlV1(config.auth.resource) !== canonicalMcpOAuthResourceUrlV1(config.url)) throw new McpResourceMismatchError();
   const requestAuth = config.auth ? await createConnectedAccountRequestAuthClient({ capabilityFile: config.auth.capabilityFile }) : null;
   const fetchRemote: FetchLike | undefined = requestAuth && config.auth ? async (target, init) => {
-    if (canonicalMcpOAuthResourceUrlV1(String(target)) !== canonicalMcpOAuthResourceUrlV1(config.auth!.resource)) throw new McpResourceMismatchError();
+    const destination = canonicalMcpOAuthResourceUrlV1(String(target));
+    const resource = canonicalMcpOAuthResourceUrlV1(config.auth!.resource);
+    // SSE advertises a same-origin POST endpoint after the initial connection.
+    // The capability remains bound to the exact initial resource above; this
+    // transport path does not select a different grant or bearer audience.
+    if (config.transport === 'sse'
+      ? new URL(destination).origin !== url.origin
+      : destination !== resource) throw new McpResourceMismatchError();
     const signal = init?.signal ?? undefined;
     const lookup = async () => {
       try {
@@ -193,16 +201,28 @@ async function main(): Promise<void> {
       .flatMap(credential => [credential, JSON.stringify(credential).slice(1, -1)]),
   ));
   const remoteClient = await connectRemoteClient(config);
-  const server = new McpServer({ name: 'Happier MCP Remote Bridge', version: '1.0.0' });
+  const serverInfo = remoteClient.getServerVersion();
+  if (!serverInfo) {
+    await remoteClient.close();
+    throw new Error('Remote MCP server did not provide its identity.');
+  }
+  const instructions = remoteClient.getInstructions();
+  const server = new McpServer(serverInfo, { ...(instructions === undefined ? {} : { instructions }) });
   const requestedSignal = await runMcpStdioBridgeLifecycle({
     stdin: process.stdin,
     start: async () => {
-      const toolList = await withMcpTimeout(remoteClient.listTools(), {
-        timeoutMs: MCP_BRIDGE_STARTUP_STEP_TIMEOUT_MS,
-        label: 'happier_mcp_bridge_list_tools_timeout',
-      });
+      const tools: Tool[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await withMcpTimeout(remoteClient.listTools(cursor === undefined ? undefined : { cursor }), {
+          timeoutMs: MCP_BRIDGE_STARTUP_STEP_TIMEOUT_MS,
+          label: 'happier_mcp_bridge_list_tools_timeout',
+        });
+        tools.push(...page.tools);
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
       registerHappierBridgeTools(server, {
-        tools: toolList.tools,
+        tools,
         callHttpTool: async (name, args, options) =>
           await callMcpToolWithResolvedTimeout({
             client: remoteClient,

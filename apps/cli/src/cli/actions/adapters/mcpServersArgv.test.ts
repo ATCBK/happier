@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { createPersonalSavedSecretActionExecuteV1 } from '@happier-dev/protocol/account/settings/personalSavedSecretActionsV1';
+import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { executeConnectedServiceConfigurationActionV1, prepareConnectedServiceRevokeInputV1, type ConnectedServiceConfigurationActionHostV1 } from '@happier-dev/protocol/connect/execute-configuration-action';
@@ -10,6 +13,155 @@ import { MCP_SIGN_IN_CONNECTED_ACCOUNT_DESCRIPTOR } from '@/mcp/oauth/mcpSignInR
 import { tryHandleMcpServerCliCommand } from './mcpServersArgv';
 import { reloadConfiguration } from '@/configuration';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '../compiledCommands';
+import { renderActionCliRootHelp } from '../rootCommand';
+
+describe('MCP compiled CLI predecessor spellings', () => {
+  function fixture(requireApproval = false, failedRead = false) {
+    let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [] };
+    let revision = 4;
+    const requests: { actionId: string; input: unknown }[] = [];
+    const mcpServerAction = createMcpServerActionExecuteV1({
+      readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+        readRow: async () => {
+          if (failedRead) throw new Error('Unavailable HTTP transport');
+          return { status: 'present', revision, content: { t: 'plain', v: catalog } };
+        } }),
+      mutate: (change, expectedRevision) => commitMcpServerCatalogMutationV1({ catalog, revision, change, scope: null,
+        writeCatalog: async candidate => {
+          if (candidate.expectedRevision !== revision || expectedRevision !== revision) return { status: 'conflict', revision };
+          catalog = candidate.catalog;
+          return { status: 'updated', revision: ++revision, cursor: revision };
+        } }),
+      ruleWriteContext: () => ({ nowMs: 1, newId: () => 'rule-id' }),
+      async machine(request) {
+        requests.push({ actionId: request.actionId, input: request.input });
+        return { ok: true, servers: [], warnings: [{ provider: 'claude', code: 'read_failed', path: '/repo/.claude.json' }] };
+      },
+    });
+    const personalSecret = createPersonalSavedSecretActionExecuteV1({
+      list: async () => [
+        { secretId: 'secret-id', name: 'WorkToken', kind: 'token', revision: 1 },
+        { secretId: 'decoy-id', name: 'secret-id', kind: 'token', revision: 1 },
+      ],
+      async create() { throw new Error('MCP add must not create a Saved Secret'); },
+      async update() { throw new Error('MCP add must not update a Saved Secret'); },
+      async delete() { throw new Error('MCP add must not delete a Saved Secret'); },
+    });
+    const executor = createActionExecutor({ mcpServerAction,
+      personalSavedSecretActionExecute: ({ actionId, input }) => personalSecret(actionId, input),
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
+        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.create': ['cli'] } }, context) });
+    const output = captureConsoleJsonOutput<unknown>();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const deps = { readCredentialsFn: async () => ({ token: 'test-token', encryption: null }),
+      createExecutorFn: async () => ({ ...executor,
+        execute: async (...args: Parameters<typeof executor.execute>) => {
+          const schema = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[args[0] as keyof typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1];
+          if (schema) expect(schema.safeParse(args[1]).success).toBe(true);
+          return executor.execute(...args);
+        }, async resolveSessionTarget() { throw new Error('Unexpected session'); } }) };
+    return { run: (argv: readonly string[]) => tryHandleMcpServerCliCommand({ argv, actionExecutionDeps: deps }),
+      current: () => catalog, revision: () => revision, requests, output };
+  }
+
+  it.each([
+    ['--name', 'fixture', '--transport', 'stdio', '--command', 'fixture-command', '--arg', '--stdio', '--arg', 'two words'],
+    ['--name=fixture', '--transport=stdio', '--command=fixture-command', '--arg=--stdio', '--arg=two words'],
+    ['fixture', '--command', 'fixture-command', '--arg', '--stdio', '--arg', 'two words'],
+  ])('creates equivalent input through the compiled add leaf: %j', async (...args) => {
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'add', ...args, '--json'])).toBe(true);
+    expect(owner.current().servers).toEqual([expect.objectContaining({ name: 'fixture', transport: 'stdio',
+      stdio: { command: 'fixture-command', args: ['--stdio', 'two words'] }, env: {} })]);
+    expect(owner.current().bindings).toEqual([expect.objectContaining({ serverId: owner.current().servers[0]?.id,
+      target: { t: 'allMachines' }, enabled: true })]);
+    expect(owner.revision()).toBe(5);
+    const envelope = owner.output.json() as { data: unknown };
+    expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.create'].safeParse(envelope.data).success).toBe(true);
+  });
+
+  it('binds remote headers and environment through metadata without resolving secret bytes', async () => {
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'add', 'remote', '--transport', 'http', '--url', 'https://mcp.example.test',
+      '--env', 'TOKEN=secret:WorkToken', '--env', 'LITERAL=text:secret:not-a-reference',
+      '--header', 'Authorization=secret:secret-id', '--json'])).toBe(true);
+    expect(owner.current().servers).toEqual([expect.objectContaining({ name: 'remote', transport: 'http',
+      remote: { url: 'https://mcp.example.test', headers: { Authorization: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('secret-id') } } },
+      env: { TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('secret-id') }, LITERAL: { t: 'literal', v: 'secret:not-a-reference' } },
+    })]);
+    expect(owner.revision()).toBe(5);
+  });
+
+  it.each(['--server-id=not-a-selected-home', '--'])('keeps the program argument %s out of Home routing and JSON mode', async argument => {
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'add', 'literal', '--command', 'fixture-command',
+      '--arg', argument, '--json'])).toBe(true);
+    expect(owner.current().servers).toEqual([expect.objectContaining({ name: 'literal',
+      stdio: { command: 'fixture-command', args: [argument] } })]);
+    expect(owner.output.json()).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['mcp', 'servers', 'detect', '--provider', 'claude', '--provider', 'codex', '--dir', '/repo', '--machine', 'machine'],
+    ['mcp', 'servers', 'detect', '--provider=claude', '--provider=codex', '--dir=/repo', '--machine=machine'],
+    ['mcp', 'found', '--providers', 'claude', '--providers', 'codex', '--directory', '/repo', '--machine-id', 'machine'],
+  ])('dispatches equivalent discovery input through the compiled Found leaf: %j', async (...argv) => {
+    const owner = fixture();
+    expect(await owner.run([...argv, '--json'])).toBe(true);
+    expect(owner.requests).toEqual([{ actionId: 'mcp.found.list', input: {
+      machineId: 'machine', providers: ['claude', 'codex'], directory: '/repo' } }]);
+    // The CLI envelope lifts the canonical response's ok field into its own ok.
+    expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.found.list'].safeParse({ ok: true,
+      ...(owner.output.json() as { data: Record<string, unknown> }).data }).success).toBe(true);
+  });
+
+  it.each([[], ['--']])('defaults the 0.2 detect target through the shared Machine owner: %j', async (...tail) => {
+    terminal.inventory.mockResolvedValue({ data: [{ id: 'machine', active: true, revokedAt: null, replacedByMachineId: null }] });
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'detect', '--provider', 'claude', '--dir', '/repo', '--json', ...tail])).toBe(true);
+    expect(owner.requests).toEqual([{ actionId: 'mcp.found.list', input: {
+      machineId: 'machine', providers: ['claude'], directory: '/repo' } }]);
+  });
+
+  it.each([[], ['--dir', '/repo'], ['--dir=/repo']])('keeps the 0.2 list spelling Account-owned: %j', async (...args) => {
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'list', ...args, '--json'])).toBe(true);
+    expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].safeParse((owner.output.json() as { data: unknown }).data).success).toBe(true);
+    expect(owner.requests).toEqual([]);
+  });
+
+  it('keeps approval on the create spec and rejects malformed caller input before mutation', async () => {
+    const owner = fixture(true);
+    expect(await owner.run(['mcp', 'servers', 'add', 'fixture', '--command', 'fixture-command', '--json'])).toBe(true);
+    expect(owner.current().servers).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    expect(await owner.run(['mcp', 'servers', 'add', 'fixture', '--unknown', 'bad', '--json'])).toBe(true);
+    expect(owner.current().servers).toEqual([]);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('keeps catalog read failures in the requested JSON envelope without a create', async () => {
+    const owner = fixture(false, true);
+    expect(await owner.run(['mcp', 'servers', 'add', 'fixture', '--command', 'fixture-command', '--json'])).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(owner.current().servers).toEqual([]);
+    expect(owner.output.logs.length).toBeGreaterThan(0);
+    expect(owner.output.json()).toMatchObject({ ok: false, error: { code: 'mcp_catalog_unavailable' } });
+  });
+
+  it('derives servers help and retired-probe removal from the compiled Action catalog', () => {
+    const commands = listCompiledActionCliCommands();
+    expect(findCompiledActionCliCommand(['mcp', 'servers', 'add'], commands)?.actionId).toBe('mcp.servers.create');
+    expect(findCompiledActionCliCommand(['mcp', 'servers', 'detect'], commands)?.actionId).toBe('mcp.found.list');
+    expect(commands.some(command => String(command.actionId) === 'mcp.servers.probe')).toBe(false);
+    const help = renderActionCliRootHelp('mcp', ['mcp', 'servers']);
+    expect(help).toContain('happier mcp servers add');
+    expect(help).toContain('happier mcp servers tools');
+    expect(help).not.toContain('happier mcp serve ');
+  });
+});
 
 const terminal = vi.hoisted(() => ({ prompt: vi.fn(), rpc: vi.fn(), inventory: vi.fn() }));
 vi.mock('axios', async importOriginal => {

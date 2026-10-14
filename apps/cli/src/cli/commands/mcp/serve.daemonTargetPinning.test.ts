@@ -177,9 +177,6 @@ describe('happier mcp serve daemon target pinning', () => {
         readStoredCredentials: async () => credentials,
         ensureMachineIdForCredentials: async () => ({ machineId: 'machine-selected' }),
         bootstrapAccountSettingsContext: async () => ({ settings: { actionsSettingsV1: null } }) as never,
-        detectProviderMcpServers: async () => ({}) as never,
-        randomUUID: () => 'uuid',
-        nowMs: () => 0,
         readDaemonPluginCatalog,
         resolveLiveDaemonControlTargetForServer,
         connectMcpStdio: async (mcp) => {

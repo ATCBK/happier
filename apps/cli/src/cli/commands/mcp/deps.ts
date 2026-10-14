@@ -1,7 +1,4 @@
-import { randomUUID } from 'node:crypto';
-
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProviderMcpServers';
 import type { createExternalMcpServer } from '@/mcp/createExternalMcpServer';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { ensureMachineIdForCredentials } from '@/ui/auth';
@@ -19,9 +16,6 @@ export type McpCommandDeps = Readonly<{
   readStoredCredentials: () => Promise<StoredCredentials | null>;
   bootstrapAccountSettingsContext: typeof bootstrapAccountSettingsContext;
   ensureMachineIdForCredentials: typeof ensureMachineIdForCredentials;
-  detectProviderMcpServers: typeof detectProviderMcpServers;
-  randomUUID: () => string;
-  nowMs: () => number;
   createExternalMcpServer?: typeof createExternalMcpServer;
   readDaemonPluginCatalog?: typeof readDaemonPluginCatalog;
   resolveLiveDaemonControlTargetForServer?: typeof resolveLiveDaemonControlTargetForServer;
@@ -36,9 +30,6 @@ export function resolveMcpCommandDeps(overrides?: Partial<McpCommandDeps>): McpC
     readStoredCredentials: overrides?.readStoredCredentials ?? readStoredCredentials,
     bootstrapAccountSettingsContext: overrides?.bootstrapAccountSettingsContext ?? bootstrapAccountSettingsContext,
     ensureMachineIdForCredentials: overrides?.ensureMachineIdForCredentials ?? ensureMachineIdForCredentials,
-    detectProviderMcpServers: overrides?.detectProviderMcpServers ?? detectProviderMcpServers,
-    randomUUID: overrides?.randomUUID ?? randomUUID,
-    nowMs: overrides?.nowMs ?? (() => Date.now()),
     createExternalMcpServer: overrides?.createExternalMcpServer,
     readDaemonPluginCatalog: overrides?.readDaemonPluginCatalog ?? readDaemonPluginCatalog,
     resolveLiveDaemonControlTargetForServer:

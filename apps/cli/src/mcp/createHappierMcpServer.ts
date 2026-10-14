@@ -47,7 +47,6 @@ import {
 } from '@/mcp/server/createMcpActionEnablement';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { isSessionBoundMemoryTarget } from '@/mcp/sessionBoundMemoryTarget';
 import { createSessionDiscussionActionDeps } from '@/session/discussions/sessionDiscussionActionDeps';
 import { createSessionBoardActionDeps } from '@/session/board/sessionBoardActionDeps';
@@ -183,9 +182,8 @@ export function createHappierMcpServer(
   const actionSettingsProvider = opts?.actionsSettingsProvider ?? createMcpActionSettingsProvider({
     accountSettings: opts?.accountSettings ?? null,
     getAccountSettings: opts?.getAccountSettings ?? null,
-    scopeKey: credentials
-      ? resolveAccountSettingsScopeKeyForToken(credentials.token)
-      : null,
+    credentials,
+    sessionCredentials,
   });
   const readActionsSettings = () => actionSettingsProvider.getActionsSettings();
   const readSessionAgentSpawnPolicyV1 = () =>

@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { describe, expect, it, vi } from 'vitest';
+import { FeaturesResponseSchema, accountSettingsParse, isApprovalRequiredByActionsSettings } from '@happier-dev/protocol';
 
 import {
   createMcpActionEnablementWithServerFeatureAvailability,
   createMcpActionSettingsProvider,
 } from './createMcpActionEnablement';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 function readySnapshot(features: unknown, capabilities: unknown = {}): CliServerFeaturesSnapshot {
   return {
@@ -38,6 +39,54 @@ function createEnablement(snapshot: CliServerFeaturesSnapshot | undefined) {
 }
 
 describe('Lane 10 Action feature availability', () => {
+  it('preserves explicitly scoped invocation getters without borrowing focused Account policy', () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    setActiveAccountSettingsSnapshot({
+      scopeKey: 'focused-bob', source: 'network', settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      settings: accountSettingsParse({ actionsSettingsV1: { v: 1, actions: { 'session.message.send': { enabled: true } } } }),
+    });
+    let admittedSettings: ReturnType<typeof accountSettingsParse> | null = accountSettingsParse({
+      actionsSettingsV1: { v: 1, actions: { 'session.message.send': { enabled: false } } },
+    });
+    const provider = createMcpActionSettingsProvider({
+      credentials: { token: 'runtime-alice' }, scopeKey: 'owning-alice', getAccountSettings: () => admittedSettings,
+    });
+    try {
+      expect(provider.getActionsSettings().actions['session.message.send']?.enabled).toBe(false);
+      admittedSettings = null;
+      expect(provider.getAccountSettings()).toBeNull();
+    } finally { resetActiveAccountSettingsSnapshotForTests(); }
+  });
+
+  it('retains the Account role authority for Session-only policy readers', () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    const rawSettings = { rolesV1: { overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } };
+    setActiveAccountSettingsSnapshot({ scopeKey: 'host-account', source: 'network', settingsVersion: 1,
+      settings: accountSettingsParse(rawSettings), rawSettings, settingsSecretsReadKeys: [], loadedAtMs: 1,
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    try {
+      const provider = createMcpActionSettingsProvider({ sessionCredentials: { token: 'session-policy-fixture' } });
+      expect(provider.getAccountRoleOverrides()).toEqual({ status: 'ready',
+        overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } });
+    } finally { resetActiveAccountSettingsSnapshotForTests(); }
+  });
+
+  it('retains a Session-only runtime approval waiver over ambient standalone CLI policy', () => {
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({ v: 1, actions: {} }));
+    const params = {
+      sessionCredentials: { token: 'session-policy-fixture' },
+      accountSettings: accountSettingsParse({ actionsSettingsV1: {
+        v: 1, approvalWaivedSurfaces: { 'browser.view.open': ['agent'] },
+      } }),
+    };
+    try {
+      const provider = createMcpActionSettingsProvider(params);
+      expect(isApprovalRequiredByActionsSettings('browser.view.open', provider.getActionsSettings(), {
+        surface: 'agent', authority: 'account_automation',
+      })).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('reads the current host Session memory choice while preserving standalone Account and unrelated Actions', () => {
     let memoryEnabled = false;
     const policy = {
@@ -104,12 +153,10 @@ describe('Lane 10 Action feature availability', () => {
     expect(createEnablement(readySnapshot({
       teams: { enabled: true, credentialResources: { enabled: false } },
     }))('teams.credentials.create')).toBe(false);
-    // Shared Saved Secrets are served by the Team route app, so an absent
-    // `teams` bit — not a sibling credential bit — is what closes them.
-    expect(createEnablement(readySnapshot({}))('secrets.shared.create')).toBe(false);
-    expect(createEnablement(readySnapshot({ teams: { enabled: false } }))('secrets.shared.create')).toBe(false);
-    // …and the `teams` bit alone opens them: they do not wait on either
-    // credential bit, so a Home with no credential resources still serves them.
+    // Saved Secrets are Account-owned. A Team audience is admitted by the
+    // operation owner; the catalog does not impose a blanket Teams gate.
+    expect(createEnablement(readySnapshot({}))('secrets.shared.create')).toBe(true);
+    expect(createEnablement(readySnapshot({ teams: { enabled: false } }))('secrets.shared.create')).toBe(true);
     expect(createEnablement(readySnapshot({ teams: { enabled: true } }))('secrets.shared.create')).toBe(true);
 
     // Malformation of the bit this family actually depends on: not a boolean is
@@ -122,7 +169,8 @@ describe('Lane 10 Action feature availability', () => {
         capabilities: {},
       },
     } as unknown as CliServerFeaturesSnapshot;
-    expect(createEnablement(malformed)('secrets.shared.update')).toBe(false);
+    expect(createEnablement(malformed)('secrets.shared.update')).toBe(true);
+    expect(createEnablement(malformed)('teams.create')).toBe(false);
     expect(createEnablement(malformed)('teams.credentials.create')).toBe(false);
   });
 
