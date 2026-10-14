@@ -14,6 +14,7 @@ import {
 import type { SessionSpawnDirectTargetTransport } from './createCliActionDeps';
 import type { createCliActionExecutor as CreateCliActionExecutor } from './createCliActionExecutor';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 type CreateCliActionExecutorOptions = Parameters<typeof CreateCliActionExecutor>[0];
 
@@ -193,7 +194,7 @@ describe('createCliActionExecutorFromCredentials', () => {
     )).resolves.toEqual({ ok: true, result: { childSessionId: 'legacy-terminal-child' } });
 
     expect(createCliActionExecutor).toHaveBeenCalledTimes(1);
-    expect(ensureCliActionPolicySettings).toHaveBeenCalledWith(credentials, configuration.apiServerUrl);
+    expect(ensureCliActionPolicySettings).toHaveBeenCalledWith(credentials, resolveServerHttpBaseUrl());
     expect(events).toEqual(['settings', 'execute']);
   });
 
@@ -580,7 +581,7 @@ describe('createCliActionExecutorFromCredentials', () => {
       token: 'token_rotated',
       credentials: rotatedCredentials,
     }));
-    expect(ensureCliActionPolicySettings).toHaveBeenLastCalledWith(rotatedCredentials, configuration.apiServerUrl);
+    expect(ensureCliActionPolicySettings).toHaveBeenLastCalledWith(rotatedCredentials, resolveServerHttpBaseUrl());
 
     const delegatedExecutionsBeforeLogout = execute.mock.calls.length;
     const policyReadsBeforeLogout = ensureCliActionPolicySettings.mock.calls.length;
