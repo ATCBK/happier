@@ -168,6 +168,8 @@ function AutomationsLatestRunsWidget(props: HubSectionProps) {
             meta={hasRows && read.readAt !== null ? <SurfaceAsOfLabel testID="home-automations.asOf" at={read.readAt} /> : null}
             menu={props.menu}
             body={body}
+            // The Runs it has size the card; the four-row room is held only until the first answer.
+            {...(hasRows ? { rows: rows.length } : {})}
             footer={footer}
         />
     );
