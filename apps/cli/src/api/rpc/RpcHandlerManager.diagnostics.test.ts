@@ -7,8 +7,31 @@ import { encrypt, decrypt, encodeBase64, decodeBase64 } from '@/api/encryption';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger as fileLogger } from '@/ui/logger';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { registerScmHandlers } from '@/rpc/handlers/scm';
 
 describe('RPC completion diagnostics', () => {
+    it('records only generation schema issue paths and codes at the real Machine SCM boundary', async () => {
+        const record = vi.spyOn(fileLogger, 'infoFile').mockImplementation(() => {});
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
+        const executor = createActionExecutor({
+            scmActionExecute: async () => { throw new Error('Invalid input must not cross SCM admission'); },
+        } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+        registerScmHandlers(rpc, '/repo', { machineId: 'machine', actionExecutor: executor });
+        try {
+            const result = await rpc.handleRequest({ method: 'machine:scm.diffSummary.generate', callerAuthority: 'present_user',
+                params: { cwd: '/repo', source: { kind: 'workingTree' }, outputLanguage: 'never-log-language-value',
+                    modelSelector: { modelId: 42 }, 'never-log-unknown-key': 'never-log-value' } });
+            expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+            expect(record).toHaveBeenCalledWith('[RPC] SCM input validation failed', {
+                actionId: 'scm.diffSummary.generate', issues: expect.arrayContaining([
+                    { path: ['modelSelector', 'modelId'], code: 'invalid_type' },
+                    { path: [], code: 'unrecognized_keys' },
+                ]),
+            });
+            expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
+        } finally { record.mockRestore(); }
+    });
     it.each(['permission_request_not_found', 'permission_actor_unattributable', 'permission_response_invalid', 'future_native_refusal_v2'])(
         'retains the typed handler refusal %s for a relay-attributed Session request', async (errorCode) => {
             const logger = vi.fn();
