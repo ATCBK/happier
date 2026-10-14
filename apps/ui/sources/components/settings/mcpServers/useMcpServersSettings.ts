@@ -15,15 +15,16 @@ import { getMcpServerCatalogSnapshot, projectMcpServerCatalogSnapshot, subscribe
     type McpServerCatalogValueSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { McpServerCatalogOperationError } from '@/sync/api/account/apiMcpServerCatalog';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import type { UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { MCP_PREVIEW_SETTINGS } from './mcpSettings';
+import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
 
 const emptyCatalog = emptyMcpServerCatalogV1();
 export type McpCatalogAuthoringActionId = Extract<McpServerActionIdV1,
     'mcp.servers.create' | 'mcp.servers.update' | 'mcp.servers.duplicate' | 'mcp.servers.delete'>;
 type ExecuteMcpCatalogMutation = <A extends McpCatalogAuthoringActionId>(actionId: A,
-    input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>) => Promise<McpServerCatalogRowMutationResponseV1>;
+    input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>, operation?: UiActionOperation) => Promise<McpServerCatalogRowMutationResponseV1>;
 
 /** Read the selected Home's Account, rather than borrowing the focused Account's projection. */
 export function useMcpServerCatalogForServer(targetServerId: string | null | undefined, demanded = true): McpServerCatalogValueSnapshot {
@@ -64,16 +65,16 @@ export function useMcpServersSettings(): Readonly<{
     const strictMode = useSetting('mcpServersStrictMode');
     const writeSetting = useDeclaredSettingsWrite(execution);
     const setStrictMode = React.useCallback((value: boolean) => {
-        void writeSetting(MCP_PREVIEW_SETTINGS.settings.mcpServersStrictMode, value);
+        void writeSetting(SESSION_SETTINGS.settings.mcpServersStrictMode, value);
     }, [writeSetting]);
     React.useEffect(() => scope ? observeMcpServerCatalog(scope) : undefined, [scope]);
     const read = React.useCallback(() => getMcpServerCatalogSnapshot(scope), [scope]);
     const snapshot = React.useSyncExternalStore(subscribeMcpServerCatalogSnapshots, read, read);
     const settings = React.useMemo(() => ({ ...(snapshot.value ?? emptyCatalog), strictMode: strictMode === true }), [snapshot.value, strictMode]);
     const writable = snapshot.status === 'ready' && snapshot.authority === 'active' && !snapshot.stale ? settings : null;
-    const mutate: ExecuteMcpCatalogMutation = React.useCallback(async (actionId, input) => {
+    const mutate: ExecuteMcpCatalogMutation = React.useCallback(async (actionId, input, operation) => {
         if (!scope || !writable || snapshot.revision === 'absent') throw new McpServerCatalogOperationError('authority-not-confirmed');
-        const result = await execution.execute(actionId, input);
+        const result = await execution.execute(actionId, input, operation);
         if (!result.ok) throw new McpServerCatalogOperationError(result.errorCode ?? 'mcp_catalog_operation_failed');
         return MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result);
     }, [execution.execute, scope, writable, snapshot.revision]);
