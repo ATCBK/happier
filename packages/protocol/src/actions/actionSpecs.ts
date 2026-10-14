@@ -420,7 +420,6 @@ import {
   ApprovalRequestV2StatusSchema,
 } from '../approvals/approvalRequestV1.js';
 import {
-  PromptAssetDeleteRequestSchema,
   PromptAssetInstallModeV1Schema,
   PromptAssetScopeV1Schema,
 } from '../prompts/library/promptAssetsV1.js';
@@ -996,6 +995,8 @@ export const ActionSpecSchema = lazyZodSchema(() => z.object({
     summary: z.custom<(input: unknown) => string | null>((value) => typeof value === 'function'),
     /** Private approval review can disclose operands that must stay out of shared Action observations. */
     projectInput: z.custom<(input: unknown) => unknown>((value) => typeof value === 'function').optional(),
+    /** Private history may retain this declared review after replay; live-only custody still wins. */
+    retainInputOnSettlement: z.literal(true).optional(),
   }).strict().optional(),
   /** Host-private output projection for observers; never changes the intentional caller result. */
   projectObservationOutput: z.custom<(value: unknown) => unknown>(
@@ -3028,27 +3029,6 @@ const PromptDocUpdateInputSchema = lazyZodSchema(() => z.object({
   ...PromptLibrarySaveOrganizationFieldsV1,
 }).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }));
 
-const PromptAssetExportInputSchema = lazyZodSchema(() => z.object({
-  artifactId: z.string().min(1),
-  machineId: z.string().min(1),
-  assetTypeId: z.string().min(1),
-  scope: PromptAssetScopeV1Schema,
-  directory: z.string().min(1).optional(),
-  targetPath: z.string().min(1).optional(),
-  targetName: z.string().min(1).optional(),
-  installMode: PromptAssetInstallModeV1Schema.optional(),
-}).passthrough().superRefine((value, ctx) => {
-  const hasDocTarget = typeof value.targetPath === 'string' && value.targetPath.trim().length > 0;
-  const hasBundleTarget = typeof value.targetName === 'string' && value.targetName.trim().length > 0;
-  if (!hasDocTarget && !hasBundleTarget) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'targetPath or targetName is required',
-      path: ['targetPath'],
-    });
-  }
-}));
-
 const PromptRegistryInstallCanonicalInputSchema = lazyZodSchema(() => z.object({
   machineId: z.string().min(1),
   sourceId: z.string().min(1),
@@ -3064,7 +3044,7 @@ const PromptRegistryInstallCanonicalInputSchema = lazyZodSchema(() => z.object({
 
 export const PromptRegistryInstallInputSchema = lazyZodSchema(() => z.preprocess((raw: z.input<typeof PromptRegistryInstallCanonicalInputSchema>) => {
   // Released 0.2 stored inputs carried source declarations; current authority is the Account row.
-  const { configuredSources: _legacyDeclarations, ...input } = readRecord(raw);
+  const { configuredSources: _legacyDeclarations, installTarget: _legacyNativeTarget, ...input } = readRecord(raw);
   return input;
 }, PromptRegistryInstallCanonicalInputSchema));
 
@@ -3622,7 +3602,7 @@ const PLUGIN_DEV_LOOP_ACTION_DESCRIPTIONS: Readonly<Record<PluginDevLoopActionId
   'plugins.doctor': 'Evaluate and diagnose an external plugin-author source.',
   'plugins.pack': 'Validate and package a local plugin into an installable archive.',
   'plugins.reload': 'Load a plugin you are developing again, so your latest changes take effect.',
-  'plugins.list': 'List installed plugins with source and load diagnostics.',
+  'plugins.list': 'List installed plugins plus daemon-owned pending changes with the issued ids needed to rejoin them.',
   'plugins.change.status': 'Read one daemon-issued pending plugin change without creating or deciding it.',
 });
 
@@ -3873,11 +3853,13 @@ function createPluginWebhookActionSpec(actionId: PluginWebhookActionIdV1): PreNo
   const isPluginSurface = isPluginWebhookPluginSurfaceActionIdV1(actionId);
   const readOnly = actionId === 'plugin.webhook.endpoint.read'
     || actionId === 'plugin.webhook.endpoint.checkCorrespondence';
+  const automationDeliveryControl = actionId === 'plugin.webhook.delivery.replay'
+    || actionId === 'plugin.webhook.delivery.discard' || actionId === 'plugin.webhook.delivery.movePending';
   return {
     id: actionId, approval: readOnly || actionId === 'plugin.webhook.endpoint.ensure'
-      || actionId === 'plugin.webhook.delivery.replay' || actionId === 'plugin.webhook.delivery.discard'
+      || automationDeliveryControl
       ? { result: 'required' } : { result: 'none' },
-    ...(actionId === 'plugin.webhook.delivery.replay' || actionId === 'plugin.webhook.delivery.discard'
+    ...(automationDeliveryControl
       ? { requiredAuthority: 'account_automation' as const, approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
     title: PLUGIN_WEBHOOK_ACTION_TITLES[actionId],
     description: 'Manage one Account-owned webhook endpoint through the canonical Webhook ingress owner.',
@@ -3887,10 +3869,11 @@ function createPluginWebhookActionSpec(actionId: PluginWebhookActionIdV1): PreNo
     surfaces: {
       ui: !isPluginSurface,
       voice: false,
-      agent: actionId === 'plugin.webhook.delivery.replay' || actionId === 'plugin.webhook.delivery.discard',
-      mcp: actionId === 'plugin.webhook.delivery.replay' || actionId === 'plugin.webhook.delivery.discard',
+      agent: automationDeliveryControl,
+      mcp: automationDeliveryControl,
       cli: !isPluginSurface,
       rpc: false,
+      ...(actionId === 'plugin.webhook.delivery.movePending' ? { api: false } : {}),
     },
     sideEffectClass: readOnly ? 'read' : 'write',
     outputSchema: PluginWebhookActionOutputSchemasV1[actionId],
@@ -4662,7 +4645,7 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
       : 'write' as const;
   const commandPath = actionId.split('.');
   return {
-    id: actionId, approvalPolicy: { ...(['workflow.trigger.add', 'workflow.trigger.update', 'workflow.trigger.remove'].includes(actionId) ? { mandatoryAgent: true as const } : {}), ...(actionId === 'session.trigger.remove' ? { scopeAdmissionOwnsConfirmation: true as const } : {}) }, approval: WORKFLOW_READ_ACTION_IDS.has(actionId) ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
+    id: actionId, approvalPolicy: { ...(actionId === 'session.trigger.remove' ? { scopeAdmissionOwnsConfirmation: true as const } : {}) }, approval: WORKFLOW_READ_ACTION_IDS.has(actionId) ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
     title: WORKFLOW_ACTION_TITLES[actionId],
     description: WORKFLOW_ACTION_DESCRIPTIONS[actionId]
       ?? `${WORKFLOW_ACTION_TITLES[actionId]} through the canonical workflow Action owner.`,
@@ -6872,7 +6855,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: SessionContinueWithReplayRpcParamsSchema,
   },
   {
-    id: 'session.rollback', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.rollback', approval: {result: 'required',flow: 'deferred'},
     title: 'Rollback conversation',
     description: 'Roll back conversation state in the selected session.',
     safety: 'danger',
@@ -6881,8 +6864,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: true,
       },
@@ -6895,7 +6878,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: SessionRollbackInputSchema,
   },
   {
-    id: 'session.checkpoint_code_rollback', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.checkpoint_code_rollback', approval: {result: 'required',flow: 'deferred'},
     title: 'Rollback code to checkpoint',
     description: 'Apply a checkpoint-backed code rollback for the selected session turn.',
     safety: 'danger',
@@ -6904,8 +6887,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: true,
     },
@@ -7222,7 +7205,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: WorkspaceSyncConflictResolveActionInputV1Schema,
   },
   {
-    id: 'workspace.sync.relationship.create', approval: {result: 'optional',flow: 'deferred'},
+    id: 'workspace.sync.relationship.create', approval: {result: 'required',flow: 'deferred'},
     workspaceWrite: true,
     operation: {
       version: 1,
@@ -7232,13 +7215,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     },
     title: 'Add machine to workspace',
     description: 'Link a selected Workspace to a folder on another machine. Attaching an existing folder preserves its contents; creating from this Workspace replaces them.',
-    safety: 'safe',
+    safety: 'danger',
     placements: [],
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: false,
     },
@@ -8247,7 +8230,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
+      agent: true,
       mcp: true,
       cli: true,
       rpc: true,
@@ -8276,8 +8259,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: true,
       rpc: true,
     },
@@ -8945,7 +8928,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     id: 'session.delete', approval: {result: 'none'},
     title: 'Delete session',
     description: 'Permanently delete a session. Its daemon removes managed folders through the durable deletion lifecycle.',
-    safety: 'danger', sideEffectClass: 'danger', placements: [],
+    safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [],
     bindings: { mcpToolName: 'session_delete' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     serverTransport: { method: 'DELETE', path: '/v1/sessions/:sessionId' },
@@ -10912,9 +10895,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       fields: [
         { path: 'backend.id', title: 'Id', widget: 'text', required: true },
         { path: 'backend.name', title: 'Name', widget: 'text', required: true },
-        { path: 'backend.title', title: 'Title', widget: 'text', required: true },
-        { path: 'backend.launch.command', title: 'Command', widget: 'text', required: true },
-        { path: 'backend.launch.args', title: 'Arguments', widget: 'text_list', listSeparator: 'comma' },
+        { path: 'backend.title', title: 'Agent', widget: 'text', required: true },
+        { path: 'backend.launch', title: 'Launch', widget: 'json', required: true },
       ],
     },
   },
@@ -11119,59 +11101,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     },
   },
   {
-    id: 'prompt_asset.export', approval: {result: 'none'},
-    title: 'Export prompt asset',
-    description: 'Export a prompt doc or skill bundle from the Happier library to a provider-native asset.',
-    safety: 'danger',
-    sideEffectClass: 'write',
-    placements: [],
-    bindings: { mcpToolName: 'prompt_asset_export', voiceClientToolName: 'exportPromptAsset' },
-    surfaces: {
-      ui: true,
-      voice: true,
-      agent: true,
-      mcp: true,
-      cli: true,
-      rpc: false,
-      },
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptAssetExportInputSchema,
-    inputHints: {
-      title: 'Export prompt asset',
-      fields: [
-        { path: 'artifactId', title: 'Artifact id', widget: 'text', required: true },
-        { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'assetTypeId', title: 'Asset type id', widget: 'text', required: true },
-        {
-          path: 'scope',
-          title: 'Scope',
-          widget: 'select',
-          required: true,
-          options: [
-            { value: 'project', label: 'Project' },
-            { value: 'user', label: 'User' },
-          ],
-        },
-        { path: 'directory', title: 'Project directory', widget: 'text' },
-        { path: 'targetPath', title: 'Document path', widget: 'text' },
-        { path: 'targetName', title: 'Skill name', widget: 'text' },
-        {
-          path: 'installMode',
-          title: 'Install mode',
-          widget: 'select',
-          options: [
-            { value: 'copy', label: 'Copy' },
-            { value: 'symlink', label: 'Symlink' },
-          ],
-        },
-      ],
-    },
-  },
-  {
     id: 'prompt_registry.install', approval: {result: 'none'},
     sideEffectClass: 'external',
     title: 'Install prompt registry skill',
-    description: 'Import a skill bundle from a registry and optionally export it to an external skills location.',
+    description: 'Import a skill bundle from a registry into the Happier library.',
     safety: 'danger',
     placements: [],
     surfaces: {
@@ -11190,42 +11123,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
         { path: 'sourceId', title: 'Source id', widget: 'text', required: true },
         { path: 'itemId', title: 'Item id', widget: 'text', required: true },
-        { path: 'installTarget.assetTypeId', title: 'Target asset type', widget: 'text' },
-        {
-          path: 'installTarget.scope',
-          title: 'Target scope',
-          widget: 'select',
-          options: [
-            { value: 'project', label: 'Project' },
-            { value: 'user', label: 'User' },
-          ],
-        },
-        { path: 'installTarget.directory', title: 'Project directory', widget: 'text' },
-        { path: 'installTarget.targetName', title: 'Target skill name', widget: 'text' },
-        {
-          path: 'installTarget.installMode',
-          title: 'Install mode',
-          widget: 'select',
-          options: [
-            { value: 'copy', label: 'Copy' },
-            { value: 'symlink', label: 'Symlink' },
-          ],
-        },
       ],
     },
-  },
-  {
-    id: 'daemon.promptAssets.delete', approval: {result: 'optional',flow: 'deferred'},
-    title: 'Delete prompt asset',
-    description: 'Delete a provider-native prompt asset through the daemon prompt asset adapter registry.',
-    safety: 'danger',
-    placements: [],
-    bindings: { rpcMethod: 'daemon.promptAssets.delete' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
-    sideEffectClass: 'danger',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptAssetDeleteRequestSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
   },
   {
     id: 'daemon.filesystem.readFile', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'required'},
@@ -12606,7 +12505,6 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...ACTION_ID_FAMILIES_V1.execution_run_control,
     'workflow.run.start',
     ...ACTION_ID_FAMILIES_V1.memory.filter(id => !MEMORY_DOCUMENT_ACTION_IDS_V1.some(documentId => documentId === id)),
-    'prompt_asset.export',
     'prompt_registry.install',
     ...ACTION_ID_FAMILIES_V1.daemon_admin,
     ...ACTION_ID_FAMILIES_V1.filesystem,
@@ -13715,9 +13613,7 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'prompts.invocation.resolve': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompts.invocation.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_bundle.update': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
-  'prompt_asset.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_registry.install': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
-  'daemon.promptAssets.delete': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'transcript.import': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'sessions.external.backgroundFollow.set': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'scm.pullRequest.openOrReuse': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
@@ -14029,7 +13925,6 @@ const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = 
   "prompt_doc.favorite.set": "{\"artifactId\":\"example\",\"favorite\":false}",
   "prompts.library.list": "{}",
   "prompt_doc.update": "{\"artifactId\":\"example\",\"title\":\"example\",\"markdown\":\"example\"}",
-  "prompt_asset.export": "{\"artifactId\":\"example\",\"machineId\":\"machine-1\",\"assetTypeId\":\"example\",\"scope\":\"user\",\"targetPath\":\"/workspace/prompt.md\"}",
   "daemon.filesystem.createDirectory": "{\"rootPath\":\"/workspace\",\"path\":\"/workspace\"}",
   "daemon.filesystem.rename": "{\"rootPath\":\"/workspace\",\"from\":\"example\",\"to\":\"example\",\"overwrite\":false}",
   "daemon.filesystem.delete": "{\"rootPath\":\"/workspace\",\"path\":\"/workspace\",\"recursive\":false}",
