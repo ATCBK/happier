@@ -2042,37 +2042,31 @@ async function createPublicAcpConversationFromAwaitableAdapter(
         return;
       }
 
-      if (
-        settledResult.kind === 'effect_may_have_occurred'
-        || settledResult.kind === 'effect_observed_without_prompt_response'
-      ) {
-        const outcome = backend.getLastTurnOutcome();
+      if (settledResult.kind === 'effect_may_have_occurred') {
         publish({
           kind: 'input-custody-unknown',
           inputIds: turn.inputIds,
           issue: diagnostic(
             'acp_input_custody_unknown',
-            settledResult.kind === 'effect_may_have_occurred'
-              ? settledResult.error.message
-              : 'ACP provider effect was observed before the prompt response settled',
-            settledResult.kind === 'effect_may_have_occurred'
-              ? settledResult.error : outcome?.kind === 'failed' ? outcome.error : undefined,
+            settledResult.error.message,
+            settledResult.error,
           ),
         });
-        if (settledResult.kind === 'effect_may_have_occurred') {
-          // Unknown input custody alone supplies no provider-turn evidence.
-          activeTurn = null;
-          bufferedMessages?.dispose();
-          bufferedMessages = null;
-          bufferedMessageFailure = null;
-          if (pendingTransportTermination) {
-            const termination = pendingTransportTermination;
-            pendingTransportTermination = null;
-            observeTransportTermination(termination);
-          }
-          return;
+        // Unknown input custody alone supplies no provider-turn evidence.
+        activeTurn = null;
+        bufferedMessages?.dispose();
+        bufferedMessages = null;
+        bufferedMessageFailure = null;
+        if (pendingTransportTermination) {
+          const termination = pendingTransportTermination;
+          pendingTransportTermination = null;
+          observeTransportTermination(termination);
         }
+        return;
       } else {
+        // Exact prompt-correlated provider effect proves consumption even when
+        // session/prompt has not answered. Retire Pending through the existing
+        // acceptance path before projecting output or a terminal turn failure.
         publish({
           kind: 'input-accepted',
           inputIds: turn.inputIds,
@@ -2085,8 +2079,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
       publish({
         kind: 'turn-start',
         turnId: turn.turnId,
-        // Correlated output witnesses a provider turn, not acceptance of input.
-        startedBy: settledResult.kind === 'effect_observed_without_prompt_response' ? 'provider' : 'host',
+        startedBy: 'host',
         ...(sendRequest.delivery.kind === 'followUp'
           ? { causedByTurnId: sendRequest.delivery.afterTurnId }
           : {}),

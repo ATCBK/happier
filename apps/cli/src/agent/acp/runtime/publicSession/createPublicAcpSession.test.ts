@@ -1279,9 +1279,9 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('projects ACP uncertainty through an Execution Run without creating a Session identity', async () => {
+  it.each(['completed', 'prompt-effect-unobserved'] as const)('projects witnessed ACP consumption through an Execution Run without creating a Session identity (%s)', async scenario => {
     await withTempDir('happier-public-acp-execution-run-', async (dir) => {
-      const fixture = createFixture(dir, 'completed');
+      const fixture = createFixture(dir, scenario);
       const run = await createPublicAcpExecutionRun({
         kind: 'create',
         runId: 'execution-run-1',
@@ -1295,15 +1295,19 @@ describe('createPublicAcpSession', () => {
       try {
         await vi.waitFor(() => {
           expect(
-            events.some((event) => event.kind === 'run-failed'),
+            events.some((event) => event.kind === (scenario === 'completed' ? 'run-complete' : 'run-failed')),
             JSON.stringify(events),
           ).toBe(true);
         });
         expect(events.map((event) => event.kind)).toContain('checkpoint');
-        expect(events).toContainEqual(expect.objectContaining({
-          kind: 'run-failed',
-          diagnostic: expect.objectContaining({ code: 'acp_input_custody_unknown' }),
-        }));
+        if (scenario === 'completed') {
+          expect(events).toContainEqual(expect.objectContaining({ kind: 'output-delta', text: 'hello from ACP' }));
+          expect(events.some(event => event.kind === 'run-failed')).toBe(false);
+        } else {
+          expect(events).toContainEqual(expect.objectContaining({
+            kind: 'run-failed', diagnostic: expect.objectContaining({ code: 'acp_input_custody_unknown' }),
+          }));
+        }
         expect(events.every((event) => event.runId === 'execution-run-1')).toBe(true);
         expect(events.every((event) => !('sessionId' in event))).toBe(true);
       } finally {
@@ -3447,7 +3451,7 @@ describe('createPublicAcpSession', () => {
 
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'turn-complete',
@@ -3458,7 +3462,7 @@ describe('createPublicAcpSession', () => {
             providerSessionId: 'provider-created',
           }),
           expect.objectContaining({
-            kind: 'input-custody-unknown',
+            kind: 'input-accepted',
             inputIds: ['input-1'],
           }),
           expect.objectContaining({
@@ -3469,8 +3473,8 @@ describe('createPublicAcpSession', () => {
         ]));
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'host-session' });
         expect(events.map((event) => invariant.observe(event).status)).toEqual(events.map(() => 'accepted'));
-        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
-        expect(events.filter((event) => event.kind === 'input-accepted')).toHaveLength(0);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'host' }));
+        expect(events.filter((event) => event.kind === 'input-accepted')).toHaveLength(1);
       } finally {
         subscription.dispose();
         await session.dispose();
@@ -3529,7 +3533,7 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('maps a rejected prompt response after provider output to unknown custody and releases buffered output', async () => {
+  it('settles consumed input before publishing a failed turn after provider output', async () => {
     await withTempDir('happier-public-acp-prompt-ambiguous-', async (dir) => {
       const fixture = createFixture(dir, 'prompt-rejected-after-update');
       const session = await createPublicAcpSession({
@@ -3549,7 +3553,7 @@ describe('createPublicAcpSession', () => {
 
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'turn-failed',
@@ -3559,10 +3563,14 @@ describe('createPublicAcpSession', () => {
           turnId: 'turn-prompt-ambiguous',
           text: 'provider output before rejected response',
         }));
-        expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
+        expect(events).toContainEqual(expect.objectContaining({
+          kind: 'input-accepted', inputIds: ['input-prompt-ambiguous'],
+          delivery: { kind: 'newTurn', turnId: 'turn-prompt-ambiguous' },
+        }));
+        expect(events.some((event) => event.kind === 'input-custody-unknown')).toBe(false);
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'host-prompt-ambiguous' });
         expect(events.map((event) => invariant.observe(event).status)).toEqual(events.map(() => 'accepted'));
-        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'host' }));
         const history: ACPMessageData[] = [];
         const project = createRuntimeFailureTranscriptProjector({ provider: 'test-agent', providerName: 'Test Agent', session: {
           sessionId: 'host-prompt-ambiguous', enqueueAgentMessageCommitted: async (provider, body) => {
@@ -3702,8 +3710,9 @@ describe('createPublicAcpSession', () => {
         );
         expect(completedEvents).toEqual(expect.arrayContaining([
           expect.objectContaining({
-            kind: 'input-custody-unknown',
+            kind: 'input-accepted',
             inputIds: ['input-follow-up'],
+            delivery: { kind: 'followUp', turnId: 'turn-follow-up' },
           }),
           expect.objectContaining({
             kind: 'turn-start',
@@ -5002,7 +5011,7 @@ describe('createPublicAcpSession', () => {
         expect(evidenceResults).toEqual([true]);
         expect(events.map((event) => event.kind)).toEqual([
           'provider-session-id',
-          'input-custody-unknown',
+          'input-accepted',
           'turn-start',
           'message-delta',
           'message-delta',
