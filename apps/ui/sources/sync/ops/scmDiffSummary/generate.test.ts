@@ -343,14 +343,16 @@ describe('SCM diff summary operations', () => {
         expect(generate).toHaveBeenCalledTimes(3);
     });
 
-    it('respects disabled generation and opt-in durable-checkpoint-only prefetch', async () => {
+    it('presents the generation owner refusal and uses opt-in durable-checkpoint-only prefetch', async () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
+        generate.mockResolvedValueOnce({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: 'Explain changes is off' });
         const ops = createScmDiffSummaryOperations({ generateSummary: generate });
         // A person's own Start is refused like every other admission, retained as the typed failure the view presents ...
         expect(await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.enabled': false } })).toMatchObject({
             ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
             viewModel: { status: 'failed', error: { reason: 'disabled', nextAction: 'enableExplain' } },
         });
+        expect(generate).toHaveBeenCalledTimes(1);
         // ... while background prefetch with Explain changes off asks for nothing and publishes no failure.
         const quiet = await ops.prefetch({ ...params, key: 'background-key', settings: { 'scm.diffSummary.enabled': false, 'scm.diffSummary.prefetch': true } });
         expect(quiet).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED' });

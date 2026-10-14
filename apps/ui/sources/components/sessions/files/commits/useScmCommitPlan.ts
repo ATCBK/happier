@@ -3,7 +3,6 @@ import type { ScmDiffSummaryResult, ScmDiffSummaryResultEdit } from '@happier-de
 
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
 import { useScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
-import { Modal } from '@/modal';
 import { applySavedScmDiffSummaryResult, deleteSavedScmDiffSummaryResults } from '@/sync/ops/scmDiffSummary/generate';
 import type { ScmCommitPlanOperationResult } from '@/sync/ops/scmDiffSummary/results';
 import { machineScmDiffCommit } from '@/sync/ops/scm/machineScm';
@@ -190,12 +189,10 @@ export function useScmCommitPlan(params: Readonly<{
             ...(!proposal.locked && proposal.landedCount === 0 ? {
                 onDiscard: () => {
                     void (async () => {
-                        const confirmed = await Modal.confirm(t('commitProposal.footer.discard'), t('commitProposal.discardBody'), {
-                            confirmText: t('commitProposal.footer.discard'), destructive: true,
-                        });
-                        if (!confirmed || !current() || !bound.scope) return;
+                        if (!current() || !bound.scope) return;
                         if (onlyCommitPlan) {
                             const deleted = await operations.delete({ cwd, resultId: saved.resultId, expectedRevision: saved.revision });
+                            if (!current()) return;
                             if (deleted.success) deleteSavedScmDiffSummaryResults(bound.scope, [deleted.resultId]);
                             else setError(deleted.error);
                             return;

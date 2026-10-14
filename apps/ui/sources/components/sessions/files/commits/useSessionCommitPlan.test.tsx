@@ -9,6 +9,8 @@ import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/mode
 import { SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { ScmDiffSummaryResultDeleteResponseSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultResponseSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 
 const boundary = vi.hoisted(() => ({
     saved: null as ScmDiffSummaryResult | null,
@@ -16,6 +18,7 @@ const boundary = vi.hoisted(() => ({
     read: null as (() => Promise<unknown>) | null,
     recover: null as (() => Promise<unknown>) | null,
     generate: null as (() => Promise<unknown>) | null,
+    discard: null as ((method: string, payload: unknown) => Promise<unknown>) | null,
     listSaved: true,
     requests: [] as Array<Readonly<{ method: string; machineId?: string; sessionId?: string; payload?: unknown }>>,
 }));
@@ -30,11 +33,14 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: false }).module);
 const OFFERED_MODELS = [{ id: 'commit-plan-fixture-model', name: 'Offered fixture model',
     capabilities: { structuredOutput: 'supported' as const } }];
 const MODEL_OBSERVATION = AgentModelsProbeObservationSchema.parse({ availableModels: OFFERED_MODELS,
     supportsFreeform: false, source: 'dynamic' });
-async function remote(method: string): Promise<unknown> {
+async function remote(method: string, payload?: unknown): Promise<unknown> {
+    if ((method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT || method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE
+        || method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO) && boundary.discard) return boundary.discard(method, payload);
     if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
         'tool.executionRuns': { ok: true, checkedAt: 1,
             data: { backends: { codex: { available: true, intents: ['scm_diff_summary'] } } } },
@@ -63,13 +69,13 @@ async function remote(method: string): Promise<unknown> {
 }
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    const rpc = async (request: { method: string; machineId?: string; payload?: unknown }) => { boundary.requests.push(request); return remote(request.method); };
+    const rpc = async (request: { method: string; machineId?: string; payload?: unknown }) => { boundary.requests.push(request); return remote(request.method, request.payload); };
     // Method-specific external wire fixtures cannot express the transport's arbitrary R.
     return createServerScopedMachineRpcBoundaryMock(rpc as typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope);
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async (importOriginal) => {
     const { createServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    const rpc = async <R,>(request: { method: string; sessionId?: string; payload?: unknown }): Promise<R> => { boundary.requests.push(request); return await remote(request.method) as R; };
+    const rpc = async <R,>(request: { method: string; sessionId?: string; payload?: unknown }): Promise<R> => { boundary.requests.push(request); return await remote(request.method, request.payload) as R; };
     return createServerScopedSessionRpcModuleMock({ importOriginal, overrides: {
         sessionRpcWithServerScope: rpc, sessionRpcWithServerAccountScope: rpc,
     } });
@@ -94,6 +100,7 @@ const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/ha
 const disposeActionLoader = await installRealActionExecutorModuleLoader();
 afterAll(disposeActionLoader);
 const { useSessionCommitPlan } = await import('./useSessionCommitPlan');
+const { Modal } = await import('@/modal');
 const { useScmCommitPlan } = await import('./useScmCommitPlan');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const { ScmCommitsView } = await import('./ScmCommitsView');
@@ -110,7 +117,7 @@ afterEach(async () => {
     vi.useRealTimers();
     getStorage().setState(initialStorage, true);
     boundary.saved = null; boundary.read = null; boundary.recover = null;
-    boundary.generate = null; boundary.listSaved = true;
+    boundary.generate = null; boundary.discard = null; boundary.listSaved = true;
     boundary.requests = [];
     await homes.reset();
 });
@@ -178,7 +185,7 @@ async function mountProposal(sessionId: string, saved = savedResult(1, 'unknown'
     }
     const screen = await renderScreen(<Probe />);
     await vi.waitFor(() => expect(latest.current?.proposal?.application?.status, proposalDiagnostic(latest.current)).toBe(saved.application?.status));
-    return { latest, screen, visibility };
+    return { latest, screen, visibility, home };
 }
 
 async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false) {
@@ -225,6 +232,82 @@ async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderP
     const screen = await renderScreen(<Probe />);
     return { latest, screen, machine, home, target };
 }
+
+describe('proposal discard Action policy', () => {
+    it.each([
+        { outputs: 'only', policy: 'waived' },
+        { outputs: 'only', policy: 'defaultApproved' },
+        { outputs: 'only', policy: 'defaultRejected' },
+        { outputs: 'only', policy: 'required' },
+        { outputs: 'only', policy: 'disabled' },
+        { outputs: 'multiple', policy: 'waived' },
+        { outputs: 'multiple', policy: 'defaultApproved' },
+        { outputs: 'multiple', policy: 'required' },
+        { outputs: 'multiple', policy: 'disabled' },
+    ] as const)('uses the $outputs-output $policy Action policy for discard and retains revisioned Undo', async ({ outputs, policy }) => {
+        const initial = savedResult(1, 'complete');
+        const saved = ScmDiffSummaryResultSchema.parse({ ...initial, application: undefined,
+            output: { ...initial.output,
+                requestedOutputs: outputs === 'only' ? ['commitPlan'] : ['commitPlan', 'summary'],
+                outputs: { ...initial.output.outputs, ...(outputs === 'multiple'
+                    ? { summary: { state: 'complete', value: { summaryMarkdown: 'Keep this explanation' } } } : {}) } } });
+        const removed = ScmDiffSummaryResultSchema.parse({ ...saved, revision: 2, canUndo: true,
+            output: { ...saved.output, revision: 2, requestedOutputs: ['summary'],
+                outputs: { summary: { state: 'complete', value: { summaryMarkdown: 'Keep this explanation' } } } } });
+        const restored = ScmDiffSummaryResultSchema.parse({ ...saved, revision: 3,
+            output: { ...saved.output, revision: 3 } });
+        boundary.discard = async (method, input) => {
+            if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE) {
+                boundary.listSaved = false;
+                return ScmDiffSummaryResultDeleteResponseSchema.parse({ success: true, resultId: saved.resultId });
+            }
+            if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT) {
+                const parsed = ScmDiffSummaryResultEditInputSchema.parse(input);
+                expect(parsed).toEqual({ cwd: '/repo/exact', resultId: saved.resultId, expectedRevision: 1,
+                    edit: { kind: 'removeOutput', output: 'commitPlan' } });
+                boundary.saved = removed;
+                return ScmDiffSummaryResultResponseSchema.parse({ success: true, result: removed });
+            }
+            boundary.saved = restored;
+            return ScmDiffSummaryResultResponseSchema.parse({ success: true, result: restored });
+        };
+        const { latest, screen, home } = await mountProposal(`discard-${policy}-${outputs}`, saved);
+        await vi.waitFor(() => expect(latest.current?.actions.onDiscard, proposalDiagnostic(latest.current)).toEqual(expect.any(Function)));
+        const actionId = outputs === 'only' ? 'scm.diffSummary.result.delete' : 'scm.diffSummary.result.edit';
+        const settings = { ...getStorage().getState().settings,
+            actionsSettingsV1: normalizeActionsSettingsV1(policy === 'waived'
+                ? { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } }
+                : policy === 'disabled' ? { v: 1, actions: { [actionId]: { enabled: false } } }
+                    : { v: 1 }) };
+        if (policy === 'required') await homes.requireUiApproval(home.id, actionId);
+        else homes.answer(home.id, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 2 } });
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(policy === 'defaultApproved');
+        try {
+            await act(async () => { latest.current!.actions.onDiscard!(); });
+            const method = outputs === 'only' ? RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE : RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT;
+            if (policy === 'required' || policy === 'disabled' || policy === 'defaultRejected') {
+                await vi.waitFor(() => expect(latest.current?.error).toEqual(expect.any(String)));
+                expect(boundary.requests.filter(request => request.method === method)).toEqual([]);
+                expect(latest.current?.proposal).not.toBeNull();
+                expect(latest.current?.undoDiscard).toBeNull();
+                if (policy === 'defaultRejected') expect(confirm).toHaveBeenCalledTimes(1);
+                else expect(confirm).not.toHaveBeenCalled();
+                if (policy === 'required') expect(homes.artifacts(home.id).list()).toHaveLength(1);
+                return;
+            }
+            await vi.waitFor(() => expect(boundary.requests.filter(request => request.method === method)).toHaveLength(1));
+            if (outputs === 'only' && policy === 'defaultApproved') expect(confirm).toHaveBeenCalledTimes(1);
+            else expect(confirm).not.toHaveBeenCalled();
+            if (outputs === 'multiple') {
+                await vi.waitFor(() => expect(latest.current?.undoDiscard).not.toBeNull());
+                await act(async () => { await latest.current!.undoDiscard!(); });
+                expect(boundary.requests.find(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO)?.payload)
+                    .toEqual({ cwd: '/repo/exact', resultId: saved.resultId, expectedRevision: 2 });
+                expect(latest.current?.proposal).not.toBeNull();
+            } else await vi.waitFor(() => expect(latest.current?.proposal).toBeNull());
+        } finally { confirm.mockRestore(); await screen.unmount(); }
+    });
+});
 
 describe('exact workspace commit plans', () => {
     it('keeps a previous saved proposal readable without treating its refresh as completion of a new admission', async () => {
