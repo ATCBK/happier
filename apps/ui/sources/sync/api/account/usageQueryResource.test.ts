@@ -917,6 +917,25 @@ describe('usage query captured Resource adapter', () => {
         credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
     const serverBasis = getActiveServerSnapshot();
     expect((await getServerFeaturesSnapshot({ serverId: serverBasis.serverId, force: true })).status).toBe('ready');
+    // A Usage Action can settle before any legacy quota-cache consumer mounts.
+    // Its next read starts with identity/pending progress, not cache hydration.
+    const unhydratedQuery = normalizeUsageQuery({});
+    const unhydratedSettled = await readUiUsageQueryBatch(captured, { queries: [unhydratedQuery] });
+    const unhydratedSlice = unhydratedSettled.results[0]!;
+    const unhydratedPlans = projectUsagePlans(unhydratedSlice.quota ?? [], now, unhydratedSlice.pools, unhydratedSlice.sources);
+    expect(unhydratedPlans.tightest?.window.remainingFraction).toBe(0.6);
+    const unhydratedRevisions: typeof unhydratedSettled[] = [];
+    await readUiUsageQueryBatch(captured, { queries: [unhydratedQuery] }, undefined, unhydratedSettled,
+      { onProgress: batch => { unhydratedRevisions.push(batch); } });
+    expect(unhydratedRevisions.length).toBeGreaterThan(0);
+    for (const revision of unhydratedRevisions) {
+      const slice = revision.results[0]!;
+      const plans = projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources);
+      expect.soft(plans.tightest).toEqual(unhydratedPlans.tightest);
+      expect.soft(plans.accounts[0]?.observedAtMs).toBe(now);
+      expect.soft(usageCoverageSummary(slice, ['quota'])).toBe(usageCoverageSummary(unhydratedSlice, ['quota']));
+      expect.soft(slice.quota?.[0]?.history).toEqual(unhydratedSlice.quota?.[0]?.history);
+    }
     const credentialScope = [captured.accountLifetime.scope.serverId, String(serverBasis.generation), resolveAuthCredentialsScopeKey(captured.credentials)].join('\u0000');
     const readContext = { credentials: captured.credentials, credentialScope, ref,
       serverBasis: { serverId: captured.accountLifetime.scope.serverId, generation: serverBasis.generation },

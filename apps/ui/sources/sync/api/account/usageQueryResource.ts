@@ -95,8 +95,10 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
         // The initial cache observation is a revision of the same Resource too.
         // A vendor reread cannot replace its settled history or qualified state
         // with a current-only projection before the admitted history read answers.
-        if (retained?.current && settled && admitted.supported === true
-            && admitted.usageRecordId === retained.current.recordId && admitted.error === null && !row?.hadError
+        // The Action may settle before this independent cache has hydrated at all.
+        if (retained?.current && settled && admitted.supported !== false
+            && (admitted.usageRecordId === null || admitted.usageRecordId === retained.current.recordId)
+            && admitted.error === null && !row?.hadError
             && (!row?.snapshot || row.snapshot.recordId === retained.current.recordId)) {
             value.push(retained);
             sources.push(settled);
