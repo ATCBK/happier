@@ -90,7 +90,8 @@ export type MachineTerminalRpcHandlerDeps = Readonly<{
   admissionDrain?: DaemonAdmissionDrain;
   resolveLaunch?: (launch: import('@happier-dev/protocol').DaemonTerminalLaunchIntent) => TerminalLaunchProcess;
   projectFiniteRuntime?: (ingress: RpcHandlerContext) => ProjectTerminalRuntime | null | Promise<ProjectTerminalRuntime | null>;
-  ownSessionRuntime?: (ingress: RpcHandlerContext) => MachineTerminalOwnSessionReadRuntime | null | Promise<MachineTerminalOwnSessionReadRuntime | null>;
+  /** Requester Account reads for Session and accepted Project custody. */
+  accountReadRuntime?: (ingress: RpcHandlerContext) => MachineTerminalOwnSessionReadRuntime | null | Promise<MachineTerminalOwnSessionReadRuntime | null>;
   /** The real receiving Action executor owns invocation policy, consent and finite launch. */
   projectScriptExecutor?: (runtime: ProjectFiniteActionRuntime, ingress: RpcHandlerContext) => RpcActionExecutor | Promise<RpcActionExecutor>;
   /**
@@ -216,7 +217,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     : Promise<Readonly<{ ok: true; cwd: string; custody: TerminalPtyCustody }> | ReturnType<typeof err>> => {
     const admission = context.machineAdmission;
     if (!admission || !await admissionCurrent(context)) return err('terminal_forbidden');
-    const runtime = await params.deps?.ownSessionRuntime?.(context);
+    const runtime = await params.deps?.accountReadRuntime?.(context);
     if (!runtime) return err('terminal_unavailable');
     if (runtime.accountId !== admission.actorAccountId) return err('terminal_forbidden');
     if (runtime.machineId !== admission.machineId || params.deps?.serverId !== undefined && runtime.serverId !== params.deps.serverId) return err('terminal_forbidden');
@@ -261,7 +262,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     }
     if (!await admissionCurrent(context)) return err('terminal_forbidden');
     const admission = context.machineAdmission;
-    const runtime = await params.deps?.projectFiniteRuntime?.(context);
+    const runtime = await params.deps?.accountReadRuntime?.(context);
     // The requester Account owner must supply its own ports. Machine Use never
     // authorizes reading the custodian's private accepted-workspace catalog.
     if (!runtime || runtime.accountId !== admission.actorAccountId) return err('terminal_unavailable');
@@ -296,25 +297,37 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     } catch { return err('terminal_forbidden'); }
   };
 
-  const authorizeTerminal = async (terminalId: string, context?: RpcHandlerContext): Promise<boolean> => {
+  const authorizeTerminal = async (terminalId: string, context?: RpcHandlerContext, purpose: 'control' | 'census' = 'control',
+    admittedCensusCustody?: TerminalPtyCustody): Promise<boolean> => {
     const manager = getSessionManager();
     const custody = manager.getCustody(terminalId);
     const terminal = manager.list().find(candidate => candidate.terminalId === terminalId);
     if (!terminal) return !context?.machineAdmission && !params.deps?.requiredSessionId;
     if (params.deps?.requiredSessionId && terminal.sessionId !== params.deps.requiredSessionId) return false;
     if (hasRequiredSessionAuthority(context)) return !context?.machineAdmission || await admissionCurrent(context);
-    if (!context?.machineAdmission) return custody === null;
+    if (!context?.machineAdmission) {
+      if (custody !== null) logger.debug('[terminal] Authorization denied', { reason: 'machine_admission_required' });
+      return custody === null;
+    }
     const admission = context.machineAdmission;
     if (!custody || custody.requesterAccountId !== admission.actorAccountId || custody.machineId !== admission.machineId
       || custody.installationId !== admission.installationId) return false;
     if (custody.kind === 'machine') return custody.serverId === params.deps?.serverId && await admissionCurrent(context);
     if (custody.kind === 'session') {
       if (terminal.sessionId !== custody.sessionId) return false;
+      // The retained owner already proved this Account's Session at birth.
+      // Discovery exposes only that owner's census under current installed
+      // Machine admission; private Session reads/effects keep their authority.
+      if (purpose === 'census') return custody.serverId === params.deps?.serverId && await admissionCurrent(context);
       const current = await resolveOwnSessionCustody(custody.sessionId, custody.rootPath, context);
       return current.ok && current.custody.serverId === custody.serverId;
     }
     if (terminal.sessionId && terminal.sessionId !== params.deps?.requiredSessionId
       && terminal.sessionId !== context.sessionActionOrigin?.caller.sessionId) return false;
+    // A qualified census already admitted this exact Project namespace through
+    // the requester Account owner. Re-reading it per retained PTY repeats the
+    // same remote decision; the list still rechecks admission before disclosure.
+    if (purpose === 'census' && admittedCensusCustody) return sameTerminalCustody(custody, admittedCensusCustody);
     const current = await resolveTerminalCustody({ workspace: {
       serverId: custody.serverId, workspaceId: custody.workspaceRefId, machineId: custody.machineId, rootPath: custody.rootPath,
     } }, context);
@@ -543,7 +556,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     const terminals = [];
     for (const terminal of sessionManager?.list() ?? []) {
       if (qualifiedCustody && !sameTerminalCustody(sessionManager?.getCustody(terminal.terminalId) ?? null, qualifiedCustody)) continue;
-      if (await authorizeTerminal(terminal.terminalId, context)) terminals.push(terminal);
+      if (await authorizeTerminal(terminal.terminalId, context, 'census', qualifiedCustody)) terminals.push(terminal);
     }
     if (context?.machineAdmission && !await admissionCurrent(context)) return err('terminal_forbidden');
     return DaemonTerminalListResponseV1Schema.parse({

@@ -308,6 +308,8 @@ export type BackendRuntimeContext = Readonly<{
     assertFilesystemPathAuthorized?: (targetPath: string) => void;
     /** Trusted host revalidation immediately before a queued filesystem effect; never request input. */
     beforeFilesystemMutation?: () => Promise<void>;
+    /** Original path retained by host Trash; relative orphan back-references are resolved here under the trusted guard. */
+    retainedSourcePath?: string;
     detection: Readonly<{
         isRepo: boolean;
         rootPath: string | null;
@@ -541,7 +543,8 @@ export type WorkspaceIntegrationHandlers = Readonly<{
 
 export type BackendRuntimeHandlers = Readonly<{
     detection?: Readonly<{
-        detectRepo?: (input: Readonly<{ cwd: string }>) => Promise<BackendRuntimeDetection> | BackendRuntimeDetection;
+        /** Retained-worktree inspection may resolve an orphan to its live repository anchor. */
+        detectRepo?: (input: Readonly<{ cwd: string; includeRetainedWorktrees?: boolean }>) => Promise<BackendRuntimeDetection> | BackendRuntimeDetection;
         describeBackend?: (
             input: BackendRuntimeHandlerInput<ScmBackendDescribeRequest>
         ) => Promise<ScmBackendDescribeResponse> | ScmBackendDescribeResponse;
@@ -711,6 +714,12 @@ export type BackendRuntimeServices = Readonly<{
     runCommand(input: BackendCommandRunInput): Promise<BackendCommandRunResult>;
     /** Optional operation: a buffered-only host cannot silently satisfy a streamed read. */
     runCommandStreaming?(input: BackendCommandStreamInput): Promise<BackendCommandRunResult>;
+    /** Host OS boundary: same-volume rename with no replacement, fenced to the reviewed source identity. */
+    renamePathNoReplace?(input: Readonly<{ sourcePath: string; targetPath: string;
+        expectedIdentity: Readonly<{ dev: string; ino: string }>; signal?: AbortSignal }>): Promise<void>;
+    /** Storage's shared deletion boundary; callers retain SCM proof and their trusted pre-effect check. */
+    removeRetainedPath?(input: Readonly<{ path: string; expectedIdentity: Readonly<{ dev: string; ino: string }>;
+        beforeEffect(): Promise<void> }>): Promise<void>;
 }>;
 
 export {

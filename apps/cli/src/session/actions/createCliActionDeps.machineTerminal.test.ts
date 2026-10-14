@@ -123,17 +123,49 @@ describe('CLI machine terminal Action', () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
       sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
+    const signal = controller.signal;
     const page = { ok: true, files: [], hasMore: false, coverage: 'complete' };
     responses.push(page);
     expect(await executor.execute('workspace.files.search', { machineId: 'machine', rootPath: '/project', query: 'needle' },
       { surface: 'cli', serverId: 'home', signal })).toEqual({ ok: true, result: page });
     expect(requests).toEqual([{ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`,
       params: { rootPath: '/project', query: 'needle' } }]);
-    expect(axios.get).toHaveBeenLastCalledWith('https://home.invalid/v1/machines/machine', expect.objectContaining({ signal }));
+    expect(axios.get).toHaveBeenLastCalledWith('https://home.invalid/v1/machines/machine', expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+    // The transport combines caller cancellation with its own lifetime and
+    // retires that operation signal after consuming the successful response.
+    expect(vi.mocked(axios.get).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
     expect(await executor.execute('workspace.files.search', { machineId: 'machine', rootPath: '/project', query: 'needle' },
       { surface: 'cli', serverId: 'other' })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
     expect(requests).toHaveLength(1);
+
+    let observeRequest!: (signal: unknown) => void;
+    const started = new Promise<unknown>(resolve => { observeRequest = resolve; });
+    vi.mocked(axios.get).mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      const requestSignal = options?.signal;
+      observeRequest(requestSignal);
+      if (!(requestSignal instanceof AbortSignal)) {
+        reject(new Error('Machine HTTP read has no cancellation signal'));
+        return;
+      }
+      requestSignal.addEventListener('abort', () => reject(requestSignal.reason), { once: true });
+    }));
+    const pending = executor.execute('workspace.files.search', { machineId: 'machine', rootPath: '/project', query: 'needle' },
+      { surface: 'cli', serverId: 'home', signal });
+    try {
+      const requestSignal = await started;
+      expect(requestSignal).toMatchObject({ aborted: false });
+      controller.abort();
+      expect(requestSignal).toMatchObject({ aborted: true, reason: signal.reason });
+      expect(await pending).toMatchObject({ ok: false });
+      expect(requests).toHaveLength(1);
+    } finally {
+      controller.abort();
+      await pending;
+    }
   });
   it('lists through the authenticated exact-machine transport and rejects unavailable credentials', async () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };

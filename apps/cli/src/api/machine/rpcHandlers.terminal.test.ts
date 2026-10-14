@@ -14,7 +14,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 import { createTerminalPtySessionManager, type TerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyProcess, PtyProvider, PtySpawnParams } from '@/terminal/pty/provider';
@@ -42,6 +42,9 @@ import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { readDaemonTerminalPtyConfig } from '@/terminal/pty/config';
+import { resolveAdmittedRequesterAccountReadRuntime } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { DaemonTerminalListResponseV1Schema } from '@happier-dev/protocol/daemon/terminal';
 
 class FakePty implements PtyProcess {
   readonly pid = 4321;
@@ -123,6 +126,133 @@ class FakeInteractivePtyProvider implements PtyProvider {
 }
 
 describe('registerMachineTerminalRpcHandlers', () => {
+  it('keeps qualified Project census latency independent of retained PTY count through real requester ports', async () => {
+    const h = await finiteHarness();
+    const key = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'terminal-list-root', binding: {
+      accountId: 'owner', custodianAccountId: 'custodian', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation',
+      actionId: 'machines.terminal.list', requestId: 'census', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } });
+    const originalPost = h.post.getMockImplementation()!;
+    let measure = false;
+    let retireOnRows = false;
+    let live = true;
+    const boundaryReads: string[] = [];
+    // HTTP is the only substituted authority/read boundary. The actual Account
+    // and signed HTTP projections, runtime factory, RPC and PTY owners stay real.
+    const latency = async (url: unknown) => {
+      if (!measure) return;
+      boundaryReads.push(new URL(String(url)).pathname);
+      await new Promise<void>(resolve => setTimeout(resolve, 5));
+    };
+    h.get.mockImplementation(async url => {
+      await latency(url);
+      return { status: 200, data: { mode: 'plain', version: 1, updatedAt: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null } };
+    });
+    h.post.mockImplementation(async (...args) => {
+      await latency(args[0]);
+      if (String(args[0]).endsWith('/execution-authorization/verify')) return { status: live ? 200 : 403, data: live ? { ok: true } : {} };
+      const result = await originalPost(...args);
+      if (measure && retireOnRows) live = false;
+      return result;
+    });
+    const http = await projectExternalActionRequesterHttpAuthorization({ authorization: root, serverId: 'home',
+      serverIdentityId: 'stable-home', serverHttpBaseUrl: h.runtime.serverHttpBaseUrl, target: root.binding.target,
+      installationId: 'installation', privateKey: key.secretKey });
+    if (!http) throw new Error('Missing HTTP custody');
+    const authorization = await projectRequesterAccountActionAuthorization({ authorization: http, serverIdentityId: 'stable-home',
+      bootstrap: { credentials: { token: 'requester', encryption: null }, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl,
+        attribution: { serverId: 'home', accountId: 'owner', machineId: 'machine', installationId: 'installation' },
+        isCurrent: async () => live } });
+    if (!authorization) throw new Error('Missing Account custody');
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: rpc, deps: {
+      serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
+      accountReadRuntime: ingress => resolveAdmittedRequesterAccountReadRuntime({ ingress, serverId: 'home', machineId: 'machine',
+        installationId: 'installation', isInstalledCurrent: () => live }),
+    } });
+    const rpcContext = { machineAdmission: { ...h.ingress.machineAdmission!, custodianAccountId: 'custodian' },
+      callerInputAuthorization: authorization, verifyMachineAdmissionCurrent: async () => live };
+    const workspace = { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root };
+    const sample = async () => {
+      boundaryReads.length = 0;
+      measure = true;
+      const started = performance.now();
+      const result = await rpc.invokeLocal(RPC_METHODS.DAEMON_TERMINAL_LIST, { workspace }, { rpcContext });
+      return { result, durationMs: performance.now() - started, reads: [...boundaryReads] };
+    };
+    try {
+      const empty = await sample();
+      expect(DaemonTerminalListResponseV1Schema.parse(empty.result)).toEqual({ ok: true, terminals: [] });
+      measure = false;
+      const custody = { serverId: 'home', requesterAccountId: 'owner', machineId: 'machine', installationId: 'installation',
+        workspaceRefId: 'accepted', projectKey: 'project', rootPath: h.root };
+      const retained = ['first', 'second', 'third'].map(terminalKey => h.sessionManager.ensure({ terminalKey, cwd: h.root, custody }));
+      for (const terminal of retained) expect(terminal.ok).toBe(true);
+      h.sessionManager.ensure({ terminalKey: 'foreign', cwd: h.root, custody: { ...custody, requesterAccountId: 'foreign' } });
+      h.sessionManager.ensure({ terminalKey: 'other-project', cwd: h.root, custody: { ...custody, workspaceRefId: 'other', projectKey: 'other' } });
+      h.sessionManager.ensure({ terminalKey: 'session-attribution', cwd: h.root, sessionId: 'other-session', custody });
+      const populated = await sample();
+      const parsed = DaemonTerminalListResponseV1Schema.parse(populated.result);
+      expect(parsed).toMatchObject({ ok: true, terminals: retained.map(terminal => ({ terminalId: terminal.ok ? terminal.terminalId : '' })) });
+      console.info('terminal census boundary latency', JSON.stringify({ empty: { durationMs: Math.round(empty.durationMs), reads: empty.reads.length },
+        populated: { durationMs: Math.round(populated.durationMs), reads: populated.reads.length },
+        projectReads: populated.reads.filter(path => path.endsWith('/project-rows/list')).length }));
+      // The same accepted namespace is read once; a PTY row adds no new remote
+      // authorization phase. Local custody filtering still rejects neighbors.
+      expect(populated.reads).toEqual(empty.reads);
+      retireOnRows = true;
+      expect(await sample()).toMatchObject({ result: { ok: false, errorCode: 'terminal_forbidden' } });
+    } finally {
+      for (const { pty } of h.provider.spawned) pty.exit(0);
+      registration.dispose();
+      await h.dispose();
+    }
+  });
+  it('discovers only retained own-Session custody from current Machine admission without borrowing private Account reads', async () => {
+    await withTempDir('terminal-retained-census-', async root => {
+      const provider = new FakeInteractivePtyProvider();
+      const sessions = createTerminalPtySessionManager({ ptyProvider: provider,
+        config: readDaemonTerminalPtyConfig({}).sessionManager, env: {}, platform: 'linux' });
+      const rpc = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
+      const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: rpc,
+        deps: { serverId: 'home', env: {}, workingDirectory: root, sessionManager: sessions } });
+      const custody = { kind: 'session' as const, serverId: 'home', requesterAccountId: 'recipient',
+        machineId: 'machine', installationId: 'installation', sessionId: 'own-session', rootPath: root };
+      const own = sessions.ensure({ terminalKey: 'own', cwd: root, sessionId: custody.sessionId, custody });
+      expect(own.ok).toBe(true);
+      if (!own.ok) throw new Error('OS PTY fixture refused');
+      sessions.ensure({ terminalKey: 'foreign-account', cwd: root, sessionId: custody.sessionId,
+        custody: { ...custody, requesterAccountId: 'another-recipient' } });
+      sessions.ensure({ terminalKey: 'foreign-home', cwd: root, sessionId: custody.sessionId,
+        custody: { ...custody, serverId: 'another-home' } });
+      sessions.ensure({ terminalKey: 'foreign-installation', cwd: root, sessionId: custody.sessionId,
+        custody: { ...custody, installationId: 'another-installation' } });
+      let current = true;
+      const rpcContext = { machineAdmission: { actorAccountId: 'recipient', custodianAccountId: 'custodian',
+        machineId: 'machine', installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const },
+        verifyMachineAdmissionCurrent: async () => current };
+      try {
+        expect(await rpc.invokeLocal(RPC_METHODS.DAEMON_TERMINAL_LIST, {}, { rpcContext }))
+          .toMatchObject({ ok: true, terminals: [{ terminalId: own.terminalId, terminalKey: 'own' }] });
+        // Census authority neither exposes a sibling Account's PTY nor grants
+        // private Session output/control authority to a raw Machine caller.
+        expect(await rpc.invokeLocal(RPC_METHODS.DAEMON_TERMINAL_STREAM_READ, { terminalId: own.terminalId, cursor: 0 }, { rpcContext }))
+          .toMatchObject({ ok: false, error: 'terminal_forbidden' });
+        const foreign = await rpc.invokeLocal(RPC_METHODS.DAEMON_TERMINAL_LIST, {}, { rpcContext: { ...rpcContext,
+          machineAdmission: { ...rpcContext.machineAdmission, actorAccountId: 'unrelated-granted-account' } } });
+        expect(foreign).toEqual({ ok: true, terminals: [] });
+        current = false;
+        expect(await rpc.invokeLocal(RPC_METHODS.DAEMON_TERMINAL_LIST, {}, { rpcContext }))
+          .toMatchObject({ ok: false, error: 'terminal_forbidden' });
+      } finally {
+        for (const { pty } of provider.spawned) pty.exit(0);
+        registration.dispose();
+      }
+    });
+  });
   it('admits an exact portable Home for Project shell custody and authoritative empty-list cleanup', async () => {
     const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
     await withTempDir('terminal-portable-home-', async home => {
@@ -136,7 +266,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       const registration = registerMachineTerminalRpcHandlers({
         rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
         deps: { serverId: profileId, env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
-          projectFiniteRuntime: async () => runtime },
+          accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime },
       });
       const workspace = { serverId: homeId, workspaceId: 'accepted', machineId: 'machine', rootPath: h.root };
       const input = { workspace, terminalKey: 'portable-shell' };
@@ -198,7 +328,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       verifyMachineAdmissionCurrent: async () => live };
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
-      deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager, projectFiniteRuntime: async () => runtime } });
+      deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime } });
     const input = { terminalKey: 'bob-shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     let disposeOwnSession: (() => void) | undefined;
     try {
@@ -239,7 +369,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       });
       const sessionHandlers = new Map<string, RpcHandler<unknown, unknown>>();
       const sessionRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { sessionHandlers.set(method, handler); } },
-        deps: { serverId: 'home', env: {}, sessionManager: h.sessionManager, ownSessionRuntime: async () => runtime } });
+        deps: { serverId: 'home', env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime } });
       disposeOwnSession = sessionRegistration.dispose;
       {
         const own = await sessionHandlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!({ terminalKey: 'bob-session-shell', sessionId: 'bob-session' }, reconnect);
@@ -284,7 +414,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const h = await finiteHarness({ setup: true });
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
-      deps: { env: {}, sessionManager: h.sessionManager, projectFiniteRuntime: async () => h.runtime } });
+      deps: { env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
     const input = { terminalKey: 'shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     try {
       await expect(handlers.get(method)!(input, h.ingress)).resolves.toMatchObject({ ok: false, error: 'project_setup_consent_required',
@@ -293,7 +423,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       await writeFile(join(h.root, 'mise.toml'), '[env]\nVALUE = "native"\n');
       const unavailable = { ...h.runtime, nativeIo: { resolveTool: async () => null } };
       const missingRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
-        deps: { env: {}, sessionManager: h.sessionManager, projectFiniteRuntime: async () => unavailable } });
+        deps: { env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => unavailable, projectFiniteRuntime: async () => unavailable } });
       await expect(handlers.get(method)!(input, h.ingress)).resolves.toMatchObject({ ok: false, error: 'native_tool_unavailable' });
       await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ version: 1, devcontainer: {} }));
       // Child namespace inspection reads the published Machine row. A mode-only
@@ -329,7 +459,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       { v: 1, workspaceRefId: 'accepted', ...reviewed.plan.successBasis, completedAtMs: 1 });
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
-      deps: { env: { REMOVE: 'ambient' }, sessionManager: h.sessionManager, projectFiniteRuntime: async () => runtime } });
+      deps: { env: { REMOVE: 'ambient' }, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime } });
     const input = { terminalKey: 'native-shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     try {
       const opened = await handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!(input, h.ingress);
@@ -408,7 +538,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: manager,
-        projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager }) } });
+        accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager }) } });
     try {
       const addresses = refs.map(ref => ({ serverId: 'home', workspaceId: ref.id, machineId: 'machine', rootPath: h.root }));
       const terminalIds: string[] = [];
@@ -448,7 +578,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager, admissionDrain,
-        projectFiniteRuntime: async () => h.runtime } });
+        accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
     const input = { terminalKey: 'attached', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     try {
       const opened = await handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!(input, h.ingress);
@@ -480,7 +610,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: manager, admissionDrain,
-        projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager, isCurrent: async () => credentialCurrent }) } });
+        accountReadRuntime: async () => ({ ...h.runtime, isCurrent: async () => credentialCurrent }), projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager, isCurrent: async () => credentialCurrent }) } });
     try {
       const input = { terminalKey: 'shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
       await expect(handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!(input, h.ingress)).resolves.toMatchObject({ ok: true });
@@ -502,7 +632,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const h = await finiteHarness({ observeInteractiveStop: true });
     let owner = true;
     let replacement = true;
-    h.get.mockImplementation(async url => String(url).endsWith('/v1/machines')
+    h.get.mockImplementation(async url => new URL(String(url)).pathname === '/v1/machines'
       ? { status: 200, data: [{ id: 'machine-old', replacedByMachineId: replacement ? 'machine' : 'unrelated' }, { id: 'machine' }, { id: 'unrelated' }] }
       : String(url).includes('/v2/sessions/') ? { status: 200, data: { session: {
       id: 'session-one', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
@@ -517,7 +647,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
-        ownSessionRuntime: async () => h.runtime } });
+        accountReadRuntime: async () => h.runtime } });
     try {
       const input = { terminalKey: 'shell', sessionId: 'session-one', cwd: h.root };
       const retained = h.sessionManager.ensure(input);
@@ -599,7 +729,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       const handlers = new Map<string, RpcHandler<unknown, unknown>>();
       registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
         deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
-          projectFiniteRuntime: async () => h.runtime } });
+          accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
       const workspace = { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root };
       const ensured = await handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!({ terminalKey: 'shell', workspace }, h.ingress);
       expect(ensured).toMatchObject({ ok: true, reused: false });
@@ -645,7 +775,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
         deps: { env: { HOME: entry.home, USERPROFILE: entry.home }, platform: entry.platform, workingDirectory: entry.home,
           accessPolicy: { kind: 'restrictedRoots', roots: [entry.home] }, sessionManager: h.sessionManager,
-          projectFiniteRuntime: async () => h.runtime } });
+          accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
       try {
         const workspace = { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: entry.requested };
         const acceptedPath = authorizeFilesystemPath({ targetPath: entry.accepted, defaultDirectory: entry.home,
@@ -719,7 +849,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       verifyMachineAdmissionCurrent: async () => current };
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
-      deps: { env: {}, workingDirectory: root, sessionManager, admissionDrain, projectFiniteRuntime: async () => runtime,
+      deps: { env: {}, workingDirectory: root, sessionManager, admissionDrain, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime,
         projectScriptExecutor: (boundRuntime, context) => createCliActionExecutorHarness({ token: runtime.credentials.token, credentials: runtime.credentials,
           isCredentialCurrent: async () => current,
           sessionId: 'cli-global', serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl,
