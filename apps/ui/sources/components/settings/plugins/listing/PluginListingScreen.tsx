@@ -72,13 +72,13 @@ export const PluginListingScreen = React.memo(function PluginListingScreen(props
 }>) {
     const isFocused = useIsFocused();
     const state = usePluginSettingsScreenState({ focused: isFocused });
-    const targetKey = JSON.stringify([state.executionServerId, state.executionServerIdentityId]);
-    // The request this page last made; until it exists for the current target, the page is loading.
+    // Discovery belongs to the admitted Account, independently of the install Machine.
+    // Reissue a cold page's demand when its credential-backed registry scope admits.
     const [requestedKey, setRequestedKey] = React.useState<string | null>(null);
-    const requestKey = `${targetKey}|${props.sourceId}|${props.pluginId}`;
+    const requestKey = JSON.stringify([state.marketplaceSourceRegistryScopeKey, props.sourceId, props.pluginId]);
     const { openDiscoverListing } = state;
     // Declared after the state owner's own effects, so this request is made after the owner has
-    // settled the machine scope for this mount; made earlier, the scope reset would drop it.
+    // settled the Account scope for this mount; made earlier, the scope reset would drop it.
     React.useEffect(() => {
         if (requestedKey === requestKey) return;
         setRequestedKey(requestKey);

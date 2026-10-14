@@ -35,7 +35,7 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
         return execute(id, input, context);
     };
     const dispatchAtTarget = async (id: Parameters<ActionExecute>[0], input: unknown,
-        target: ScopedPluginSettingsTarget, lifetime: ActiveServerAccountScopeLifetime, signal?: AbortSignal, isCurrent?: () => boolean) => {
+        target: ScopedPluginSettingsTarget, lifetime: ActiveServerAccountScopeLifetime, signal?: AbortSignal, isCurrent?: () => boolean): Promise<Awaited<ReturnType<ActionExecute>>> => {
         const unavailable = { ok: false as const, errorCode: 'plugin_settings_target_not_current', error: 'plugin_settings_target_not_current' };
         if (!lifetime?.isCurrent() || signal?.aborted) return unavailable;
         const controller = new AbortController();
@@ -112,23 +112,24 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
             if (!isSecret && field?.redacted) return { status: 'unavailable', reason: 'scope-mismatch' };
             const bindingServerIdentityId = field?.binding?.kind === 'perActiveServer'
                 ? input.bindingServerIdentityId !== undefined ? input.bindingServerIdentityId : params.perActiveServerIdentityId ?? null : undefined;
-            let mutation = input.mutation;
-            if (field?.binding?.kind === 'perActiveServer' && typeof bindingServerIdentityId === 'string' && mutation.kind === 'set') {
-                const values = mutation.value;
-                mutation = typeof values === 'object' && values !== null && !Array.isArray(values)
-                    && Object.prototype.hasOwnProperty.call(values, bindingServerIdentityId)
-                    ? { kind: 'set', value: values[bindingServerIdentityId] } : { kind: 'delete' };
-            }
+            const values = input.mutation.kind === 'set' ? input.mutation.value : undefined;
+            const projectsServerValue = field?.binding?.kind === 'perActiveServer'
+                && typeof bindingServerIdentityId === 'string' && input.mutation.kind === 'set';
+            const hasServerValue = projectsServerValue && typeof values === 'object' && values !== null && !Array.isArray(values)
+                && Object.prototype.hasOwnProperty.call(values, bindingServerIdentityId);
+            const isSet = input.mutation.kind === 'set' && (!projectsServerValue || hasServerValue);
+            const actionValue = hasServerValue && typeof bindingServerIdentityId === 'string'
+                ? (values as Readonly<Record<string, unknown>>)[bindingServerIdentityId] : values;
             const actionId = isSecret
                 ? input.mutation.kind === 'bind' ? 'plugins.settings.secret.bind' as const
                     : input.mutation.kind === 'unbind' ? 'plugins.settings.secret.unbind' as const
                         : 'plugins.settings.secret.delete' as const
-                : mutation.kind === 'set' ? 'plugins.settings.set' as const : 'plugins.settings.reset' as const;
+                : isSet ? 'plugins.settings.set' as const : 'plugins.settings.reset' as const;
             const result = await dispatchAtTarget(actionId, { pluginId: input.pluginId,
                 ...(!isSecret ? { scope: input.scope, target: portableTarget(input.target) } : {}), localId: field?.key ?? input.fieldId,
                 expectedRevision: formatPluginSettingsAdministrationRevision(input.expectedRevision),
                 ...(bindingServerIdentityId !== undefined ? { bindingServerIdentityId } : {}),
-                ...(mutation.kind === 'set' ? { value: mutation.value } : {}),
+                ...(isSet ? { value: actionValue } : {}),
                 ...(input.mutation.kind === 'bind' ? { savedSecretId: input.mutation.savedSecretId } : {}),
             }, input.target, lifetime, undefined, input.isCurrent);
             if (!result.ok) return recordFailure(result.errorCode, result.details, input, lifetime);
@@ -148,7 +149,7 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
         },
         ...(params.adapter.daemonSecret ? { daemonSecret: {
             read: params.adapter.daemonSecret.read,
-            async write(input) {
+            async write(input: ScopedPluginDaemonSecretWriteInput) {
                 if (input.mutation.kind === 'set') return params.adapter.daemonSecret!.write(input);
                 const lifetime = typeof params.accountLifetime === 'function' ? params.accountLifetime() : params.accountLifetime;
                 if (!lifetime?.isCurrent()) return { status: 'unavailable' as const, reason: 'transport' as const };

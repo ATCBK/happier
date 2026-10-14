@@ -105,10 +105,27 @@ export type PluginArtifactByteRequest = Readonly<{
 /** A source's complete file set for one digest, keyed by relative path. */
 export type PluginArtifactFileSet = ReadonlyMap<string, Uint8Array>;
 
+/** Safe byte-source refusals; private transport messages never leave the adapter. */
+export type PluginArtifactSourceFailureCode =
+    | 'artifact_bytes_rpc_unavailable'
+    | 'artifact_bytes_response_invalid'
+    | 'artifact_bytes_fetch_failed'
+    | 'plugin_host_access_disclosure_mismatch'
+    | 'transport_unavailable'
+    | 'response_invalid';
+
+export class PluginArtifactSourceError extends Error {
+    constructor(readonly code: PluginArtifactSourceFailureCode) {
+        super(code);
+        this.name = 'PluginArtifactSourceError';
+    }
+}
+
 /**
  * The one byte-source interface. Every source (app preseed, device cache,
  * daemon, Account hosting) returns the complete file set for the requested
- * digest or `null` for a miss/failure. Integrity is verified once by the
+ * digest or `null` for a miss. Safe failures may throw PluginArtifactSourceError.
+ * Integrity is verified once by the
  * lease; a source has no admission, selection, or currentness authority.
  */
 export type PluginArtifactSourceCandidate = Readonly<{
@@ -155,7 +172,8 @@ export type PluginSelectedArtifactLeaseAcquireResult =
             | 'artifact_source_ambiguous'
             | 'artifact_source_integrity_invalid'
             | 'artifact_source_unavailable'
-            | 'artifact_lease_revoked';
+            | 'artifact_lease_revoked'
+            | PluginArtifactSourceFailureCode;
     }>;
 
 const SOURCE_ORDER = Object.freeze([
@@ -263,7 +281,7 @@ export type PluginArtifactVerifiedSourceResult =
         files: readonly PluginArtifactVerifiedSourceFile[];
     }>
     | Readonly<{ kind: 'notCurrent' }>
-    | Readonly<{ kind: 'unavailable'; integrityFailed: boolean }>;
+    | Readonly<{ kind: 'unavailable'; integrityFailed: boolean; code?: PluginArtifactSourceFailureCode }>;
 
 type InFlightArtifactMaterializationParticipant = Readonly<{
     artifact: PluginSelectedArtifactIdentity;
@@ -623,6 +641,7 @@ export async function materializeVerifiedPluginArtifactSource(input: Readonly<{
 }>): Promise<PluginArtifactVerifiedSourceResult> {
     const isCurrent = () => !input.signal?.aborted && input.isCurrent();
     let sawIntegrityFailure = false;
+    let failureCode: PluginArtifactSourceFailureCode | undefined;
     for (const source of input.sources) {
         if (!isCurrent()) return Object.freeze({ kind: 'notCurrent' });
         let fetched: PluginArtifactFileSet | null;
@@ -634,7 +653,8 @@ export async function materializeVerifiedPluginArtifactSource(input: Readonly<{
                     ? { accountHostedArtifactId: input.accountHostedArtifactId }
                     : {}),
             }), input.signal);
-        } catch {
+        } catch (error) {
+            if (error instanceof PluginArtifactSourceError) failureCode ??= error.code;
             fetched = null;
         }
         if (!isCurrent()) return Object.freeze({ kind: 'notCurrent' });
@@ -681,7 +701,11 @@ export async function materializeVerifiedPluginArtifactSource(input: Readonly<{
             files: Object.freeze(materialized),
         });
     }
-    return Object.freeze({ kind: 'unavailable', integrityFailed: sawIntegrityFailure });
+    return Object.freeze({
+        kind: 'unavailable',
+        integrityFailed: sawIntegrityFailure,
+        ...(failureCode ? { code: failureCode } : {}),
+    });
 }
 
 /** A retired reader must settle even when a byte transport ignores cancellation. */
@@ -718,6 +742,7 @@ async function materializeInFlightVerifiedPluginArtifactSource(input: Readonly<{
         Set<PluginArtifactSourceCandidate>
     >();
     let sawIntegrityFailure = false;
+    let failureCode: PluginArtifactSourceFailureCode | undefined;
 
     while (true) {
         let next: Readonly<{
@@ -742,7 +767,11 @@ async function materializeInFlightVerifiedPluginArtifactSource(input: Readonly<{
         }
         if (!anyCurrent) return Object.freeze({ kind: 'notCurrent' });
         if (!next) {
-            return Object.freeze({ kind: 'unavailable', integrityFailed: sawIntegrityFailure });
+            return Object.freeze({
+                kind: 'unavailable',
+                integrityFailed: sawIntegrityFailure,
+                ...(failureCode ? { code: failureCode } : {}),
+            });
         }
 
         let attempted = attemptedByParticipant.get(next.participant);
@@ -762,8 +791,9 @@ async function materializeInFlightVerifiedPluginArtifactSource(input: Readonly<{
                 : {}),
         });
         if (materialized.kind === 'available') return materialized;
-        if (materialized.kind === 'unavailable' && materialized.integrityFailed) {
-            sawIntegrityFailure = true;
+        if (materialized.kind === 'unavailable') {
+            sawIntegrityFailure ||= materialized.integrityFailed;
+            failureCode ??= materialized.code;
         }
     }
 }
@@ -990,7 +1020,7 @@ export async function acquirePluginSelectedArtifactLease(input: Readonly<{
             kind: 'unavailable',
             code: materializedSource.integrityFailed
                 ? 'artifact_source_integrity_invalid'
-                : 'artifact_source_unavailable',
+                : materializedSource.code ?? 'artifact_source_unavailable',
         });
     }
     const files = new Map(materializedSource.files.map(

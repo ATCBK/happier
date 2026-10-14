@@ -75,7 +75,7 @@ describe('getPluginUiClientExecutableTargetAddressKey', () => {
         scope.commit();
         expect(index.read({ family: 'actions', pluginId, localId: 'open-preview', target,
             executionOrigin: sourceOrigin, occurrenceId })?.executionOrigin).toEqual(sourceOrigin);
-        const { serverIdentityId: _server, materializationRef: _materialization, ...sourceAction } = withCurrentAuthorization(projectedClientAction());
+        const sourceAction = { ...withCurrentAuthorization(projectedClientAction()), executionOrigin: sourceOrigin };
         const stampedAction = { ...sourceAction, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: {
             machineId: authority.machineId, serverId: authority.serverId, generation: projectionGeneration,
             phase: 'current', interactionEnabled: true, executionOrigin: sourceOrigin,
@@ -187,8 +187,7 @@ function projectedClientAction(): PluginProjectedActionV2 {
             },
             platforms: [target.platform],
         },
-        serverIdentityId: executionOrigin.serverIdentityId,
-        materializationRef: executionOrigin.materializationRef,
+        executionOrigin,
         placementBindings: ['detailsPanel'],
         priority: 0,
         dangerLevel: 'safe',
@@ -316,8 +315,8 @@ describe('generic client executable contribution registration', () => {
             dragSources: [{ id: 'issue', title: 'Issue', referenceSchema: { type: 'string' }, client: { artifactId: target.artifactId, exportName: target.exportName }, platforms: ['web'] }],
             dropTargets: [{ id: 'review', title: 'Review', acceptedKinds: ['session'], actions: [{ kind: 'host', actionId: 'session.open' }], client: { artifactId: target.artifactId, exportName: target.exportName }, platforms: ['web'] }],
         });
-        const source = { id: `${pluginId}/issue`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: contributes.dragSources[0]!, ...executionOrigin };
-        const dropTarget = { id: `${pluginId}/review`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: contributes.dropTargets[0]!, ...executionOrigin };
+        const source = { id: `${pluginId}/issue`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: contributes.dragSources[0]!, executionOrigin };
+        const dropTarget = { id: `${pluginId}/review`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: contributes.dropTargets[0]!, executionOrigin };
         const scope = index.createScope({ pluginId, contributes, target, executionOrigin, occurrenceId, pluginVersion: '1.0.0', lifecycle: createLifecycle() });
         scope.api.dragSources.register('issue', { describe: reference => ({ title: String(reference) }) });
         scope.api.dropTargets.register('review', { resolve: () => ({ status: 'refused', reason: { code: 'unavailable', message: 'Unavailable' } }) });

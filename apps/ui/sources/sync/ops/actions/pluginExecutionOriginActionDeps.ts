@@ -48,10 +48,9 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
             if (!command) return { status: 'unavailable' };
             if (actionId === 'plugins.execution_origin.list') return command.read();
             context.signal?.throwIfAborted();
-            const mutation = actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input)
-                : inputs['plugins.execution_origin.clear'].parse(input);
+            const origin = actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input).origin : null;
             return resolve(parsed.contextualTarget.commandId) === command
-                ? command.apply('origin' in mutation ? mutation.origin : null) : { status: 'unavailable' };
+                ? command.apply(origin) : { status: 'unavailable' };
         }
         const readFacts = () => {
             const reader = readPluginAccountAvailability(scope);
@@ -74,7 +73,7 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
             : inputs['plugins.execution_origin.clear'].parse(input);
         if (mutation.expectedSettingsVersion === undefined) return { status: 'unavailable' };
         const result = await persistPluginMachineExecutionOriginSelection({ pluginId: mutation.pluginId,
-            origin: 'origin' in mutation ? mutation.origin : null,
+            origin: actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input).origin : null,
             expectedSettingsScope: scope, expectedSettingsVersion: mutation.expectedSettingsVersion,
             isInvocationCurrent: () => { context.signal?.throwIfAborted(); return current(); },
             isOriginCurrent: origin => current() && resolveFreshPluginMachineExecutionOrigin({ ...readFacts(), origin }) !== null });

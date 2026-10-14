@@ -1,5 +1,5 @@
 import { projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import type { PluginSettingsContributionV2 } from '@happier-dev/protocol/plugins/contributions/publicTypes';
+import type { PluginSettingsContributionV2 } from '@happier-dev/protocol/plugins/contributions/settings';
 import { qualifyPluginContributionReferenceV1, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import {

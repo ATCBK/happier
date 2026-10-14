@@ -13,7 +13,7 @@ import {
     normalizePluginReleaseFactsV1,
     PluginPortableReleaseManifestV1Schema,
 } from '@happier-dev/protocol/plugins/availability';
-import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiArtifactsManifestEntryV2Schema, type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol';
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
@@ -24,6 +24,8 @@ import {
     areServerAccountScopesEqual,
     type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
+import type { BundledPluginUiAppArtifactInventory, PluginHostBundledUiDeclaration } from './bundledPluginUiArtifactInventory';
+export type { PluginHostBundledUiDeclaration } from './bundledPluginUiArtifactInventory';
 
 export type PluginAccountAvailabilitySnapshot = Readonly<{
     /** The canonical AccountChange ordering fact for this complete projection. */
@@ -47,6 +49,22 @@ export type PluginAccountAvailabilitySnapshot = Readonly<{
     /** Exact immutable installed release facts, not enabled selection intent. */
     releases?: readonly PluginReleaseFactsV1[];
 }>;
+
+/** The host's validated first-party declaration custody, never a machine occurrence. */
+export function readHostBundledPluginUiDeclarations(inventory: BundledPluginUiAppArtifactInventory): readonly PluginHostBundledUiDeclaration[] {
+    const byPluginId = new Map<string, PluginHostBundledUiDeclaration>();
+    for (const row of inventory) {
+        const declaration = row.uiDeclaration;
+        if (byPluginId.has(row.pluginId)) continue;
+        const parsed = PluginDeclaredUiEntriesV1Schema.safeParse(declaration?.entriesById);
+        if (!parsed.success || declaration?.pluginId !== row.pluginId || declaration.pluginVersion !== row.releaseVersion
+            || typeof declaration.packageName !== 'string' || declaration.packageName.trim().length === 0
+            || !row.artifactGraph || row.artifactGraph.digest !== row.digest
+            || row.artifactGraph.artifactId !== row.artifactId || row.artifactGraph.tier !== row.tier) continue;
+        byPluginId.set(row.pluginId, Object.freeze({ ...declaration, entriesById: parsed.data }));
+    }
+    return Object.freeze([...byPluginId.values()]);
+}
 
 export type PluginAccountInstalledPluginInstallation = Readonly<{
     materialization: PluginMachineMaterializationV1;
@@ -375,6 +393,8 @@ export type PluginAccountAvailabilityHostedArtifactAdministrationAdmission =
     }>;
 
 export type PluginAccountAvailabilityReader = Readonly<{
+    /** Account-only host declarations do not carry a machine execution occurrence. */
+    readAccountUiProjection: () => PluginUiProjectionModel | null;
     /**
      * Current expected Artifact identity only. This is intentionally not a
      * byte-source selector: URLs, cache state, source priority, and transport
@@ -503,6 +523,7 @@ export type PluginAccountAvailabilityStoredProjection = Readonly<{
      * readable and current (AVD-07); this is refresh status only.
      */
     stalePluginIds: readonly string[];
+    retiredPluginIds?: readonly string[];
 }>;
 
 type AvailabilityProjectionState = PluginAccountAvailabilityStoredProjection;
@@ -962,9 +983,25 @@ function readCurrentArtifactAdmission(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
     slot: PluginAccountAvailabilityArtifactSlot,
+    hostBundledUi: readonly PluginHostBundledUiDeclaration[] = [],
 ): PluginAccountAvailabilityArtifactAdmission {
     const current = readCurrentReleaseAdmission(state, scope, slot.pluginId);
     if (current.kind !== 'available') {
+        const bundled = readCurrentHostBundle(state, scope, hostBundledUi, slot.pluginId);
+        if (bundled) {
+            const artifacts = Object.values(bundled.entriesById).flatMap(entry => {
+                const graph = PluginUiArtifactsManifestEntryV2Schema.safeParse(entry.artifactGraph);
+                return entry.contributionId === slot.contributionId && graph.success && graph.data.tier === slot.tier
+                    ? [graph.data] : [];
+            });
+            if (artifacts.length > 1) return Object.freeze({ kind: 'unavailable', code: 'artifact_slot_ambiguous' });
+            if (artifacts.length === 1) {
+                const artifact = artifacts[0]!;
+                return Object.freeze({ kind: 'available', availabilityCursor: state!.snapshot.availabilityCursor,
+                    artifact: Object.freeze({ ...slot, artifactId: artifact.artifactId, digest: artifact.digest,
+                        hostUiApiRange: artifact.hostUiApiRange, releaseVersion: bundled.pluginVersion }) });
+            }
+        }
         return current;
     }
     if (!current.intent.enabled) {
@@ -997,6 +1034,21 @@ function readCurrentArtifactAdmission(
         availabilityCursor: current.availabilityCursor,
         artifact: cloneArtifact(artifact),
     });
+}
+
+function readCurrentHostBundle(
+    state: AvailabilityProjectionState | null,
+    scope: ServerAccountScope,
+    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
+    pluginId: string,
+): PluginHostBundledUiDeclaration | null {
+    const snapshot = state ? readProjectionForScope(state, scope) : null;
+    if (!snapshot || state?.retiredPluginIds?.includes(pluginId)) return null;
+    const intents = snapshot.intentReads.filter(entry => entry.pluginId === pluginId);
+    if (intents.length > 1 || intents.some(entry => entry.response.intent
+        && (!entry.response.intent.enabled || entry.response.intent.desiredVersion !== null))) return null;
+    const bundles = hostBundledUi.filter(candidate => candidate.pluginId === pluginId);
+    return bundles.length === 1 ? bundles[0]! : null;
 }
 
 /**
@@ -1179,12 +1231,8 @@ function readCurrentCollectionContractAdmission(
     if (ref.pluginId !== input.pluginId || ref.collectionId !== input.collectionId) {
         return Object.freeze({ kind: 'unavailable', code: 'collection_not_current' });
     }
-    if (
-        ref.schemaVersion === candidates[0]!.schemaVersion
-        && ref.contractDigest !== candidates[0]!.contractDigest
-    ) {
-        return Object.freeze({ kind: 'unavailable', code: 'collection_not_current' });
-    }
+    // Data resolves compatibility and read/write access for this exact ref.
+    // Availability never substitutes the current writer's digest for a caller.
     return Object.freeze({
         kind: 'available',
         availabilityCursor: current.availabilityCursor,
@@ -1273,6 +1321,7 @@ function createBoundReader(input: Readonly<{
     scope: ServerAccountScope;
     readState: () => AvailabilityProjectionState | null;
     subscribe: (listener: () => void) => () => void;
+    hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
 }>): PluginAccountAvailabilityReader {
     // Both projections are derived from the owner-snapshotted immutable state.
     // Fresh imperative admission still reads that state on every access; only
@@ -1281,20 +1330,41 @@ function createBoundReader(input: Readonly<{
     let derivedState: AvailabilityProjectionState | null | undefined;
     let materializations: PluginMachineMaterializationAdmission | undefined;
     let installed: ReturnType<typeof readInstalledPluginsAdmission> | undefined;
+    let accountUi: PluginUiProjectionModel | null | undefined;
     const readDerivedState = () => {
         const state = input.readState();
         if (state !== derivedState) {
             derivedState = state;
             materializations = undefined;
             installed = undefined;
+            accountUi = undefined;
         }
         return state;
     };
     return Object.freeze({
+        readAccountUiProjection: () => {
+            const state = readDerivedState();
+            if (accountUi !== undefined) return accountUi;
+            const bundles = (input.hostBundledUi ?? []).filter(bundle =>
+                readCurrentHostBundle(state, input.scope, input.hostBundledUi ?? [], bundle.pluginId));
+            const entries = Object.assign({}, ...bundles.map(bundle => bundle.entriesById));
+            const projection = normalizePluginInstalledUiDeclarations(entries);
+            return accountUi = Object.keys(entries).length > 0 ? Object.freeze({ ...projection,
+                surfacePlacementsById: Object.freeze(Object.fromEntries(Object.entries(projection.surfacePlacementsById)
+                    .map(([key, entry]) => [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]) })]))),
+                settingsPagesById: Object.freeze(Object.fromEntries(Object.entries(projection.settingsPagesById)
+                    .map(([key, entry]) => [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]) })]))),
+                installedPackagesById: Object.freeze(Object.fromEntries(bundles.map(bundle => [bundle.pluginId, {
+                    id: bundle.pluginId, displayName: bundle.displayName,
+                    version: bundle.pluginVersion, enabled: true, source: { kind: 'bundled' as const, locator: bundle.packageName },
+                }]))),
+            }) : null;
+        },
         readCurrentArtifact: (slot) => readCurrentArtifactAdmission(
             input.readState(),
             input.scope,
             slot,
+            input.hostBundledUi,
         ),
         readCurrentHostedPublicationTarget: (slot) => readCurrentHostedPublicationAdmission(
             input.readState(),
@@ -1366,6 +1436,7 @@ function createBoundReader(input: Readonly<{
 export function createPluginAccountAvailabilityReader(input: Readonly<{
     scope: ServerAccountScope;
     snapshot: PluginAccountAvailabilitySnapshot;
+    hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
 }>): PluginAccountAvailabilityReader {
     const state: AvailabilityProjectionState = Object.freeze({
         scope: Object.freeze({ ...input.scope }),
@@ -1376,6 +1447,7 @@ export function createPluginAccountAvailabilityReader(input: Readonly<{
         scope: state.scope,
         readState: () => state,
         subscribe: () => () => {},
+        hostBundledUi: input.hostBundledUi,
     });
 }
 
@@ -1383,7 +1455,9 @@ export function createPluginAccountAvailabilityReader(input: Readonly<{
  * The live Account projection owner. Account-change consumers replace one
  * complete materialization snapshot; no renderer-specific selector is kept.
  */
-export function createPluginAccountAvailabilityReaderStore(): PluginAccountAvailabilityReaderStore {
+export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
+    hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
+}> = {}): PluginAccountAvailabilityReaderStore {
     let state: AvailabilityProjectionState | null = null;
     const listeners = new Set<() => void>();
     const notify = () => {
@@ -1426,6 +1500,7 @@ export function createPluginAccountAvailabilityReaderStore(): PluginAccountAvail
             }
             state = Object.freeze({
                 scope: Object.freeze({ ...input.scope }),
+                retiredPluginIds: canMerge ? previous.retiredPluginIds?.filter(pluginId => !replacedPluginIds.has(pluginId)) : [],
                 stalePluginIds: Object.freeze([...stalePluginIds].sort((left, right) => left.localeCompare(right))),
                 snapshot: snapshotPluginAccountAvailabilitySnapshot({
                     ...incoming,
@@ -1453,11 +1528,11 @@ export function createPluginAccountAvailabilityReaderStore(): PluginAccountAvail
             if (!state || pluginIds.length === 0) return;
             const retired = new Set(pluginIds);
             const intentReads = state.snapshot.intentReads.filter((entry) => !retired.has(entry.pluginId));
-            if (intentReads.length === state.snapshot.intentReads.length) return;
             state = Object.freeze({
                 scope: state.scope,
                 snapshot: Object.freeze({ ...state.snapshot, intentReads: Object.freeze(intentReads) }),
                 stalePluginIds: Object.freeze(state.stalePluginIds.filter((pluginId) => !retired.has(pluginId))),
+                retiredPluginIds: Object.freeze([...new Set([...(state.retiredPluginIds ?? []), ...pluginIds])]),
             });
             notify();
         },
@@ -1467,6 +1542,7 @@ export function createPluginAccountAvailabilityReaderStore(): PluginAccountAvail
             scope: Object.freeze({ ...scope }),
             readState: () => state,
             subscribe,
+            hostBundledUi: input.hostBundledUi,
         }),
     });
 }

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } from './generatedBundledPluginUiArtifacts';
 
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability';
 
@@ -20,13 +21,16 @@ import {
 
 import {
     createPluginAccountAvailabilityReaderStore,
+    readHostBundledPluginUiDeclarations,
     projectPluginAccountAvailabilityMaterializationIdentity,
     type PluginAccountAvailabilityReader,
     type PluginAccountAvailabilityReleaseClassificationV1,
     type PluginAccountAvailabilitySnapshot,
 } from './reader';
 
-const readerStore = createPluginAccountAvailabilityReaderStore();
+const readerStore = createPluginAccountAvailabilityReaderStore({
+    hostBundledUi: readHostBundledPluginUiDeclarations(BUNDLED_PLUGIN_UI_APP_ARTIFACTS),
+});
 
 function subscribeToReactProjection(listener: () => void): () => void {
     // Account capture can clear the store while a sibling renders. Withdraw

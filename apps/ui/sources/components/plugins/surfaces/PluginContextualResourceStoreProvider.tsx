@@ -292,8 +292,8 @@ export function usePluginContextualResourceStoreOwner(): PluginContextualResourc
     return React.useContext(PluginContextualResourceStoreContext);
 }
 
-function resourceRenderKey(resource: PluginUiResourceReference): string {
-    return pluginUiResourceReferenceKey(resource);
+function resourceRenderKey(resource: PluginUiResourceReference, pluginId: string): string {
+    return pluginUiResourceReferenceKey(resource, pluginId);
 }
 
 type AcquiredPluginContextualResource = Readonly<{
@@ -325,7 +325,7 @@ export function PluginContextualResourceState(props: Readonly<{
     const owner = usePluginContextualResourceStoreOwner();
     const presented = useLayoutPresentationActive();
     const bindingKey = resourceBindingKey(props.binding);
-    const resourceKey = resourceRenderKey(props.resource);
+    const resourceKey = resourceRenderKey(props.resource, props.binding.pluginId);
     // Callers commonly reconstruct a `{ pluginId, localId }` reference during
     // their own projection. Keep the generic store entry stable by its exact
     // Resource identity, not that incidental wrapper identity.

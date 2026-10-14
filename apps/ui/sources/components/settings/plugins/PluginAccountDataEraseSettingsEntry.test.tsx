@@ -307,6 +307,7 @@ function createAccountAvailabilityReader(input: Pick<
 >): PluginAccountAvailabilityReader {
     return {
         ...input,
+        readAccountUiProjection: createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE).readAccountUiProjection,
         readInstalledPlugins: createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE).readInstalledPlugins,
         readCurrentArtifact: () => ({
             kind: 'unavailable',

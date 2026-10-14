@@ -257,10 +257,10 @@ describe('resolveProjectedPluginUiClientExecutables', () => {
         const directSource = Object.freeze({
             ...current,
             voiceProvidersById: Object.freeze({
-                [voiceKey]: Object.freeze({ ...currentVoice, ...origin }),
+                [voiceKey]: Object.freeze({ ...currentVoice, executionOrigin: origin }),
             }),
             reactNativeBundlesById: Object.freeze({
-                [voiceBundleKey]: Object.freeze({ ...currentBundle, ...origin }),
+                [voiceBundleKey]: Object.freeze({ ...currentBundle, executionOrigin: origin }),
             }),
         }) satisfies PluginUiProjectionModel;
 

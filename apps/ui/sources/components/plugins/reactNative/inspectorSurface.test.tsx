@@ -138,6 +138,7 @@ describe('inspector renderSurface (real source, mounted)', () => {
             renderer = create(renderInspectorSurface({
                 hostApi: createInspectorTabHostApi(executeAction),
                 surface: createInspectorTabSurface(),
+                signal: new AbortController().signal,
             }));
         });
         await waitForTestId(renderer!, 'inspector-plugin-acme.retained');

@@ -301,6 +301,27 @@ describe('active Account-hosted plugin Artifact reader', () => {
     it.each([
         createActivePluginAccountHostedArtifactSourceCandidate,
         createActivePluginAccountHostedArtifactTargetSourceCandidate,
+    ])('preserves an Account-hosted transport failure without exposing the HTTP error body', async (createSource) => {
+        const { lifetime } = createLifetime();
+        const current = createReader({
+            lifetime,
+            request: async () => new Response('private failure detail', { status: 503 }),
+        });
+        const source = createSource({ accountLifetime: lifetime, reader: current.reader });
+        await expect(source.fetch({
+            artifact: {
+                pluginId: release.pluginId, contributionId: slot.contributionId,
+                artifactId: slot.artifactId, tier: slot.tier, platform: slot.platform,
+                digest: artifactDigest, hostUiApiRange: artifactGraph.hostUiApiRange,
+                releaseVersion: release.version,
+            },
+            accountHostedArtifactId: accountArtifactId,
+        })).rejects.toMatchObject({ code: 'transport_unavailable', message: 'transport_unavailable' });
+    });
+
+    it.each([
+        createActivePluginAccountHostedArtifactSourceCandidate,
+        createActivePluginAccountHostedArtifactTargetSourceCandidate,
     ])('cancels a held Account-hosted source read when its acquisition retires', async (createSource) => {
         const { lifetime } = createLifetime();
         const controller = new AbortController();

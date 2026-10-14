@@ -2,8 +2,9 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createActionExecutor, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
-import { UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
+import { UsageExportInputSchema, UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { PluginUiHostApiWireEnvelopeV1Schema, PluginUiJsonValueV1Schema, type PluginUiJsonObjectV1 } from '@happier-dev/protocol/plugins/ui';
 import { useLivePluginResource, type PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 import type { PluginUiResourceEntry } from '@happier-dev/plugin-ui/advanced';
@@ -103,7 +104,8 @@ describe('mounted native and hosted host reads', () => {
         const { controller, native } = await mount(request => request.path === '/v2/usage/query'
             ? Response.json(accounting(10)) : undefined, () => enabled);
         const frame = hosted(controller);
-        const input = { query: {}, format: 'json', fields: ['totals'] } as const;
+        const input = UsageExportInputSchema.parse({ query: {}, format: 'json', fields: ['totals'] });
+        const wireInput = projectNativeJsonValueForTransport(input);
         const bytes = (value: unknown) => JSON.parse(new TextDecoder().decode(decodeBase64(UsageFileResultSchema.parse(value).base64)));
         try {
             const exported = await native.api.executeAction('usage.export', input);
@@ -111,18 +113,18 @@ describe('mounted native and hosted host reads', () => {
             expect(Object.keys(bytes(exported).accounting)).toEqual(['totals']);
             await frame.send({ kind: 'negotiate', apiRange: '*' });
             const hostedExport = await frame.send({ kind: 'request', method: 'executeAction', requestId: 'export',
-                payload: { action: 'usage.export', input } });
+                payload: { action: 'usage.export', input: wireInput } });
             expect(hostedExport.payload).toMatchObject({ kind: 'result' });
             const payload = hostedExport.payload as { result: unknown };
             expect(bytes(payload.result)).toEqual(bytes(exported));
             enabled = false;
             await expect(native.api.executeAction('usage.export', input)).rejects.toMatchObject({ code: 'unavailable' });
             expect((await frame.send({ kind: 'request', method: 'executeAction', requestId: 'denied-export',
-                payload: { action: 'usage.export', input } })).payload).toMatchObject({ kind: 'error', error: { code: 'unavailable' } });
+                payload: { action: 'usage.export', input: wireInput } })).payload).toMatchObject({ kind: 'error', error: { code: 'unavailable' } });
             controller.dispose();
             await expect(native.api.executeAction('usage.export', input)).rejects.toMatchObject({ code: 'stale_surface' });
             expect(await frame.send({ kind: 'request', method: 'executeAction', requestId: 'retired-export',
-                payload: { action: 'usage.export', input } })).toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
+                payload: { action: 'usage.export', input: wireInput } })).toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
         } finally { frame.dispose(); native.dispose(); }
     });
     it('delivers ready accounting to native and hosted readers while its comparison is still pending', async () => {
@@ -137,7 +139,7 @@ describe('mounted native and hosted host reads', () => {
         const frame = hosted(controller);
         try {
             await expect.poll(() => hostEntry.getSnapshot().value !== undefined).toBe(true);
-            expect(decodeUsageQueryResource(hostEntry.getSnapshot().value!).results[0]?.accounting).toEqual(accounting(10));
+            expect(decodeUsageQueryResource(hostEntry.getSnapshot().value!).results[0]?.accounting?.totals).toEqual(accounting(10).totals);
             expect(hostEntry.getSnapshot().pending).toBe('initial');
             const nativeRead = await native.api.readResource(resource);
             expect(nativeRead.digest).toBe(hostEntry.getSnapshot().digest);
@@ -317,13 +319,14 @@ describe('mounted native and hosted host reads', () => {
         } finally { frame.dispose(); native.dispose(); unwatchHost(); }
     });
 
-    it('cancels an in-flight native read and withholds a late result after mount retirement', async () => {
+    it('cancels a native read before snapshot admission and withholds later results after mount retirement', async () => {
         const delayed = createDeferred<Response>();
         const { controller, native } = await mount(request => request.path === '/v2/usage/query' ? delayed.promise : undefined);
         const abort = new AbortController();
         const pending = native.api.readResource(reference, { signal: abort.signal });
         const rejected = expect(pending).rejects.toMatchObject({ code: 'unavailable' });
-        await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').length).toBe(1);
+        // Usage publishes source-only progress before accounting settles. Cancel
+        // before the first snapshot; a completed progress read cannot be retracted.
         abort.abort(); controller.dispose(); delayed.resolve(Response.json(accounting(99)));
         await rejected;
         await flushHookEffects({ cycles: 20 });

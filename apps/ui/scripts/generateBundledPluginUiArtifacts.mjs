@@ -25,7 +25,7 @@ const GENERATED_OUTPUT_RELATIVE_PATH = join(
 
 // This producer emits static JSON-quoted requires. Describe exactly that graph
 // without executing an inventory; workspace startup owns file admission.
-const INVENTORY_REQUIRE = /\brequire\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)/g;
+const INVENTORY_REQUIRE = /^(const BUNDLED_PLUGIN_UI_APP_ASSET_\d+ = )require\(("(?:[^"\\]|\\.)*")\);$/gm;
 function readBundledPluginUiArtifactsInventory(inventoryPath) {
   let source;
   try {
@@ -36,11 +36,11 @@ function readBundledPluginUiArtifactsInventory(inventoryPath) {
   }
   if (!source.includes('export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS')) return null;
   const references = [...source.matchAll(INVENTORY_REQUIRE)];
-  if (references.length !== [...source.matchAll(/\brequire\s*\(/g)].length) return null;
+  if (references.length !== [...source.matchAll(/^const BUNDLED_PLUGIN_UI_APP_ASSET_\d+ = require\(/gm)].length) return null;
   const require = createRequire(inventoryPath);
   const paths = [inventoryPath];
   try {
-    for (const [, encoded] of references) {
+    for (const [, , encoded] of references) {
       const specifier = JSON.parse(encoded);
       paths.push(isAbsolute(specifier) ? specifier : require.resolve(specifier));
     }
@@ -79,7 +79,7 @@ export async function retainBundledPluginUiArtifactsInventory({ inventoryPath, o
   const retained = readBundledPluginUiArtifactsInventory(inventoryPath);
   if (!retained) return false;
   let index = 0;
-  const output = retained.source.replace(INVENTORY_REQUIRE, () => `require(${JSON.stringify(retained.references[index++])})`);
+  const output = retained.source.replace(INVENTORY_REQUIRE, (_match, prefix) => `${prefix}require(${JSON.stringify(retained.references[index++])});`);
   await mkdir(dirname(outputPath), { recursive: true });
   const temporaryPath = `${outputPath}.tmp.${process.pid}`;
   await writeFile(temporaryPath, output, 'utf8');
@@ -126,6 +126,8 @@ export function listBundledPluginUiArtifactExports(packageJson) {
 }
 
 export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}) {
+  const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
+  const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
   const {
     PluginUiArtifactsManifestV2Schema,
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -199,6 +201,12 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     }
 
     const destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
+    const declaration = PluginPortableReleaseManifestV1Schema.safeParse(pluginManifest);
+    const uiDeclaration = declaration.success ? {
+      pluginId, pluginVersion: packageVersion, packageName,
+      displayName: typeof declaration.data.displayName === 'string' ? declaration.data.displayName : declaration.data.displayName.fallback,
+      entriesById: projectPluginPortableUiDeclarationsV1({ ...declaration.data, version: packageVersion }, parsedManifest.data.entries),
+    } : undefined;
     const pluginSources = [];
     const pluginFiles = [];
     for (const entry of parsedManifest.data.entries) {
@@ -247,6 +255,8 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
         artifactId: entry.artifactId,
         tier: entry.tier,
         digest: entry.digest,
+        artifactGraph: entry,
+        uiDeclaration,
         files: [...entry.files]
           .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
           .map((file) => ({ relativePath: file.relativePath, specifier: artifactRoots
@@ -322,6 +332,15 @@ function renderBundledPluginUiArtifactInventory(sources) {
     }
   }
   if (assetSymbolBySpecifier.size > 0) lines.push('');
+  const declarationSymbolByPluginId = new Map();
+  for (const source of sources) {
+    if (declarationSymbolByPluginId.has(source.pluginId)) continue;
+    const symbol = `BUNDLED_PLUGIN_UI_APP_DECLARATION_${declarationSymbolByPluginId.size}`;
+    declarationSymbolByPluginId.set(source.pluginId, symbol);
+    lines.push("/** @type {import('./bundledPluginUiArtifactInventory').PluginHostBundledUiDeclaration | undefined} */");
+    lines.push(`const ${symbol} = ${JSON.stringify(source.uiDeclaration)};`);
+  }
+  if (declarationSymbolByPluginId.size > 0) lines.push('');
   lines.push(
     "/** @satisfies {import('./bundledPluginUiArtifactInventory').BundledPluginUiAppArtifactInventory} */",
     'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = Object.freeze([',
@@ -334,6 +353,8 @@ function renderBundledPluginUiArtifactInventory(sources) {
       `    tier: ${JSON.stringify(source.tier)},`,
       `    digest: ${JSON.stringify(source.digest)},`,
       `    releaseVersion: ${JSON.stringify(source.packageVersion)},`,
+      `    artifactGraph: /** @satisfies {NonNullable<import('./bundledPluginUiArtifactInventory').BundledPluginUiAppArtifact['artifactGraph']>} */ (${JSON.stringify(source.artifactGraph)}),`,
+      `    uiDeclaration: ${declarationSymbolByPluginId.get(source.pluginId)},`,
       '    files: Object.freeze([',
     );
     for (const file of source.files) {

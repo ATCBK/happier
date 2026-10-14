@@ -536,7 +536,7 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
                 const signal = merged.signal;
                 if (signal?.aborted || input.isCurrent?.() === false) { merged.dispose(); return resourceAbortPayload(input.isCurrent); }
                 const entry = input.hostResourceStore.getEntry(hostReference.data);
-                let lastDigest: string | undefined;
+                let lastDigest: PluginSurfaceResourceDigest | undefined;
                 let established = false;
                 let release = () => {};
                 const close = () => {
@@ -550,19 +550,27 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
                     if (!snapshot.value && snapshot.error) {
                         input.deliver(terminalEvent(subscriptionId, 'denied', snapshot.error.code ?? 'plugin_resource_unavailable'));
                         close();
-                    } else if (snapshot.digest && snapshot.digest !== lastDigest) {
-                        lastDigest = snapshot.digest;
-                        input.deliver(invalidatedEvent(subscriptionId, snapshot.digest));
+                    } else if (snapshot.value) {
+                        const digest = PluginUiArtifactDigestV1Schema.safeParse(snapshot.digest);
+                        if (!digest.success) {
+                            input.deliver(terminalEvent(subscriptionId, 'unavailable', 'plugin_resource_digest_invalid'));
+                            close();
+                        } else if (digest.data !== lastDigest) {
+                            lastDigest = digest.data;
+                            input.deliver(invalidatedEvent(subscriptionId, digest.data));
+                        }
                     }
                 }, true);
                 signal?.addEventListener('abort', close, { once: true });
                 try {
                     const snapshot = await readPluginResourceStoreSnapshot(entry, signal);
                     if (signal?.aborted || input.isCurrent?.() === false) { close(); return resourceAbortPayload(input.isCurrent); }
-                    if (!snapshot.digest || !snapshot.value) { close(); return errorPayload('unavailable', snapshot.error?.code ?? 'plugin_resource_unavailable'); }
-                    lastDigest = snapshot.digest;
+                    if (!snapshot.value) { close(); return errorPayload('unavailable', snapshot.error?.code ?? 'plugin_resource_unavailable'); }
+                    const digest = PluginUiArtifactDigestV1Schema.safeParse(snapshot.digest);
+                    if (!digest.success) { close(); return errorPayload('unavailable', 'plugin_resource_digest_invalid'); }
+                    lastDigest = digest.data;
                     established = true;
-                    return { subscriptionId, digest: snapshot.digest };
+                    return { subscriptionId, digest: digest.data };
                 } catch (error) {
                     close();
                     return errorPayload('unavailable', error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'

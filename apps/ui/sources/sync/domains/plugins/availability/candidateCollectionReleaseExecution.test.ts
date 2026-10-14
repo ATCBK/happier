@@ -134,11 +134,13 @@ function createProjection(entries: Readonly<Record<string, unknown>> = {}) {
                         occurrenceId: 'example.tasks-occurrence-a',
                         artifactGraph,
                         runtime: { cacheIdentity: projectedByteIdentity },
-                        serverIdentityId: materialization.serverIdentityId,
-                        materializationRef: {
-                            machineId: materialization.machineId,
-                            materializationId: materialization.materializationId,
-                            pluginId: materialization.pluginId,
+                        executionOrigin: {
+                            serverIdentityId: materialization.serverIdentityId,
+                            materializationRef: {
+                                machineId: materialization.machineId,
+                                materializationId: materialization.materializationId,
+                                pluginId: materialization.pluginId,
+                            },
                         },
                     },
                     ...entries,
@@ -234,11 +236,13 @@ describe('candidate Collection release execution resolver', () => {
             occurrenceId: 'example.tasks-occurrence-b',
             artifactGraph,
             runtime: { cacheIdentity: projectedByteIdentity },
-            serverIdentityId: materialization.serverIdentityId,
-            materializationRef: {
-                machineId: materialization.machineId,
-                materializationId: materialization.materializationId,
-                pluginId,
+            executionOrigin: {
+                serverIdentityId: materialization.serverIdentityId,
+                materializationRef: {
+                    machineId: materialization.machineId,
+                    materializationId: materialization.materializationId,
+                    pluginId,
+                },
             },
         };
 

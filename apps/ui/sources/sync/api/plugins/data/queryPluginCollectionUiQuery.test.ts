@@ -226,7 +226,7 @@ describe('queryActivePluginCollectionUiQuery', () => {
                     logicalRow: {
                         content: {
                             t: 'plain',
-                            v: { title: 'Private title' },
+                            v: { title: 'Private title', retainedFutureField: 'kept in stored content' },
                         },
                         projection: { status: 'open' },
                     },

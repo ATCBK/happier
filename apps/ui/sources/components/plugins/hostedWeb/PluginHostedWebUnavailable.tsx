@@ -6,6 +6,12 @@ import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/c
 import { t } from '@/text';
 
 export type PluginHostedWebUnavailableDiagnosticCode =
+    | 'artifact_bytes_rpc_unavailable'
+    | 'artifact_bytes_response_invalid'
+    | 'artifact_bytes_fetch_failed'
+    | 'plugin_host_access_disclosure_mismatch'
+    | 'plugin_collection_contract_conflict'
+    | 'plugin_resource_admission_unavailable'
     | 'account_availability_not_loaded'
     | 'account_availability_scope_mismatch'
     | 'account_scope_changed'
@@ -65,6 +71,12 @@ export function readPluginHostedWebUnavailableDiagnosticCode(
     value: unknown,
 ): PluginHostedWebUnavailableDiagnosticCode | null {
     switch (value) {
+        case 'artifact_bytes_rpc_unavailable':
+        case 'artifact_bytes_response_invalid':
+        case 'artifact_bytes_fetch_failed':
+        case 'plugin_host_access_disclosure_mismatch':
+        case 'plugin_collection_contract_conflict':
+        case 'plugin_resource_admission_unavailable':
         case 'account_availability_not_loaded':
         case 'account_availability_scope_mismatch':
         case 'account_scope_changed':

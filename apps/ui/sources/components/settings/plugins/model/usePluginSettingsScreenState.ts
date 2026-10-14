@@ -822,7 +822,10 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 });
             if (!params.isAuthorityCurrent()) return;
             if (!response.supported) {
-                Modal.alert(t('common.error'), t('common.unavailable'));
+                Modal.alert(
+                    t('common.error'),
+                    response.detail ?? (response.reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed')),
+                );
                 return;
             }
             const outcome: MachinePluginInstallDecisionOutcome = response.outcome;
@@ -1666,7 +1669,10 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     });
                     if (!isAuthorityCurrent()) return;
                     if (!rejection.supported) {
-                        Modal.alert(t('common.error'), t('common.unavailable'));
+                        Modal.alert(
+                            t('common.error'),
+                            rejection.detail ?? (rejection.reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed')),
+                        );
                         return;
                     }
                     if (rejection.outcome.kind === 'cancelled' || rejection.outcome.kind === 'expired') {

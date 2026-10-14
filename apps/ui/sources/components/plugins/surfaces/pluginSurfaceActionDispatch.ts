@@ -568,7 +568,7 @@ function clientActionExecuteAction(
                         occurrenceId: selection.registration.occurrenceId,
                         // An originless (bundled/development) plugin has no
                         // materialization; the daemon admits that exact case.
-                        ...(selection.registration.executionOrigin
+                        ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
                             ? { materializationRef: selection.registration.executionOrigin.materializationRef }
                             : {}),
                     },

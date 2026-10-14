@@ -14,6 +14,7 @@ import type {
     PluginArtifactFileSet,
     PluginArtifactSourceCandidate,
 } from './artifactLease';
+import { PluginArtifactSourceError } from './artifactLease';
 
 export type PluginArtifactDaemonFamily = 'reactNative' | 'hostedWeb';
 
@@ -104,7 +105,20 @@ export function createPluginArtifactDaemonSource(input: Readonly<{
                 digest: artifact.digest,
                 ...(signal ? { signal } : {}),
             });
-            return signal?.aborted ? null : decodeDaemonFileSet(response, input.family, artifact.digest);
+            if (signal?.aborted) return null;
+            if (!response.ok) {
+                for (const diagnostic of response.diagnostics) {
+                    switch (diagnostic) {
+                        case 'artifact_bytes_rpc_unavailable':
+                        case 'artifact_bytes_response_invalid':
+                        case 'artifact_bytes_fetch_failed':
+                        case 'plugin_host_access_disclosure_mismatch':
+                            throw new PluginArtifactSourceError(diagnostic);
+                    }
+                }
+                return null;
+            }
+            return decodeDaemonFileSet(response, input.family, artifact.digest);
         },
     });
 }

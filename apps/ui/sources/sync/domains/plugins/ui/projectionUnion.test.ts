@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema, PluginProjectedResourceV2Schema } from '@happier-dev/protocol';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import {
@@ -34,6 +34,27 @@ it('retains proven installed declarations on a cold client without fabricating r
     expect(merged?.surfacePlacementsById[String(entry.id)]?.occurrenceId).toBeUndefined();
     expect(merged?.generation).toBeNull();
     expect(mergeInstalledPluginUiProjections([], null)).toBeNull();
+});
+
+it('keeps a current development override ahead of the host bundle and uses the bundle when that source is offline', () => {
+    const pluginId = 'happier.fixture';
+    const entry = placementEntry({ pluginId, localId: 'page', container: 'appPage' });
+    const declaredEntry = { ...entry, occurrenceId: undefined, hostSupplies: [], display: { title: 'Bundled page' } };
+    const declared = { ...machineProjection({ generation: 1, entriesById: { page: declaredEntry }, installedPackagesById: {
+        [pluginId]: { id: pluginId, displayName: 'Fixture', version: '1.0.0', enabled: true, source: { kind: 'bundled' } },
+    } }), generation: null };
+    const makeRuntime = (online: boolean) => unionPluginUiProjections([member({ machineId: 'machine-dev', generation: 2,
+        interactionEnabled: online, entriesById: { page: { ...entry, display: { title: 'Edited page' } } }, installedPackagesById: {
+            [pluginId]: { id: pluginId, displayName: 'Fixture', version: '1.0.0', enabled: true, source: { kind: 'localPath' },
+                occurrenceId: entry.occurrenceId, sourceCustody: { kind: 'development', registeredRootId: 'source-root' } },
+        } })]).pluginUiProjection;
+    const current = makeRuntime(true);
+    expect(mergeInstalledPluginUiProjections([declared], current)?.surfacePlacementsById[String(entry.id)]?.display)
+        .toEqual({ title: 'Edited page' });
+    const offline = mergeInstalledPluginUiProjections([declared], makeRuntime(false));
+    expect(offline?.surfacePlacementsById[String(entry.id)]?.display).toEqual({ title: 'Bundled page' });
+    expect(readPluginUiContributionSupplies(offline?.surfacePlacementsById[String(entry.id)]))
+        .toMatchObject([{ machineId: 'machine-dev', interactionEnabled: false }]);
 });
 
 it('reuses the live occurrence for the same declared root without confusing runtime identity with content', () => {
@@ -94,7 +115,9 @@ it('projects only a real current source occurrence for execution and retains its
         machineId: 'machine-a', serverId: 'server-1', serverIdentityId: 'srv_test', phase: 'current', interactionEnabled: true,
         projection: machineProjection({ generation: 7, entriesById: { [String(entry.id)]: entry }, installedPackagesById: {
             [pluginId]: { id: pluginId, displayName: 'Local', version: '1.0.0', enabled: true, source: { kind: 'localPath' },
-                occurrenceId, sourceCustody, executionTarget: { default: 'installation' } },
+                occurrenceId, sourceCustody, executionTarget: { default: 'installation' },
+                executionOrigin: PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test',
+                    sourceRef: { machineId: 'machine-a', pluginId, sourceCustody } }) },
         } }),
     };
     const read = (member: PluginUiProjectionUnionMember) => readPluginUiExecutionOriginCandidates({
@@ -146,6 +169,11 @@ it('projects only a real current source occurrence for execution and retains its
         origin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine-a', pluginId, sourceCustody } },
         version: '1.0.0', occurrenceId, serverId: 'server-1', generation: 7,
     }, validation: { kind: 'admitted' } })]);
+    const unstamped = { ...source, projection: { ...source.projection!, installedPackagesById: {
+        ...source.projection!.installedPackagesById,
+        [pluginId]: { ...source.projection!.installedPackagesById[pluginId]!, executionOrigin: undefined },
+    } } };
+    expect(read(unstamped).sourceCandidates).toEqual([]);
     expect(read(source).declaredDefaultOrigins).toEqual([read(source).sourceCandidates[0]!.source.origin]);
     expect(read({ ...source, phase: 'retainedOffline', interactionEnabled: false }).sourceCandidates[0])
         .toMatchObject({ source: { occurrenceId, origin: read(source).sourceCandidates[0]!.source.origin }, validation: { kind: 'rejected', reason: 'stale' } });
@@ -162,6 +190,8 @@ it('admits package occurrences without UI while preserving source trust and port
         phase: 'current', interactionEnabled: true, projection: machineProjection({ generation: 7, entriesById: {},
             installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Native only', version: '1.0.0', enabled: true,
                 source: { kind: 'localPath' }, occurrenceId: `${pluginId}:occurrence`,
+                executionOrigin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine-a', pluginId,
+                    sourceCustody: { kind: 'development', registeredRootId: 'native-only-root' } } },
                 sourceCustody: { kind: 'development', registeredRootId: 'native-only-root' } } } }) };
     const read = (input: PluginUiProjectionUnionMember) => readPluginUiExecutionOriginCandidates({ projection: null, pluginId, members: [input] });
     expect(read(source).sourceCandidates).toEqual([expect.objectContaining({ validation: { kind: 'admitted' } })]);
@@ -185,6 +215,8 @@ it('does not recreate a conflicted declaration default through package supplies'
             installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Source', version: declaringDefault ? '1.0.0' : '2.0.0', enabled: true,
                 source: { kind: 'localPath' }, occurrenceId: entry.occurrenceId,
                 sourceCustody: { kind: 'development', registeredRootId: `root-${machineId}` },
+                executionOrigin: { serverIdentityId: 'srv_test', sourceRef: { machineId, pluginId,
+                    sourceCustody: { kind: 'development', registeredRootId: `root-${machineId}` } } },
                 ...(declaringDefault ? { executionTarget: { default: 'installation' } } : {}) } } }),
     });
     const members = [source('machine-a', true), source('machine-b', false)];
@@ -234,7 +266,8 @@ it('keeps machine-local source candidates selectable across different web artifa
                 contributionId: 'settings', artifactSelectionOwner: 'daemonProjection', artifactDigest: `sha256:${digest.repeat(64)}` },
         }, installedPackagesById: {
             [pluginId]: { id: pluginId, displayName: 'Local', version: '1.0.0', enabled: true, source: { kind: 'localPath' },
-                occurrenceId: entry.occurrenceId, sourceCustody },
+                occurrenceId: entry.occurrenceId, sourceCustody,
+                executionOrigin: { serverIdentityId: 'srv_test', sourceRef: { machineId, pluginId, sourceCustody } } },
         } }),
         materializationsByPluginId: { [pluginId]: { serverIdentityId: 'srv_test', machineId, pluginId,
             materializationId: machineId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
@@ -325,9 +358,7 @@ function stampEntriesWithProducerOrigins(
         const origin = originsByPluginId?.[pluginId] ?? selectedOrigin(pluginId, machineId);
         return [id, {
             ...candidate,
-            serverIdentityId: origin.serverIdentityId,
-            ...('materializationRef' in origin ? { materializationRef: origin.materializationRef }
-                : { sourceCustody: origin.sourceRef.sourceCustody }),
+            executionOrigin: origin,
         }];
     }));
 }
@@ -608,7 +639,7 @@ describe('unionPluginUiProjections', () => {
         expect(readPluginUiContributionOrigin({ hostOrigin: { machineId: 'machine-a', phase: 'current',
             executionOrigin: { serverIdentityId: 'srv_test', materializationRef: {} } } })?.executionOrigin).toBeNull();
         const valid = selectedOrigin('acme.inspector', 'machine-a');
-        expect(readPluginUiProjectionEntryExecutionOrigin({ pluginId: 'acme.inspector', ...valid })).toEqual(valid);
+        expect(readPluginUiProjectionEntryExecutionOrigin({ pluginId: 'acme.inspector', executionOrigin: valid })).toEqual(valid);
     });
 
     it.runIf(process.env.HAPPIER_MEASURE_UI_HOT_LOOPS === '1')('measures 2,000 originless contributions', () => {
@@ -631,7 +662,7 @@ describe('unionPluginUiProjections', () => {
         const origin = selectedOrigin(pluginId, 'machine-a');
         const type = { id: `${pluginId}/repository`, pluginId, pluginVersion: '1.0.0', occurrenceId: 'current',
             definition: { id: 'repository', title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' as const } },
-            ...origin };
+            executionOrigin: origin };
         const projection = machineProjection({ generation: 3, entriesById: {},
             inputTypesById: { [type.id]: type }, installedPackagesById: {
                 [pluginId]: { id: pluginId, displayName: 'Types', version: '1.0.0', enabled: true,
@@ -649,7 +680,7 @@ describe('unionPluginUiProjections', () => {
         expect(unionPluginUiProjections([{ ...source, projection: retired }], selectedOrigins(origin))
             .pluginUiProjection?.inputTypesById[type.id]).toBeUndefined();
         const originless = { ...projection, inputTypesById: { [type.id]: { ...type,
-            serverIdentityId: undefined, materializationRef: undefined } } };
+            executionOrigin: undefined } } };
         expect(unionPluginUiProjections([{ ...source, projection: originless }], new Map())
             .pluginUiProjection?.inputTypesById[type.id]).toMatchObject({ occurrenceId: 'current' });
     });
@@ -659,7 +690,7 @@ describe('unionPluginUiProjections', () => {
         const resource = (machineId: string, occurrenceId: string) => ({
             id: 'report', pluginId, resourceKind: 'config', scope: 'global',
             contentType: 'application/json', digest: null, occurrenceId,
-            ...selectedOrigin(pluginId, machineId),
+            executionOrigin: selectedOrigin(pluginId, machineId),
         });
         const source = (machineId: string, occurrenceId: string, resourceOccurrenceId = occurrenceId) => member({
             machineId, generation: machineId === 'machine-a' ? 3 : 99,
@@ -716,10 +747,10 @@ describe('unionPluginUiProjections', () => {
         });
         if (!source.projection) throw new Error('fixture must produce a projection');
 
-        const resource = {
+        const resource = PluginProjectedResourceV2Schema.parse({
             id: 'report', pluginId: 'acme.inspector', resourceKind: 'asset' as const,
             scope: 'global' as const, contentType: 'application/json',
-        };
+        });
         const union = unionPluginUiProjections([{
             ...source,
             projection: {
@@ -1290,18 +1321,17 @@ describe('unionPluginUiProjections', () => {
         const origin = selectedOrigin('acme.alpha', 'machine-a');
         const entry = {
             ...placementEntry({ pluginId: 'acme.alpha', localId: 'panel' }),
-            serverIdentityId: origin.serverIdentityId,
-            materializationRef: origin.materializationRef,
+            executionOrigin: origin,
         };
 
         expect(readPluginUiProjectionEntryExecutionOrigin(entry)).toEqual(origin);
         expect(readPluginUiProjectionEntryExecutionOrigin({
             ...entry,
-            materializationRef: { ...origin.materializationRef, pluginId: 'acme.other' },
+            executionOrigin: { ...origin, materializationRef: { ...origin.materializationRef, pluginId: 'acme.other' } },
         })).toBeNull();
         expect(readPluginUiProjectionEntryExecutionOrigin({
             ...entry,
-            materializationRef: undefined,
+            executionOrigin: undefined,
         })).toBeNull();
     });
 });

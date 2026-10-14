@@ -1,5 +1,6 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import * as React from 'react';
+import { t } from '@/text';
 // Hosted guests select real browser persistence; IndexedDB is the OS boundary.
 import 'fake-indexeddb/auto';
 import NodeModule from 'node:module';
@@ -21,6 +22,7 @@ import {
     DaemonPluginUiComposerSurfaceCatalogEntryV1Schema,
     DaemonPluginUiTargetedSurfaceMountV1Schema,
     DaemonPluginUiResourceReadRequestSchema,
+    DaemonPluginUiResourceReadResponseSchema,
     DaemonPluginUiResourceWatchOpenRequestSchema,
     DaemonPluginUiResourceWatchNextRequestSchema,
     DaemonPluginUiResourceWatchCloseRequestSchema,
@@ -247,12 +249,36 @@ const {
         active: true,
     },
 }));
-const pluginSurfaceConnectivity = vi.hoisted(() => ({
+const pluginSurfaceConnectivity = {
     endpointStatus: 'online' as 'online' | 'offline',
     machineOnline: true,
     machineOnlineById: new Map<string, boolean>(),
     daemonStateVersion: 1,
-}));
+};
+
+// Publish the same presence facts that the real storage/reachability readers
+// consume. Mocking the hooks module does not update already-bound public
+// storage exports and conceals admission failures beneath the mounted host.
+let surfaceFixtureStorage: typeof import('@/sync/domains/state/storage').storage | null = null;
+function applyPluginSurfaceConnectivity() {
+    const storage = surfaceFixtureStorage;
+    const scope = captureActiveServerAccountScopeLifetime()?.scope;
+    if (!scope || !storage) return;
+    const machineIds = ['machine_1', 'machine-1', 'machine_docs', 'origin-machine',
+        'settings-machine', 'ambient-machine', 'machine-ambient', 'machine-origin',
+        'machine-stale', 'machine-old', 'machine-new', 'machine-current', 'machine-compose', 'machine_a'];
+    const machines = Object.fromEntries(machineIds.map(id => {
+        const active = pluginSurfaceConnectivity.machineOnlineById.get(id) ?? pluginSurfaceConnectivity.machineOnline;
+        return [id, createMachineFixture({ id, active,
+            // A just-seen inactive heartbeat is still reachable during the
+            // canonical presence grace. An offline fixture has no such lease.
+            activeAt: active ? Date.now() : 0, daemonStateVersion: pluginSurfaceConnectivity.daemonStateVersion,
+        })] as const;
+    }));
+    act(() => storage.setState({ endpointStatus: pluginSurfaceConnectivity.endpointStatus, machines,
+        machineListByServerId: { ...storage.getState().machineListByServerId, [scope.serverId]: Object.values(machines) },
+        machineListStatusByServerId: { ...storage.getState().machineListStatusByServerId, [scope.serverId]: 'idle' } }));
+}
 // Exercise the same applied Home, credentials and Account lifetime as app entry.
 // Only the disconnected Socket and Home's HTTP responses leave this process.
 const usedAccountScopes = new Map<string, Readonly<{ serverId: string; accountId: string }>>();
@@ -299,12 +325,14 @@ const pluginSurfaceAccountLifetime = {
         });
         if (surfaceConnection.home.id !== scope.serverId) throw new Error('Fixture Home identity must match its routed mount.');
         const { storage } = await import('@/sync/domains/state/storage');
+        surfaceFixtureStorage = storage;
         // A scoped request admits the endpoint's actual readiness, independently
         // of the intentionally disconnected logical Socket used by this fixture.
         await waitForHomeGovernance(() => expect(storage.getState().endpointStatus).toBe('online'));
         storage.setState({ profileScope: scope });
         this.value = captureActiveServerAccountScopeLifetime();
         if (!this.value) throw new Error('Expected an applied fixture Account lifetime.');
+        applyPluginSurfaceConnectivity();
         usedAccountScopes.set(serverAccountScopeKeySuffix(scope), scope);
         accountEncryptionModeCredentials.value = surfaceConnection.credentials;
     },
@@ -1055,18 +1083,6 @@ vi.mock('@/sync/api/plugins/data/queryPluginCollectionUiQuery', () => ({
     ),
 }));
 
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/hooks')>()),
-    useEndpointStatus: () => pluginSurfaceConnectivity.endpointStatus,
-    useMachineCliDetectionTarget: (machineId: string | null) => ({
-        isOnline: machineId === null
-            ? false
-            : pluginSurfaceConnectivity.machineOnlineById.get(machineId)
-                ?? pluginSurfaceConnectivity.machineOnline,
-        daemonStateVersion: pluginSurfaceConnectivity.daemonStateVersion,
-    }),
-}));
-
 
 vi.mock('@/sync/http/client', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/sync/http/client')>();
@@ -1153,6 +1169,22 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
+
+vi.mock('react-dom', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('react-dom')>()),
+    // react-test-renderer has no DOM portal target. Keep the real frame and
+    // message bridge, replacing only the browser DOM's portal insertion.
+    createPortal: (children: React.ReactNode) => children,
+}));
+
+async function loadHostedNavigationGuest(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const shell = screen.root.findByType('iframe');
+    expect(shell.props.srcDoc).toContain("frame-src 'none'");
+    await act(async () => {
+        shell.props.onLoad({ currentTarget: { contentDocument: { body: {} } } });
+    });
+    return screen.root.findAllByType('iframe').find(frame => frame !== shell)!;
+}
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -1334,6 +1366,7 @@ afterEach(async () => {
     pluginSurfaceConnectivity.machineOnline = true;
     pluginSurfaceConnectivity.machineOnlineById.clear();
     pluginSurfaceConnectivity.daemonStateVersion = 1;
+    applyPluginSurfaceConnectivity();
     declarativeSettingsGetMock.mockReset();
     declarativeSettingsSetMock.mockReset();
     declarativeSecretStatusMock.mockReset();
@@ -2074,6 +2107,7 @@ const browserReactNativePlacement = surfacePlacementFixture({
     },
     renderer: { kind: 'reactNative', contributionId: 'native-panel' },
     display: { label: 'Native panel' },
+    runtime: { resourceCapability: { readable: true, dynamic: true } },
 });
 
 function browserReactNativePlacementFor(occurrenceId: string): PluginUiSurfacePlacementProjection {
@@ -2132,6 +2166,7 @@ function generatedReactNativePlacement(input: Readonly<{ occurrenceId?: string }
         },
         renderer: { kind: 'reactNative', contributionId: 'native-panel' },
         display: { label: 'Native panel' },
+        runtime: { resourceCapability: { readable: true, dynamic: true } },
         occurrenceId: input.occurrenceId ?? 'acme.browser-test-occurrence',
     });
     return Object.freeze({
@@ -2265,7 +2300,7 @@ function projectedDaemonUiAction(input: Readonly<{
         surfaces: ['ui'],
         placementBindings: ['detailsPanel'],
         execution: { target: 'daemon' },
-        ...mountedExecutionOrigin(
+        executionOrigin: mountedExecutionOrigin(
             input.pluginId,
             input.machineId,
             input.materializationId,
@@ -2507,6 +2542,7 @@ describe('PluginSurfacePlacementHost', () => {
 
         pluginSurfaceConnectivity.machineOnlineById.set('origin-machine', false);
         pluginSurfaceConnectivity.machineOnlineById.set('settings-machine', true);
+        applyPluginSurfaceConnectivity();
         const screen = await renderScreen(renderPage());
         await vi.waitFor(() => expect(declarativeSettingsGetMock).toHaveBeenCalledWith(
             'settings-machine',
@@ -2533,6 +2569,7 @@ describe('PluginSurfacePlacementHost', () => {
         declarativeSettingsSetMock.mockClear();
         pluginSurfaceConnectivity.machineOnlineById.set('origin-machine', true);
         pluginSurfaceConnectivity.machineOnlineById.set('settings-machine', false);
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPage());
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.editable).toBe(false);
         await act(async () => {
@@ -2655,6 +2692,10 @@ describe('PluginSurfacePlacementHost', () => {
             id: 'server-a',
             serverIdentityId: 'srv_server_a',
         });
+        // Establish the portable Home identity before capturing the lifetime
+        // used by the Settings target, rather than rehoming an active fixture.
+        await pluginSurfaceAccountLifetime.setScope({ serverId: daemonProfile.id, accountId: 'account-a' },
+            undefined, { serverIdentityId: 'srv_server_a' });
         declarativeSettingsGetMock.mockResolvedValue({ supported: true, snapshot: { protocolVersion: 1, pluginId: 'acme.forms', scope: { kind: 'daemon' }, revision: '0', values: { name: 'Before', count: 2, mode: 'safe', enabled: true, token: 'must-not-render' }, redactedKeys: ['token'] } });
         declarativeSettingsSetMock.mockResolvedValue({ supported: true, snapshot: { protocolVersion: 1, pluginId: 'acme.forms', scope: { kind: 'daemon' }, revision: '1', values: { name: 'After', count: 3, mode: 'fast', enabled: true }, redactedKeys: ['token'] } });
         declarativeSecretStatusMock.mockResolvedValue({ supported: true, result: { protocolVersion: 1, pluginId: 'acme.forms', secretId: 'token', state: 'configured', revision: 'secret-0' } });
@@ -2671,7 +2712,7 @@ describe('PluginSurfacePlacementHost', () => {
                 pluginId: 'acme.forms', destinationId: 'settings', rendererId: 'form',
                 container: 'settingsPage', target: { kind: 'app' },
             }),
-            ...mountedExecutionOrigin(
+            executionOrigin: mountedExecutionOrigin(
                 'acme.forms',
                 'machine-1',
                 'materialization-forms-current',
@@ -2729,11 +2770,11 @@ describe('PluginSurfacePlacementHost', () => {
         });
         const screen = await renderScreen(<PluginSurfacePlacementHost placement={placement} machineId="machine-1" serverId="server-a" pluginUiProjection={projectedUi} platform="web" />);
         await act(async () => {});
-        expect(declarativeSettingsGetMock).toHaveBeenCalledWith('machine-1', {
+        await vi.waitFor(() => expect(declarativeSettingsGetMock, screen.getTextContent()).toHaveBeenCalledWith('machine-1', {
             serverId: 'server-a',
             serverIdentityId: 'srv_server_a',
             pluginId: 'acme.forms',
-        });
+        }));
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Before');
         // Account-secret presentation remains visible and inert when this
         // fixture has no active Account target; hiding it would make recovery
@@ -2754,6 +2795,7 @@ describe('PluginSurfacePlacementHost', () => {
         const omittedSaveInput = declarativeActionExecuteMock.mock.calls.at(-1)?.[1] as Readonly<Record<string, unknown>> | undefined;
         expect(omittedSaveInput).toEqual({
             isCurrent: expect.any(Function),
+            signal: expect.any(AbortSignal),
             serverId: 'server-a',
             expectedContributorOccurrenceId: 'acme.forms-test-occurrence',
             qualifiedActionId: 'acme.forms/save',
@@ -2820,6 +2862,7 @@ describe('PluginSurfacePlacementHost', () => {
         await act(async () => { screen.pressByTestId('plugin-declarative-action:acme.shared/reset'); });
         expect(declarativeActionExecuteMock).toHaveBeenCalledWith('machine-1', {
             isCurrent: expect.any(Function),
+            signal: expect.any(AbortSignal),
             serverId: 'server-a',
             expectedContributorOccurrenceId: 'acme.shared-test-occurrence',
             qualifiedActionId: 'acme.shared/reset',
@@ -2875,12 +2918,12 @@ describe('PluginSurfacePlacementHost', () => {
         );
         const screen = await renderScreen(renderPlacement(true));
 
-        expect(resourceReadMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+        await vi.waitFor(() => expect(resourceReadMock, screen.getTextContent()).toHaveBeenCalledWith('machine-1', expect.objectContaining({
             serverId: 'server-a',
             expectedCallerOccurrenceId: 'live-dashboard-generation-7',
             callerPluginId: 'acme.live-dashboard',
             resource: { pluginId: 'acme.live-dashboard', localId: 'live-dashboard' },
-        }));
+        })));
         await vi.waitFor(() => {
             const diagnostics = screen.root.findAll((node) => (
                 typeof node.props.testID === 'string' && node.props.testID.includes('diagnostic')
@@ -3169,7 +3212,7 @@ describe('PluginSurfacePlacementHost', () => {
             await Promise.resolve();
         });
 
-        expect(resourceReadMock).toHaveBeenCalled();
+        await vi.waitFor(() => expect(resourceReadMock).toHaveBeenCalled());
         expect(screen.getTextContent()).toContain('Static dashboard');
         expect(screen.getTextContent()).not.toContain('Rejected dynamic dashboard');
     });
@@ -3244,7 +3287,7 @@ describe('PluginSurfacePlacementHost', () => {
                 container: 'appPage', target: { kind: 'app' } },
             renderer: { kind: 'reactNative', contributionId, requiredHostMethods: ['executeAction'] },
             occurrenceId,
-        }), ...mountedExecutionOrigin(pluginId, 'machine_1', 'inspector-installation'), generatedV2: true });
+        }), executionOrigin: mountedExecutionOrigin(pluginId, 'machine_1', 'inspector-installation'), generatedV2: true });
         const bundleId = `reactNativeBundle:${pluginId}:${contributionId}`;
         const targetFixture = primeExactTargetedContributions({ pluginId, occurrenceId, projectionGeneration: 44 });
         const projection = withMountedTargetPackage({
@@ -3419,12 +3462,17 @@ describe('PluginSurfacePlacementHost', () => {
         // Daemon state, not read-call order, owns the snapshot. Bootstrap may
         // legitimately replace a controller when its exact methods arrive.
         let resourceSnapshot = adopted;
+        let resourceRefusal: string | null = null;
+        const managePlugin = vi.fn();
         const pendingInvalidations = new Map<string, () => void>();
         const observedResourceRequests: string[] = [];
         realResourceTransport.request = async (method, payload) => {
             observedResourceRequests.push(method);
             if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ) {
                 const request = DaemonPluginUiResourceReadRequestSchema.parse(payload);
+                if (resourceRefusal) return DaemonPluginUiResourceReadResponseSchema.parse({
+                    ok: false, code: resourceRefusal, reason: 'unavailable',
+                });
                 return { ...resourceSnapshot.result, resource: request.resource, kind: 'asset' };
             }
             if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_OPEN) {
@@ -3469,6 +3517,7 @@ describe('PluginSurfacePlacementHost', () => {
                 sessionId="session-live-dashboard"
                 pluginUiProjection={projection}
                 platform="web"
+                unavailableAction={{ label: 'route fallback', onPress: managePlugin }}
             />,
         );
 
@@ -3503,6 +3552,21 @@ describe('PluginSurfacePlacementHost', () => {
             expect(screen.getTextContent()).toContain('Recovered dashboard');
         });
         expect(screen.findByTestId('plugin-declarative-document-source-error')).toBeNull();
+        await vi.waitFor(() => { expect(pendingInvalidations.size).toBeGreaterThan(0); });
+        await act(async () => {
+            resourceRefusal = 'plugin_collection_contract_conflict';
+            const pending = [...pendingInvalidations.values()];
+            pendingInvalidations.clear();
+            for (const resolveInvalidation of pending) resolveInvalidation();
+        });
+        await vi.waitFor(() => {
+            expect(screen.getTextContent()).toContain(t('pluginRuntime.collectionConflict'));
+        });
+        expect(screen.getTextContent()).toContain('Recovered dashboard');
+        expect(screen.findByTestId('plugin-declarative-document-source-retry')?.props.accessibilityLabel)
+            .toBe(t('settingsPlugins.managePlugin'));
+        await act(async () => { screen.pressByTestId('plugin-declarative-document-source-retry'); });
+        expect(managePlugin).toHaveBeenCalledOnce();
     });
 
     it('keeps a settings-less declarative surface interactive when the plugin has no settings service', async () => {
@@ -3521,7 +3585,7 @@ describe('PluginSurfacePlacementHost', () => {
                 pluginId: 'acme.actionsonly', destinationId: 'tab', rendererId: 'decl',
                 container: 'settingsPage', target: { kind: 'app' },
             }),
-            ...mountedExecutionOrigin(
+            executionOrigin: mountedExecutionOrigin(
                 'acme.actionsonly',
                 'machine-1',
                 'materialization-actionsonly-current',
@@ -3599,7 +3663,7 @@ describe('PluginSurfacePlacementHost', () => {
                 pluginId: 'acme.nested', destinationId: 'tab', rendererId: 'decl',
                 container: 'settingsPage', target: { kind: 'app' },
             }),
-            ...mountedExecutionOrigin('acme.nested', 'machine-1', 'materialization-nested-current'),
+            executionOrigin: mountedExecutionOrigin('acme.nested', 'machine-1', 'materialization-nested-current'),
             renderer: { kind: 'declarative', contributionId: 'decl', model: admittedDeclarativeModelFixture({
                 identity: { pluginId: 'acme.nested', localId: 'decl', qualifiedId: 'acme.nested/decl', occurrenceId: 'generation-7' },
                 visible: true, requiredHostMethods: ['executeAction'], nodes: [],
@@ -3776,7 +3840,7 @@ describe('PluginSurfacePlacementHost', () => {
                 pluginId: 'acme.repos', destinationId: 'list', rendererId: 'list',
                 container: 'detailsTab', target: { kind: 'session' },
             }),
-            ...mountedExecutionOrigin(
+            executionOrigin: mountedExecutionOrigin(
                 'acme.repos',
                 'machine-1',
                 'materialization-repos-current',
@@ -3853,6 +3917,7 @@ describe('PluginSurfacePlacementHost', () => {
             sessionId: 'session-1',
             expectedContributorOccurrenceId: 'acme.repos-test-occurrence',
             isCurrent: expect.any(Function),
+            signal: expect.any(AbortSignal),
             qualifiedActionId: 'acme.repos/open',
             input: { id: 'happier' },
             executionSurface: 'ui',
@@ -4262,6 +4327,7 @@ describe('PluginSurfacePlacementHost', () => {
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Current');
 
         pluginSurfaceConnectivity.endpointStatus = 'offline';
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPlacement('generation-2', 'machine-current'));
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Current');
         const offlineBoundary = screen.findByTestId(
@@ -4292,6 +4358,7 @@ describe('PluginSurfacePlacementHost', () => {
         const callsBeforeReconnect = declarativeSettingsGetMock.mock.calls.length;
         pluginSurfaceConnectivity.endpointStatus = 'online';
         pluginSurfaceConnectivity.daemonStateVersion += 1;
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPlacement('generation-2', 'machine-current'));
         expect(declarativeSettingsGetMock).toHaveBeenCalledTimes(callsBeforeReconnect + 1);
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Current');
@@ -4638,9 +4705,11 @@ describe('PluginSurfacePlacementHost', () => {
         expect(declarativeSettingsSetMock).toHaveBeenCalledTimes(1);
 
         pluginSurfaceConnectivity.endpointStatus = 'offline';
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPlacement());
         pluginSurfaceConnectivity.endpointStatus = 'online';
         pluginSurfaceConnectivity.daemonStateVersion += 1;
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPlacement());
         await act(async () => {});
 
@@ -4823,7 +4892,7 @@ describe('PluginSurfacePlacementHost', () => {
             expect(screen.root.findAll((node) => typeof node.props.testID === 'string'
                 && node.props.testID.startsWith('plugin-surface-unavailable-diagnostic-'))
                 .map((node) => node.props.testID)).toEqual([]);
-            const frame = screen.root.findByType('iframe');
+            const frame = await loadHostedNavigationGuest(screen);
             expect(frame.props.srcDoc).toContain(body);
             const csp = String(frame.props.srcDoc).match(/content="([^"]*connect-src[^\"]*)"/)?.[1];
             expect(csp?.split(';').map((directive) => directive.trim())
@@ -5792,6 +5861,7 @@ describe('PluginSurfacePlacementHost', () => {
     it('keeps zero-Collection hosted-web surfaces inert and does not revive predecessor React Native mounts offline', async () => {
         reactNativeSurfaceProps.length = 0;
         pluginSurfaceConnectivity.endpointStatus = 'offline';
+        applyPluginSurfaceConnectivity();
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         // A bound Availability reader always gives the mount a Data client. That
         // is not itself an offline rendering grant: this current release has no
@@ -5881,6 +5951,7 @@ describe('PluginSurfacePlacementHost', () => {
 
         pluginSurfaceConnectivity.endpointStatus = 'online';
         pluginSurfaceConnectivity.machineOnline = false;
+        applyPluginSurfaceConnectivity();
         await hostedWeb.update(
             <PluginSurfacePlacementHost
                 placement={browserHostedWebPlacement}
@@ -6502,6 +6573,14 @@ describe('PluginSurfacePlacementHost', () => {
                     id: pluginId, displayName: 'Replica page', version: '1.0.0', enabled: true,
                     source: { kind: 'localPath', locator: `replica-root-${index}` }, occurrenceId,
                     sourceCustody: { kind: 'development', registeredRootId: `replica-root-${index}` },
+                    executionOrigin: {
+                        serverIdentityId: 'srv_server_1',
+                        sourceRef: {
+                            pluginId,
+                            machineId,
+                            sourceCustody: { kind: 'development', registeredRootId: `replica-root-${index}` },
+                        },
+                    },
                 } },
                 agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
                 familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
@@ -6759,6 +6838,7 @@ describe('PluginSurfacePlacementHost', () => {
             focusActive = false,
         ) => {
             pluginSurfaceConnectivity.endpointStatus = connected ? 'online' : 'offline';
+            applyPluginSurfaceConnectivity();
             return (
                 <AppShellPluginUiProjectionValueProvider value={rowProjectionValue}><PluginSurfaceFocusEligibilityProvider active={focusActive}>
                     <PluginSurfacePlacementHost
@@ -7377,8 +7457,11 @@ describe('PluginSurfacePlacementHost', () => {
             binding: generatedReactNativePlacement({ occurrenceId: exactTarget.targetFixture.mountedTarget.occurrenceId }).binding,
         } as PluginUiSurfacePlacementProjection;
         const renderPlacement = (connected: boolean) => {
-            pluginSurfaceConnectivity.endpointStatus = connected ? 'online' : 'offline';
+            // Home HTTP remains available; only every addressed daemon loses
+            // its presence lease in this Account-data outage scenario.
+            pluginSurfaceConnectivity.endpointStatus = 'online';
             pluginSurfaceConnectivity.machineOnline = connected;
+            applyPluginSurfaceConnectivity();
             return (
                 <PluginSurfacePlacementHost
                     placement={placement}
@@ -7580,6 +7663,7 @@ describe('PluginSurfacePlacementHost', () => {
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         pluginSurfaceConnectivity.endpointStatus = 'offline';
         pluginSurfaceConnectivity.machineOnline = false;
+        applyPluginSurfaceConnectivity();
         const screen = await renderScreen(<PluginSurfacePlacementHost
             placement={placement}
             resourceBrowserTarget={target}
@@ -7640,6 +7724,7 @@ describe('PluginSurfacePlacementHost', () => {
         const renderPlacement = (connected: boolean) => {
             pluginSurfaceConnectivity.endpointStatus = connected ? 'online' : 'offline';
             pluginSurfaceConnectivity.machineOnline = connected;
+            applyPluginSurfaceConnectivity();
             return (
                 <PluginSurfacePlacementHost
                     placement={placement}
@@ -7668,6 +7753,7 @@ describe('PluginSurfacePlacementHost', () => {
         expect(screen.findByTestId(`plugin-surface-offline-summary:${placement.id}-freshness-text`)).toBeTruthy();
 
         pluginSurfaceConnectivity.daemonStateVersion += 1;
+        applyPluginSurfaceConnectivity();
         await screen.update(renderPlacement(true));
 
         await vi.waitFor(() => expect(screen.findByTestId('plugin-rn-host-api-currentness')?.props.accessibilityLabel)
@@ -8436,6 +8522,12 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         return props.renderContext!.surface;
     }
 
+    // Plugin surfaces use non-preemptive publication. Explicit core-page focus
+    // belongs to the real provider and must not silently run through this fixture.
+    const rejectUnexpectedCurrentUiContextActivation: CurrentUiContextMountPublication['activateCurrent'] = async () => {
+        throw new Error('Unexpected explicit Current UI activation in a plugin surface fixture');
+    };
+
     it('forgets app-page A current UI before focus can restore it after navigation', async () => {
         reactNativeSurfaceProps.length = 0;
         await primeGeneratedArtifact();
@@ -8484,6 +8576,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                         });
                         return true;
                     }),
+                    activateCurrent: rejectUnexpectedCurrentUiContextActivation,
                     clear,
                     dispose: vi.fn((): void => {
                         if (disposed) return;
@@ -8664,6 +8757,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                         publishLabels.push(enrichment.entity?.label ?? '');
                         return true;
                     }),
+                    activateCurrent: rejectUnexpectedCurrentUiContextActivation,
                     clear: publicationClear,
                     dispose: vi.fn(),
                 }) satisfies CurrentUiContextMountPublication;
@@ -8810,6 +8904,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             pluginSurfaceConnectivity.endpointStatus = 'offline';
             pluginSurfaceConnectivity.machineOnline = false;
             pluginSurfaceConnectivity.daemonStateVersion += 1;
+            applyPluginSurfaceConnectivity();
             await screen.update(renderPlacement(false, true));
             expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(false);
             expect(screen.findHostByTestId('current-ui-lifecycle-probe')).toBe(retainedButton);
@@ -8822,6 +8917,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             pluginSurfaceConnectivity.endpointStatus = 'online';
             pluginSurfaceConnectivity.machineOnline = true;
             pluginSurfaceConnectivity.daemonStateVersion += 1;
+            applyPluginSurfaceConnectivity();
             await screen.update(renderPlacement(true, true));
             expect(screen.findHostByTestId('current-ui-lifecycle-probe')).toBe(retainedButton);
             expect(spinnerStrip().props.style.animationName).toBe('happierActivitySpinnerFilmstrip');
@@ -9059,6 +9155,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         reactNativeSurfaceProps.length = 0;
         pluginSurfaceConnectivity.endpointStatus = 'offline';
         pluginSurfaceConnectivity.machineOnline = false;
+        applyPluginSurfaceConnectivity();
         contributionProjectionDescribeMock.mockReset();
         contributionProjectionDescribeMock.mockResolvedValue({ supported: false, reason: 'error' });
 
@@ -9078,6 +9175,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         reactNativeSurfaceProps.length = 0;
         pluginSurfaceConnectivity.endpointStatus = 'online';
         pluginSurfaceConnectivity.machineOnline = true;
+        applyPluginSurfaceConnectivity();
         // Structurally different from the retained admission, so the assertion
         // below distinguishes live authority from device custody.
         const liveTargetedContributions = PluginUiTargetedContributionsV1Schema.parse({
@@ -9143,6 +9241,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         reactNativeSurfaceProps.length = 0;
         pluginSurfaceConnectivity.endpointStatus = 'offline';
         pluginSurfaceConnectivity.machineOnline = false;
+        applyPluginSurfaceConnectivity();
         contributionProjectionDescribeMock.mockReset();
         contributionProjectionDescribeMock.mockResolvedValue({ supported: false, reason: 'error' });
         const emptyTarget = await renderScreen(renderPlacement(), { flushOptions: { cycles: 0 } });
@@ -9950,6 +10049,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                         currentUiEntityLabel = label;
                         return true;
                     },
+                    activateCurrent: rejectUnexpectedCurrentUiContextActivation,
                     clear,
                     dispose(): void {
                         if (disposed) return;
@@ -10649,7 +10749,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         } as PluginUiSurfacePlacementProjection;
         const noResourceProducerPlacement = {
             ...browserReactNativePlacementFor(targetedFixture.mountedTarget.occurrenceId),
-            runtime: { ...browserReactNativePlacement.runtime },
+            runtime: { resourceCapability: { readable: false, dynamic: false } },
         } as PluginUiSurfacePlacementProjection;
 
         const screen = await renderScreen(render(readableStaticPlacement));
@@ -11167,7 +11267,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             const unavailable = screen.findByTestId('plugin-surface-unavailable');
             expect(unavailable, testCase.reason).toBeTruthy();
             expect(screen.getTextContent()).not.toContain(testCase.reason);
-            expect(unavailable?.props).toMatchObject({
+            const statusSentence = unavailable?.find(node => node.props.role === 'status');
+            expect(statusSentence?.props).toMatchObject({
                 accessibilityRole: 'text',
                 accessibilityLiveRegion: 'polite',
                 role: 'status',
@@ -12039,7 +12140,8 @@ describe('Composer physical surface mount', () => {
             transactionApplier={{ apply: () => ({ status: 'rejected' }) } as never}
         />, { createNodeMock: (element) => element.type === 'iframe' ? { contentWindow: iframeSource } : null });
         await vi.waitFor(() => expect(screen.root.findAllByType('iframe')).toHaveLength(1));
-        const document = String(screen.root.findByType('iframe').props.srcDoc);
+        const guest = await loadHostedNavigationGuest(screen);
+        const document = String(guest.props.srcDoc);
         const encodedConfig = document.match(/Object\.freeze\((\{.*?\})\),writable:false/)?.[1];
         if (!encodedConfig) throw new Error('expected_inline_frame_bootstrap');
         const config: { identity: { instanceId: string; mountNonce: string } } = JSON.parse(encodedConfig);
@@ -12227,6 +12329,104 @@ describe('Composer physical surface mount', () => {
  * mocked, and it is asserted on.
  */
 describe('installed Session widget through the mounted plugin controller', () => {
+    it('shares widget occurrences through the public provider and fences retired mounts', async () => {
+        const { widgetProjectionEntry } = await import('@/dev/testkit/fixtures/pluginWidgetProjectionFixtures');
+        const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
+        const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+        const { unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const pluginId = 'com.acme.shared-widget';
+        const occurrenceId = 'shared-widget-occurrence';
+        const scope = { serverId: 'server_1', accountId: 'account-a', owner: { kind: 'home' as const } };
+        const previous = storage.getState();
+        onTestFinished(() => { storage.setState(previous, true); });
+        await pluginSurfaceAccountLifetime.setScope(scope);
+        storage.setState({ profileScope: { serverId: scope.serverId, accountId: scope.accountId },
+            profile: AccountProfileSchema.parse({ id: scope.accountId }),
+            machineListByServerId: { [scope.serverId]: [createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() })] } });
+        const placement = widgetProjectionEntry({ pluginId, localId: 'latest', target: 'app', occurrenceId });
+        const bundleId = `reactNativeBundle:${pluginId}:widget-native`;
+        const directProjection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({
+            v: 2, generation: 1, actionsById: {},
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Shared widget', enabled: true,
+                version: '1.0.0', occurrenceId, declaresContributionPoints: false,
+                sourceCustody: { kind: 'development', registeredRootId: '/plugins/shared-widget' },
+                executionOrigin: {
+                    serverIdentityId: 'srv_server_1',
+                    sourceRef: {
+                        pluginId,
+                        machineId: 'machine_1',
+                        sourceCustody: { kind: 'development', registeredRootId: '/plugins/shared-widget' },
+                    },
+                },
+                source: { kind: 'local', locator: '/plugins/shared-widget' } } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                [placement.id]: { ...placement, renderer: { kind: 'reactNative', contributionId: 'widget-native' } },
+                [bundleId]: { id: bundleId, pluginId, occurrenceId, contributionKind: 'reactNativeBundle',
+                    contributionId: 'widget-native', generatedV2: true, pluginVersion: '1.0.0',
+                    hostApi: { minVersion: '1.0.0', methods: ['context'] },
+                    artifactGraph: generatedReactNativeArtifactGraph,
+                    runtime: { decision: { state: 'load', reason: 'compatible', diagnostics: [] },
+                        loadPolicy: { source: 'installedArtifact' }, cacheKey: 'shared-widget',
+                        cacheIdentity: { artifactDigest: generatedReactNativeCacheIdentity.artifactDigest } } },
+            } } },
+        }));
+        const union = unionPluginUiProjections([{ machineId: 'machine_1', serverId: scope.serverId,
+            serverIdentityId: 'srv_server_1', phase: 'current', interactionEnabled: true, projection: directProjection }]);
+        const projection = union.pluginUiProjection;
+        expect(projection?.surfacePlacementsById[placement.id]?.occurrenceId).toBe(occurrenceId);
+        const descriptor = readWidgetDescriptor(projection, { pluginId, localId: 'latest' });
+        expect(descriptor).not.toBeNull();
+        const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
+            interactionEnabled: true, machineId: null, serverId: scope.serverId, platform: 'web' as const,
+            accountLifetime: captureActiveServerAccountScopeLifetime() };
+        const renderWidget = (id: string) => <WidgetSurface scope={scope} providedContext={{}} descriptor={descriptor}
+            instance={{ v: 1, id, definition: { kind: 'installed', surface: { pluginId, localId: 'latest' } }, bindings: {} }}
+            appRuntime={runtime} presentation="content" recordRevision="1" testID={id} />;
+        type MountedProps = React.ComponentProps<typeof import('../reactNative/PluginReactNativeSurface').PluginReactNativeSurface>;
+        const { usePluginUiEphemeralSharedScope } = await import('@happier-dev/plugin-ui/hostApi');
+        const observedScopes: Array<ReturnType<typeof usePluginUiEphemeralSharedScope>> = [];
+        function SharedWidget() {
+            const sharedScope = usePluginUiEphemeralSharedScope();
+            observedScopes.push(sharedScope);
+            return React.createElement('Text', null, sharedScope ? 'Shared provider ready' : 'Shared provider unavailable');
+        }
+        const readScope = () => observedScopes.at(-1);
+        // Inject only the executable module-loader boundary; run the real native
+        // surface adapter, private provider and author's public hook beneath it.
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(SharedWidget) };
+        reactNativeSurfaceProps.length = 0;
+        const first = await renderScreen(renderWidget('shared-widget-first'));
+        await vi.waitFor(() => expect(reactNativeSurfaceProps.length, JSON.stringify(first.findAll(node =>
+            typeof node.props.testID === 'string').map(node => node.props.testID))).toBeGreaterThan(0));
+        await flushHookEffects();
+        const firstProps = reactNativeSurfaceProps.at(-1) as MountedProps;
+        expect(firstProps.privateHostBindings?.resourceStoreGeneration).toBe(occurrenceId);
+        expect(firstProps.privateHostBindings?.ephemeralSharedScope).not.toBeNull();
+        expect(first.getTextContent()).toContain('Shared provider ready');
+        expect(firstProps.renderContext.surface.mount).toMatchObject({ kind: 'embedded', role: 'widget' });
+        const firstScope = readScope();
+        expect(firstScope).not.toBeNull();
+        const dispose = vi.fn();
+        const firstLease = firstScope!.acquire('latest', () => ({ value: { rows: ['current'] }, dispose }));
+        const second = await renderScreen(renderWidget('shared-widget-second'));
+        await flushHookEffects();
+        expect(second.getTextContent()).toContain('Shared provider ready');
+        const secondScope = readScope();
+        const secondLease = secondScope!.acquire('latest', () => { throw new Error('Shared occurrence must reuse the provider'); });
+        expect(secondLease?.value).toBe(firstLease?.value);
+        await first.unmount();
+        expect(firstScope!.acquire('late', () => ({ value: 'stale', dispose }))).toBeNull();
+        expect(dispose).not.toHaveBeenCalled();
+        firstLease?.release();
+        await act(async () => { retireActiveServerAccountScopeLifetime(); });
+        expect(secondScope!.acquire('late', () => ({ value: 'stale', dispose }))).toBeNull();
+        expect(dispose).toHaveBeenCalledOnce();
+        secondLease?.release();
+        await second.unmount();
+    });
+
     it('renders an inputless authored body when the app projection has no unique machine scope', async () => {
         const { WidgetDefinitionV1Schema } = await import('@happier-dev/protocol/widgets');
         const { storage } = await import('@/sync/domains/state/storage');
@@ -12368,7 +12568,7 @@ describe('installed Session widget through the mounted plugin controller', () =>
                 [placementId]: {
                     id: placementId, pluginId, occurrenceId, contributionKind: 'surfacePlacement',
                     descriptorId: declaration.id, binding, target: binding.target,
-                    ...mountedExecutionOrigin(pluginId, 'machine_1', 'public-widget-materialization', 'srv_server_1'),
+                    executionOrigin: mountedExecutionOrigin(pluginId, 'machine_1', 'public-widget-materialization', 'srv_server_1'),
                     renderer: { kind: 'reactNative', contributionId: declaration.renderer },
                     runtime: { resourceCapability: { readable: resourceGranted, dynamic: resourceGranted } },
                     display: { title: 'Review status' },
@@ -12469,12 +12669,9 @@ describe('installed Session widget through the mounted plugin controller', () =>
                     }));
                     if (path.startsWith('/v2/sessions/') && path.split('/').length === 4) {
                         const selected = availableSessions.find(candidate => path === `/v2/sessions/${candidate.id}`);
-                        return Promise.resolve(selected ? Response.json({ session: {
-                            id: selected.id, createdAt: selected.createdAt, updatedAt: selected.updatedAt, seq: selected.seq,
-                            active: selected.active, activeAt: selected.activeAt, encryptionMode: 'plain', dataEncryptionKey: null,
-                            metadataVersion: selected.metadataVersion, metadata: JSON.stringify(selected.metadata),
-                            agentStateVersion: selected.agentStateVersion, agentState: null, share: null, access: selected.access,
-                        } }) : Response.json({ error: 'Session not found' }, { status: 404 }));
+                        return Promise.resolve(selected ? Response.json({
+                            session: sessionRows.find(row => row.id === selected.id),
+                        }) : Response.json({ error: 'Session not found' }, { status: 404 }));
                     }
                     if (path === `/v2/sessions/session-widget-a/system-records/record`) return Promise.resolve(Response.json({ record: null }));
                     if (path === `/v2/sessions/session-widget-a/system-records`) return Promise.resolve(Response.json({ records: [], nextCursor: null, hasNext: false }));
@@ -12499,7 +12696,8 @@ describe('installed Session widget through the mounted plugin controller', () =>
             })) },
             ordinarySessionListMembershipByServerId: { server_1: availableSessions.map(entry => entry.id) },
             sessionListIndexByServerId: { server_1: availableSessions.map(entry => ({ type: 'session', sessionId: entry.id, serverId: 'server_1', serverName: 'Home' })) },
-            machineListByServerId: { server_1: [createMachineFixture({ id: 'machine_1', active: true }), createMachineFixture({ id: 'machine_a', active: true })] } });
+            machineListByServerId: { server_1: [createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() }),
+                createMachineFixture({ id: 'machine_a', active: true, activeAt: Date.now() })] } });
         const descriptor = readWidgetDescriptor(model, { pluginId, localId: declaration.id });
         const onRepairInputs = vi.fn();
         const render = (current = runtime) => <WidgetSurface
@@ -12698,7 +12896,7 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
                             descriptorId: binding.destination.localId,
                             binding,
                             target: binding.target,
-                            ...mountedExecutionOrigin(
+                            executionOrigin: mountedExecutionOrigin(
                                 binding.destination.pluginId,
                                 'machine_1',
                                 'materialization-cross-path-current',

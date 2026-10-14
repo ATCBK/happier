@@ -2,6 +2,7 @@ import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/ar
 import { describe, expect, it } from 'vitest';
 
 import {
+    PluginProjectedActionV2Schema,
     PluginProjectionV2Schema,
     type PluginProjectionV2,
 } from '@happier-dev/protocol';
@@ -147,6 +148,23 @@ function createProjection(): PluginProjectionV2 {
         installedPackagesById: {},
         agentsById: {},
         actionsById: {
+            'acme.preview/entries/search-v1': PluginProjectedActionV2Schema.parse({
+                id: 'entries/search-v1',
+                pluginId: 'acme.preview',
+                occurrenceId: PREVIEW_OCCURRENCE_ID,
+                title: 'Search entries',
+                scopes: ['session'],
+                surfaces: ['ui'],
+                execution: { target: 'daemon' },
+                dangerLevel: 'safe',
+                available: true,
+                executionOrigin: {
+                    serverIdentityId: 'srv_preview',
+                    materializationRef: {
+                        pluginId: 'acme.preview', machineId: 'machine-preview', materializationId: 'materialization-preview',
+                    },
+                },
+            }),
             'acme.preview/open-preview': {
                 id: 'open-preview',
                 pluginId: 'acme.preview',
@@ -268,12 +286,6 @@ function createProjection(): PluginProjectionV2 {
                         descriptorId: 'entries',
                         identity: { pluginId: 'acme.preview', localId: 'entries' },
                         action: { pluginId: 'acme.preview', localId: 'entries/search-v1' },
-                        serverIdentityId: 'srv_preview',
-                        materializationRef: {
-                            pluginId: 'acme.preview',
-                            machineId: 'machine-preview',
-                            materializationId: 'materialization-preview',
-                        },
                     },
                     'searchProvider:acme.preview:foreign': {
                         id: 'searchProvider:acme.preview:foreign',
@@ -957,6 +969,9 @@ describe('plugin UI projection normalization', () => {
         expect(model.searchProvidersById['searchProvider:acme.preview:entries']).toMatchObject({
             descriptorId: 'entries',
             action: { pluginId: 'acme.preview', localId: 'entries/search-v1' },
+        });
+        // Search descriptors point to their query Action, the sole execution-origin owner.
+        expect(model.actionsById['acme.preview/entries/search-v1']?.executionOrigin).toEqual({
             serverIdentityId: 'srv_preview',
             materializationRef: {
                 pluginId: 'acme.preview',
@@ -964,6 +979,7 @@ describe('plugin UI projection normalization', () => {
                 materializationId: 'materialization-preview',
             },
         });
+        expect(model.searchProvidersById['searchProvider:acme.preview:entries']).not.toHaveProperty('executionOrigin');
         // A descriptor whose reference names another plugin has no reachable
         // executor here, so it is dropped rather than repaired.
         expect(model.searchProvidersById['searchProvider:acme.preview:foreign']).toBeUndefined();

@@ -26,6 +26,7 @@ import {
 import type {
     PluginArtifactSourceCandidate,
 } from '@/sync/domains/plugins/availability/artifactLease';
+import { PluginArtifactSourceError } from '@/sync/domains/plugins/availability/artifactLease';
 import {
     resolveAccountStoredContentCompatibilityHeaders,
     withAccountStoredContentCompatibilityRequestDeclaration,
@@ -839,6 +840,9 @@ export async function publishActivePluginAccountPackageAssets(
 function archiveFileSet(
     result: ActivePluginAccountHostedArtifactReadResult,
 ): ReadonlyMap<string, Uint8Array> | null {
+    if (result.kind === 'unavailable' && (result.code === 'transport_unavailable' || result.code === 'response_invalid')) {
+        throw new PluginArtifactSourceError(result.code);
+    }
     return result.kind === 'available' ? result.value.archive.files : null;
 }
 

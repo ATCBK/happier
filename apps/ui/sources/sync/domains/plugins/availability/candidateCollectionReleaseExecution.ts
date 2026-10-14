@@ -131,10 +131,7 @@ export function resolveCandidateCollectionReleaseExecution(input: Readonly<{
             platform: slot.platform,
         })
         : null;
-    const origin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse({
-        serverIdentityId: entry.serverIdentityId,
-        materializationRef: entry.materializationRef,
-    });
+    const origin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse(entry.executionOrigin);
     if (
         !graph.success
         || !cacheIdentity

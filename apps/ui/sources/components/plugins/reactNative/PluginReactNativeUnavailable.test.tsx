@@ -8,6 +8,8 @@ import { PluginReactNativeUnavailable } from './PluginReactNativeUnavailable';
 import { PluginHostedWebUnavailable, readPluginHostedWebUnavailableDiagnosticCode } from '../hostedWeb/PluginHostedWebUnavailable';
 import { acquirePluginSelectedArtifactLease } from '@/sync/domains/plugins/availability/artifactLease';
 import { createPluginAccountAvailabilityReaderStore } from '@/sync/domains/plugins/availability/reader';
+import { createPluginArtifactDaemonSource } from '@/sync/domains/plugins/availability/artifactDaemonSource';
+import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1, PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -22,6 +24,71 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 describe('PluginReactNativeUnavailable', () => {
+    it('carries a daemon byte-route refusal through acquisition and hosted copy into the real Retry action', async () => {
+        const bytes = new TextEncoder().encode('view');
+        const entry = 'hosted-web/view/index.html';
+        const digest = computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: entry, bytes }]);
+        const slot = { pluginId: 'com.acme.fixture', contributionId: 'view', tier: 'hostedWeb', platform: 'web' } as const;
+        const result = await acquirePluginSelectedArtifactLease({
+            reader: createPluginAccountAvailabilityReaderStore().bind({ serverId: 'home', accountId: 'account' }),
+            slot,
+            daemonProjectionSelection: {
+                occurrenceId: 'fixture-route-occurrence',
+                artifact: { ...slot, artifactId: 'view', digest, hostUiApiRange: '^1.0.0', releaseVersion: '1.0.0' },
+                isCurrent: () => true,
+            },
+            artifactGraph: PluginUiArtifactsManifestEntryV2Schema.parse({
+                artifactId: 'view', tier: 'hostedWeb', entry, digest,
+                hostUiApiRange: '^1.0.0', builtWith: { staging: 'staticDirectory' },
+                files: [{ relativePath: entry, byteSize: bytes.byteLength, digest: computePluginUiArtifactSha256DigestV1(bytes) }],
+            }),
+            sources: [createPluginArtifactDaemonSource({
+                transport: { machineId: 'machine', serverId: 'home' }, family: 'hostedWeb',
+                fetchArtifactBytes: async () => ({ ok: false, code: 'artifact_unavailable', diagnostics: ['artifact_bytes_rpc_unavailable'] }),
+            })],
+        });
+        if (result.kind !== 'unavailable') throw new Error('Expected unavailable route');
+        const retry = vi.fn();
+        const repair = vi.fn();
+        const screen = await renderScreen(<PluginHostedWebUnavailable
+            diagnosticCode={readPluginHostedWebUnavailableDiagnosticCode(result.code) ?? 'response_invalid'}
+            onRetry={retry} recoveryAction={{ label: 'route fallback', onPress: repair }}
+        />);
+        expect(screen.getTextContent()).toContain(t('pluginRuntime.routeUnavailable'));
+        await act(async () => { screen.pressByTestId('plugin-hosted-web-unavailable-action'); });
+        expect(retry).toHaveBeenCalledOnce();
+        expect(repair).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['plugin_collection_contract_conflict', 'settingsPlugins.managePlugin'],
+        ['plugin_resource_admission_unavailable', 'settingsPlugins.managePlugin'],
+        ['plugin_host_access_disclosure_mismatch', 'settingsPlugins.managePlugin'],
+        ['artifact_bytes_rpc_unavailable', 'common.retry'],
+        ['artifact_bytes_response_invalid', 'common.retry'],
+        ['artifact_bytes_fetch_failed', 'common.retry'],
+        ['plugin_resource_transport_not_supported', 'common.retry'],
+        ['plugin_resource_transport_error', 'common.retry'],
+        ['plugin_resource_transport_timeout', 'common.retry'],
+        ['targeted_contributions_invalid_response', 'common.retry'],
+        ['targeted_contributions_error', 'common.retry'],
+    ] as const)('explains %s and invokes its one real recovery callback', async (code, labelKey) => {
+        const repair = vi.fn();
+        const retry = vi.fn();
+        const screen = await renderScreen(
+            <PluginReactNativeUnavailable
+                diagnostics={[code]}
+                onRetry={retry}
+                recoveryAction={{ label: 'route fallback', onPress: repair }}
+            />,
+        );
+        expect(screen.getTextContent()).not.toContain(t('pluginRuntime.unavailableGeneric'));
+        expect(screen.findByTestId('plugin-rn-ui-unavailable-action')?.props.accessibilityLabel).toBe(t(labelKey));
+        await act(async () => { screen.pressByTestId('plugin-rn-ui-unavailable-action'); });
+        expect(labelKey === 'common.retry' ? retry : repair).toHaveBeenCalledOnce();
+        expect(labelKey === 'common.retry' ? repair : retry).not.toHaveBeenCalled();
+    });
+
     it('preserves a real Artifact graph refusal through hosted presentation and its repair action', async () => {
         const slot = { pluginId: 'com.acme.fixture', contributionId: 'view', tier: 'hostedWeb', platform: 'web' } as const;
         const result = await acquirePluginSelectedArtifactLease({

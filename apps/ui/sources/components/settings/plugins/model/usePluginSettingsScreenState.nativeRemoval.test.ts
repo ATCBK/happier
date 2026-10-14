@@ -88,9 +88,6 @@ async function renderRemovalOwner(
             projection: { v: 2, generation: 1, installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
                 commandsById: {}, resourcesById: {}, settingsById: {}, familiesById: {}, diagnostics: [] },
         };
-        if (request.method === RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_GET) return {
-            t: 'happier_marketplace_source_registry_v1', schemaVersion: 1, sources: [],
-        };
         if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) {
             const payload = request.payload as CapabilitiesInvokeRequest;
             requests.push({ machineId: request.machineId, serverId: request.serverId, payload });

@@ -63,8 +63,8 @@ describe('canonical React Native plugin Host API adapter', () => {
     it('transports host reads through the same mounted read ceiling without dropping their identity', async () => {
         const reference = { hostRead: 'usage.query' as const, input: { queries: [] } };
         const owner = createPluginSurfaceHostApi({ surfaceContext: surface, handlers: {
-            readResource: request => request.payload && typeof request.payload === 'object'
-                && !Array.isArray(request.payload) && JSON.stringify(request.payload.resource) === JSON.stringify(reference)
+            readResource: (request): PluginUiJsonValueV1 => request.payload && typeof request.payload === 'object'
+                && 'resource' in request.payload && JSON.stringify(request.payload.resource) === JSON.stringify(reference)
                 ? { contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`, bytesBase64: 'Nw==' }
                 : { code: 'denied', diagnostics: [] },
         } });

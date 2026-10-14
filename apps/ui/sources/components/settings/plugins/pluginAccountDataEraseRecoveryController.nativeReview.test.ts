@@ -69,7 +69,8 @@ describe('Account plugin erase native resource review at the real Action and HTT
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { createPluginAccountDataEraseRecoveryController } = await import('./pluginAccountDataEraseRecoveryController');
         const executor = createDefaultActionExecutor();
-        const controller = createPluginAccountDataEraseRecoveryController({ execute: executor.execute, modal,
+        const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+        const controller = createPluginAccountDataEraseRecoveryController({ execute: createFrontDoorActionExecute(executor), modal,
             captureActiveAccountScopeLifetime: captureActiveServerAccountScopeLifetime });
         try {
             expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);

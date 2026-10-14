@@ -1,7 +1,8 @@
 import { PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { PluginCollectionUiQueryErrorV1Schema, PluginCollectionUiQueryRequestV1Schema, PluginCollectionUiQueryResultV1Schema, validatePluginCollectionUiQueryParametersV1, type NormalizedPluginCollectionUiQueryDescriptorV1, type PluginCollectionUiQueryErrorV1, type PluginCollectionUiQueryRequestV1, type PluginCollectionUiQueryResultV1 } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
 import { PluginCollectionUiQueryTransportResultV1Schema, validatePluginCollectionUiQueryResultV1, type NormalizedPluginAccountCollectionContractV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
-import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type {
     PluginAccountCollectionDefinition,
     PluginAccountCollectionValue,
@@ -227,6 +228,7 @@ async function executePrivatePluginCollectionUiQuery(
         }
         const transport = PluginCollectionUiQueryTransportResultV1Schema.parse(response.body);
         const validate = compilePluginJsonSchema(contract.schema);
+        const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(contract.schema));
         const rows: PluginCollectionUiQueryResultV1['rows'] = [];
         for (const row of transport.rows) {
             if (!row.logicalRow) {
@@ -235,6 +237,7 @@ async function executePrivatePluginCollectionUiQuery(
             const logical = mergeLogicalRow<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>({
                 contract,
                 validate,
+                storedReadSchema,
                 row: {
                     rowId: row.context.rowId,
                     revision: row.context.revision,

@@ -112,13 +112,14 @@ import type { PluginReactNativeLoaderPolicyInput } from '@/components/plugins/re
 import {
     createCanonicalPluginReactNativeHostApiAdapter,
 } from '@/components/plugins/reactNative/hostApi';
-import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
+import { PluginSurfaceFallback, resolvePluginSurfaceStateAction } from '@/components/sessions/panes/PluginSurfaceFallback';
 import {
     resolvePluginSurfaceStatePresentation,
     type PluginSurfacePresentationState,
 } from '@/sync/domains/surfaces/copy';
 import { getPreferredLanguage, t } from '@/text';
 import { useMachineDisplayNamesById } from '@/sync/store/hooks';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { resolvePluginDisplayString } from '@/components/plugins/surfaces/resolvePluginDisplayString';
 import {
@@ -541,6 +542,7 @@ function createInstalledPackageBrandTargetResolver(
  */
 type DeclarativePluginSurfaceWithDocumentSourceProps = Readonly<{
     pluginId: string;
+    unavailableAction?: SurfaceStateAction;
     staticModel: Readonly<Record<string, unknown>>;
     documentSource: unknown;
     /** The exact Registry container published through the public SDK context. */
@@ -629,6 +631,7 @@ function DeclarativePluginSurfaceDocumentContent(
         reasonCode: document.invalidDocument
             ? 'plugin_declarative_document_invalid'
             : document.resourceError?.code,
+        diagnostics: document.resourceError?.diagnostics,
         // The packaged static model paints immediately and remains the valid
         // LKG until a complete dynamic document is atomically adopted.
         hasRetainedContent: true,
@@ -662,7 +665,11 @@ function DeclarativePluginSurfaceDocumentContent(
             dataClient={props.dataClient}
             documentSourcePresentation={{
                 presentation: documentSurfacePresentation,
-                retry: document.retry,
+                action: resolvePluginSurfaceStateAction({
+                    recoveryAction: documentSurfacePresentation.recoveryAction,
+                    onRetry: document.retry,
+                    manageAction: props.unavailableAction,
+                }),
             }}
             renderTargetedSurface={props.renderTargetedSurface}
             reportUnsupportedNestedTargetedSurface={props.reportUnsupportedNestedTargetedSurface}
@@ -789,6 +796,7 @@ function DeclarativePluginSurfaceWithDocumentSource(
             surfaceActivity={{
                 active: props.controller.isCurrent()
                     && props.interactionEnabled
+                    && props.daemonInteractionEnabled
                     && presented,
             }}
             {...(props.composerRef === undefined ? {} : { composerRef: props.composerRef })}
@@ -1683,7 +1691,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     const canonicalEphemeralSharedScope = usePluginUiEphemeralSharedScopeBinding({
         accountLifetime: canonicalAccountLifetime,
         pluginId: canonicalIdentity.pluginId,
-        occurrenceId: canonicalIdentity.targetedContributions?.target.occurrenceId,
+        occurrenceId: canonicalIdentity.occurrenceId,
         executionOrigin: canonicalIdentity.executionOrigin,
         mountLifetime: props.mountLifetime,
     });
@@ -2364,6 +2372,9 @@ function PluginSurfaceHostMount(props: Readonly<(
     // observes its existing retirement callback.
     const [, refreshAfterAccountRetirement] = React.useReducer((revision: number) => revision + 1, 0);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const reactNativeFeatureEnabled = useFeatureEnabled('plugins.ui.reactNativeBundles', {
+        scopeKind: 'spawn', serverId: serverId ?? accountLifetime?.scope.serverId ?? '',
+    });
     React.useEffect(() => {
         const retirement = accountLifetime?.onRetire(refreshAfterAccountRetirement);
         return () => retirement?.dispose();
@@ -3648,6 +3659,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             return renderWithTargetedSurfaceBoundary(
                 <DeclarativePluginSurfaceWithDocumentSource
                     pluginId={mountedPluginId}
+                    unavailableAction={props.unavailableAction}
                     staticModel={model}
                     documentSource={documentSource}
                     surfaceMount={surfaceMount}
@@ -3915,6 +3927,7 @@ function PluginSurfaceHostMount(props: Readonly<(
 
     const renderReactNative = (): React.ReactNode => {
         if (renderer.kind !== 'reactNative') return null;
+        if (!reactNativeFeatureEnabled) return renderUnavailable('feature_gate_disabled');
         if (!accountEncryptionMode) {
             return renderAccountEncryptionModeReadiness();
         }
