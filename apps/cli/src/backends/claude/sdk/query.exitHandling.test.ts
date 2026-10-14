@@ -17,6 +17,8 @@ import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createDeferred } from '@/testkit/async/deferred';
 import { logger } from '@/ui/logger';
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
+import { createSessionRuntimeActivity } from '@/session/runtimeActivity/createSessionRuntimeActivity';
+import type { SessionRuntimeActivityContribution } from '@/session/runtimeActivity/types';
 import { ClaudeNativeProviderExitUnverifiedError } from './types';
 
 // Record real OS children so cleanup assertions wait for the actual close boundary.
@@ -231,9 +233,14 @@ describe('claude sdk query exit handling', () => {
     env.patch({ HAPPIER_CLAUDE_PATH: script, HAPPIER_JS_RUNTIME_PATH: process.execPath });
     const ledger = createClaudeProviderActivityLedger();
     ledger.apply({ type: 'started', sessionId: 'owned-session', taskId: 'background-child' });
+    const runtimeActivity = createSessionRuntimeActivity('supported');
+    const reports: SessionRuntimeActivityContribution[] = [];
+    await runtimeActivity.bindPublisher({ publish: async snapshot => { reports.push(snapshot); }, close: async () => {} });
+    const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+    if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
     const adapter = createClaudeProviderRuntimeActivityAdapter({
       providerActivityLedger: ledger,
-      contributionHandle: { report: async () => {}, markUnknown: async () => {}, dispose: async () => {} },
+      contributionHandle,
     });
     let initialRead = false;
     let providerPid: number | undefined;
@@ -262,10 +269,16 @@ describe('claude sdk query exit handling', () => {
       if (providerPid === undefined) throw new Error('Expected the real provider process identity');
       expect(isPidAlive(providerPid)).toBe(false);
       expect(ledger.getActiveProviderTaskCount()).toBe(0);
+      expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+      // The remote launcher starts each replacement through this boundary before installing its observer.
+      await adapter.publishBeforeRuntimeStart('claude-remote-provider-not-started');
+      await adapter.activateObservation('replacement-provider-observer-installed');
       await adapter.observeActivity({ evidence: 'live', activity: { type: 'started', sessionId: 'owned-session', taskId: 'replacement-child' } });
       expect(ledger.getActiveProviderTaskBlockers().map(task => task.taskId)).toEqual(['replacement-child']);
+      expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
     } finally {
       env.restore();
+      await runtimeActivity.dispose();
     }
   });
 
