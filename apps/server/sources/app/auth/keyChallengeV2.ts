@@ -1,20 +1,12 @@
 import * as privacyKit from "privacy-kit";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
-import {
-    canonicalizeKeyChallengeV2AudienceOrigin,
-    createPasswordCredentialMutationDigestV1,
-    createPasswordMutationChallengeSigningInputV1,
-    PasswordMutationChallengeV1Schema,
-    PASSWORD_CREDENTIAL_MUTATION_OPERATION_V1,
-    type PasswordCredentialMutationV1,
-    type PasswordMutationChallengeProofV1,
-    type PasswordMutationChallengeV1,
-    type KeyChallengeV2IssueResponse,
-} from "@happier-dev/protocol";
+import { canonicalizeKeyChallengeV2AudienceOrigin, type KeyChallengeV2IssueResponse } from '@happier-dev/protocol/auth/keyChallenge';
+import { decodePasswordCredentialFieldV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
+import { createPasswordCredentialMutationDigestV1, createPasswordMutationChallengeSigningInputV1, PasswordMutationChallengeV1Schema, PASSWORD_CREDENTIAL_MUTATION_OPERATION_V1, type PasswordCredentialMutationV1, type PasswordMutationChallengeProofV1, type PasswordMutationChallengeV1 } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 import { resolveConfiguredCanonicalServerUrl } from "@/app/serverUrls/effectiveServerUrls";
 import { getOrCreateServerIdentityId, readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 
@@ -247,8 +239,8 @@ export async function consumePasswordMutationKeyChallengeInTx(tx: Tx, params: Re
     let publicKey: Uint8Array;
     let signature: Uint8Array;
     try {
-        publicKey = privacyKit.decodeBase64(params.proof.publicKey);
-        signature = privacyKit.decodeBase64(params.proof.signature);
+        publicKey = decodePasswordCredentialFieldV1(params.proof.publicKey);
+        signature = decodePasswordCredentialFieldV1(params.proof.signature);
     } catch {
         return false;
     }

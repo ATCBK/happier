@@ -148,8 +148,8 @@ describe("Account Security native password lifecycle", () => {
         if (!challenge) throw new Error("challenge unavailable");
         const proof = {
             challengeId: challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey,
             ))),
         };
@@ -219,8 +219,8 @@ describe("Account Security native password lifecycle", () => {
         if (!challenge) throw new Error("challenge unavailable");
         const proof = {
             challengeId: challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(challenge),
                 signing.secretKey,
             ))),
@@ -442,8 +442,8 @@ describe("Account Security native password lifecycle", () => {
             normalizedNativeEmail: email, newCredentialDigest: null,
         } });
         if (!challenge) throw new Error("challenge unavailable");
-        const proof = { challengeId: challenge.challengeId, publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey))) };
+        const proof = { challengeId: challenge.challengeId, publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey))) };
         const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user",
             authenticationEvidence: [{ kind: "home_method", methodId: "email_password" }] });
         const staleEvidence = [{ kind: "home_method" as const, methodId: "email_password" }];
@@ -584,8 +584,8 @@ describe("Account Security native password lifecycle", () => {
         if (!challenge) throw new Error("challenge unavailable");
         const proof = {
             challengeId: challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(accountSigning.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(accountSigning.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(challenge),
                 accountSigning.secretKey,
             ))),

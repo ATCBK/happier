@@ -3,6 +3,7 @@ import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
 import {
     createPasswordMutationChallengeSigningInputV1,
+    encodePasswordCredentialFieldV1,
     type PasswordCredentialMutationV1,
 } from "@happier-dev/protocol";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -39,8 +40,8 @@ describe("Key Challenge password mutation (real database)", () => {
         if (!challenge) throw new Error("challenge issuance unavailable");
         const proof = {
             challengeId: challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey,
             ))),
         };
@@ -113,8 +114,8 @@ describe("Key Challenge password mutation (real database)", () => {
         const other = tweetnacl.sign.keyPair();
         const proof = {
             challengeId: prepared.challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(other.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(other.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(prepared.challenge), other.secretKey,
             ))),
         };
