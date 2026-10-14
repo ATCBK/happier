@@ -13,6 +13,7 @@ import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThem
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { USAGE_METER_METRICS } from '@/components/settings/connectedServices/usage/UsageMeterRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
@@ -153,7 +154,7 @@ export function UsageBodyReading(props: Readonly<{
 
 const readingStyles = StyleSheet.create(() => ({
   body: { gap: 12, paddingVertical: 4 },
-  meters: { gap: 18, paddingVertical: 4 },
+  meters: { gap: USAGE_METER_METRICS.rowGapPx, paddingVertical: 4 },
   meter: { gap: 8 },
   mix: { gap: 18, paddingVertical: 4 },
   mixFigures: { flexDirection: 'row', columnGap: 24 },
@@ -391,6 +392,36 @@ const SHORT_TAIL_ROWS = 2;
 export function leadingUsageRows<Row>(rows: readonly Row[], expanded: boolean): Readonly<{ rows: readonly Row[]; hidden: number }> {
   if (expanded || rows.length <= LEADING_ROWS + SHORT_TAIL_ROWS) return { rows, hidden: 0 };
   return { rows: rows.slice(0, LEADING_ROWS), hidden: rows.length - LEADING_ROWS };
+}
+
+/** An allowance account reports a session and a longer window; this only sizes the room held while reads arrive. */
+const EXPECTED_WINDOWS_PER_ACCOUNT = 2;
+/** What the settled list measures: a captioned meter row, the Show all button, one quiet line, the body's row gap. */
+const SETTLED_ROW_PX = 43;
+const SETTLED_SHOW_ALL_PX = 26;
+const SETTLED_QUIET_LINE_PX = 18;
+const SETTLED_BODY_GAP_PX = 16;
+/** The quiet lines that can close a led list: the unreported-windows note and the pace legend. */
+const SETTLED_QUIET_LINES = 2;
+
+/**
+ * The room a list of allowance windows holds while their reads still arrive, from the accounts already
+ * known: rows fill it and the notes under them join it, so nothing below the list moves until the
+ * reads settle. Undefined when no allowance read is outstanding or no account is known yet.
+ */
+export function readUsageMeterListReserve(slice: UsageQueryResultSlice, accountCount: number): Readonly<{
+  shape: Extract<NonNullable<React.ComponentProps<typeof UsageBodyReading>['shape']>, { kind: 'meters' }>;
+  minHeight: number;
+}> | undefined {
+  const outstanding = readUsageCoverageGaps(slice, ['quota']).some(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+  if (!outstanding || accountCount < 1) return undefined;
+  const led = leadingUsageRows(Array.from({ length: accountCount * EXPECTED_WINDOWS_PER_ACCOUNT }), false);
+  const rows = led.rows.length;
+  const gap = SETTLED_BODY_GAP_PX;
+  const minHeight = rows * SETTLED_ROW_PX + (rows - 1) * USAGE_METER_METRICS.rowGapPx
+    + (led.hidden > 0 ? gap + SETTLED_SHOW_ALL_PX : 0)
+    + SETTLED_QUIET_LINES * (gap + SETTLED_QUIET_LINE_PX);
+  return { shape: { kind: 'meters', rows }, minHeight };
 }
 
 /** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */

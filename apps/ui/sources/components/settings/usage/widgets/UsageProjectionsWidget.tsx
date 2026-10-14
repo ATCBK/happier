@@ -26,6 +26,7 @@ import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
+  readUsageMeterListReserve,
   UsageBodyInsufficient,
   UsageShowAllRows,
   useUsagePluginTheme,
@@ -201,14 +202,17 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       })),
     [paced, nameOf, nowMs],
   );
-  // Beside other widgets the body is a list of meters: while it reads, it holds the rows' room (one per
-  // account already expected, as many as the list leads with) so the page does not grow under the reader.
-  const readingShape = list
-    ? { kind: 'meters' as const, rows: leadingUsageRows(Array.from({ length: readUsageKnownQuotaAccountCount(props.slice) }), false).rows.length }
+  // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
+  // list's room (the rows its accounts are expected to report and the notes under them), so reads fill the
+  // room instead of growing the page under the reader; a re-read of a settled account never reserves.
+  const reserve = list && (projection.accounts.length === 0 || projection.accounts.some((account) => account.read === null))
+    ? readUsageMeterListReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice))
     : undefined;
+  const readingShape = reserve?.shape;
+  const bodyStyle = reserve ? [styles.body, { minHeight: reserve.minHeight }] : styles.body;
   if (projection.accounts.length === 0) {
     return (
-      <View style={styles.body}>
+      <View style={bodyStyle}>
         <UsagePlansNothingRead
           testID={`${props.testID}.none`}
           slice={props.slice}
@@ -265,7 +269,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     const reasons = lead.rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
     const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
     return (
-      <View style={styles.body} testID={`${props.testID}.projections`}>
+      <View style={bodyStyle} testID={`${props.testID}.projections`}>
         {rows.length ? (
           <UsageMeterStack testID={`${props.testID}.windows`}>
             {lead.rows.map((row) => (
