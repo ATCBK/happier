@@ -376,6 +376,7 @@ function FleetCards(
     [machines],
   );
   const thisComputer = useThisComputerCliUpdate();
+  const accountScope = useActiveServerAccountScope(props.serverId);
   const runs = useMachineUpdateRuns(props.serverId);
   const snapshots = useMachinesCapabilitySnapshots(props.serverId, machineIds);
   const updating = React.useMemo(
@@ -386,11 +387,12 @@ function FleetCards(
           thisComputer.machineId,
           runs,
           snapshots,
+          accountScope,
         )
           .filter((facts) => UPDATE_WAITING.has(facts.cliItem.state))
           .map((facts) => facts.machine.id),
       ),
-    [machines, runs, snapshots, thisComputer.machineId],
+    [machines, runs, snapshots, thisComputer.machineId, accountScope],
   );
   const agents = useMachineAgentsByMachine({
     serverId: props.serverId,

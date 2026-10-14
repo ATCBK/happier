@@ -3,6 +3,7 @@ import {
   createTestSessionTranscriptSource,
 } from '@/dev/testkit';
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   API_TOKEN_FULL_GRANT_V1,
@@ -341,6 +342,36 @@ describe('MachineSuggestionWidget', () => {
     await vi.waitFor(() => expect(screen.findByTestId('widget.review')).toBeTruthy());
     expect(screen.findByTestId('widget.notNow')).toBeTruthy();
     expect(screen.findByTestId('widget.approve')).toBeNull();
+  });
+
+  it('keeps the mounted proposal check on unrelated Artifact updates and checks changed proposal operands', async () => {
+    const request = proposal();
+    const screen = await render('full', request);
+    await vi.waitFor(() => expect(screen.findByTestId('widget.approve')?.props.disabled).toBe(false));
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    await act(async () => {
+      const artifacts = storage.getState().artifacts;
+      const selected = artifacts['approval-1']!;
+      if (!selected.isDecrypted) throw new Error('Selected proposal is not readable');
+      storage.setState({ artifacts: { ...artifacts, unrelated: { ...selected, id: 'unrelated',
+        isDecrypted: true, header: { title: null, kind: 'note' }, body: 'An unrelated note changed', updatedAt: Date.now() } } });
+    });
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    expect(screen.findByTestId('widget.approve')?.props.disabled).toBe(false);
+    await act(async () => {
+      const artifacts = storage.getState().artifacts;
+      const selected = artifacts['approval-1']!;
+      if (!selected.isDecrypted) throw new Error('Selected proposal is not readable');
+      storage.setState({ artifacts: { ...artifacts, 'approval-1': { ...selected,
+        header: { ...selected.header! }, updatedAt: Date.now() } } });
+    });
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    const changed = signed(ApprovalRequestV2Schema.parse({ ...request, updatedAtMs: 2,
+      actionArgs: { ...proposalArgs, items: proposalArgs.items.slice(0, 2) } }));
+    await act(async () => putArtifact(changed));
+    await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(2));
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)[1]?.payload).toMatchObject({ refs: proposalArgs.items.slice(0, 2).map(item => ({ itemId: item.ref.itemId, path: item.ref.path })) });
+    await screen.unmount();
   });
 
   it('approves eight visible items at Full through the existing decision owner', async () => {

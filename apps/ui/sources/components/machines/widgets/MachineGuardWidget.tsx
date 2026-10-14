@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { MachineGuardViewV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import type { MachineGuardPolicyV1 } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
 import { MachineActivityRow } from '@/components/machines/guard/activity/MachineActivityRow';

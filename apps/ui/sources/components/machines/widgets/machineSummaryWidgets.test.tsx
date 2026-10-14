@@ -264,8 +264,9 @@ describe('Machine widget names', () => {
     const screen = await renderScreen(<Probe />);
     expect(subject).toBe('machines.widgets.body.common.unknownMachine');
     const readable = createMachineFixture({ id: 'm1' });
-    if (!readable.metadata) throw new Error('Fixture must have readable metadata');
-    await act(async () => seed({ ...readable, metadata: { ...readable.metadata, host: 'Readable box' } }));
+    const readableMetadata = readable.metadata;
+    if (!readableMetadata) throw new Error('Fixture must have readable metadata');
+    await act(async () => seed({ ...readable, metadata: { ...readableMetadata, host: 'Readable box' } }));
     expect(subject).toBe('Readable box');
     await screen.unmount();
   });
