@@ -137,13 +137,27 @@ resolve_self_publisher_policy() {
     node "$projection_command_policy" --publisher-policy "$self_publisher_repo" "$self_publisher_cwd" "$@"
   ) || exit $?
   self_publisher_flag=${self_publisher_policy%% *}
-  self_publisher_class=${self_publisher_policy#* }
+  self_publisher_fields=${self_publisher_policy#* }
+  self_publisher_class=${self_publisher_fields%% *}
+  self_publisher_tools=${self_publisher_fields#* }
   case "$self_publisher_flag:$self_publisher_class" in
     [01]:[A-Za-z0-9-]*) ;;
     *) printf '%s\n' '[preferred-execution] invalid publisher policy' >&2; exit 2 ;;
   esac
   case "$self_publisher_class" in
     *[!A-Za-z0-9-]*) printf '%s\n' '[preferred-execution] invalid publisher envelope' >&2; exit 2 ;;
+  esac
+  case "$self_publisher_tools" in
+    -) policy_requiredTools= ;;
+    '') printf '%s\n' '[preferred-execution] invalid publisher prerequisites' >&2; exit 2 ;;
+    *)
+      for self_publisher_tool in $self_publisher_tools; do
+        case "$self_publisher_tool" in
+          *[!A-Za-z0-9_.+-]*) printf '%s\n' '[preferred-execution] invalid publisher prerequisite' >&2; exit 2 ;;
+        esac
+      done
+      policy_requiredTools=$self_publisher_tools
+      ;;
   esac
   policy_selfPublisher=$self_publisher_flag
   [ "$self_publisher_class" = - ] || policy_heavyClass=$self_publisher_class
@@ -2396,7 +2410,9 @@ if [ -n "$runtime_build_target" ]; then printf 'HSTACK_RUNTIME_SELECTED:%s\n' "$
 if [ "$selected_number" = 0 ]; then
   run_selected_local "$@"
 fi
-reservation_temporary=$(create_cache_temporary "$cache_dir/$selected_name.active" 2>/dev/null || true)
+# Active readers may reap unlocked records. Keep construction private until
+# its metadata and lifetime lock are ready to publish together by rename.
+reservation_temporary=$(create_cache_temporary "$cache_dir/.dispatch-reservation" 2>/dev/null || true)
 reservation_token=${reservation_temporary##*.}
 execution_id="native-${reservation_token:-$$}-${selected_number}-$(date +%s)"
 reservation_path="$cache_dir/$selected_name.active.$reservation_token"
@@ -2408,6 +2424,7 @@ if [ -n "$reservation_temporary" ] && command -v flock >/dev/null 2>&1; then
       reservation_lock_held=1
     else
       exec 8>&-
+      rm -f -- "$reservation_temporary" 2>/dev/null || true
       reservation_temporary=
     fi
   fi

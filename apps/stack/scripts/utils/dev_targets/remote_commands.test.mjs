@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -28,6 +28,7 @@ import {
   buildRemoteStackOperationCommand,
   buildRemoteRuntimeSnapshotProbeCommand,
   buildRemoteEnsureDirectoriesCommand,
+  buildRemoteInstallCredentialCommand,
   buildSshForwardArgs,
   buildSshTunnelArgs,
   buildSshWorkerArgs,
@@ -104,6 +105,60 @@ test('Docs content coordination delegates admission to its finite reference prod
   assert.equal(native.status, 0, native.stderr);
   assert.equal(native.stdout, '1');
   assert.equal(resolveRemoteCommandPolicy(['node', './fixture/apps/docs/scripts/checkContent.mjs'], { cwd: root }).selfPublisher, '0');
+});
+
+test('Stack public test coordination requires Bun and leaves admission to preparation and the finite test runner', async () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const args = ['node', './apps/stack/scripts/test_ci.mjs'];
+  assert.equal(resolveRemoteCommandPolicy(args, { cwd: root }).selfPublisher, '1');
+  assert.equal(resolveRemoteCommandPolicy(args, { cwd: root }).requiredTools, 'bun');
+  assert.equal(resolveRemoteCommandPolicy(['node', './scripts/test_ci.mjs'], { cwd: join(root, 'apps/stack') }).requiredTools, 'bun');
+  const publicPolicy = await commandPolicy.resolveCommandPublisherPolicy(
+    ['corepack', 'yarn', '--cwd', 'apps/stack', '-s', 'test'], { repoRoot: root, cwd: root },
+  );
+  assert.equal(publicPolicy.selfPublisher, '1');
+  assert.equal(publicPolicy.requiredTools, 'bun');
+  const target = { name: 'worker', platform: 'linux', repoDir: root, cliHomeDir: '/tmp/stack-tests-worker-home' };
+  assert.doesNotMatch(buildRemoteExecCommand(target, { commandArgs: args, admissionClass: 'validation', executionId }), /--heavyweight-admission/);
+  const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
+  const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s:%s" "$policy_selfPublisher" "$policy_requiredTools"', 'policy', artifact, root, ...args], { encoding: 'utf8' });
+  assert.equal(native.status, 0, native.stderr);
+  assert.equal(native.stdout, '1:bun');
+  const lookalike = resolveRemoteCommandPolicy(['node', './fixture/apps/stack/scripts/test_ci.mjs'], { cwd: root });
+  assert.equal(lookalike.selfPublisher, '0');
+  assert.equal(lookalike.requiredTools, '');
+});
+
+test('placed script dispatch preserves publisher admission with inherited Yarn executables', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-script-publisher-' });
+  const { launcher } = await installNativeAdmissionFixture({ root });
+  const packageDir = join(root, 'native-owner', 'apps', 'stack');
+  await mkdir(packageDir, { recursive: true });
+  await writeFile(join(packageDir, 'package.json'), JSON.stringify({ scripts: {
+    'test:unit:local': 'node ./scripts/test_ci.mjs',
+    'test:ordinary:local': 'node ./scripts/ordinary.mjs',
+  } }));
+  // Yarn is the process boundary. The real launcher and manifest policy must
+  // recognize the coordinator before selecting its inherited executable.
+  const manager = join(root, 'yarn.cjs');
+  await writeFile(manager, 'process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23;\n');
+  writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "1048576 1048576\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
+  writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  const env = { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, HOME: root, CI: '',
+    npm_node_execpath: process.execPath, npm_execpath: manager,
+    HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
+    HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
+    HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
+  const invoke = script => spawnSync('/bin/sh', [launcher, `--script=${script}`, '--', 'literal argument'], {
+    cwd: packageDir, env, encoding: 'utf8', timeout: 15_000,
+  });
+  const publisher = invoke('test:unit:local');
+  assert.equal(publisher.status, 23, publisher.stderr);
+  assert.deepEqual(JSON.parse(publisher.stdout), ['-s', 'test:unit:local', 'literal argument']);
+  const ordinary = invoke('test:ordinary:local');
+  assert.equal(ordinary.status, 1, ordinary.stderr);
+  assert.equal(ordinary.stdout, '');
+  assert.match(ordinary.stderr, /insufficient memory capacity/);
 });
 
 test('native test preparation follows reachable source imports rather than the package runtime closure', async t => {
@@ -220,9 +275,28 @@ test('publisher policy uses effective compiler argv and the selected prepared sc
   assert.equal(commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: sdkDir, scriptName: 'check:prepare:api-governance:prepared', env: {} }), 'package-dist');
   assert.equal(commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson: { scripts: { build: 'pkgroll', selected: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json' } }, cwd: sdkDir, scriptName: 'selected', env: {} }), 'package-dist');
   const resolvePublisher = commandPolicy.resolveCommandPublisherPolicy ?? (async () => ({ selfPublisher: '0', heavyClass: '' }));
-  assert.deepEqual(await resolvePublisher(['yarn', 'build'], { repoRoot, cwd, env: {} }), { selfPublisher: '1', heavyClass: 'runtime-build' });
-  assert.deepEqual(await resolvePublisher(['node', 'scripts/bundleWorkspaceDeps.mjs', '--declarations', '--run-script=check:prepare:api-governance:prepared'], { repoRoot, cwd: sdkDir, env: {} }), { selfPublisher: '1', heavyClass: 'package-dist' });
-  assert.deepEqual(await resolvePublisher(['yarn', 'prepack'], { repoRoot, cwd: join(repoRoot, 'apps/cli'), env: { HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' } }), { selfPublisher: '1', heavyClass: 'compilation' });
+  assert.deepEqual(await resolvePublisher(['yarn', 'build'], { repoRoot, cwd, env: {} }), { selfPublisher: '1', heavyClass: 'runtime-build', requiredTools: '' });
+  assert.deepEqual(await resolvePublisher(['node', 'scripts/bundleWorkspaceDeps.mjs', '--declarations', '--run-script=check:prepare:api-governance:prepared'], { repoRoot, cwd: sdkDir, env: {} }), { selfPublisher: '1', heavyClass: 'package-dist', requiredTools: '' });
+  assert.deepEqual(await resolvePublisher(['yarn', 'prepack'], { repoRoot, cwd: join(repoRoot, 'apps/cli'), env: { HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' } }), { selfPublisher: '1', heavyClass: 'compilation', requiredTools: '' });
+});
+
+test('manifest prerequisites retain a stable tool union for publishers and ordinary commands', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'manifest-tool-prerequisites-' });
+  const cwd = join(root, 'apps/cli');
+  await mkdir(cwd, { recursive: true });
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({ scripts: {
+    check: 'node ../stack/scripts/test_ci.mjs && yarn -s ordinary && node ../stack/scripts/test_ci.mjs',
+    ordinary: 'vitest run example.test.ts',
+  } }));
+  const policy = await commandPolicy.resolveCommandPublisherPolicy(['yarn', 'check'], { repoRoot: root, cwd });
+  assert.equal(policy.requiredTools, 'bun go');
+  const ordinary = await commandPolicy.resolveCommandPublisherPolicy(['yarn', 'ordinary'], { repoRoot: root, cwd });
+  assert.equal(ordinary.selfPublisher, '0');
+  assert.equal(ordinary.requiredTools, 'go', 'tool requirements do not depend on payload admission ownership');
+  const metadata = spawnSync(process.execPath, [fileURLToPath(new URL('./remote_commands.mjs', import.meta.url)),
+    '--publisher-policy', root, cwd, 'yarn', 'check'], { encoding: 'utf8' });
+  assert.equal(metadata.status, 0, metadata.stderr);
+  assert.equal(metadata.stdout, `${policy.selfPublisher} ${policy.heavyClass} bun go\n`);
 });
 
 test('workspace build admission covers effective compilers behind real package lifecycle scripts', () => {
@@ -337,6 +411,42 @@ const windows = {
 };
 
 const execFileAsync = promisify(execFile);
+
+test('remote credential seeding preserves an enrolled credential across repeated starts', { skip: process.platform === 'win32' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-auth-seed-' });
+  const target = { ...posix, cliHomeDir: fixture.path('remote cli') };
+  const { cliHomeDir, activeServerId } = resolveRemoteStackStatePaths(target, { stackName: 'agent-qa', runtimeMode: 'source-snapshot' });
+  const finalPath = join(cliHomeDir, 'servers', activeServerId, 'access.key');
+  const stagedPath = join(cliHomeDir, '.access-key-agent-qa.tmp');
+  const enrolled = JSON.stringify({ token: 'qa-enrolled', encryption: { publicKey: Buffer.alloc(32, 1).toString('base64'), machineKey: Buffer.alloc(32, 2).toString('base64') } });
+  await mkdir(join(cliHomeDir, 'servers', activeServerId), { recursive: true });
+  await writeFile(finalPath, enrolled, { mode: 0o600 });
+  const command = buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath });
+  for (let start = 0; start < 2; start += 1) {
+    await writeFile(stagedPath, JSON.stringify({ token: 'qa-seed', secret: Buffer.alloc(32, 3).toString('base64') }));
+    await execFileAsync('/bin/bash', ['-c', command]);
+    assert.equal(readFileSync(finalPath, 'utf8'), enrolled, 'startup must not replace the target enrollment with controller seed material');
+    assert.equal(existsSync(stagedPath), false, 'unused staged credentials must be retired');
+  }
+});
+
+test('remote credential seeding initializes missing or empty target credentials privately', { skip: process.platform === 'win32' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-auth-initial-seed-' });
+  const target = { ...posix, cliHomeDir: fixture.path('remote cli') };
+  const { cliHomeDir, activeServerId } = resolveRemoteStackStatePaths(target, { stackName: 'agent-qa' });
+  const finalPath = join(cliHomeDir, 'servers', activeServerId, 'access.key');
+  const stagedPath = fixture.path('staged credential');
+  const seed = JSON.stringify({ token: 'qa-seed', secret: Buffer.alloc(32, 3).toString('base64') });
+  const command = buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath });
+  for (const empty of [false, true]) {
+    if (empty) await writeFile(finalPath, '');
+    await writeFile(stagedPath, seed);
+    await execFileAsync('/bin/bash', ['-c', command]);
+    assert.deepEqual(JSON.parse(readFileSync(finalPath, 'utf8')), JSON.parse(seed));
+    assert.equal((await stat(finalPath)).mode & 0o777, 0o600);
+    assert.equal(existsSync(stagedPath), false);
+  }
+});
 
 test('remote narrow stack operations keep literal CLI arguments and retained stack scope on POSIX and Windows', () => {
   for (const target of [posix, windows]) {
@@ -937,8 +1047,11 @@ test('native source tests and generator checks use their real preparation contra
     'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs',
     'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs',
+    'apps/stack/scripts/utils/test/test_process.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs',
     'apps/stack/scripts/build/build_source_runtime.test.mjs',
+    'apps/stack/scripts/runtime/shared/pending_source_start.test.mjs',
+    'apps/stack/scripts/runtime/launch/resolveLaunchSpecs.test.mjs',
   ]) {
     const args = ['node', '--test', path];
     assert.equal(classifyRemoteCommand(args).requiresDependencyBootstrap, true);
@@ -1461,6 +1574,29 @@ test('remote lifecycle retirement is a separate lightweight command before the l
     'the Windows worker must initialize through Stack before dev',
   );
   assert.doesNotMatch(decodedWindowsWorker, /Set-Content -LiteralPath \$stackEnvPath/);
+});
+
+test('remote Stack preserves an explicit allocator arena setting without supplying a default', () => {
+  const config = resolveRemoteServerRuntimeConfig({ serverComponentName: 'happier-server-light', env: {
+    HAPPIER_DB_PROVIDER: 'sqlite', MALLOC_ARENA_MAX: '2', UNRELATED_SETTING: 'not-forwarded',
+  } });
+  assert.equal(config.environment.MALLOC_ARENA_MAX, '2');
+  const ordinary = resolveRemoteServerRuntimeConfig({ serverComponentName: 'happier-server-light', env: {
+    HAPPIER_DB_PROVIDER: 'sqlite',
+  } });
+  assert.equal(Object.hasOwn(ordinary.environment, 'MALLOC_ARENA_MAX'), false);
+  for (const target of [posix, windows]) {
+    const command = buildRemoteStackCommand(target, {
+      services: { server: true, expo: false, daemon: true },
+      stackName: 'remote-qa', runtimeMode: 'source-snapshot',
+      serverUrl: 'http://127.0.0.1:43005', publicServerUrl: 'http://127.0.0.1:53005',
+      remoteServerPort: 43005, remoteServerRuntimeConfig: config,
+    });
+    const rendered = target.platform === 'windows'
+      ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+    assert.ok(rendered.includes('MALLOC_ARENA_MAX=2'), `${target.platform} omitted allocator configuration`);
+    assert.doesNotMatch(rendered, /UNRELATED_SETTING|not-forwarded/);
+  }
 });
 
 test('remote light Postgres admits the source-host authority without transporting its URL or secret', () => {

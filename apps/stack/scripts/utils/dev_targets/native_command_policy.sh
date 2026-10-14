@@ -198,6 +198,7 @@ native_command_policy_base() {
     policy_heavyClass='validation'
     policy_componentOverride='apps/stack'
     policy_selfPublisher='1'
+    policy_requiredTools='bun'
   fi
   if { [ "$policy_command" = 'node' ]; } && { [ "$policy_stripTypes" = '1' ]; } && { [ "$policy_entryPath" = 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts' ] || [ "$policy_entryPath" = 'scripts/build-owned/generateBundledPluginEntries.ts' ]; }; then
     policy_generator='1'

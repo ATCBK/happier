@@ -162,8 +162,9 @@ const COMMAND_RULES = [
   // Unit coordination publishes dependencies first, then the managed native
   // runner acquires its finite test envelope. Never reserve that envelope
   // across the coordinator's foreign-publication wait.
+  // The suite executes real server and daemon Bun builds on its selected host.
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: ['apps/stack/scripts/test_ci.mjs'] },
-    set: { ...validation, componentOverride: 'apps/stack', selfPublisher: '1' } },
+    set: { ...validation, componentOverride: 'apps/stack', selfPublisher: '1', requiredTools: 'bun' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'] }, set: { generator: '1', workerTool: 'bundled-plugin-generator', heavyClass: 'validation', placement: 'primary-only' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { ...validation, placement: 'worker-eligible', generatorCheck: '1', componentOverride: 'apps/cli' } },
   { when: { command: ['node'], stripTypes: ['1'], sourceCondition: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { kind: 'source-test' } },
@@ -478,6 +479,7 @@ function resolveWorkspacePackageScriptPolicy({ packageJson, cwd = process.cwd(),
   let admissionClass = '';
   let sawPublisher = false;
   let selfPublisher = true;
+  const requiredTools = new Set();
   const include = (candidate) => {
     if (!candidate) return;
     const candidateFloor = resolveHeavyweightMemoryFloorKiB(candidate);
@@ -497,6 +499,8 @@ function resolveWorkspacePackageScriptPolicy({ packageJson, cwd = process.cwd(),
       if (!commands) { include('compilation'); selfPublisher = false; continue; }
       for (const args of commands) {
         const facts = normalizeCommandArguments(args, cwd, repoRoot);
+        const policy = resolveRemoteCommandPolicy(args, { cwd, repoRoot, env });
+        for (const tool of policy.requiredTools.split(/\s+/u).filter(Boolean)) requiredTools.add(tool);
         const dispatchedScript = facts.command === 'hstack-exec'
           ? args.find(arg => arg.startsWith('--script='))?.slice('--script='.length) : '';
         if (dispatchedScript) { visit(dispatchedScript); continue; }
@@ -508,12 +512,11 @@ function resolveWorkspacePackageScriptPolicy({ packageJson, cwd = process.cwd(),
         const wrapperScript = facts.entry === 'bundleWorkspaceDeps.mjs'
           ? args.find(arg => arg.startsWith('--run-script='))?.slice('--run-script='.length) : '';
         if (wrapperScript) {
-          if (resolveRemoteCommandPolicy(args, { cwd, repoRoot, env }).selfPublisher === '1') sawPublisher = true;
+          if (policy.selfPublisher === '1') sawPublisher = true;
           else selfPublisher = false;
           visit(wrapperScript);
           continue;
         }
-        const policy = resolveRemoteCommandPolicy(args, { cwd, repoRoot, env });
         // Unclassified Node entries are the manifest's light generators.
         // Unknown shell/executable commands can change cwd or launch work we
         // cannot expand, so they retain the existing general compile floor.
@@ -529,7 +532,8 @@ function resolveWorkspacePackageScriptPolicy({ packageJson, cwd = process.cwd(),
     visiting.delete(name);
   };
   visit(scriptName);
-  return { admissionClass: admissionClass || 'compilation', selfPublisher: selfPublisher && sawPublisher };
+  return { admissionClass: admissionClass || 'compilation', selfPublisher: selfPublisher && sawPublisher,
+    requiredTools: [...requiredTools].join(' ') };
 }
 
 export function resolveWorkspacePackageBuildAdmissionClass(options = {}) {
@@ -548,18 +552,25 @@ export async function isSelfPublishingPackageCommand(commandArgs, options = {}) 
 
 export async function resolveCommandPublisherPolicy(commandArgs, options = {}) {
   const policy = resolveRemoteCommandPolicy(commandArgs, options);
+  const requiredTools = new Set(policy.requiredTools.split(/\s+/u).filter(Boolean));
+  let selfPublisher = policy.selfPublisher;
+  let heavyClass = policy.heavyClass;
   const manifest = await resolvePackageCommandManifest(commandArgs, options);
   if (manifest) {
     const resolved = resolveWorkspacePackageScriptPolicy({ ...options, ...manifest, cwd: manifest.packageDir });
-    if (resolved.selfPublisher) return { selfPublisher: '1', heavyClass: resolved.admissionClass };
+    for (const tool of resolved.requiredTools.split(/\s+/u).filter(Boolean)) requiredTools.add(tool);
+    if (resolved.selfPublisher) { selfPublisher = '1'; heavyClass = resolved.admissionClass; }
   }
   if (policy.selfPublisher === '1' && normalizeCommandArguments(commandArgs, options.cwd, options.repoRoot).entry === 'bundleWorkspaceDeps.mjs') {
     const cwd = options.cwd ?? process.cwd();
     const packageJson = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8'));
     const scriptName = commandArgs.find(arg => arg.startsWith('--run-script='))?.slice('--run-script='.length);
-    return { selfPublisher: '1', heavyClass: resolveWorkspacePackageBuildAdmissionClass({ ...options, cwd, packageJson, scriptName }) };
+    const resolved = resolveWorkspacePackageScriptPolicy({ ...options, cwd, packageJson, scriptName });
+    for (const tool of resolved.requiredTools.split(/\s+/u).filter(Boolean)) requiredTools.add(tool);
+    selfPublisher = '1';
+    heavyClass = resolved.admissionClass;
   }
-  return { selfPublisher: policy.selfPublisher, heavyClass: policy.heavyClass };
+  return { selfPublisher, heavyClass, requiredTools: [...requiredTools].join(' ') };
 }
 export function classifyRemoteCommand(commandArgs, options = {}) {
   const policy = resolveRemoteCommandPolicy(commandArgs, options);
@@ -1880,7 +1891,7 @@ export async function runRemoteCommandPolicyCli(argv = process.argv.slice(2)) {
   try {
     if (publisherPolicy) {
       const policy = await resolveCommandPublisherPolicy(commandArgs, { repoRoot, cwd });
-      process.stdout.write(`${policy.selfPublisher} ${policy.heavyClass || '-'}\n`);
+      process.stdout.write(`${policy.selfPublisher} ${policy.heavyClass || '-'} ${policy.requiredTools || '-'}\n`);
       return 0;
     }
     const probe = selfPublishing ? isSelfPublishingPackageCommand : isSelfDispatchingPackageCommand;
