@@ -109,13 +109,13 @@ function caller(pluginId: string): PluginInvocationCaller {
 function createContext(input: Readonly<{
     collections: CorpusCollectionsV1;
     callerPluginId?: string;
-    hostAgent?: boolean;
+    hostSurface?: PluginInvocationContext['surface'];
     sessionSummary?: Readonly<{ title?: string; updatedAtMs?: number }> | null;
 }>): PluginInvocationContext {
     return {
         signal: new AbortController().signal,
-        surface: input.hostAgent ? 'agent' : 'plugin',
-        ...(input.hostAgent ? {} : { caller: caller(input.callerPluginId ?? TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1) }),
+        surface: input.hostSurface ?? 'plugin',
+        ...(input.hostSurface ? {} : { caller: caller(input.callerPluginId ?? TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1) }),
         services: {
             targetedContributions: {
                 observeForSelf: () => ({
@@ -168,15 +168,18 @@ async function seedTwoConnections(): Promise<Readonly<{ collections: CorpusColle
 }
 
 describe('the entry detail read', () => {
-    it('returns the exact admitted configured connection to a host agent', async () => {
+    it.each(['agent', 'mcp', 'cli', 'api'] as const)('returns the exact admitted configured connection to a host %s caller', async (hostSurface) => {
         const { collections } = await seedTwoConnections();
         const handler = createTriageReadEntryDetailActionHandler();
-        const result = await handler(detailInput(INSTANCE_A), createContext({ collections, hostAgent: true }));
+        const context = createContext({ collections, hostSurface });
+        const result = await handler(detailInput(INSTANCE_A), context);
         expect(result.kind).toBe('read');
         if (result.kind !== 'read') return;
         expect(result.instance.instance).toEqual({ source: SOURCE, sourceInstanceId: INSTANCE_A });
         expect(await handler({ ...detailInput(INSTANCE_A), entryRef: { ...ENTRY_REF, kindId: 'undeclared' } },
-            createContext({ collections, hostAgent: true }))).toEqual({ kind: 'unavailable' });
+            context)).toEqual({ kind: 'unavailable' });
+        expect(await handler(detailInput(INSTANCE_A), { ...context, caller: caller(OTHER_SOURCE.pluginId) }))
+            .toEqual({ kind: 'invalidCaller' });
     });
 
     it('reports when the bounded linked-Session page has more rows', async () => {

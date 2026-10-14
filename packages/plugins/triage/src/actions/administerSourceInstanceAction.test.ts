@@ -180,21 +180,21 @@ describe('the source administration Action handler', () => {
         expect(JSON.stringify(rows)).not.toContain('credential');
     });
 
-    it('lets a host agent configure an admitted source and remove its existing instance without spoofing provenance', async () => {
+    it.each(['agent', 'api'] as const)('lets a host %s caller configure an admitted source and remove its existing instance without spoofing provenance', async (surface) => {
         const { collections } = createTestkitCorpusCollections();
         const handler = createTriageAdministerSourceInstanceActionHandler({
             mintSourceInstanceId: () => INSTANCE_ID,
             nowMs: () => 1_000,
         });
         const request = { v: 1 as const, kind: 'create' as const, source: SOURCE, draft: draft() };
-        expect(await handler(request, createContext({ collections, surface: 'agent' })))
+        expect(await handler(request, createContext({ collections, surface })))
             .toEqual({ kind: 'active', sourceInstanceId: INSTANCE_ID });
-        expect(await handler(request, createContext({ collections, surface: 'agent', caller: pluginCaller('happier.other') })))
+        expect(await handler(request, createContext({ collections, surface, caller: pluginCaller('happier.other') })))
             .toEqual({ kind: 'invalidCaller' });
-        expect(await handler({ v: 1, kind: 'remove', sourceInstanceId: INSTANCE_ID }, createContext({ collections, surface: 'agent' })))
+        expect(await handler({ v: 1, kind: 'remove', sourceInstanceId: INSTANCE_ID }, createContext({ collections, surface })))
             .toEqual({ kind: 'removed', sourceInstanceId: INSTANCE_ID });
         expect((await readRows(collections))[0]?.lifecycle).toBe(CORPUS_SOURCE_INSTANCE_LIFECYCLE.retired);
-        expect(await handler({ v: 1, kind: 'create', draft: draft() }, createContext({ collections, surface: 'agent' })))
+        expect(await handler({ v: 1, kind: 'create', draft: draft() }, createContext({ collections, surface })))
             .toEqual({ kind: 'invalidCaller' });
     });
 

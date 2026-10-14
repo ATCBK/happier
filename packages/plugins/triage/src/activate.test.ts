@@ -77,7 +77,7 @@ async function withRegisteredPlugin(run: (fixture: Readonly<{
 }
 
 describe('Triage activation', () => {
-  it.each(['agent', 'mcp'] as const)('keeps built-ins and explicit opt-outs identical on registered %s Actions and direct UI reads', async (surface) => {
+  it.each(['agent', 'mcp', 'cli'] as const)('keeps built-ins and explicit opt-outs identical on registered %s Actions and direct UI reads', async (surface) => {
     await withRegisteredPlugin(async ({ plugin, kv }) => {
       kv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, { v: 1, actions: [] });
       const read = async () => TriageReadActionsResultV1Schema.parse(await plugin.invokeAction(

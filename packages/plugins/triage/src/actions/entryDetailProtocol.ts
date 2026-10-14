@@ -26,7 +26,7 @@ export const TRIAGE_READ_PULL_REQUEST_STATUS_ACTION_LOCAL_ID_V1 = 'entries/read-
  * observation, is already in the reader's device-local projection. Both paths
  * compose the strict input through the one boundary builder.
  *
- * Mounted self and authenticated host agent/MCP/CLI callers use this exact
+ * Mounted self and authenticated host agent/MCP/CLI/API callers use this exact
  * contract. The handler enforces provenance and source admission; a supplied
  * entry/source address never grants another plugin access to private config.
  */

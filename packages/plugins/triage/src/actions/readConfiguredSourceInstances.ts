@@ -34,7 +34,7 @@ import { resolveTriageCallerSources } from './callerSource.js';
  * and it is deliberately only a read — administration remains the sole writer.
  *
  * The canonical caller owner scopes plugins to their own admitted contribution
- * and host agent/MCP/CLI callers to their requested source or all admitted sources.
+ * and host agent/MCP/CLI/API callers to their requested source or all admitted sources.
  * A supplied source address cannot promote a plugin into host authority.
  */
 
