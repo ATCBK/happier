@@ -954,6 +954,10 @@ test('remote Stack retirement probe accepts rebooted runtime records but require
     writeFileSync(statePath, JSON.stringify({ ownerPid: null, processes: { daemonPid: child.pid, daemonPids: [child.pid] } }));
     await execFileAsync('/bin/bash', ['-lc', preservedCommand]);
     await assert.rejects(execFileAsync('/bin/bash', ['-lc', command]), 'a later full stop must still see the preserved daemon');
+    writeFileSync(statePath, JSON.stringify({ ownerPid: null, processes: { daemonPid: child.pid },
+      stopRequest: { preserveDaemon: false, requestedBy: 'stack stop', reason: 'interrupted full stop' } }));
+    await assert.rejects(execFileAsync('/bin/bash', ['-lc', preservedCommand]),
+      'preserving the daemon must complete the interrupted native stop before startup consumes its state');
     writeFileSync(statePath, JSON.stringify({ ownerPid: null, processes: { daemonPid: child.pid, serverPid: child.pid } }));
     await assert.rejects(execFileAsync('/bin/bash', ['-lc', preservedCommand]), 'preservation does not exempt server retirement');
     const exited = once(child, 'exit');

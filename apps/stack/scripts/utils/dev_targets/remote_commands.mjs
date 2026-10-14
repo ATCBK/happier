@@ -1343,6 +1343,9 @@ export function buildRemoteStackRetirementProbeCommand(target, { stackName, runt
     "    const bootedAt = Date.now() - require('node:os').uptime() * 1000;",
     `    if (!(fs.statSync(${JSON.stringify(runtimeStatePath)}).mtimeMs < bootedAt)) process.exit(1);`,
     '  }',
+    // A preserved daemon does not complete an interrupted full Stop. Let the
+    // native Stop owner settle its request before the next startup consumes it.
+    '  if (state?.stopRequest) process.exit(1);',
     `  if (await hasTrustedStackRuntimeLifecycle(state, ${JSON.stringify({ stackName: remoteStackName, envPath: stackEnvPath, cliHomeDir })}, ${JSON.stringify({ preserveDaemon: preserveDaemon === true })})) process.exit(1);`,
     '}',
     `const base = ${JSON.stringify(stackBaseDir)};`,

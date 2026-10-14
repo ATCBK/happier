@@ -452,11 +452,13 @@ test(`next source start settles retirement and preserve-daemon close retains the
 }
 
 for (const runtimeState of ['absent', 'unreadable', 'unreachable']) {
-test(`failed fresh source launch retries only after remote runtime absence is verified (${runtimeState})`, async (t) => {
+test(`source preparation phase followed by worker death retries only after remote runtime absence is verified (${runtimeState})`, async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-launch-retry-' });
   const target = { name: 'linux', platform: 'posix', ssh: 'linux-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
   const workers = [];
   const stops = [];
+  const states = [];
+  let absenceProbes = 0;
   let failLaunch;
   const firstExit = new Promise(resolve => { failLaunch = resolve; });
   let retryOutcome;
@@ -466,6 +468,7 @@ test(`failed fresh source launch retries only after remote runtime absence is ve
     stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true,
     localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005', sourceUi: 'export',
     remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
+    onTargetStateChange: state => states.push(state),
     targetPlans: [{ target, services: { server: true, daemon: false, expo: false } }], env: {},
   }, {
     // SSH, remote filesystem state and process lifetimes are system boundaries.
@@ -476,6 +479,7 @@ test(`failed fresh source launch retries only after remote runtime absence is ve
       }
       if (command === 'ssh' && remote.includes('stack stop')) stops.push(remote);
       else if (command === 'ssh' && remote.includes('stack.runtime.json')) {
+        absenceProbes += 1;
         return { code: workers.length === 0 || runtimeState === 'absent' ? 0 : runtimeState === 'unreachable' ? 255 : 1 };
       }
       return { code: 0 };
@@ -499,10 +503,15 @@ test(`failed fresh source launch retries only after remote runtime absence is ve
     }, logger: { error() {} },
   });
   try {
+    workers[0].onLine({ stream: 'stdout', line: 'HSTACK_SOURCE_PREPARATION_PHASE={"phase":"queued","component":"server"}' });
+    assert.ok(states.some(state => state.sourcePreparation?.phase === 'queued'));
     workers[0].exitCode = 1;
     failLaunch({ code: 1 });
     assert.equal(await retried, runtimeState === 'absent' ? 'launched' : 'blocked');
     assert.equal(workers.length, runtimeState === 'absent' ? 2 : 1);
+    assert.ok(absenceProbes >= 2, 'a diagnostic phase cannot bypass the retry absence probe');
+    assert.equal(states.findLast(state => state.status === 'retrying')?.sourcePreparation, null,
+      'worker failure retires preparation diagnostics');
     assert.equal(stops.length, 0, 'retry must not retire a runtime whose absence is unverified');
     if (runtimeState === 'absent') {
       assert.doesNotMatch(workers[1].args.at(-1), /--reuse-source-runtime|--restart/,

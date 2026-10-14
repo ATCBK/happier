@@ -88,12 +88,15 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
   await mkdir(directory, { recursive: true });
   await withJsonOwnerFileLock(async () => {
     const current = await readJsonIfExists(markerPath);
+    const sameRequest = inheritedRequestId && current?.requestId === requestId;
+    const ownerStatus = current ? observePidLiveness(current.pid).status : 'dead';
     // A delegated half participates in the existing start; its publication and
     // cleanup must not replace or retire the parent's preparation custody.
-    if (inheritedRequestId && current?.requestId === requestId) return;
+    if (sameRequest && ownerStatus === 'alive') return;
     if (inheritedRequestId && current && !replacePending
-      && observePidLiveness(current.pid).status !== 'dead') throw supersededError();
-    await writeJsonAtomic(markerPath, { requestId, pid: process.pid, phase: 'preparing' });
+      && ownerStatus !== 'dead') throw supersededError();
+    // A dead worker's retry takes custody of the same request and its pins.
+    await writeJsonAtomic(markerPath, { ...(sameRequest ? current : {}), requestId, pid: process.pid, phase: 'preparing' });
     ownsMarker = true;
   }, { lockPath });
   let closed = false;

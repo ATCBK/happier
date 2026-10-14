@@ -3,7 +3,7 @@ import test from 'node:test';
 import { writeFile, readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { beginPendingSourceStart } from './pending_source_start.mjs';
+import { beginPendingSourceStart, readPendingSourcePreparation } from './pending_source_start.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../../testkit/core/run_node_capture.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
@@ -92,6 +92,35 @@ test('a delegated remote start replaces abandoned preparation and keeps its retr
   assert.equal(await readFile(fixture.path('current-published'), 'utf8'), 'yes');
 });
 
+test('a same-request retry reclaims a dead child owner and preserves its pending preparations', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-same-request-', registerCleanup: false });
+  const moduleUrl = new URL('./pending_source_start.mjs', import.meta.url).href;
+  const preparationDir = fixture.path('prepared');
+  let retry;
+  t.after(async () => { await retry?.dispose(); await fixture.cleanup(); });
+  const abandoned = await runNodeCapture(['--input-type=module', '-e', `
+    import { beginPendingSourceStart } from ${JSON.stringify(moduleUrl)};
+    const start = await beginPendingSourceStart({ stackBaseDir: ${JSON.stringify(fixture.root)}, requestId: 'controller' });
+    await start.retainPreparation(${JSON.stringify(preparationDir)});
+    await start.setPhase({ phase: 'queued', component: 'server' });
+    // The real child exits without disposing its pending start.
+  `]);
+  assert.equal(abandoned.code, 0, abandoned.stderr);
+  assert.equal(await readPendingSourcePreparation({ stackBaseDir: fixture.root }), null,
+    'a dead child cannot publish active preparation');
+  retry = await beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'controller' });
+  const markerPath = fixture.path('source-runtime/start.pending.json');
+  const marker = JSON.parse(await readFile(markerPath, 'utf8'));
+  assert.equal(marker.pid, process.pid, 'the retry must own the marker with its live PID');
+  assert.equal(marker.requestId, 'controller');
+  assert.deepEqual(marker.preparationDirs, [preparationDir], 'completed preparations remain pinned for the same request');
+  await retry.setPhase({ phase: 'building', component: 'server' });
+  assert.deepEqual(await readPendingSourcePreparation({ stackBaseDir: fixture.root }), { phase: 'building', component: 'server' });
+  await retry.publish(async () => writeFile(fixture.path('selected'), 'retry'));
+  assert.equal(await readFile(fixture.path('selected'), 'utf8'), 'retry');
+  await assert.rejects(readFile(markerPath), { code: 'ENOENT' }, 'successful retry removes its marker');
+});
+
 test('a delegated start cannot replace a marker when its owner liveness is inconclusive', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-unknown-', registerCleanup: false });
   const owner = await beginPendingSourceStart({ stackBaseDir: fixture.root });
@@ -107,6 +136,8 @@ test('a delegated start cannot replace a marker when its owner liveness is incon
   });
   await assert.rejects(beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'contender' }),
     { code: 'ESOURCESTARTSUPERSEDED' });
+  await assert.rejects(beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: owner.requestId }),
+    { code: 'ESOURCESTARTSUPERSEDED' }, 'same-request delegation also requires conclusive live custody');
   assert.deepEqual(JSON.parse(await readFile(markerPath, 'utf8')), marker);
 });
 
