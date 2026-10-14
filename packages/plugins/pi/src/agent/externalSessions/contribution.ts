@@ -1289,7 +1289,10 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const searchTarget = request.searchTarget ?? 'metadata';
       const contentSearch = searchTarget === 'content';
       const searchTerm = contentSearch ? request.searchTerm ?? '' : readOptionalString(request.searchTerm)?.toLowerCase() ?? '';
-      const control = contentSearch ? createExternalSessionContentSearchControl(request) : null;
+      const control = contentSearch ? createExternalSessionContentSearchControl({
+        signal: request.signal,
+        deadlineAtMs: request.scanDeadlineAtMs ?? request.deadlineAtMs,
+      }) : null;
       let yielded = false;
       let partial = false;
       const decodedCursor = request.cursor ? decodeCandidateCursor(request.cursor) : null;
@@ -1479,7 +1482,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           );
         }
         request.signal.throwIfAborted();
-        const after = yielded ? null : getAgentExternalSessionsInvocationFailure(request);
+        const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) {
           await retireCandidateScan(scan);
           return after;

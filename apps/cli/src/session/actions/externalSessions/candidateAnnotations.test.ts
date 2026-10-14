@@ -214,13 +214,26 @@ describe('annotateExternalSessionCandidates', () => {
         expect(result.annotationsIncomplete).toBe(false);
     });
 
-    it('stops the indexed lookup and rejects when the caller cancels mid-page', async () => {
+    it('stops the indexed lookup and retains found candidates as incomplete when cancelled mid-page', async () => {
         fetchSessionsPageMock.mockReset();
         lookupSessionsByTagsMock.mockReset();
         const abortController = new AbortController();
         lookupSessionsByTagsMock.mockImplementation(async ({ tags }: { tags: readonly string[] }) => {
             abortController.abort();
-            return { state: 'available' as const, tags, sessions: [] };
+            return { state: 'available' as const, tags, sessions: [{
+                id: 'already-linked',
+                encryptionMode: 'plain',
+                metadataLayoutVersion: 1,
+                metadata: JSON.stringify({ v: 1 }),
+                ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
+                    v: 1,
+                    workspace: { machineId: 'machine-1' },
+                    nativeSession: { externalSessionV1: {
+                        v: 1, agentId: 'codex', machineId: 'machine-1', remoteSessionId: 'remote-0',
+                        source: { kind: 'codexHome', home: 'user' },
+                    } },
+                })),
+            }] };
         });
 
         await expect(annotateExternalSessionCandidates({
@@ -239,15 +252,22 @@ describe('annotateExternalSessionCandidates', () => {
             signal: abortController.signal,
         }, {
             fetchPage: fetchSessionsPageMock,
-            decryptMetadata: () => null,
+            decryptMetadata: tryDecryptSessionOwnerMetadataView,
             getAccountEncryptionCurrentness: getPlainAccountEncryptionCurrentness,
             lookupByTags: lookupSessionsByTagsMock,
-        })).rejects.toMatchObject({ name: 'AbortError' });
+        })).resolves.toMatchObject({
+            candidates: Array.from({ length: 8 }, (_unused, index) => ({
+                remoteSessionId: `remote-${index}`,
+                updatedAtMs: index,
+                ...(index === 0 ? { linkedSessionId: 'already-linked' } : {}),
+            })),
+            annotationsIncomplete: true,
+        });
 
         expect(lookupSessionsByTagsMock).toHaveBeenCalledTimes(1);
     });
 
-    it('stops the bounded compatibility scan and rejects when the caller cancels mid-scan', async () => {
+    it('stops the bounded compatibility scan and retains found candidates as incomplete when cancelled mid-scan', async () => {
         fetchSessionsPageMock.mockReset();
         lookupSessionsByTagsMock.mockReset();
         lookupSessionsByTagsMock.mockImplementation(indexedTagRouteUnavailable);
@@ -271,10 +291,13 @@ describe('annotateExternalSessionCandidates', () => {
             signal: abortController.signal,
         }, {
             fetchPage: fetchSessionsPageMock,
-            decryptMetadata: () => null,
+            decryptMetadata: tryDecryptSessionOwnerMetadataView,
             getAccountEncryptionCurrentness: getPlainAccountEncryptionCurrentness,
             lookupByTags: lookupSessionsByTagsMock,
-        })).rejects.toMatchObject({ name: 'AbortError' });
+        })).resolves.toMatchObject({
+            candidates: [{ remoteSessionId: 'remote-1', updatedAtMs: 1 }],
+            annotationsIncomplete: true,
+        });
 
         expect(fetchSessionsPageMock).toHaveBeenCalledTimes(1);
     });

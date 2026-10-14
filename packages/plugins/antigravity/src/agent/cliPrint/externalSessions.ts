@@ -495,7 +495,12 @@ async function listFullCandidateSearch(params: Readonly<{
   });
 
   const retained: AgentExternalSessionCandidate[] = [];
-  const control = createExternalSessionContentSearchControl(params.invocation);
+  const control = createExternalSessionContentSearchControl({
+    signal: params.invocation.signal,
+    deadlineAtMs: params.searchTarget === 'content'
+      ? params.invocation.scanDeadlineAtMs ?? params.invocation.deadlineAtMs
+      : params.invocation.deadlineAtMs,
+  });
   let partial = false;
   let yielded = false;
   let processedOffset = params.cursor?.directoryEntryOffset ?? 0;
@@ -582,7 +587,7 @@ async function listFullCandidateSearch(params: Readonly<{
   retained.sort(compareExternalSessionCandidatePrecedence);
 
   const stopped = getAgentExternalSessionsInvocationFailure(params.invocation);
-  if (stopped && (!yielded || params.invocation.signal.aborted)) return stopped;
+  if (stopped) return stopped;
 
   const exhausted = !yielded && page.nextDirectoryEntryOffset === null;
   const nextOffset = yielded ? processedOffset : page.nextDirectoryEntryOffset;
