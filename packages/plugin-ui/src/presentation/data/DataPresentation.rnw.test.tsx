@@ -156,4 +156,20 @@ describe('public data nodes through React Native Web', () => {
       mount.unmount();
     }
   });
+
+  it('never clamps a metric value to one line, so a long figure wraps instead of ending in an ellipsis', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Metric testID="metric" label="Agent time" size="stat" value={6840000} valueFormatter={() => '1 h 54 min'} />
+      </PluginUiProvider>,
+    );
+    try {
+      const style = getComputedStyle(query(mount.container, 'metric-value')!);
+      expect(style.textOverflow).not.toBe('ellipsis');
+      expect(style.whiteSpace).not.toBe('nowrap');
+    } finally {
+      mount.unmount();
+    }
+  });
 });

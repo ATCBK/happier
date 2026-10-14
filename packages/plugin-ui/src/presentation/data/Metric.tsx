@@ -147,7 +147,7 @@ export function HappierDataMetric(props: HappierDataMetricProps) {
           testID={props.testID ? `${props.testID}-value` : undefined}
           style={valueStyle}
           tabularNumbers
-          numberOfLines={1}
+          // A figure is never ellipsized ("1 h 54 …"): a long one wraps at its spaces in a narrow cell.
         >
           {shown}
         </HappierText>
