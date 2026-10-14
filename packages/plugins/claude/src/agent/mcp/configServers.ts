@@ -1,88 +1,20 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-
+import { canonicalizePathSync, expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 import type { DetectedMcpServerV1, DiscoveryWarning as McpDiscoveryWarningV1 } from '@happier-dev/plugin-sdk/mcp';
-
-import { resolveClaudeConfigDir } from '../environment.js';
+import { resolveClaudeConfigDirOverride } from '../environment.js';
 
 export type ReadClaudeMcpConfigServersResult = Readonly<{
     servers: ReadonlyArray<DetectedMcpServerV1>;
     warnings: ReadonlyArray<McpDiscoveryWarningV1>;
 }>;
 
-function safeReadJson(path: string): { ok: true; value: unknown } | { ok: false; warning: McpDiscoveryWarningV1 } {
-    try {
-        const raw = readFileSync(path, 'utf8');
-        return { ok: true, value: JSON.parse(raw) };
-    } catch {
-        return { ok: false, warning: { provider: 'claude', code: 'parse_failed', path } };
-    }
+function record(value: unknown): Readonly<Record<string, unknown>> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : {};
 }
 
-function readClaudeMcpServersFromSettingsJson(value: unknown): unknown {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const root = value as Record<string, unknown>;
-    const direct = root.mcpServers;
-    if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
-    const legacy = root.mcp_servers;
-    if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) return legacy;
-    return null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    const out: string[] = [];
-    for (const entry of value) {
-        if (typeof entry === 'string') out.push(entry);
-    }
-    return out;
-}
-
-function normalizeRecordKeys(value: unknown): string[] {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-    return Object.keys(value as Record<string, unknown>);
-}
-
-function normalizeDetectedServer(params: Readonly<{
-    name: string;
-    config: unknown;
-    source: DetectedMcpServerV1['source'];
-}>): DetectedMcpServerV1 | null {
-    const cfg = params.config;
-    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
-    const obj = cfg as Record<string, unknown>;
-
-    const enabled = typeof obj.enabled === 'boolean' ? obj.enabled : null;
-
-    const command = typeof obj.command === 'string' && obj.command.trim().length > 0 ? obj.command.trim() : null;
-    const args = normalizeStringArray(obj.args);
-    const envKeys = normalizeRecordKeys(obj.env);
-
-    if (command) {
-        return {
-            provider: 'claude',
-            name: params.name,
-            transport: 'stdio',
-            stdio: { command, args },
-            envKeys,
-            enabled,
-            source: params.source,
-        };
-    }
-
-    const url = typeof obj.url === 'string' && obj.url.trim().length > 0 ? obj.url.trim() : null;
-    if (!url) return null;
-    const transport = obj.transport === 'sse' ? 'sse' : 'http';
-    const headerKeys = normalizeRecordKeys(obj.headers);
-    return {
-        provider: 'claude',
-        name: params.name,
-        transport,
-        remote: { url, headers: headerKeys },
-        envKeys,
-        enabled,
-        source: params.source,
-    };
+function stringArray(value: unknown): string[] {
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 export async function readClaudeMcpConfigServers(params: Readonly<{
@@ -90,45 +22,44 @@ export async function readClaudeMcpConfigServers(params: Readonly<{
     env?: NodeJS.ProcessEnv;
 }>): Promise<ReadClaudeMcpConfigServersResult> {
     const env = params.env ?? process.env;
-    const configDir = resolveClaudeConfigDir(env);
-
-    const candidates: Array<Readonly<{ kind: 'user' | 'project'; path: string }>> = [
-        { kind: 'user', path: join(configDir, 'settings.json') },
-    ];
-
-    if (typeof params.directory === 'string' && params.directory.trim().length > 0) {
-        const root = params.directory.trim();
-        candidates.push({ kind: 'project', path: join(root, '.claude', 'settings.json') });
-        candidates.push({ kind: 'project', path: join(root, '.claude', 'settings.local.json') });
-    }
-
-    const servers: DetectedMcpServerV1[] = [];
+    const home = resolveHomeDirFromEnvironment(env);
+    const override = resolveClaudeConfigDirOverride(env);
+    const userPath = join(override ? expandHomePath(override, home) : home, '.claude.json');
     const warnings: McpDiscoveryWarningV1[] = [];
-
-    for (const candidate of candidates) {
-        if (!existsSync(candidate.path)) continue;
-        const parsed = safeReadJson(candidate.path);
-        if (!parsed.ok) {
-            warnings.push(parsed.warning);
-            continue;
+    function read(path: string): Readonly<Record<string, unknown>> {
+        let text: string;
+        try { text = readFileSync(path, 'utf8'); }
+        catch (error) {
+            if (record(error).code !== 'ENOENT') warnings.push({ provider: 'claude', code: 'read_failed', path });
+            return {};
         }
-
-        const rawServers = readClaudeMcpServersFromSettingsJson(parsed.value);
-        if (!rawServers || typeof rawServers !== 'object' || Array.isArray(rawServers)) continue;
-
-        for (const [nameRaw, config] of Object.entries(rawServers as Record<string, unknown>)) {
-            const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
-            if (!name) continue;
-
-            const detected = normalizeDetectedServer({
-                name,
-                config,
-                source: { kind: candidate.kind, path: candidate.path },
-            });
-            if (!detected) continue;
-            servers.push(detected);
+        try { return record(JSON.parse(text)); }
+        catch { warnings.push({ provider: 'claude', code: 'parse_failed', path }); return {}; }
+    }
+    const user = read(userPath);
+    const directory = params.directory ? canonicalizePathSync(expandHomePath(params.directory, home)) : null;
+    const local = directory ? Object.entries(record(user.projects)).find(([path]) => canonicalizePathSync(path) === directory)?.[1] : null;
+    const disabled = new Set(stringArray(record(local).disabledMcpServers));
+    const candidates = [
+        { kind: 'user' as const, path: userPath, servers: record(user.mcpServers) },
+        ...(directory ? [{ kind: 'project' as const, path: join(directory, '.mcp.json'), servers: record(read(join(directory, '.mcp.json')).mcpServers) },
+            { kind: 'project' as const, path: userPath, servers: record(record(local).mcpServers) }] : []),
+    ];
+    const servers = new Map<string, DetectedMcpServerV1>();
+    for (const candidate of candidates) {
+        for (const [name, config] of Object.entries(candidate.servers)) {
+            const entry = record(config);
+            const source = { kind: candidate.kind, path: candidate.path };
+            const enabled = disabled.has(name) ? false : null;
+            const envKeys = Object.keys(record(entry.env));
+            if ((entry.type === undefined || entry.type === 'stdio') && typeof entry.command === 'string' && entry.command.trim()) {
+                servers.set(name, { provider: 'claude', name, transport: 'stdio', stdio: { command: entry.command.trim(), args: stringArray(entry.args) }, envKeys, enabled, source });
+            } else if ((entry.type === 'http' || entry.type === 'streamable-http' || entry.type === 'sse') && typeof entry.url === 'string' && entry.url.trim()) {
+                servers.set(name, { provider: 'claude', name, transport: entry.type === 'sse' ? 'sse' : 'http', remote: { url: entry.url.trim(), headers: Object.keys(record(entry.headers)) }, envKeys, enabled, source });
+            } else {
+                warnings.push({ provider: 'claude', code: 'unsupported', path: candidate.path });
+            }
         }
     }
-
-    return { servers, warnings };
+    return { servers: [...servers.values()], warnings };
 }

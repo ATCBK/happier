@@ -20,12 +20,11 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null;
 }
 
-function readCodexMcpConfig(env: NodeJS.ProcessEnv): Readonly<{
+function readCodexMcpConfig(env: NodeJS.ProcessEnv, path = join(resolveCodexHome(env), 'config.toml')): Readonly<{
     path: string;
     entries: Readonly<Record<string, unknown>>;
     warnings: ReadonlyArray<McpDiscoveryWarningV1>;
 }> {
-    const path = join(resolveCodexHome(env), 'config.toml');
     if (!existsSync(path)) return { path, entries: {}, warnings: [] };
     let text: string;
     try {
@@ -47,25 +46,47 @@ export function readCodexMcpServerKeysFromConfigToml(env: NodeJS.ProcessEnv): st
 }
 
 export async function readCodexMcpConfigServers(
-    params: Readonly<{ env?: NodeJS.ProcessEnv }>,
+    params: Readonly<{ env?: NodeJS.ProcessEnv; directory?: string | null }>,
 ): Promise<ReadCodexMcpConfigServersResult> {
-    const parsed = readCodexMcpConfig(params.env ?? process.env);
-    const servers: DetectedMcpServerV1[] = [];
-    for (const [name, value] of Object.entries(parsed.entries)) {
-        const entry = readRecord(value);
-        if (typeof entry?.command !== 'string' || !entry.command.trim()) continue;
-        const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : [];
-
-        servers.push({
-            provider: 'codex',
-            name,
-            transport: 'stdio',
-            stdio: { command: entry.command, args },
-            envKeys: [],
-            enabled: typeof entry.enabled === 'boolean' ? entry.enabled : null,
-            source: { kind: 'user', path: parsed.path },
-        });
+    const env = params.env ?? process.env;
+    const directory = params.directory?.trim() ? expandHomePath(params.directory, resolveHomeDirFromEnvironment(env)) : null;
+    const candidates = [{ kind: 'user' as const, parsed: readCodexMcpConfig(env) },
+        ...(directory ? [{ kind: 'project' as const, parsed: readCodexMcpConfig(env, join(directory, '.codex', 'config.toml')) }] : [])];
+    const servers = new Map<string, DetectedMcpServerV1>();
+    for (const { kind, parsed } of candidates) {
+        for (const [name, value] of Object.entries(parsed.entries)) {
+            const entry = readRecord(value);
+            if (!entry) continue;
+            const source = { kind, path: parsed.path };
+            const enabled = typeof entry.enabled === 'boolean' ? entry.enabled : null;
+            if (typeof entry.url === 'string' && entry.url.trim()) {
+                servers.set(name, {
+                    provider: 'codex', name, transport: 'http',
+                    remote: { url: entry.url.trim(), headers: [...new Set([
+                        ...Object.keys(readRecord(entry.http_headers) ?? {}),
+                        ...Object.keys(readRecord(entry.env_http_headers) ?? {}),
+                        ...(typeof entry.bearer_token_env_var === 'string' ? ['Authorization'] : []),
+                    ])] },
+                    envKeys: [], enabled, source,
+                });
+                continue;
+            }
+            if (typeof entry.command !== 'string' || !entry.command.trim()) continue;
+            const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : [];
+            const forwardedEnvKeys = Array.isArray(entry.env_vars) ? entry.env_vars.flatMap(value => {
+                const key = typeof value === 'string' ? value : readRecord(value)?.name;
+                return typeof key === 'string' ? [key] : [];
+            }) : [];
+            servers.set(name, {
+                provider: 'codex',
+                name,
+                transport: 'stdio',
+                stdio: { command: entry.command, args },
+                envKeys: [...new Set([...Object.keys(readRecord(entry.env) ?? {}), ...forwardedEnvKeys])],
+                enabled,
+                source,
+            });
+        }
     }
-
-    return { servers, warnings: parsed.warnings };
+    return { servers: [...servers.values()], warnings: candidates.flatMap(candidate => candidate.parsed.warnings) };
 }

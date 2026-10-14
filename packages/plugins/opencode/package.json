@@ -119,6 +119,7 @@
   },
   "dependencies": {
     "@happier-dev/plugin-sdk": "0.0.0",
+    "json5": "^2.2.3",
     "zod": "4.3.6"
   },
   "devDependencies": {

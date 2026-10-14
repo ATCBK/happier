@@ -1,139 +1,69 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-import {
-    normalizeDetectedMcpServerV1,
-    type DetectedMcpServerV1,
-    type DiscoveryWarning as McpDiscoveryWarningV1,
-} from '@happier-dev/plugin-sdk/mcp';
+import JSON5 from 'json5';
+import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
+import type { DetectedMcpServerV1, DiscoveryWarning as McpDiscoveryWarningV1 } from '@happier-dev/plugin-sdk/mcp';
 
 export type ReadOpenCodeMcpConfigServersResult = Readonly<{
     servers: ReadonlyArray<DetectedMcpServerV1>;
     warnings: ReadonlyArray<McpDiscoveryWarningV1>;
 }>;
 
-type OpenCodeMcpServersFile = Readonly<{
-    mcpServers?: Readonly<Record<string, unknown>>;
-    mcp_servers?: Readonly<Record<string, unknown>>;
-}>;
-
-function resolveOpenCodeConfigJsonPath(env: NodeJS.ProcessEnv): string {
-    const xdgConfigHome = typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
-    if (xdgConfigHome) return join(xdgConfigHome, 'opencode', 'opencode.json');
-    const home = typeof env.HOME === 'string' && env.HOME.trim() ? env.HOME.trim() : homedir();
-    return join(home, '.config', 'opencode', 'opencode.json');
-}
-
-function parseStringArray(raw: unknown): string[] {
-    if (!Array.isArray(raw)) return [];
-    const out: string[] = [];
-    for (const entry of raw) {
-        if (typeof entry !== 'string') continue;
-        out.push(entry);
-    }
-    return out;
-}
-
-function parseRecordKeys(raw: unknown): string[] {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    return Object.keys(raw as Record<string, unknown>);
-}
-
-function normalizeDetectedServer(params: Readonly<{
-    name: string;
-    config: unknown;
-    source: DetectedMcpServerV1['source'];
-}>): DetectedMcpServerV1 | null {
-    const cfg = params.config;
-    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
-    const obj = cfg as Record<string, unknown>;
-
-    const enabled = typeof obj.enabled === 'boolean' ? obj.enabled : null;
-    const command = typeof obj.command === 'string' && obj.command.trim()
-        ? obj.command.trim()
-        : null;
-    const args = parseStringArray(obj.args);
-    const envKeys = parseRecordKeys(obj.env);
-
-    if (command) {
-        return normalizeDetectedMcpServerV1({
-            provider: 'opencode',
-            name: params.name,
-            transport: 'stdio',
-            stdio: { command, args },
-            envKeys,
-            enabled,
-            source: params.source,
-        });
-    }
-
-    const urlRaw = typeof obj.url === 'string'
-        ? obj.url
-        : typeof obj.endpoint === 'string'
-            ? obj.endpoint
-            : null;
-    const url = urlRaw && urlRaw.trim() ? urlRaw.trim() : null;
-    if (!url) return null;
-
-    const transport = obj.transport === 'sse' || obj.type === 'sse' ? 'sse' : 'http';
-    return normalizeDetectedMcpServerV1({
-        provider: 'opencode',
-        name: params.name,
-        transport,
-        remote: {
-            url,
-            headers: parseRecordKeys(obj.headers),
-        },
-        envKeys,
-        enabled,
-        source: params.source,
-    });
+function record(value: unknown): Readonly<Record<string, unknown>> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : {};
 }
 
 export async function readOpenCodeMcpConfigServers(
     params: Readonly<{ directory?: string | null; env?: NodeJS.ProcessEnv }>,
 ): Promise<ReadOpenCodeMcpConfigServersResult> {
     const env = params.env ?? process.env;
-    const candidates: Array<Readonly<{ kind: 'user' | 'project'; path: string }>> = [
-        { kind: 'user', path: resolveOpenCodeConfigJsonPath(env) },
-    ];
-    if (typeof params.directory === 'string' && params.directory.trim()) {
-        candidates.push({
-            kind: 'project',
-            path: join(params.directory.trim(), '.opencode', 'opencode.json'),
-        });
+    const home = resolveHomeDirFromEnvironment(env);
+    const configRoot = env.XDG_CONFIG_HOME?.trim() ? expandHomePath(env.XDG_CONFIG_HOME, home) : join(home, '.config');
+    const candidates: Array<DetectedMcpServerV1['source']> = [];
+    function addDirectory(root: string, kind: 'user' | 'project') {
+        candidates.push({ kind, path: join(root, 'opencode.json') }, { kind, path: join(root, 'opencode.jsonc') });
+    }
+    addDirectory(join(configRoot, 'opencode'), 'user');
+    if (env.OPENCODE_CONFIG?.trim()) candidates.push({ kind: 'user', path: expandHomePath(env.OPENCODE_CONFIG, home) });
+    if (params.directory?.trim()) {
+        const directory = expandHomePath(params.directory, home);
+        addDirectory(directory, 'project');
+        addDirectory(join(directory, '.opencode'), 'project');
+    }
+    if (env.OPENCODE_CONFIG_DIR?.trim()) addDirectory(expandHomePath(env.OPENCODE_CONFIG_DIR, home), 'user');
+
+    const entries = new Map<string, { config: Readonly<Record<string, unknown>>; source: DetectedMcpServerV1['source'] }>();
+    const warnings: McpDiscoveryWarningV1[] = [];
+    for (const source of candidates) {
+        let text: string;
+        try { text = readFileSync(source.path, 'utf8'); }
+        catch (error) {
+            if (record(error).code !== 'ENOENT') warnings.push({ provider: 'opencode', code: 'read_failed', path: source.path });
+            continue;
+        }
+        let parsed: unknown;
+        try { parsed = source.path.endsWith('.jsonc') ? JSON5.parse(text) : JSON.parse(text); }
+        catch { warnings.push({ provider: 'opencode', code: 'parse_failed', path: source.path }); continue; }
+        for (const [name, raw] of Object.entries(record(record(parsed).mcp))) {
+            entries.set(name, { config: { ...entries.get(name)?.config, ...record(raw) }, source });
+        }
     }
 
     const servers: DetectedMcpServerV1[] = [];
-    const warnings: McpDiscoveryWarningV1[] = [];
-
-    for (const candidate of candidates) {
-        if (!existsSync(candidate.path)) continue;
-
-        let parsed: OpenCodeMcpServersFile;
-        try {
-            const text = readFileSync(candidate.path, 'utf8');
-            parsed = JSON.parse(text) as OpenCodeMcpServersFile;
-        } catch {
-            warnings.push({ provider: 'opencode', code: 'parse_failed', path: candidate.path });
-            continue;
-        }
-
-        const mcpServers = parsed?.mcpServers ?? parsed?.mcp_servers;
-        if (!mcpServers || typeof mcpServers !== 'object') continue;
-
-        for (const [name, raw] of Object.entries(mcpServers)) {
-            const trimmed = name.trim();
-            if (!trimmed) continue;
-            const detected = normalizeDetectedServer({
-                name: trimmed,
-                config: raw,
-                source: { kind: candidate.kind, path: candidate.path },
-            });
-            if (detected) servers.push(detected);
+    for (const [name, { config, source }] of entries) {
+        const enabled = typeof config.enabled === 'boolean' ? config.enabled : null;
+        if (config.type === 'local' && Array.isArray(config.command) && config.command.length > 0
+            && config.command.every((value): value is string => typeof value === 'string') && config.command[0].trim()) {
+            servers.push({ provider: 'opencode', name, transport: 'stdio',
+                stdio: { command: config.command[0], args: config.command.slice(1) },
+                envKeys: Object.keys(record(config.environment)), enabled, source });
+        } else if (config.type === 'remote' && typeof config.url === 'string' && config.url.trim()) {
+            servers.push({ provider: 'opencode', name, transport: 'http',
+                remote: { url: config.url.trim(), headers: Object.keys(record(config.headers)) },
+                envKeys: [], enabled, source });
+        } else {
+            warnings.push({ provider: 'opencode', code: 'unsupported', path: source.path });
         }
     }
-
     return { servers, warnings };
 }
