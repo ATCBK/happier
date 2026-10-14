@@ -26,7 +26,7 @@ import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
-  readUsageMeterListReserve,
+  useUsageMeterListFirstReadReserve,
   UsageBodyInsufficient,
   UsageShowAllRows,
   useUsagePluginTheme,
@@ -53,6 +53,7 @@ import {
   UsagePlanLegend,
   UsagePlanAccountStates,
   UsagePlansNothingRead,
+  readPendingPlanAccountCount,
   readUsageKnownQuotaAccountCount,
   usePlanText,
 } from './plans/UsagePlanParts';
@@ -203,11 +204,12 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     [paced, nameOf, nowMs],
   );
   // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
-  // list's room (the rows its accounts are expected to report and the notes under them), so reads fill the
-  // room instead of growing the page under the reader; a re-read of a settled account never reserves.
-  const reserve = list && (projection.accounts.length === 0 || projection.accounts.some((account) => account.read === null))
-    ? readUsageMeterListReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice))
-    : undefined;
+  // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
+  // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
+  const firstReadReserve = useUsageMeterListFirstReadReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice),
+    projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0,
+    width !== null && width < STACKED_BELOW_PX);
+  const reserve = list ? firstReadReserve : undefined;
   const readingShape = reserve?.shape;
   const bodyStyle = reserve ? [styles.body, { minHeight: reserve.minHeight }] : styles.body;
   if (projection.accounts.length === 0) {

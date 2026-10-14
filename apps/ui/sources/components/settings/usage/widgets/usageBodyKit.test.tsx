@@ -6,7 +6,7 @@ import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/proto
 import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { resolveUsageShownCalendarRange, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { Heatmap, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
@@ -16,7 +16,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageSummary, usageCoverageLineMode, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle } from './usageBodyKit';
+import { describeUsagePagePendingSources, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageSummary, usageCoverageLineMode, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -351,5 +351,24 @@ describe('shared Usage identity and dependent coverage', () => {
             v: 1, totals: { tokens: { total: 5, input: 5, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' }, eventCount: 1 },
         } }] }).results[0]!;
         expect(readUsageCoverageGaps(slice, ['accounting'])).toEqual([{ source: 'accounting', status: 'unknown' }]);
+    });
+});
+
+describe('the allowance list holds its first-read room once', () => {
+    const query = normalizeUsageQuery({});
+    const pendingSlice = () => resolveUsagePageAggregation({ queries: [query], sources: [0, 1, 2].map(index => ({
+        source: `quota:${JSON.stringify(QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: `acct-${index}` } }))}`,
+        status: 'pending' as const })) }).results[0]!;
+    it('reserves through the first reads, lets go when every account has answered, and never reserves for a re-read', async () => {
+        const slice = pendingSlice();
+        const hook = await renderHook(({ answered }: { answered: boolean }) => useUsageMeterListFirstReadReserve(slice, 3, answered, false),
+            { initialProps: { answered: false } });
+        expect(hook.getCurrent()?.minHeight).toBeGreaterThan(0);
+        await hook.rerender({ answered: true });
+        expect(hook.getCurrent()).toBeUndefined();
+        // A later re-read puts accounts back to pending: the retained rows keep their height, no blank room is added.
+        await hook.rerender({ answered: false });
+        expect(hook.getCurrent()).toBeUndefined();
     });
 });

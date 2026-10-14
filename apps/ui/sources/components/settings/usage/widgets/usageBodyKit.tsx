@@ -401,15 +401,17 @@ const SETTLED_ROW_PX = 43;
 const SETTLED_SHOW_ALL_PX = 26;
 const SETTLED_QUIET_LINE_PX = 18;
 const SETTLED_BODY_GAP_PX = 16;
-/** The quiet lines that can close a led list: the unreported-windows note and the pace legend. */
-const SETTLED_QUIET_LINES = 2;
+/** The quiet lines that can close a led list: the unreported-windows note (one line) and the pace legend (two on a phone). */
+const SETTLED_LEGEND_LINES = { wide: 1, narrow: 2 } as const;
+/** The pace alert ("runs out Thu 02:26 AM before it resets") sits among them and wraps to two lines at a half-width. */
+const SETTLED_PACE_NOTE_LINES = 2;
 
 /**
  * The room a list of allowance windows holds while their reads still arrive, from the accounts already
  * known: rows fill it and the notes under them join it, so nothing below the list moves until the
  * reads settle. Undefined when no allowance read is outstanding or no account is known yet.
  */
-export function readUsageMeterListReserve(slice: UsageQueryResultSlice, accountCount: number): Readonly<{
+export function readUsageMeterListReserve(slice: UsageQueryResultSlice, accountCount: number, narrow = false): Readonly<{
   shape: Extract<NonNullable<React.ComponentProps<typeof UsageBodyReading>['shape']>, { kind: 'meters' }>;
   minHeight: number;
 }> | undefined {
@@ -420,8 +422,27 @@ export function readUsageMeterListReserve(slice: UsageQueryResultSlice, accountC
   const gap = SETTLED_BODY_GAP_PX;
   const minHeight = rows * SETTLED_ROW_PX + (rows - 1) * USAGE_METER_METRICS.rowGapPx
     + (led.hidden > 0 ? gap + SETTLED_SHOW_ALL_PX : 0)
-    + SETTLED_QUIET_LINES * (gap + SETTLED_QUIET_LINE_PX);
+    + (gap + SETTLED_QUIET_LINE_PX)
+    + gap + SETTLED_LEGEND_LINES[narrow ? 'narrow' : 'wide'] * SETTLED_QUIET_LINE_PX
+    + gap + SETTLED_PACE_NOTE_LINES * SETTLED_QUIET_LINE_PX;
   return { shape: { kind: 'meters', rows }, minHeight };
+}
+
+/**
+ * The list's first-read room: held from the first frame until every account has answered once, through the
+ * reads' arrivals, so the pace alert, its shared reason and the legend come and go inside it and the body
+ * settles its height once. After that settle a re-read never reserves again, so it cannot add blank room
+ * under retained rows. Nothing is held before the read's accounts are known.
+ */
+export function useUsageMeterListFirstReadReserve(
+  slice: UsageQueryResultSlice,
+  accountCount: number,
+  everyAccountAnswered: boolean,
+  narrow: boolean,
+): ReturnType<typeof readUsageMeterListReserve> {
+  const settledOnce = React.useRef(false);
+  if (everyAccountAnswered) settledOnce.current = true;
+  return settledOnce.current ? undefined : readUsageMeterListReserve(slice, accountCount, narrow);
 }
 
 /** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */
