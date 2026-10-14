@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -82,7 +82,8 @@ async function createMinisignBootstrapFixture(t) {
     assert.ok(source, `Missing installer function ${name}`);
     return source[0];
   });
-  const scratch = await mkdtemp(join(tmpdir(), 'happier-minisign-'));
+  // PowerShell expands Windows 8.3 TEMP aliases when returning executable paths.
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-minisign-')));
   t.after(() => rm(scratch, { recursive: true, force: true }));
   const binary = join(scratch, 'minisign.exe');
   if (process.platform === 'win32') {
