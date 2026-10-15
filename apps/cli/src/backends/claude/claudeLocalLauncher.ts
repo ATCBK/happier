@@ -239,6 +239,7 @@ export async function claudeLocalLauncher(
     };
     session.addSessionFoundCallback(scannerSessionCallback);
     const lifecycleHookCallback = (data: SessionHookData) => {
+        transcriptProjector.observeRaw(data, { historicalReplay: false, authenticatedHook: true });
         lifecycleTracker.observeHook(data);
     };
     session.addClaudeSessionHookCallback(lifecycleHookCallback);

@@ -36,6 +36,7 @@ import {
   type ConnectedServiceCredentialSealedResponse,
 } from './connectedServices/connectedServiceCredentialApi';
 import { resolveConnectedServicesServerApiTimeoutMs } from './connectedServices/serverApiTimeout';
+import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import {
   ConnectedServiceQuotaApiError,
   createConnectedServiceQuotaApiError,
@@ -49,6 +50,7 @@ import {
 import {
   normalizeSessionMetadataForRead,
   projectSessionMetadataForWire,
+  withConnectedServiceReaderSupport,
   buildProviderAccountUsageRecordId,
   CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
   CONNECTED_SERVICE_AUTH_GROUP_SWITCH_REASON_HEADER,
@@ -69,7 +71,8 @@ import {
   SealedConnectedServiceQuotaSnapshotV1Schema,
   SealedProviderAccountUsageSnapshotV1Schema,
   StoredJsonContentEnvelopeSchema,
-  splitProviderAccountUsageSubscription,
+  splitProviderAccountUsageSupplementalFacets,
+  readServerEnabledBit,
   PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
 } from '@happier-dev/protocol';
 import type {
@@ -410,7 +413,7 @@ export class ApiClient {
     state: AgentState | null
   }): Promise<Session | null> {
     const { encryptionKey, encryptionVariant, dataEncryptionKey } = resolveSessionEncryptionContext(this.credential);
-    const sessionsUrl = `${resolveServerHttpBaseUrl()}/v1/sessions`;
+    const sessionsUrl = withConnectedServiceReaderSupport(`${resolveServerHttpBaseUrl()}/v1/sessions`);
 
     const serverBaseUrl = resolveServerHttpBaseUrl();
     const { desiredSessionEncryptionMode, serverSupportsFeatureSnapshot } = await resolveSessionCreateEncryptionMode({
@@ -774,6 +777,7 @@ export class ApiClient {
   ): ApiMachineClient {
     return new ApiMachineClient(this.credential.token, machine, ownershipMetadata, {
       connectedAccounts: this.createConnectedAccountCredentialResolver(),
+      connectedServiceImportAccount: { api: this, credentials: this.credential },
     });
   }
 
@@ -1718,17 +1722,24 @@ export class ApiClient {
   }): Promise<void> {
     const serverUrl = resolveServerHttpBaseUrl();
     const recordId = ProviderAccountUsageRecordIdSchema.parse(params.recordId);
-    const { snapshot, subscription } = splitProviderAccountUsageSubscription(
+    const { snapshot, subscription, recoveryCreditDetails } = splitProviderAccountUsageSupplementalFacets(
       ProviderAccountUsageSnapshotV1Schema.parse(params.content.v),
     );
     const source = params.source ? ConnectedServiceUsageSourceV1Schema.parse(params.source) : undefined;
+    const serverFeatures = recoveryCreditDetails ? await fetchServerFeaturesSnapshot({ serverUrl }) : undefined;
+    const includeRecoveryCreditDetails = serverFeatures?.status === 'ready'
+      && readServerEnabledBit(serverFeatures.features, 'connectedServices.quotaRecoveryCreditDetails') === true;
 
     try {
       const response = await axios.post(
         `${serverUrl}/v3/connect/provider-account-usage/${encodeURIComponent(recordId)}`,
         {
           content: { t: 'plain', v: snapshot },
-          metadata: { ...params.metadata, ...(subscription ? { subscription } : {}) },
+          metadata: {
+            ...params.metadata,
+            ...(subscription ? { subscription } : {}),
+            ...(includeRecoveryCreditDetails ? { recoveryCreditDetails } : {}),
+          },
           ...(source ? { source } : {}),
         },
         {
@@ -1877,8 +1888,12 @@ export class ApiClient {
       }
 
       const baseSnapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(contentParsed.data.v);
-      const snapshotParsed = baseSnapshot.success && rawRecord.subscription !== undefined
-        ? ProviderAccountUsageSnapshotV1Schema.safeParse({ ...baseSnapshot.data, subscription: rawRecord.subscription })
+      const snapshotParsed = baseSnapshot.success && (rawRecord.subscription !== undefined || rawRecord.recoveryCreditDetails !== undefined)
+        ? ProviderAccountUsageSnapshotV1Schema.safeParse({
+          ...baseSnapshot.data,
+          ...(rawRecord.subscription !== undefined ? { subscription: rawRecord.subscription } : {}),
+          ...(rawRecord.recoveryCreditDetails !== undefined ? { recoveryCreditDetails: rawRecord.recoveryCreditDetails } : {}),
+        })
         : baseSnapshot;
       if (!snapshotParsed.success || snapshotParsed.data.recordId !== recordId) {
         throw createConnectedServiceQuotaProtocolError(

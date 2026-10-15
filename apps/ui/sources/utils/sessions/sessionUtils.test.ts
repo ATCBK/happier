@@ -114,6 +114,26 @@ function createBaseSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('getSessionStatus', () => {
+    it('shows a primary failure rather than background activity without altering the background ledger', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({
+            activeAt: 1_000,
+            latestTurnStatus: 'failed',
+            latestTurnStatusObservedAt: 1_000,
+            lastRuntimeIssue: {
+                v: 1, scope: 'primary_session', status: 'failed',
+                code: 'usage_limit', source: 'usage_limit', occurredAt: 1_000,
+            },
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 2,
+            runtimeActivityObservedAt: 1_000,
+        });
+        const status = getSessionStatus(session, 1_000, 0);
+        expect(status.state).toBe('failed');
+        expect(status.shouldShowStatus).toBe(true);
+        expect(status.isPulsing).toBe(false);
+        expect(session.runtimeActivityActiveCount).toBe(2);
+    });
     it('exports the shared runtime status freshness budget and helper', async () => {
         const statusModule = await import('./sessionUtils');
 

@@ -743,10 +743,16 @@ export function normalizeRawMessage(
 	                    for (let c of raw.content.data.message.content) {
 		                        if (c.type === 'tool_result') {
 		                            const rawResultContent = raw.content.data.toolUseResult ?? c.content;
+                                    // Historical failed/stopped results only carried status in origin.
+                                    // Use the canonical Task result envelope so downstream readers
+                                    // retain the terminal status as well as the original findings.
+                                    const resultContent = nativeTaskStatus === 'failed' || nativeTaskStatus === 'cancelled'
+                                        ? { status: nativeTaskStatus, content: toolResultContentToText(rawResultContent) }
+                                        : rawResultContent;
 		                            content.push({
 		                                ...c,  // WOLOG: Preserve all fields including unknown ones
 	                                type: 'tool-result',
-	                                content: toolResultContentToText(rawResultContent),
+	                                content: toolResultContentToText(resultContent),
 	                                is_error: nativeTaskStatus === 'failed' || nativeTaskStatus === 'cancelled' || c.is_error || false,
 		                                uuid: outputUuid,
 		                                parentUUID: raw.content.data.parentUuid ?? null,

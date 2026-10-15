@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { createMessagesDomain } from './messages';
 
 function createHarness(initial: any) {
-    let state: any = {
+    const state: any = {
         sessions: {},
         sessionListRenderables: {},
         sessionListViewData: null,
@@ -17,13 +19,10 @@ function createHarness(initial: any) {
         ...initial,
     };
 
-    const get = () => state;
-    const set = (updater: any) => {
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
-
-    const domain = createMessagesDomain({ get, set } as any);
+    const store = createStore<typeof state>(() => state);
+    const get = store.getState;
+    const domain = createMessagesDomain({ get, set: store.setState });
+    store.setState({ ...domain, ...initial });
     return { get, domain };
 }
 
@@ -45,6 +44,26 @@ beforeEach(() => {
 });
 
 describe('messages domain: ordering', () => {
+    it('projects deferred completed questions when paging reaches the beginning, even with no final rows', () => {
+        const session = createSessionFixture({
+            id: 's1', agentStateVersion: 1,
+            agentState: { completedRequests: { question: {
+                tool: 'AskUserQuestion', arguments: { questions: [] }, createdAt: 100,
+                completedAt: 200, status: 'approved', answers: { choice: 'yes' },
+            } } },
+        });
+        const { get, domain } = createHarness({ sessions: { s1: session } });
+        domain.applyMessages('s1', []);
+        expect(get().sessionMessages.s1.messageIdsOldestFirst).toEqual([]);
+        domain.markSessionMessagesHistoryStartLoaded('s1');
+        const entry = get().sessionMessages.s1;
+        expect(entry.messageIdsOldestFirst).toHaveLength(1);
+        expect(entry.messagesById[entry.messageIdsOldestFirst[0]]).toMatchObject({ tool: { result: { answers: { choice: 'yes' } } } });
+        const previous = get();
+        domain.markSessionMessagesHistoryStartLoaded('s1');
+        expect(get()).toBe(previous);
+    });
+
     it('keeps an already-loaded transcript entry referentially stable when marked loaded again', () => {
         const { get, domain } = createHarness({});
 

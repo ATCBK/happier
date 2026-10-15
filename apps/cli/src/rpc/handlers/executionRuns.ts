@@ -157,6 +157,7 @@ export function registerExecutionRunHandlers(
         credentials: await readCredentials().catch(() => null),
         cwd: resolveCwd(),
         sessionId: params.sessionId,
+        ...(params.previousMaterializedRoot ? { previousMaterializedRoot: params.previousMaterializedRoot } : {}),
       }),
   });
 

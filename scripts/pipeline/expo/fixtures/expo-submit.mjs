@@ -66,5 +66,3 @@ export function createExpoSubmitFixture(t, { cloud = false, sourceMismatch = fal
   const result = spawnSync(process.execPath, args, { cwd: fileURLToPath(new URL('../../../../', import.meta.url)), env: { ...process.env, CI: '1', EXPO_TOKEN: 'fixture', GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: credentialJson, HAPPIER_EXPO_SUBMIT_APP_ENV: '', APPLE_API_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n' }, encoding: 'utf8' });
   return { result, calls: readFileSync(marker, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)), restored: readFileSync(path.join(projectDir, 'eas.json'), 'utf8') === easJson, whatsNew };
 }
-
-

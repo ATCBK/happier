@@ -75,6 +75,7 @@ import type { RpcHandlerActiveExecution } from '@/api/rpc/types';
 
 export type ApiMachineClientDeps = Readonly<{
     connectedAccounts?: ScmConnectedAccountCredentialResolver;
+    connectedServiceImportAccount?: import('@/cloud/connectedServices/connectedServiceImport').ConnectedServiceImportAccount;
 }>;
 
 export type AccountSettingsVersionHintSource = 'changes' | 'cursor-gone' | 'page-limit';
@@ -171,6 +172,7 @@ function isMachineReplacedSocketError(error: unknown, diagnostic: Record<string,
 }
 
 export class ApiMachineClient {
+    private readonly connectedServiceImportAccount: ApiMachineClientDeps['connectedServiceImportAccount'];
     private socket: Socket<ServerToDaemonEvents, DaemonToServerEvents> | null = null;
     private keepAliveInterval: NodeJS.Timeout | null = null;
     private rpcHandlerManager: RpcHandlerManager;
@@ -330,6 +332,7 @@ export class ApiMachineClient {
         deps?: ApiMachineClientDeps,
     ) {
         this.ownershipMetadata = ownershipMetadata ?? {};
+        this.connectedServiceImportAccount = deps?.connectedServiceImportAccount;
         // Initialize RPC handler manager
         this.rpcHandlerManager = new RpcHandlerManager({
             scopePrefix: this.machine.id,
@@ -408,6 +411,7 @@ export class ApiMachineClient {
         stopSession,
         isSessionActive,
         loadLocalSessionMetadata,
+        resolveExistingStateEnvironment,
         requestShutdown,
         memory,
         daemonServerWorkScheduler,
@@ -424,6 +428,7 @@ export class ApiMachineClient {
                 stopSession,
                 ...(isSessionActive ? { isSessionActive } : {}),
                 ...(loadLocalSessionMetadata ? { loadLocalSessionMetadata } : {}),
+                ...(resolveExistingStateEnvironment ? { resolveExistingStateEnvironment } : {}),
                 requestShutdown,
                 ...(memory ? { memory } : {}),
                 ...(daemonServerWorkScheduler ? { daemonServerWorkScheduler } : {}),
@@ -432,6 +437,7 @@ export class ApiMachineClient {
             },
             deps: {
                 ...deps,
+                connectedServiceImportAccount: this.connectedServiceImportAccount,
                 machineRpcWorkingDirectory: this.machineRpcWorkingDirectory,
                 filesystemAccessPolicy: this.filesystemAccessPolicy,
                 emitDirectSessionTranscriptUpdate:

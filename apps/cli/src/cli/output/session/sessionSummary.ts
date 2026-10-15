@@ -1,6 +1,7 @@
 import type { Credentials } from '@/persistence';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { RawSessionListRow, RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
 import {
   readSystemSessionMetadataFromMetadata,
   type SessionSummary as ProtocolSessionSummary,
@@ -28,6 +29,8 @@ export function summarizeSessionRow(params: Readonly<{
   const title = typeof (metadata as any)?.summary?.text === 'string' ? String((metadata as any).summary.text).trim() : undefined;
   const path = typeof (metadata as any)?.path === 'string' ? String((metadata as any).path) : undefined;
   const host = typeof (metadata as any)?.host === 'string' ? String((metadata as any).host) : undefined;
+  const machineId = typeof metadata?.machineId === 'string' ? metadata.machineId.trim() : undefined;
+  const permissionMode = resolvePermissionIntentFromSessionMetadata(metadata)?.intent;
   const systemMetadata = metadata === null ? null : readSystemSessionMetadataFromMetadata({ metadata });
   const isSystem = systemMetadata !== null;
   const archivedAt = (params.row as any)?.archivedAt;
@@ -46,6 +49,8 @@ export function summarizeSessionRow(params: Readonly<{
     ...(title ? { title } : {}),
     ...(path ? { path } : {}),
     ...(host ? { host } : {}),
+    ...(machineId ? { machineId } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
     ...(isSystem ? { isSystem, systemPurpose: systemMetadata?.key ?? null } : {}),
     ...(readShare(params.row.share) !== undefined ? { share: readShare(params.row.share) } : {}),
     ...((params.row as any)?.encryptionMode ? { encryptionMode: (params.row as any).encryptionMode } : {}),

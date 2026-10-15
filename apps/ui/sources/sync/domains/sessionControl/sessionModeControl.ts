@@ -52,7 +52,10 @@ export function resolveRequestedSessionModeIdForMetadata(
     return resolveRequestedSessionModeId(requestedModeId, control?.options ?? []);
 }
 
-function computeLegacyRequestedModeIdFromPermissionMode(metadata: Metadata | null | undefined, options: readonly SessionModeOption[]): string | null {
+function computeLegacyRequestedModeIdFromPermissionMode(
+    metadata: Metadata | null | undefined,
+    options: readonly SessionModeOption[],
+): string | null {
     const raw = typeof metadata?.permissionMode === 'string' ? metadata.permissionMode : '';
     const intent = raw ? parsePermissionIntentAlias(raw) : null;
     return intent === 'plan' && options.some((option) => option.id === 'plan') ? 'plan' : null;

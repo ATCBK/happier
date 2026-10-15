@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
+import { configuration } from '@/configuration';
 import {
   ReviewStartInputSchema,
   SessionUsageLimitRecoveryOperationResultV1Schema,
@@ -113,6 +114,10 @@ function parseUsageLimitResult(value: unknown) {
 }
 
 describe('createCliActionDeps session controls', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.axiosGet.mockReset();
     mocks.axiosGet.mockResolvedValue({ status: 200, data: { id: 'acct_1', connectedServicesV2: [] } });
@@ -175,6 +180,9 @@ describe('createCliActionDeps session controls', () => {
   });
 
   it('lists models from provider probes instead of stale current-session metadata', async () => {
+    // This case exercises the cold fallback; the catalog's discovered-membership cases
+    // exercise dynamic discovery separately through their HTTP boundary fixtures.
+    vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
     const deps = createCliActionInventoryDeps({
       token: 'token',
       credentials: createCredentials(),
@@ -301,7 +309,11 @@ describe('createCliActionDeps session controls', () => {
     expect(JSON.stringify(configOptions)).not.toMatch(/token|secret|password/i);
   });
 
-  it('lists spawn target paths, machines, and servers from canonical session and daemon owners', async () => {
+  it('lists spawn target paths, account machines, and configured servers through their canonical owners', async () => {
+    mocks.axiosGet.mockResolvedValueOnce({ status: 200, data: [
+      { id: 'machine-cloud', active: true },
+      { id: 'machine-remote', active: false },
+    ] });
     mocks.listSessions.mockResolvedValueOnce({
       sessions: [
         { id: 'sess-a', path: '/repo/a', host: 'host-a', activeAt: 30 },
@@ -387,11 +399,21 @@ describe('createCliActionDeps session controls', () => {
         value: 'machine-cloud',
         label: 'machine-cloud',
         machineId: 'machine-cloud',
-        serverId: 'cloud',
-        serverName: 'Cloud',
+        serverId: configuration.activeServerId,
+        serverName: configuration.serverUrl,
         authenticated: true,
         machineRegistered: true,
         daemonRunning: true,
+      },
+      {
+        value: 'machine-remote',
+        label: 'machine-remote',
+        machineId: 'machine-remote',
+        serverId: configuration.activeServerId,
+        serverName: configuration.serverUrl,
+        authenticated: true,
+        machineRegistered: true,
+        daemonRunning: false,
       },
     ]);
     expect(servers.items).toEqual([

@@ -83,6 +83,8 @@ export interface SpawnSessionOptions {
      * When set, the CLI will connect to this session instead of creating a new one.
      */
     existingSessionId?: string;
+    /** Internal canonical handoff resume; retain already-present provider state. */
+    handoffStateTransfer?: 'existing';
     /**
      * Internal-only attach payload for a pre-resolved existing Happy session.
      *

@@ -1059,7 +1059,7 @@ describe('SessionHeaderActionMenu handoff', () => {
       await pending;
     });
 
-    expect(modalConfirmMock).toHaveBeenCalled();
+    expect(modalConfirmMock).not.toHaveBeenCalled();
     expect(archiveSessionMock).toHaveBeenCalledWith('sess_archive', { serverId: 'server_a' });
   });
 

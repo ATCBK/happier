@@ -1,4 +1,6 @@
 import { t } from '@/text';
+import { Modal } from '@/modal';
+import { storage } from '@/sync/domains/state/storage';
 import { HappyError } from '@/utils/errors/errors';
 import {
     sessionArchiveWithServerScope,
@@ -39,6 +41,7 @@ import type {
     SessionActionOperationResult,
     SessionActionTarget,
 } from './sessionActionTypes';
+import { resolveSessionArchiveActionPolicy } from './sessionActionMetadata';
 
 function resolveStopArchiveFlow(context: SessionActionExecutionContext | undefined) {
     return context?.operations?.stopArchiveFlow ?? stopSessionAndMaybeArchive;
@@ -121,10 +124,19 @@ async function runStopArchiveFlow(params: Readonly<{
     });
 }
 
-async function executeArchiveAction(target: SessionActionTarget, context?: SessionActionExecutionContext): Promise<void> {
+export async function confirmSessionStop(): Promise<boolean> {
+    return await Modal.confirm(t('sessionInfo.stopSession'), t('sessionInfo.stopSessionConfirm'), {
+        cancelText: t('common.cancel'),
+        confirmText: t('sessionInfo.stopSession'),
+        destructive: true,
+    });
+}
+
+async function executeArchiveAction(target: SessionActionTarget, context?: SessionActionExecutionContext): Promise<void | false> {
     const archiveSession = resolveArchiveSession(context);
 
     if (target.isActive || target.hasStoppableTerminalHost) {
+        if (!await confirmSessionStop()) return false;
         await runStopArchiveFlow({ target, context, archiveAfterStop: 'always' });
         return;
     }
@@ -132,6 +144,9 @@ async function executeArchiveAction(target: SessionActionTarget, context?: Sessi
     const result = await archiveSession(target.sessionId, { serverId: target.serverId });
     if (!result.success) {
         if (isSessionActiveArchiveResult(result)) {
+            // The server may know the session is active before this client does.
+            // Waiving reversible archive confirmation never waives stopping it.
+            if (!await confirmSessionStop()) return false;
             await runStopArchiveFlow({ target, context, archiveAfterStop: 'always' });
             return;
         }
@@ -145,7 +160,29 @@ export async function executeSessionAction(params: Readonly<{
     target: SessionActionTarget;
     input?: SessionActionExecutionInput;
     context?: SessionActionExecutionContext;
-}>): Promise<void> {
+}>): Promise<void | false> {
+    if (params.actionId === SESSION_ACTION_ARCHIVE_ID || params.actionId === SESSION_ACTION_UNARCHIVE_ID) {
+        const policy = resolveSessionArchiveActionPolicy({
+            actionId: params.actionId,
+            settings: storage.getState().settings.actionsSettingsV1,
+        });
+        if (!policy.enabled) return false;
+        const willStop = params.actionId === SESSION_ACTION_ARCHIVE_ID
+            && (params.target.isActive || params.target.hasStoppableTerminalHost);
+        if (policy.requiresConfirmation && !willStop) {
+            const isArchive = params.actionId === SESSION_ACTION_ARCHIVE_ID;
+            const confirmed = await Modal.confirm(
+                isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.unarchiveSession'),
+                isArchive ? t('sessionInfo.archiveSessionConfirm') : t('sessionInfo.unarchiveSessionConfirm'),
+                {
+                    cancelText: t('common.cancel'),
+                    confirmText: isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.unarchiveSession'),
+                    destructive: policy.destructive,
+                },
+            );
+            if (!confirmed) return false;
+        }
+    }
     switch (params.actionId) {
         case SESSION_ACTION_MARK_READ_ID:
             throwIfFailed(
@@ -178,8 +215,7 @@ export async function executeSessionAction(params: Readonly<{
             await runStopArchiveFlow({ target: params.target, context: params.context, archiveAfterStop: 'never' });
             return;
         case SESSION_ACTION_ARCHIVE_ID:
-            await executeArchiveAction(params.target, params.context);
-            return;
+            return await executeArchiveAction(params.target, params.context);
         case SESSION_ACTION_UNARCHIVE_ID:
             throwIfFailed(
                 await resolveUnarchiveSession(params.context)(params.target.sessionId, { serverId: params.target.serverId }),

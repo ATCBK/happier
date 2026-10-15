@@ -612,7 +612,6 @@ export type ConnectedServiceAuthGroupSwitchPipelineRequest = Readonly<{
 }>;
 
 export type ConnectedServiceAuthGroupSwitchPipelinePhase =
-  | 'lease_loser_non_apply'
   | 'lease_loser_apply'
   | 'record_observed_generation'
   | 'policy'

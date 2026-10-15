@@ -22,9 +22,9 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
     let publicationTail: Promise<void> = Promise.resolve();
 
     const currentProjection = (): ClaudeProviderRuntimeActivityProjection => {
-        const activeCount = params.providerActivityLedger.getActiveProviderTaskCount();
+        const activeCount = params.providerActivityLedger.getObservedActiveProviderTaskCount();
         if (activeCount > 0) return { state: 'active', activeCount };
-        return observationComplete
+        return observationComplete && !params.providerActivityLedger.hasActiveProviderTasks()
             ? { state: 'idle', activeCount: 0 }
             : { state: 'unknown', activeCount: 0 };
     };
@@ -105,6 +105,7 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
         async handleRuntimeLoss(reasonCode: string): Promise<void> {
             if (!isCurrentRuntime()) return;
             observationComplete = false;
+            params.providerActivityLedger.noteObservationLost();
             if (observationState !== 'active') return;
             // Observation loss is published as `unknown` whatever the ledger still holds. Tasks left
             // in flight when the query dies are not evidence of liveness — they are exactly the

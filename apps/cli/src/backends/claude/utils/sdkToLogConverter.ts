@@ -18,8 +18,8 @@ import { normalizeClaudeToolUseNamesInSdkMessage } from './normalizeClaudeToolUs
 import { providers } from '@happier-dev/agents'
 import { buildClaudeSdkResultUsageTelemetry } from './sdkResultUsageTelemetry'
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers'
-import { formatClaudePeerMessageText, projectClaudePeerMessage } from '../attachments/claudePeerMessageProjection'
 import { createClaudeTaskNotificationToolResultProjector, readClaudeTaskLifecycleEnvelope } from '../taskNotifications/claudeTaskLifecycleEnvelope'
+import { formatClaudePeerMessageText, projectClaudePeerMessage } from '../attachments/claudePeerMessageProjection'
 
 /**
  * Context for converting SDK messages to log format
@@ -118,8 +118,8 @@ export class SDKToLogConverter {
      * Convert SDK message to log format
      */
     convert(sdkMessage: SDKMessage): RawJSONLines | null {
-        const rawType = (sdkMessage as any)?.type;
         const fact = readClaudeTaskLifecycleEnvelope(sdkMessage);
+        const rawType = (sdkMessage as any)?.type;
         if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment'
             && fact?.subtype !== 'task_notification') {
             return null;

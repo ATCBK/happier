@@ -19,7 +19,6 @@ import {
 import { readClaudeTranscriptTurnSignal } from './readClaudeTranscriptTurnSignal';
 import {
   isClaudeTranscriptTaskNotification,
-  readClaudeTranscriptProviderActivity,
 } from './readClaudeTranscriptProviderActivity';
 import type { createClaudeProviderRuntimeActivityAdapter } from '../providerActivity/createClaudeProviderRuntimeActivityAdapter';
 
@@ -119,24 +118,13 @@ export function createClaudeLocalLifecycleTracker(opts: Readonly<{
   const observeProviderActivity = (message: unknown, expectedSessionId: string): void => {
     const row = message as Record<string, unknown>;
     if (row.isReplay === true || row.is_replay === true) return;
-    const activity = readClaudeProviderTaskActivity(message);
+    const activity = readClaudeProviderTaskActivity(message, expectedSessionId);
     if (activity) {
       if (activity.sessionId !== expectedSessionId) return;
       observeProviderActivityFact(activity);
       return;
     }
 
-    const transcriptActivity = readClaudeTranscriptProviderActivity(message as RawJSONLines);
-    if (
-      transcriptActivity?.type !== 'task_notification'
-      || !transcriptActivity.terminal
-      || !transcriptActivity.taskId
-    ) return;
-    observeProviderActivityFact({
-      type: 'terminal',
-      sessionId: expectedSessionId,
-      taskId: transcriptActivity.taskId,
-    });
   };
 
   const observe = (event: LocalTurnLifecycleEvent | null): void => {

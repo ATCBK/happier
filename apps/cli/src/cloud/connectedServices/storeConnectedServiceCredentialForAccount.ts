@@ -44,11 +44,11 @@ type PreparedCredentialWrite =
     }>;
 
 export type ConnectedServiceCredentialStorageApi = Readonly<{
-  getAccountEncryptionMode: (options?: Readonly<{ refresh?: boolean }>) => Promise<'e2ee' | 'plain' | 'unknown'>;
-  getConnectedServiceCredentialPlain: (binding: CredentialBinding) => Promise<({
+  getAccountEncryptionMode: (options?: Readonly<{ refresh?: boolean; signal?: AbortSignal }>) => Promise<'e2ee' | 'plain' | 'unknown'>;
+  getConnectedServiceCredentialPlain: (binding: CredentialBinding & Readonly<{ signal?: AbortSignal }>) => Promise<({
     content: { t: 'plain'; v: ConnectedServiceCredentialRecordV1 };
   } & ConnectedServiceCredentialRevisionBoundaryV1) | null>;
-  getConnectedServiceCredentialSealed: (binding: CredentialBinding) => Promise<({
+  getConnectedServiceCredentialSealed: (binding: CredentialBinding & Readonly<{ signal?: AbortSignal }>) => Promise<({
     sealed: SealedConnectedServiceCredentialV1;
     metadata: {
       kind: 'oauth' | 'token';
@@ -83,6 +83,16 @@ export class ConnectedServiceCredentialStorageSupersededError extends Error {
   }
 }
 
+export class ConnectedServiceCredentialIdentityConflictError extends Error {
+  readonly code = 'profile_conflict';
+  constructor() { super('The profile belongs to a different or unverified provider account'); this.name = 'ConnectedServiceCredentialIdentityConflictError'; }
+}
+
+export class ConnectedServiceCredentialStorageResultUnknownError extends Error {
+  readonly code = 'storage_result_unknown';
+  constructor() { super('The entered credential write could not be settled'); this.name = 'ConnectedServiceCredentialStorageResultUnknownError'; }
+}
+
 function metadataForRecord(record: ConnectedServiceCredentialRecordV1): CredentialMetadata {
   return {
     kind: record.kind,
@@ -115,12 +125,13 @@ async function readCurrentRevision(params: Readonly<{
   api: ConnectedServiceCredentialStorageApi;
   mode: 'e2ee' | 'plain';
   binding: CredentialBinding;
-}>): Promise<ConnectedServiceCredentialRevisionBoundaryV1 | null> {
+  signal?: AbortSignal;
+}>) {
   if (params.mode === 'plain') {
-    const current = await params.api.getConnectedServiceCredentialPlain(params.binding);
+    const current = await params.api.getConnectedServiceCredentialPlain({ ...params.binding, ...(params.signal ? { signal: params.signal } : {}) });
     return current;
   }
-  const current = await params.api.getConnectedServiceCredentialSealed(params.binding);
+  const current = await params.api.getConnectedServiceCredentialSealed({ ...params.binding, ...(params.signal ? { signal: params.signal } : {}) });
   return current;
 }
 
@@ -174,15 +185,34 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
   api: ConnectedServiceCredentialStorageApi;
   credentials: Credentials;
   record: ConnectedServiceCredentialRecordV1;
+  identityPolicy?: 'same_account_or_empty';
+  signal?: AbortSignal;
   randomBytes?: (length: number) => Uint8Array;
 }>): Promise<ConnectedServiceCredentialRevisionBoundaryV1> {
   const binding = { serviceId: params.record.serviceId, profileId: params.record.profileId };
-  const mode = await params.api.getAccountEncryptionMode({ refresh: true });
+  params.signal?.throwIfAborted();
+  const mode = await params.api.getAccountEncryptionMode({ refresh: true, ...(params.signal ? { signal: params.signal } : {}) });
   if (mode !== 'e2ee' && mode !== 'plain') {
     throw new Error('Cannot store connected service credential while account encryption mode is unknown');
   }
 
-  const currentRevision = await readCurrentRevision({ api: params.api, mode, binding });
+  params.signal?.throwIfAborted();
+  const currentRevision = await readCurrentRevision({ api: params.api, mode, binding, signal: params.signal });
+  params.signal?.throwIfAborted();
+  if (params.identityPolicy === 'same_account_or_empty' && currentRevision !== null) {
+    const existing = 'content' in currentRevision ? metadataForRecord(currentRevision.content.v) : normalizeMetadata(currentRevision.metadata);
+    const incoming = metadataForRecord(params.record);
+    const sameAccount = existing.kind === incoming.kind && (
+      existing.providerAccountId && incoming.providerAccountId
+        ? existing.providerAccountId === incoming.providerAccountId
+        : !existing.providerAccountId && !incoming.providerAccountId && existing.providerEmail && incoming.providerEmail
+          ? existing.providerEmail === incoming.providerEmail
+          : false
+    );
+    if (!sameAccount) throw new ConnectedServiceCredentialIdentityConflictError();
+    // Unfenced servers cannot protect identity between the check and write.
+    if (currentRevision.revisionSemantics !== 'revisioned') throw new ConnectedServiceCredentialIdentityConflictError();
+  }
   const expectedCredentialRevision = currentRevision?.credentialRevision ?? null;
   const revisionSemantics = currentRevision?.revisionSemantics ?? 'revisioned';
   const prepared: PreparedCredentialWrite = mode === 'plain'
@@ -207,6 +237,8 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
       };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0 && params.signal?.aborted) throw new ConnectedServiceCredentialStorageResultUnknownError();
+    params.signal?.throwIfAborted();
     try {
       const result = await writePreparedCredential({ api: params.api, prepared });
       if ('error' in result) {
@@ -224,6 +256,7 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
       try {
         settlement = await didStorePreparedCredential({ api: params.api, prepared });
       } catch {
+        if (params.signal?.aborted || params.identityPolicy === 'same_account_or_empty') throw new ConnectedServiceCredentialStorageResultUnknownError();
         throw error;
       }
       if (settlement.stored && settlement.credentialRevision) {
@@ -238,7 +271,10 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
           credentialRevision: settlement.credentialRevision,
         });
       }
-      if (attempt === 1) throw error;
+      if (attempt === 1) {
+        if (params.signal?.aborted || params.identityPolicy === 'same_account_or_empty') throw new ConnectedServiceCredentialStorageResultUnknownError();
+        throw error;
+      }
     }
   }
 

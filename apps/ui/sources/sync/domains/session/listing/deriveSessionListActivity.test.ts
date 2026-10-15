@@ -205,7 +205,7 @@ describe('deriveSessionListAttentionState', () => {
         }))).toBe('failed');
     });
 
-    it('uses fresh session status thinking after a failed terminal projection as working attention', () => {
+    it('does not hide the failed primary projection behind a thinking signal', () => {
         expect(deriveSessionListAttentionState(input({
             sessionState: 'thinking',
             latestTurnStatus: 'failed',
@@ -215,7 +215,7 @@ describe('deriveSessionListAttentionState', () => {
             seq: 10,
             latestReadyEventSeq: null,
             lastViewedSessionSeq: 9,
-        }))).toBe('thinking');
+        }))).toBe('failed');
     });
 
     it('does not treat stale in-progress projection as working attention without fresh session status thinking', () => {

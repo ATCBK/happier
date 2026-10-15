@@ -390,6 +390,7 @@ import {
   type ConnectedServiceSwitchTarget,
 } from './connectedServices/sessionAuthSwitch/connectedServiceSwitchDeferralQueue';
 import { requestPlannedRunnerRestart } from './plannedRunnerRestart/requestPlannedRunnerRestart';
+import { createRestartCompletionWaiters } from './plannedRunnerRestart/completionWaiters';
 import type { PlannedRunnerRestartNotSignaledReason } from './plannedRunnerRestart/types';
 import {
   summarizeSessionRunnerEndpoint,
@@ -461,7 +462,8 @@ import { warmActiveAccountSettingsSnapshotBestEffort } from '@/settings/accountS
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { isBackendEnabledByAccountSettings } from '@/settings/backendEnabled';
 import { resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveConfiguredAcpBackendFromAccountSettings';
-import { fetchSessionByIdCompat, fetchSessionsPage, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { listRetainedConnectedServiceMaterializationIdentityIds } from './connectedServices/materialize/cleanup/listRetainedConnectedServiceMaterializationIdentityIds';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { persistExplicitSessionStopUsageLimitRecoveryCancellation } from '@/session/usageLimitRecoveryControls/persistUsageLimitRecoveryFieldDurably';
 import { UsageLimitRecoveryScheduler } from './connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
@@ -522,7 +524,6 @@ import { resolveCurrentCodexRuntimeAuthFailureSource } from './connectedServices
 import { resolveRuntimeAuthFailureSourceProfile } from './connectedServices/runtimeAuth/resolveRuntimeAuthFailureSourceProfile';
 import { resolveConnectedServiceGroupMemberByProviderAccountId } from './connectedServices/shared/resolveConnectedServiceGroupMemberByProviderAccountId';
 import { readCredentialAccountIdentity } from './connectedServices/quotas/coordinator/support';
-import { startConnectedServiceStableHomeReconcileScheduler } from './connectedServices/startup/stableHomeReconcile';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
 
@@ -770,36 +771,6 @@ function resolveConnectedServiceRestartProcessGroupPid(tracked: TrackedSession):
   return tracked.startedBy === 'daemon' && tracked.childProcess && Number.isInteger(tracked.pid) && tracked.pid > 0
     ? tracked.pid
     : null;
-}
-
-async function listRetainedConnectedServiceMaterializationIdentityIds(params: Readonly<{
-  credentials: Credentials;
-}>): Promise<ReadonlySet<string>> {
-  const retained = new Set<string>();
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let page = 0; page < 50; page += 1) {
-    const result = await fetchSessionsPage({
-      token: params.credentials.token,
-      ...(cursor ? { cursor } : {}),
-      limit: 200,
-    });
-    for (const rawSession of result.sessions as ReadonlyArray<RawSessionRecord>) {
-      const metadata = tryDecryptSessionMetadata({
-        credentials: params.credentials,
-        rawSession,
-      });
-      const identity = readConnectedServiceMaterializationIdentityV1(
-        metadata?.connectedServiceMaterializationIdentityV1,
-      );
-      if (identity) retained.add(identity.id);
-    }
-    if (!result.hasNext || !result.nextCursor) break;
-    if (seenCursors.has(result.nextCursor)) break;
-    seenCursors.add(result.nextCursor);
-    cursor = result.nextCursor;
-  }
-  return retained;
 }
 
 async function resumeInactiveSessionWhenUsageLimitReady(params: Readonly<{
@@ -1889,7 +1860,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         resume: () => void;
       }> | null = null;
       let connectedServiceQuotasCoordinator: ConnectedServiceQuotasCoordinator | null = null;
-      let connectedServiceStableHomeReconcileHandle: Readonly<{ stop: () => void }> | null = null;
       const connectedServiceRuntimeRegistry = new ConnectedServiceRuntimeRegistry();
       const connectedServiceRuntimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
       const providerAccountUsageStore = createProviderAccountUsageStore();
@@ -2036,6 +2006,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       };
       const connectedServiceGroupHomeCleanupScheduler = new ConnectedServiceGroupHomeCleanupScheduler({
         activeServerDir: configuration.activeServerDir,
+        runtimeRegistry: connectedServiceRuntimeRegistry,
         hasLiveTarget: ({ serviceId, groupId, agentId }) => getCurrentChildren().some((tracked) => {
           const trackedAgentId = resolveTrackedSessionCatalogAgentId(tracked);
           if (trackedAgentId !== agentId) return false;
@@ -2049,6 +2020,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       });
       const connectedServiceMaterializedHomeCleanupScheduler = new ConnectedServiceMaterializedHomeCleanupScheduler({
         baseDir: connectedServicesMaterializationBaseDir,
+        runtimeRegistry: connectedServiceRuntimeRegistry,
         nowMs: () => Date.now(),
         rootTtlMs: resolvePositiveIntEnv(
           process.env.HAPPIER_CONNECTED_SERVICES_MATERIALIZED_HOME_TTL_MS,
@@ -2066,7 +2038,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           return readTrackedConnectedServiceMaterializationIdentityId(tracked) === materializationIdentityId;
         }),
         listRetainedIdentityIds: async () =>
-          await listRetainedConnectedServiceMaterializationIdentityIds({ credentials }),
+          await listRetainedConnectedServiceMaterializationIdentityIds({ credentials, baseDir: connectedServicesMaterializationBaseDir }),
       });
       let connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null = null;
       let connectedServiceMaterializedHomeCleanupLoopHandle: Readonly<{
@@ -3703,11 +3675,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                       processEnv: process.env,
                       credentialRefreshService: connectedServiceRefreshCoordinator,
                       vendorResumeId: effectiveResume || null,
+                      existingSessionMetadata: existingSessionPersistedMetadata,
                       resumeReachabilityRequired: spawnSharedStateContinuityRequested,
-                      candidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile(
-                        catalogAgentId,
-                        existingSessionPersistedMetadata,
-                      ),
+                      sessionStateMode: normalizedOptions.handoffStateTransfer,
+                      candidatePersistedSessionFile: normalizedOptions.handoffStateTransfer === 'existing'
+                        ? null
+                        : resolveConnectedServiceCandidatePersistedSessionFile(
+                            catalogAgentId,
+                            existingSessionPersistedMetadata,
+                          ),
                     });
                     if (repairedMissingMaterializationIdentity && normalizedExistingSessionId) {
                       try {
@@ -3827,6 +3803,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   logInfo: (message) => logger.info(message),
                   logWarn: (message) => logger.warn(message),
                   connectedServiceAuth,
+                  existingSessionMetadata: existingSessionPersistedMetadata,
                 });
                 spawnResourceCleanupOnFailure = spawnEnvironment.cleanupOnFailure;
                 spawnResourceCleanupOnExit = spawnEnvironment.cleanupOnExit;
@@ -4978,12 +4955,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           60_000,
           { min: 1_000, max: 10 * 60_000 },
         );
-        type SessionRunnerRestartCompletionWaiter = Readonly<{
-          settle: (completion: RestartSessionRunnerCompletion) => void;
-        }>;
-        const sessionRunnerRestartCompletionWaiters = new Map<string, SessionRunnerRestartCompletionWaiter>();
-        const sessionRunnerRestartCompletionKey = (sessionId: string, previousPid: number): string =>
-          `${sessionId}\u0000${previousPid}`;
+        // Restart exit watches span the whole completion window and each probe spawns a process listing, so
+        // poll at most twice a second; sub-second exit detection is well inside the restart UI budget.
+        const sessionRunnerRestartExitPollIntervalMs = Math.max(
+          configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
+          500,
+        );
+        const sessionRunnerRestartCompletionWaiters = createRestartCompletionWaiters({
+          timeoutMs: sessionRunnerRestartCompletionTimeoutMs,
+        });
         const buildSessionRunnerRestartTerminalCompletion = (
           reason: SessionRunnerRespawnTerminalReason,
           detail?: string,
@@ -5005,69 +4985,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             return { ok: false, status: 'partial_failure', diagnostics };
           }
           return { ok: false, status: 'spawn_failed', diagnostics };
-        };
-        const settleSessionRunnerRestartCompletion = (
-          sessionId: string,
-          previousPid: number,
-          completion: RestartSessionRunnerCompletion,
-        ): void => {
-          const key = sessionRunnerRestartCompletionKey(sessionId, previousPid);
-          const waiter = sessionRunnerRestartCompletionWaiters.get(key);
-          if (!waiter) return;
-          sessionRunnerRestartCompletionWaiters.delete(key);
-          waiter.settle(completion);
-        };
-        const createSessionRunnerRestartCompletionWaiter = (
-          sessionId: string,
-          previousPid: number,
-        ): Readonly<{
-          promise: Promise<RestartSessionRunnerCompletion>;
-          cancel: () => void;
-        }> => {
-          const key = sessionRunnerRestartCompletionKey(sessionId, previousPid);
-          let resolved = false;
-          let resolveCompletion!: (completion: RestartSessionRunnerCompletion) => void;
-          const promise = new Promise<RestartSessionRunnerCompletion>((resolve) => {
-            resolveCompletion = resolve;
-          });
-          const timer = setTimeout(() => {
-            settleSessionRunnerRestartCompletion(sessionId, previousPid, {
-              ok: false,
-              status: 'partial_failure',
-              diagnostics: {
-                respawnTerminalReason: 'timeout',
-                timeoutMs: sessionRunnerRestartCompletionTimeoutMs,
-              },
-            });
-          }, sessionRunnerRestartCompletionTimeoutMs) as NodeJS.Timeout & { unref?: () => void };
-          timer.unref?.();
-          const settle = (completion: RestartSessionRunnerCompletion) => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timer);
-            resolveCompletion(completion);
-          };
-          const existing = sessionRunnerRestartCompletionWaiters.get(key);
-          existing?.settle({
-            ok: false,
-            status: 'partial_failure',
-            diagnostics: { respawnTerminalReason: 'superseded_waiter' },
-          });
-          sessionRunnerRestartCompletionWaiters.set(key, { settle });
-          return {
-            promise,
-            cancel: () => {
-              if (resolved) return;
-              resolved = true;
-              clearTimeout(timer);
-              sessionRunnerRestartCompletionWaiters.delete(key);
-              resolveCompletion({
-                ok: false,
-                status: 'partial_failure',
-                diagnostics: { respawnTerminalReason: 'cancelled_before_signal' },
-              });
-            },
-          };
         };
         const connectedServiceRestartAmplificationGuard = createConnectedServiceSessionRestartAmplificationGuard();
         const sessionRunnerRespawnManager = createSessionRunnerRespawnManager({
@@ -5095,7 +5012,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               '[DAEMON RUN] Failed to clear connected-service restart intent after respawn success',
             );
             const next = getCurrentChildren().find((child) => child.happySessionId === sessionId) ?? null;
-            settleSessionRunnerRestartCompletion(sessionId, previousPid, {
+            sessionRunnerRestartCompletionWaiters.settle(sessionId, previousPid, {
               ok: true,
               ...(next ? { next: summarizeSessionRunnerEndpoint(next) } : {}),
             });
@@ -5112,7 +5029,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               previousPid,
               '[DAEMON RUN] Failed to clear connected-service restart intent after terminal respawn suppression',
             );
-            settleSessionRunnerRestartCompletion(
+            sessionRunnerRestartCompletionWaiters.settle(
               sessionId,
               previousPid,
               buildSessionRunnerRestartTerminalCompletion(reason, detail),
@@ -5172,6 +5089,20 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             : 0,
         });
 
+        const observePlannedRunnerRetirement = (tracked: TrackedSession, sessionId: string): void => {
+          if (tracked.childProcess) return;
+          void waitForExistingSessionExitIfStopRequested({
+            sessionId,
+            pidToTrackedSession,
+            timeoutMs: sessionRunnerRestartCompletionTimeoutMs,
+            pollIntervalMs: sessionRunnerRestartExitPollIntervalMs,
+            trackedPids: [tracked.pid],
+            onExitObserved: (pid, exit) => onChildExited(pid, exit),
+          }).catch((error) => {
+            logger.warn('[DAEMON RUN] Failed to observe planned runner restart exit for reattached session', error);
+          });
+        };
+
         const requestConnectedServiceRestartWithDeferral = async (input: Readonly<{
           sessionId: string;
           tracked: TrackedSession;
@@ -5186,100 +5117,85 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         }>): Promise<Readonly<{ signaled: boolean }>> => {
           // K5:gated_restart connected-service restarts route through the generic planned runner
           // restart primitive, preserving deferral, stale-owner checks, PID reservation, and respawn.
-          const completionWaiter = input.awaitPreviousRunnerRetirement
-            ? createSessionRunnerRestartCompletionWaiter(input.sessionId, input.tracked.pid)
-            : null;
-          try {
-            const restart = await requestPlannedRunnerRestart({
-              sessionId: input.sessionId,
-              tracked: input.tracked,
-              reason: 'connected_service_switch',
-              deferral: {
-                kind: 'connected_service_switch',
-                source: input.source,
-                policy: input.policy,
-                target: input.target,
-                turnDeferralQueue: connectedServiceTurnDeferralQueue,
-              },
-              restartRequestedPids: connectedServicesRestartRequestedPids,
-              pidToTrackedSession,
-              canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
-              requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
-                // K5:gated_restart raw signal is owned by planned runner restart deferral/reservation.
-                await requestConnectedServiceSessionRestartSignal({
-                  pid: input.tracked.pid,
-                  processGroupPid: resolveConnectedServiceRestartProcessGroupPid(input.tracked),
-                  delayMs: input.restartSignalDelayMs,
-                  shouldSignal,
-                  restartDiagnostic: input.restartDiagnostic,
-                  recordRestartDiagnostic: recordConnectedServiceRestartDiagnostic,
-                  restartAmplificationGuard: connectedServiceRestartAmplificationGuard,
-                  onSignalFailure,
-                  onProcessAlreadyMissing,
-                }),
-              observeProcessMissing: (tracked) => {
-                if (observeConnectedServiceRestartProcessMissing) {
-                  void observeConnectedServiceRestartProcessMissing(tracked).catch((error) => {
-                    logger.warn('[DAEMON RUN] Failed to stage connected-service restart process exit', { pid: tracked.pid, error });
-                  });
-                } else {
-                  logger.warn('[DAEMON RUN] Connected-service restart process was already missing before exit observer was ready');
-                }
-              },
-              clearRestartIntentForPid: (pid) => {
-                clearConnectedServiceRestartIntentForPid(
-                  pid,
-                  '[DAEMON RUN] Failed to clear connected-service restart intent after skipped or failed signal',
-                );
-              },
-              onSignalFailureLogMessage: input.onSignalFailureLogMessage,
-              logDebug: (message, payload) => logger.debug(message, payload),
-              logWarn: (message, payload) => logger.warn(message, payload),
-            });
-            if (shouldEmitConnectedServiceRestartRequestedSessionEvent({
-              owner: input.transcriptEventOwner,
-              signaled: restart.signaled,
-            })) {
-              void commitConnectedServiceAccountSwitchSessionEvent({
-                credentials,
-                sessionId: input.sessionId,
-                event: buildConnectedServiceRestartRequestedSessionEvent(input.restartDiagnostic),
-              }).catch((error) => {
-                logger.debug('[DAEMON RUN] Connected-service restart transcript event failed (non-fatal)', error);
-              });
-            }
-            if (!completionWaiter) return restart;
-            if (!restart.signaled) {
-              throw Object.assign(
-                new Error(`connected_service_restart_not_signaled:${restart.notSignaledReason ?? 'unknown'}`),
-                { code: 'connected_service_restart_not_signaled', retryable: true },
+          const restart = await requestPlannedRunnerRestart({
+            completionWaiters: sessionRunnerRestartCompletionWaiters,
+            awaitCompletion: input.awaitPreviousRunnerRetirement,
+            observeRunnerRetirement: observePlannedRunnerRetirement,
+            sessionId: input.sessionId,
+            tracked: input.tracked,
+            reason: 'connected_service_switch',
+            deferral: {
+              kind: 'connected_service_switch',
+              source: input.source,
+              policy: input.policy,
+              target: input.target,
+              turnDeferralQueue: connectedServiceTurnDeferralQueue,
+            },
+            restartRequestedPids: connectedServicesRestartRequestedPids,
+            pidToTrackedSession,
+            canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+            requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
+              // K5:gated_restart raw signal is owned by planned runner restart deferral/reservation.
+              await requestConnectedServiceSessionRestartSignal({
+                pid: input.tracked.pid,
+                processGroupPid: resolveConnectedServiceRestartProcessGroupPid(input.tracked),
+                delayMs: input.restartSignalDelayMs,
+                shouldSignal,
+                restartDiagnostic: input.restartDiagnostic,
+                recordRestartDiagnostic: recordConnectedServiceRestartDiagnostic,
+                restartAmplificationGuard: connectedServiceRestartAmplificationGuard,
+                onSignalFailure,
+                onProcessAlreadyMissing,
+              }),
+            observeProcessMissing: (tracked) => {
+              if (observeConnectedServiceRestartProcessMissing) {
+                void observeConnectedServiceRestartProcessMissing(tracked).catch((error) => {
+                  logger.warn('[DAEMON RUN] Failed to stage connected-service restart process exit', { pid: tracked.pid, error });
+                });
+              } else {
+                logger.warn('[DAEMON RUN] Connected-service restart process was already missing before exit observer was ready');
+              }
+            },
+            clearRestartIntentForPid: (pid) => {
+              clearConnectedServiceRestartIntentForPid(
+                pid,
+                '[DAEMON RUN] Failed to clear connected-service restart intent after skipped or failed signal',
               );
-            }
-            if (!input.tracked.childProcess && configuration.daemonSpawnExistingSessionWaitForExitMs > 0) {
-              void waitForExistingSessionExitIfStopRequested({
-                sessionId: input.sessionId,
-                pidToTrackedSession,
-                timeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
-                pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
-                trackedPids: [input.tracked.pid],
-                onExitObserved: (pid, exit) => onChildExited(pid, exit),
-              }).catch((error) => {
-                logger.debug('[DAEMON RUN] Failed to observe connected-service runner retirement for a reattached session', error);
-              });
-            }
-            const completion = await completionWaiter.promise;
-            if (!doesRestartCompletionProvePreviousRunnerRetired(completion)) {
-              const reason = completion.ok ? 'unknown' : completion.diagnostics?.respawnTerminalReason;
-              throw Object.assign(
-                new Error(`connected_service_previous_runner_retirement_unproven:${String(reason ?? 'unknown')}`),
-                { code: 'connected_service_previous_runner_retirement_unproven', retryable: true },
-              );
-            }
-            return restart;
-          } catch (error) {
-            completionWaiter?.cancel();
-            throw error;
+            },
+            onRestartSignaled: () => {
+              if (shouldEmitConnectedServiceRestartRequestedSessionEvent({
+                owner: input.transcriptEventOwner,
+                signaled: true,
+              })) {
+                void commitConnectedServiceAccountSwitchSessionEvent({
+                  credentials,
+                  sessionId: input.sessionId,
+                  event: buildConnectedServiceRestartRequestedSessionEvent(input.restartDiagnostic),
+                }).catch((error) => {
+                  logger.debug('[DAEMON RUN] Connected-service restart transcript event failed (non-fatal)', error);
+                });
+              }
+            },
+            onSignalFailureLogMessage: input.onSignalFailureLogMessage,
+            logDebug: (message, payload) => logger.debug(message, payload),
+            logWarn: (message, payload) => logger.warn(message, payload),
+          });
+          if (!input.awaitPreviousRunnerRetirement) return restart;
+          if (!restart.signaled) {
+            throw Object.assign(
+              new Error(`connected_service_restart_not_signaled:${restart.notSignaledReason ?? 'unknown'}`),
+              { code: 'connected_service_restart_not_signaled', retryable: true },
+            );
           }
+          const completion = restart.completion;
+          if (!completion || !doesRestartCompletionProvePreviousRunnerRetired(completion)) {
+            const reason = completion?.ok ? 'unknown' : completion?.diagnostics?.respawnTerminalReason;
+            throw Object.assign(
+              new Error(`connected_service_previous_runner_retirement_unproven:${String(reason ?? 'unknown')}`),
+              { code: 'connected_service_previous_runner_retirement_unproven', retryable: true },
+            );
+          }
+          return restart;
         };
 
         const requestVersionRuntimeRefreshWithDeferral = async (input: Readonly<{
@@ -5289,66 +5205,41 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           signaled: boolean;
           notSignaledReason?: PlannedRunnerRestartNotSignaledReason;
           completion?: RestartSessionRunnerCompletion;
-        }>> => {
-          const completionWaiter = createSessionRunnerRestartCompletionWaiter(input.sessionId, input.tracked.pid);
-          try {
-            const restart = await requestPlannedRunnerRestart({
-              sessionId: input.sessionId,
-              tracked: input.tracked,
-              reason: 'version_runtime_refresh',
-              deferral: { kind: 'none' },
-              restartRequestedPids: connectedServicesRestartRequestedPids,
-              pidToTrackedSession,
-              canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
-              requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
-                // K5:gated_restart version refresh uses the planned restart primitive without
-                // connected-service deferral/target metadata; this call is only the signal adapter.
-                await requestConnectedServiceSessionRestartSignal({
-                  pid: input.tracked.pid,
-                  processGroupPid: resolveConnectedServiceRestartProcessGroupPid(input.tracked),
-                  delayMs: 0,
-                  shouldSignal,
-                  onSignalFailure,
-                  onProcessAlreadyMissing,
-                }),
-              observeProcessMissing: (tracked) => {
-                if (observeConnectedServiceRestartProcessMissing) {
-                  void observeConnectedServiceRestartProcessMissing(tracked).catch((error) => {
-                    logger.warn('[DAEMON RUN] Failed to stage planned runner restart process exit', { pid: tracked.pid, error });
-                  });
-                } else {
-                  logger.warn('[DAEMON RUN] Planned session runner restart process was already missing before exit observer was ready');
-                }
-              },
-              onSignalFailureLogMessage: '[DAEMON RUN] Failed to restart session runner for version refresh',
-              logDebug: (message, payload) => logger.debug(message, payload),
-              logWarn: (message, payload) => logger.warn(message, payload),
-            });
-            if (!restart.signaled) {
-              completionWaiter.cancel();
-              return restart;
-            }
-            if (!input.tracked.childProcess && configuration.daemonSpawnExistingSessionWaitForExitMs > 0) {
-              void waitForExistingSessionExitIfStopRequested({
-                sessionId: input.sessionId,
-                pidToTrackedSession,
-                timeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
-                pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
-                trackedPids: [input.tracked.pid],
-                onExitObserved: (pid, exit) => onChildExited(pid, exit),
-              }).catch((error) => {
-                logger.debug('[DAEMON RUN] Failed to observe planned runner restart exit for reattached session', error);
+        }>> => await requestPlannedRunnerRestart({
+          completionWaiters: sessionRunnerRestartCompletionWaiters,
+          awaitCompletion: true,
+          observeRunnerRetirement: observePlannedRunnerRetirement,
+          sessionId: input.sessionId,
+          tracked: input.tracked,
+          reason: 'version_runtime_refresh',
+          deferral: { kind: 'none' },
+          restartRequestedPids: connectedServicesRestartRequestedPids,
+          pidToTrackedSession,
+          canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+          requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
+            // K5:gated_restart version refresh uses the planned restart primitive without
+            // connected-service deferral/target metadata; this call is only the signal adapter.
+            await requestConnectedServiceSessionRestartSignal({
+              pid: input.tracked.pid,
+              processGroupPid: resolveConnectedServiceRestartProcessGroupPid(input.tracked),
+              delayMs: 0,
+              shouldSignal,
+              onSignalFailure,
+              onProcessAlreadyMissing,
+            }),
+          observeProcessMissing: (tracked) => {
+            if (observeConnectedServiceRestartProcessMissing) {
+              void observeConnectedServiceRestartProcessMissing(tracked).catch((error) => {
+                logger.warn('[DAEMON RUN] Failed to stage planned runner restart process exit', { pid: tracked.pid, error });
               });
+            } else {
+              logger.warn('[DAEMON RUN] Planned session runner restart process was already missing before exit observer was ready');
             }
-            return {
-              ...restart,
-              completion: await completionWaiter.promise,
-            };
-          } catch (error) {
-            completionWaiter.cancel();
-            throw error;
-          }
-        };
+          },
+          onSignalFailureLogMessage: '[DAEMON RUN] Failed to restart session runner for version refresh',
+          logDebug: (message, payload) => logger.debug(message, payload),
+          logWarn: (message, payload) => logger.warn(message, payload),
+        });
         const verifyConnectedServiceAccountAdoption = createSessionConnectedServiceAccountAdoptionVerifier();
 
         /**
@@ -6830,6 +6721,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         sessionDirectory: params.sessionDirectory ?? null,
         connectedServicesBindingsRaw: params.connectedServicesBindingsRaw,
         materializationKey: params.materializationKey,
+        ...(params.previousMaterializedRoot ? { previousMaterializedRoot: params.previousMaterializedRoot } : {}),
         activeServerDir: configuration.activeServerDir,
         baseDir: connectedServicesMaterializationBaseDir,
         credentials,
@@ -6842,12 +6734,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         credentialRefreshService: connectedServiceRefreshCoordinator,
       }),
       runtimeRegistry: connectedServiceRuntimeRegistry,
-      createAdoptedRootCleanup: ({ materializedRoot, materializationKey, agentId }) => {
+      createAdoptedRootCleanup: ({ materializedRoot, materializationKey, agentId, retentionPolicy }) => {
         return createAdoptedExecutionRunRootCleanup({
           materializationBaseDir: connectedServicesMaterializationBaseDir,
           materializedRoot,
           materializationKey,
           agentId,
+          retentionPolicy,
           removeRoot: async (root) => await fs.rm(root, { recursive: true, force: true }),
         });
       },
@@ -6922,6 +6815,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           materializationKey: input.materializationKey,
           connectedServicesBindingsRaw: input.connectedServicesBindingsRaw,
           sessionDirectory: input.sessionDirectory ?? null,
+          ...(input.previousMaterializedRoot ? { previousMaterializedRoot: input.previousMaterializedRoot } : {}),
           ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         });
       },
@@ -7066,6 +6960,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             vendorResumeId,
             cwd: inactiveCwd,
             candidatePersistedSessionFile: inactiveCandidatePersistedSessionFile,
+            persistedSessionMetadata: inactivePersistedSessionMetadata,
           }) => {
             const persistedSessionMetadata = tracked
               ? await resolvePersistedConnectedServiceSwitchSessionMetadata({
@@ -7073,7 +6968,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   sessionId,
                   agentId,
                 })
-              : null;
+              : inactivePersistedSessionMetadata ?? null;
             const continuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
               agentId,
               baseDir: connectedServicesMaterializationBaseDir,
@@ -7561,7 +7456,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         true,
       );
       const restartAfterAuthUpdated = createConnectedServicesAuthUpdatedRestartHandler({
-            restartRequestedPids: connectedServicesRestartRequestedPids,
             pidToTrackedSession,
             restartEnabled: restartOnAuthUpdate,
             resolveLifecycleDescriptor: resolveConnectedServiceCredentialLifecycleDescriptor,
@@ -7591,9 +7485,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 routedThroughGatedPrimitive: true,
               });
               // K5:gated_restart refresh/reconnect restart deferred until turn boundary,
-              // reachability re-verified at respawn (no raw mid-turn SIGTERM). The handler reserves
-              // the pid only when the gated restart actually signalled; a superseded/cancelled
-              // deferral returns { signaled: false } so the reservation is not leaked.
+              // reachability re-verified at respawn (no raw mid-turn SIGTERM). The shared planned
+              // restart owner alone admits requests, reserves the pid, and observes retirement.
               return await requestConnectedServiceRestartWithDeferral({
                 sessionId: signalParams.sessionId ?? signalParams.tracked.happySessionId ?? '',
                 tracked: signalParams.tracked,
@@ -7739,25 +7632,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       });
       connectedServiceRefreshCoordinator = refreshStartup.coordinator;
       connectedServiceRefreshLoopHandle = refreshStartup.loopHandle;
-
-      // Triage #4 systemic leg: format+freshness-reconcile stable provider homes (e.g. codex
-      // homes, which are not refresh-target bound and otherwise drift stale/malformed) at startup
-      // and on a coarse cadence, provider-owned via the lifecycle-descriptor home-maintenance hook.
-      if (parseBooleanEnv(process.env.HAPPIER_CONNECTED_SERVICES_STABLE_HOME_RECONCILE_ENABLED, true)) {
-        connectedServiceStableHomeReconcileHandle = startConnectedServiceStableHomeReconcileScheduler({
-          activeServerDir: configuration.activeServerDir,
-          api,
-          credentials,
-          intervalMs: resolvePositiveIntEnv(
-            process.env.HAPPIER_CONNECTED_SERVICES_STABLE_HOME_RECONCILE_INTERVAL_MS,
-            15 * 60_000,
-            { min: 60_000, max: 6 * 60 * 60_000 },
-          ),
-          onError: (error) => {
-            logger.debug('[DAEMON RUN] Connected services stable-home reconcile failed (non-fatal)', error);
-          },
-        });
-      }
 
       const connectedServicesQuotasEnabled = await resolveConnectedServicesQuotasDaemonEnabled({
         env: process.env,
@@ -8620,6 +8494,14 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     connectedServiceProjectionEpoch += 1;
                   }
                   latestConnectedServiceProjectionSnapshot = projectionSnapshot;
+                  if (isInitialProjection || projectionDelta.changedCredentialBoundaries.length > 0) {
+                    const readyCredentials = isInitialProjection
+                      ? projectionSnapshot.credentials
+                      : projectionDelta.changedCredentialBoundaries;
+                    connectedServiceQuotasLoopHandle?.wake(readyCredentials
+                      .filter(credential => credential.boundary.status === 'present')
+                      .map(({ serviceId, profileId }) => ({ serviceId, profileId, bindingKind: 'profile' as const })));
+                  }
                   const projectionRegistrations = connectedServiceRuntimeRegistry.listTargetRegistrations();
                   // Changed projection scopes are owned by the global reconcilers below. The
                   // registration sweep is only for an unchanged replay, where a late/re-registered
@@ -8706,6 +8588,31 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 stopSession,
                 isSessionActive: isSessionAlreadyRunning,
                 loadLocalSessionMetadata: loadLocalSessionMetadataForHandoff,
+                resolveExistingStateEnvironment: async ({ sessionId, metadata, targetPath }) => {
+                  const agentId = resolveCatalogAgentId(resolveAgentIdFromSessionMetadata(metadata));
+                  const materialized = await resolveConnectedServiceAuthForSpawn({
+                    agentId,
+                    sessionDirectory: targetPath,
+                    connectedServicesBindingsRaw: metadata.connectedServices,
+                    materializationKey: sessionId,
+                    connectedServiceMaterializationIdentityV1: readConnectedServiceMaterializationIdentityV1(
+                      metadata.connectedServiceMaterializationIdentityV1,
+                    ),
+                    activeServerDir: configuration.activeServerDir,
+                    baseDir: connectedServicesMaterializationBaseDir,
+                    credentials,
+                    api,
+                    accountUsageStore: providerAccountUsageStore,
+                    runtimeQuotaSnapshots: connectedServiceRuntimeQuotaSnapshots,
+                    sessionId,
+                    accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
+                    processEnv: process.env,
+                    credentialRefreshService: connectedServiceRefreshCoordinator,
+                    sessionStateMode: 'existing',
+                    existingSessionMetadata: metadata,
+                  });
+                  return { ...process.env, ...materialized?.env };
+                },
                 requestShutdown: () => {
                   void beforeShutdown().finally(() => requestShutdown('happier-app'));
                 },
@@ -9122,10 +9029,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       if (connectedServiceRefreshLoopHandle) {
         connectedServiceRefreshLoopHandle.stop();
         connectedServiceRefreshLoopHandle = null;
-      }
-      if (connectedServiceStableHomeReconcileHandle) {
-        connectedServiceStableHomeReconcileHandle.stop();
-        connectedServiceStableHomeReconcileHandle = null;
       }
       if (connectedServiceQuotasLoopHandle) {
         await connectedServiceQuotasLoopHandle.stop();

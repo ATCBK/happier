@@ -13,10 +13,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const CONNECTED_SERVICE_OAUTH_REFRESH_FETCH_TIMEOUT_MS = 120_000;
 
-function buildRefreshAbortSignal(): AbortSignal | undefined {
-  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+function buildRefreshAbortSignal(containingSignal?: AbortSignal): AbortSignal | undefined {
+  const timeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
     ? AbortSignal.timeout(CONNECTED_SERVICE_OAUTH_REFRESH_FETCH_TIMEOUT_MS)
     : undefined;
+  return containingSignal && timeout ? AbortSignal.any([containingSignal, timeout]) : containingSignal ?? timeout;
 }
 
 function classifyProviderRefreshFailure(params: Readonly<{
@@ -104,7 +105,9 @@ export async function refreshConnectedAccountOauthTokens(params: Readonly<{
   serviceId: ConnectedServiceId;
   refreshToken: string;
   now: number;
+  signal?: AbortSignal;
 }>): Promise<ConnectedAccountOauthRefreshResult> {
+  params.signal?.throwIfAborted();
   const config = resolveConnectedAccountOauthConfig(params.serviceId, process.env);
   const request = buildRefreshRequestBody({
     refreshTokenBody: config.refreshTokenBody,
@@ -118,9 +121,10 @@ export async function refreshConnectedAccountOauthTokens(params: Readonly<{
       method: 'POST',
       headers: request.headers,
       body: request.body,
-      signal: buildRefreshAbortSignal(),
+      signal: buildRefreshAbortSignal(params.signal),
     });
   } catch {
+    params.signal?.throwIfAborted();
     throw new ConnectedServiceOauthRefreshError({
       serviceId: params.serviceId,
       category: 'network_error',
@@ -179,9 +183,10 @@ export async function refreshConnectedAccountOauthTokens(params: Readonly<{
       evidence = await config.resolveRefreshCredentialEvidence({
         accessToken,
         fetcher: fetch,
-        signal: buildRefreshAbortSignal(),
+        signal: buildRefreshAbortSignal(params.signal),
       });
     } catch {
+      params.signal?.throwIfAborted();
       evidence = undefined;
     }
     if (evidence?.status === 'rejected') {
