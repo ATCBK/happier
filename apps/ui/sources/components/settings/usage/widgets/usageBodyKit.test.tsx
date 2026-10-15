@@ -9,6 +9,7 @@ import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happie
 import { renderHook, renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { resolveUsageShownCalendarRange, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
+import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { Heatmap, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 import { UsageDailyWidget } from './UsageDailyWidget';
 import { UsageFlowWidget } from './UsageFlowWidget';
@@ -33,6 +34,22 @@ describe('shared Usage identity and dependent coverage', () => {
         const screen = await renderScreen(<UsageDailyWidget query={query} slice={slice} model={model} serverId="home" id="usage_daily" testID="daily" />);
         expect(screen.getTextContent()).not.toContain(t('usage.board.page.noUsageTitle'));
         expect(screen.findByTestId('daily.loading')).toBeTruthy();
+    });
+    it('holds a phone-width Daily body at its settled height while the first read is outstanding, and nothing at a wide card', async () => {
+        const query = normalizeUsageQuery({ period: { relative: '7days' }, granularity: 'day' });
+        const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'pending' }] }).results[0]!;
+        const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice, pending: true, error: null,
+            freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
+        const heldRoom = async (width: number) => {
+            const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'medium',
+                footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height: 260 } }}>
+                <UsageDailyWidget query={query} slice={slice} model={model} serverId="home" id="usage_daily" testID="daily" />
+            </WidgetPresentationProvider>);
+            const style = ([] as unknown[]).concat(screen.findHostByTestId('daily.reading')?.props.style ?? []).flat(2);
+            return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
+        };
+        expect(await heldRoom(326)).toBeGreaterThan(0);
+        expect(await heldRoom(640)).toBe(0);
     });
     it('keeps Rhythm reading until activity answers and retains known activity during refresh', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true, activityResolution: 'both' });
@@ -72,6 +89,22 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(points).toHaveLength(relative ? 7 : 8);
         expect(points.slice(0, relative ? 4 : 5).every(point => point.y === null)).toBe(true);
         expect(accounting.insights!.activeDays).toBe(calendar.filter(cell => (cell.value ?? 0) > 0).length);
+    });
+    it('draws the weekday × hour matrix at a half-width card and the 24-hour rhythm only where a phone cannot hold it', async () => {
+        const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true, activityResolution: 'both' });
+        const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: usageQaAccountingFixture() }] }).results[0]!;
+        const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice, pending: false, error: null,
+            freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
+        const at = (width: number) => renderScreen(<WidgetPresentationProvider value={{ size: 'medium',
+            footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height: 260 } }}>
+            <UsageRhythmWidget query={query} slice={slice} model={model} serverId="home" id="usage_rhythm" testID="rhythm" />
+        </WidgetPresentationProvider>);
+        const half = await at(430);
+        expect(half.findByTestId('rhythm.punchcard')).not.toBeNull();
+        expect(half.findByTestId('rhythm.hours')).toBeNull();
+        const phone = await at(320);
+        expect(phone.findByTestId('rhythm.punchcard')).toBeNull();
+        expect(phone.findByTestId('rhythm.hours')).not.toBeNull();
     });
     it('does not invent a Legacy Agent for scalar reports with unknown attribution', () => {
         expect(usageAgentTitle('legacy')).toBe(t('usage.board.page.unattributed'));

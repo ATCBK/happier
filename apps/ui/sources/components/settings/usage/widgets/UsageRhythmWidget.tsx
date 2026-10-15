@@ -33,22 +33,29 @@ import {
   type UsageBodyProps,
 } from './usageBodyKit';
 
-/** Below this body width the 7×24 matrix is unreadable; the 24-hour rhythm says the same. */
-const MATRIX_MIN_WIDTH_PX = 440;
-/** Calendar and weekday×hour sit side by side only when each keeps its matrix width. */
-const SIDE_BY_SIDE_MIN_WIDTH_PX = 2 * MATRIX_MIN_WIDTH_PX;
+/**
+ * Below this body width the 7×24 matrix has no room to be read (a phone); the 24-hour rhythm says the same.
+ * A half-width card keeps the matrix: its weekday axis is the point of the card (lab `d2views-OV`).
+ */
+const MATRIX_MIN_WIDTH_PX = 360;
+/** Calendar and weekday×hour sit side by side only when each keeps a comfortable matrix width. */
+const SIDE_BY_SIDE_MIN_WIDTH_PX = 880;
 
 /**
- * What the settled body measures at the two widths the page is designed for, so the reading state holds
- * that room: side by side (calendar beside weekday × hour) and a phone (calendar over the 24-hour rhythm).
- * Widths between them hold nothing rather than a guess.
+ * What the settled body measures at the widths the page is designed for, so the reading state holds
+ * that room: side by side (calendar beside weekday × hour), a half-width card (calendar over the matrix,
+ * measured at ~430 px) and a phone (calendar over the 24-hour rhythm). Other widths hold nothing rather
+ * than a guess.
  */
 const SETTLED_SIDE_BY_SIDE_BODY_PX = 180;
+const SETTLED_HALF_WIDTH_BODY_PX = 272;
+const HALF_WIDTH_MAX_PX = 520;
 const SETTLED_PHONE_BODY_PX = 223;
 function settledBodyPx(width: number | undefined): number | undefined {
   if (width === undefined) return undefined;
   if (width >= SIDE_BY_SIDE_MIN_WIDTH_PX) return SETTLED_SIDE_BY_SIDE_BODY_PX;
-  return width < MATRIX_MIN_WIDTH_PX ? SETTLED_PHONE_BODY_PX : undefined;
+  if (width < MATRIX_MIN_WIDTH_PX) return SETTLED_PHONE_BODY_PX;
+  return width < HALF_WIDTH_MAX_PX ? SETTLED_HALF_WIDTH_BODY_PX : undefined;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   useUsagePluginTheme,
   type UsageBodyProps,
   UsageBodyNoUsage,
+  isUsageReadOutstanding,
 } from './usageBodyKit';
 
 /** Room the peak figure, axis, legend and a one-line coverage note take around the plot in a sized frame. */
@@ -48,6 +49,8 @@ const MAX_PLOT_PX = 480;
  */
 const NARROW_FRAME_PX = 420;
 const NARROW_CHROME_PX = 52;
+/** What a settled Daily body measures in a narrow frame (a phone: the 140 px plot, its axis and legend), held while it reads. */
+const SETTLED_NARROW_BODY_PX = 184;
 
 /**
  * "Daily usage": the period's buckets stacked by Agent when per-Agent tokens are known, otherwise one
@@ -212,8 +215,14 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   // read answers, and the legend says it then. The chart's own label (for assistive technology) names the split.
   useWidgetFrameBodyCaption(measure);
   const caption = byAgent ? `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')} ${t('usage.board.page.byAgent')} · ${usagePeriodPhrase(props.query)}` : measure;
-  if (!view || count === 0)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+  if (!view || count === 0) {
+    const noUsage = <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    const narrow = presentation?.size !== 'small' && presentation?.size !== 'wide'
+      && (presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX;
+    return narrow && isUsageReadOutstanding(props.slice, ['accounting'])
+      ? <View testID={`${props.testID}.reading`} style={{ minHeight: SETTLED_NARROW_BODY_PX }}>{noUsage}</View>
+      : noUsage;
+  }
   const compact = presentation?.size === 'small' || presentation?.size === 'wide';
   const chromePx = CHROME_PX + ((presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX ? NARROW_CHROME_PX : 0);
   const height = compact ? Math.max(1, (presentation?.geometry?.height ?? 96) - CHROME_PX / 2) : Math.max(

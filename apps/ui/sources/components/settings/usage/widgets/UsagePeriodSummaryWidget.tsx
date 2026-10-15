@@ -176,8 +176,8 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         {comparison === null ? <Text style={styles.subline}>{subline}</Text> : null}
       </View>
       <View style={styles.stats}>
-        {stats.map((stat) => (
-          <View key={stat.key} style={styles.stat}>
+        {stats.map((stat, index) => (
+          <View key={stat.key} style={index === 0 ? styles.statLead : styles.stat}>
             {stat}
           </View>
         ))}
@@ -199,5 +199,8 @@ const styles = StyleSheet.create((theme) => ({
   body: { gap: theme.space.s20 },
   hero: { gap: theme.space.s4 },
   stats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s24, rowGap: theme.space.s16 },
-  stat: { flexGrow: 1, flexBasis: 120, minWidth: 0 },
+  stat: { flexGrow: 1, flexBasis: 100, minWidth: 0 },
+  // The money cell carries the longest caption ("reported where known, otherwise estimated"): it takes
+  // the larger share so that line wraps in two, never cut, and a phone gives it its own row.
+  statLead: { flexGrow: 2, flexBasis: 168, minWidth: 0 },
 }));

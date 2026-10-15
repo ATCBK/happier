@@ -58,6 +58,8 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Below this body width the Overview strip's three columns would crush their titles; it lists instead. */
 const STRIP_MIN_WIDTH_PX = 760;
 const STRIP_FINDINGS = 3;
+/** Where the Coach lists instead of striping (a phone), its reading state holds one finding row: measured at 390 px. */
+const SETTLED_COACH_LIST_ROW_BODY_PX = 195;
 /** On Overview, at the strip's width, the Coach is three findings in a row; its loading state holds that room. */
 export function isUsageCoachStrip(presentation: ReturnType<typeof useWidgetPresentation>): boolean {
   return presentation?.size !== undefined && presentation.size !== 'large'
@@ -242,7 +244,8 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   // keeps the tallest height it has drawn, so a re-read never moves what sits below.
   const reading = readUsageCoachState(props.slice) === 'reading';
   const floor = useSettledBodyHeightFloor(!reading, `${glance}:${strip}`);
-  const bodyStyle = [styles.body, strip && reading ? { minHeight: SETTLED_COACH_STRIP_BODY_PX }
+  const bodyStyle = [styles.body, reading && glance
+    ? { minHeight: strip ? SETTLED_COACH_STRIP_BODY_PX : SETTLED_COACH_LIST_ROW_BODY_PX }
     : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null];
   // Preferences are rare: a quiet disclosure after the findings, never a bar above them (lab d2coach).
   const configuration = <UsagePlanDisclosure title={t('usage.board.coach.configure')} testID={`${props.testID}.configure`}>

@@ -183,6 +183,22 @@ describe('Work and Coach widget bodies', () => {
       model={{ ...model, slice: settledSlice }} id="usage_coach" testID="first-coach" />);
     expect(screen.findHostByTestId('first-coach.empty')).not.toBeNull();
   });
+  it('holds one finding row of room while a phone-width Coach reads, so its findings land without moving the page', async () => {
+    const pendingSlice = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
+      sources: [{ source: 'how_you_work', status: 'pending' }], nowMs: 1000 }).results[0]!;
+    const heldRoom = async (size: 'medium' | 'large') => {
+      const screen = await renderScreen(<WidgetPresentationProvider value={{ size,
+        footprint: { columns: 1, columnSpan: 1, rowSpan: 2, width: 'full', height: 'regular' }, geometry: { width: 326, height: 260 } }}>
+        <UsageCoachWidget {...props} slice={pendingSlice} model={{ ...model, slice: pendingSlice, pending: true }} id="usage_coach" testID="phone-coach" />
+      </WidgetPresentationProvider>);
+      const style = ([] as unknown[]).concat(screen.findHostByTestId('phone-coach.coach')?.props.style ?? []).flat(2);
+      return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
+    };
+    expect(await heldRoom('medium')).toBeGreaterThan(0);
+    // The Coach's own view lists freely: nothing is held there.
+    expect(await heldRoom('large')).toBe(0);
+  });
   it.each(['plain', 'e2ee'] as const)('names Work from the admitted protected Project producer and retires it on Account loss (%s)', async mode => {
     const previous = storage.getState();
     const scope = { serverId: 'home', accountId: 'work-label-account' };
