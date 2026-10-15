@@ -1127,26 +1127,13 @@ export async function startMemoryWorker(params: Readonly<{
       tier1.init();
     }
 
-    if (deepPolicyChanged && !deep && existsSync(paths.deepDbPath)) {
+    // Attached documents share this index even when Session transcripts use hints.
+    if (!deep) {
       indexesQualified = false;
       deep = openDeepIndexDb({ dbPath: paths.deepDbPath });
       deep.init();
     }
-
-    if (settings.indexMode === 'deep' || settings.conversationSearch.indexExternal.enabled) {
-      if (!deep) {
-        indexesQualified = false;
-        deep = openDeepIndexDb({ dbPath: paths.deepDbPath });
-        deep.init();
-      }
-    } else if (deep && !deepPolicyChanged) {
-      try {
-        deep.close();
-      } catch {
-        // best-effort
-      }
-      deep = null;
-    }
+    if (previousSettings.indexMode !== settings.indexMode) indexesQualified = false;
     if (externalPolicyChanged && deep) {
       for (const retained of deep.listExternalSourceStates()) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
       await externalSources.refresh(settings, signal ?? new AbortController().signal);
@@ -1213,14 +1200,6 @@ export async function startMemoryWorker(params: Readonly<{
           throw error;
         }
       }
-    }
-    if (settings.indexMode !== 'deep' && !settings.conversationSearch.indexExternal.enabled && deep) {
-      try {
-        deep.close();
-      } catch {
-        // best-effort
-      }
-      deep = null;
     }
     effectiveSettings = settings;
 

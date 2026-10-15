@@ -244,7 +244,8 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     const query = externalRequested && !externalEnabled
       ? { ...parsed.data, corpora: parsed.data.corpora?.filter(corpus => corpus !== 'external_transcripts') }
       : parsed.data;
-    const preferDeep = mode === 'deep' || (mode === 'auto' && settings.indexMode === 'deep')
+    const deepSessions = mode === 'deep' || (mode === 'auto' && settings.indexMode === 'deep');
+    const preferDeep = deepSessions || query.corpora?.includes('documents') === true
       || (externalRequested && externalEnabled);
 
     if (preferDeep) {
@@ -260,7 +261,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
         dbPath: deepPath,
         query,
         externalAgentIds: settings.conversationSearch.indexExternal.agents,
-        ...(externalRequested && mode !== 'deep' && settings.indexMode === 'hints' && memoryWorker.getTier1DbPath()
+        ...(!deepSessions && memoryWorker.getTier1DbPath()
           ? { sessionSummaryDbPath: memoryWorker.getTier1DbPath()! } : {}),
         previewChars: settings.deep.previewChars,
         candidateLimit: settings.deep.candidateLimit,

@@ -5,6 +5,9 @@ import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/e
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { Credentials, StoredCredentials } from '@/persistence';
 
+// Transform the shared API graph outside the per-operation workload deadline.
+await import('@/api/api');
+
 describe('memoryWorker', () => {
   it('publishes Session readiness only after the latest observed cursor and revisions are indexed', async () => {
     let resume = () => {};
@@ -169,7 +172,11 @@ describe('memoryWorker', () => {
     } finally { await worker.stop(); }
   });
 
-  it('indexes admitted documents with every stored topic and requalifies revisions and attachment access before mixed search', async () => {
+  it.each([
+    { indexMode: 'deep', mode: 'deep' },
+    { indexMode: 'deep', mode: 'hints' },
+    { indexMode: 'hints', mode: 'hints' },
+  ] as const)('indexes admitted documents and preserves $mode Session search with $indexMode indexing', async ({ indexMode, mode }) => {
     const axios = (await import('axios')).default;
     const { accountSettingsParse, MemorySearchResultV1Schema } = await import('@happier-dev/protocol');
     const { encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/storage/artifactStoredContent');
@@ -226,25 +233,35 @@ describe('memoryWorker', () => {
       fetchEncryptedTranscriptMessagesPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }),
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
-    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history' });
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode, backfillPolicy: 'all_history' });
     const { startMemoryWorker } = await import('./memoryWorker');
     const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc/methods');
     const worker = await startMemoryWorker({ credentials, machineId: 'machine_1', deps: { fetchDecryptedTranscriptPageAfterSeq: async () => [] } });
     try {
       await worker.ensureUpToDate('s1');
+      expect(worker.getDeepDbPath()).toBeTruthy();
       const dbPath = worker.getDeepDbPath()!;
       const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
       const db = openDeepIndexDb({ dbPath });
       db.insertChunk({ sessionId: 's1', seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1, text: 'quartz session' });
       expect(db.getDeepIndexStats()).toMatchObject({ deepDocumentEntryCount: 5, searchableDocumentCount: 2 });
       db.close();
+      const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+      const summaries = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+      summaries.insertSummaryShard({ sessionId: 's1', seqFrom: 2, seqTo: 2,
+        createdAtFromMs: 2, createdAtToMs: 2, summary: 'quartz hinted session', keywords: [], entities: [], decisions: [] });
+      summaries.close();
       const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
       const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
       registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
       expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: null })).toMatchObject({ documentSearchSupported: true });
+      const { MemoryStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
+      expect(MemoryStatusV1Schema.parse(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`,
+        params: { scope: { type: 'session', sessionId: 's1' } } })).documents)
+        .toMatchObject({ state: 'ready', facts: [{ ref: { kind: 'doc', artifactId: 'memory' }, indexedFactCount: 4 }] });
       const search = async (corpora: ('documents' | 'sessions')[] | null = ['documents', 'sessions'], global = false) => MemorySearchResultV1Schema.parse(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`, params: {
-        v: 1, query: 'quartz', scope: global ? { type: 'global' } : { type: 'session', sessionId: 's1' }, mode: 'deep', ...(corpora ? { corpora } : {}),
+        v: 1, query: 'quartz', scope: global ? { type: 'global' } : { type: 'session', sessionId: 's1' }, mode, ...(corpora ? { corpora } : {}),
       } }));
       const result = await search();
       expect(result).toMatchObject({ ok: true, documents: { state: 'ready' } });
@@ -256,7 +273,9 @@ describe('memoryWorker', () => {
       expect(documentsOnly.ok && documentsOnly.hits.every(hit => hit.type === 'artifact')).toBe(true);
       expect(documentsOnly.ok && documentsOnly.hits).toHaveLength(5);
       const sessionsOnly = await search(['sessions']);
-      expect(sessionsOnly).toMatchObject({ ok: true, hits: [expect.objectContaining({ sessionId: 's1' })] });
+      expect(sessionsOnly).toMatchObject({ ok: true, hits: [expect.objectContaining({ sessionId: 's1',
+        seqFrom: mode === 'hints' ? 2 : 1, summary: mode === 'hints' ? 'quartz hinted session' : 'quartz session' })] });
+      expect(result.hits.filter(hit => !('type' in hit))).toEqual(sessionsOnly.ok ? sessionsOnly.hits : []);
       expect(sessionsOnly).not.toHaveProperty('documents');
       expect(await search(null)).toEqual(sessionsOnly);
       const global = await search(['documents', 'sessions'], true);
@@ -279,8 +298,12 @@ describe('memoryWorker', () => {
       readable = false;
       const revoked = await search();
       expect(revoked.ok && revoked.hits.filter(hit => hit.type === 'artifact')).toEqual([]);
-      expect(worker.getSettings().hints.enabled).toBe(false);
+      expect(worker.getSettings().hints.enabled).toBe(indexMode === 'hints');
       expect(worker.getEmbeddingsDiagnostics()).toMatchObject({ runtimeState: 'unavailable' });
+      await writeMemorySettingsToDisk({ ...worker.getSettings(), enabled: false });
+      await worker.reloadSettings();
+      expect(await search(['documents'])).toMatchObject({ ok: false, errorCode: 'memory_disabled' });
+      expect(await worker.resolveDocumentSearchScope!({ type: 'global' })).toMatchObject({ state: 'unavailable' });
     } finally {
       await worker.stop();
       resetActiveAccountSettingsSnapshotForTests();
