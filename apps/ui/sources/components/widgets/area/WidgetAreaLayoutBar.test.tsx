@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -378,6 +379,37 @@ describe('WidgetAreaLayoutBar', () => {
         });
     });
     expect(screen.findByTestId('views.tabs:overview:icon')).not.toBeNull();
+  });
+
+  it('holds the strip invisible, with its space, until the first fit is known, and then paints the final form once', async () => {
+    const { WidgetAreaLayoutBar } = await import('./WidgetAreaLayoutBar');
+    const screen = await renderScreen(
+      <WidgetAreaLayoutBar
+        labels={LABELS}
+        selectedId="overview"
+        onSelect={() => {}}
+        onCreate={() => {}}
+        actions={null}
+        testID="views"
+        layouts={[
+          { id: 'overview', name: 'Overview', icon: 'squares-four' },
+          { id: 'costs', name: 'Costs', icon: 'currency-dollar' },
+        ]}
+      />,
+    );
+    const opacityOf = () =>
+      (StyleSheet.flatten(screen.findHostByTestId('views')!.props.style) as { opacity?: number }).opacity;
+    // Unmeasured: the tabs exist (so they can be measured) but nothing is painted yet.
+    expect(opacityOf()).toBe(0);
+    // The bar needs 420 with icons and has 400: the first painted frame is already the iconless strip.
+    await measure(screen, 'views', { bar: 400, viewport: 300, strip: 320 });
+    expect(opacityOf()).not.toBe(0);
+    expect(screen.findByTestId('views.tabs:overview:icon')).toBeNull();
+    // A later width change never hides the strip again.
+    await act(async () => {
+      screen.findHostByTestId('views')!.props.onLayout({ nativeEvent: { layout: { width: 700, height: 40 } } });
+    });
+    expect(opacityOf()).not.toBe(0);
   });
 
   it('becomes the current-name menu on a narrow pane, with Create at its end', async () => {

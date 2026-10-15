@@ -185,7 +185,14 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
     );
   }
   return (
-    <View testID={testID} style={styles.bar} onLayout={fit.onBarLayout}>
+    // Until the first fit is known the strip is measured but not painted (its space is held), so the
+    // first frame the viewer sees is already the final form: never icons that then drop away.
+    <View
+      testID={testID}
+      style={[styles.bar, fit.ready ? null : styles.unfit]}
+      pointerEvents={fit.ready ? 'auto' : 'none'}
+      onLayout={fit.onBarLayout}
+    >
       <CoreCollectionScope>
         <HappierTabs
           theme={tabsTheme}
@@ -261,6 +268,12 @@ function useLayoutTabsFit(iconAllowancePx: number, controlsGapPx: number, layout
   }, [layoutSignature]);
   const iconless =
     barWidth !== null && neededPx !== null && barWidth + 1 < neededPx;
+  // The first fit is known once the bar and its tabs have both measured; from then on the strip stays
+  // visible, because a later re-measure (a rename, a resize) is a correction, not a first paint.
+  const [ready, setReady] = React.useState(false);
+  React.useLayoutEffect(() => {
+    if (!ready && barWidth !== null && neededPx !== null) setReady(true);
+  }, [ready, barWidth, neededPx]);
   const narrow = iconless && barWidth! + 1 < neededPx! - iconAllowancePx;
   React.useEffect(() => {
     // The tabs are gone while the menu shows; their last widths describe a bar that no longer exists.
@@ -306,7 +319,7 @@ function useLayoutTabsFit(iconAllowancePx: number, controlsGapPx: number, layout
     const width = event.nativeEvent.layout.width;
     setTrailingWidth((current) => (current === width ? current : width));
   }, []);
-  return { narrow, iconless: iconless && !narrow, onBarLayout, onStripLayout, onTrailingLayout };
+  return { narrow, ready, iconless: iconless && !narrow, onBarLayout, onStripLayout, onTrailingLayout };
 }
 
 /** Where the tabs do not fit: the selected layout's name opens the list, with Create at its end. */
@@ -600,6 +613,7 @@ function WidgetAreaLayoutActionsMenu(
 
 const styles = StyleSheet.create(() => ({
   bar: { minWidth: 0 },
+  unfit: { opacity: 0 },
   narrow: { flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 0 },
   trailing: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   grow: { flex: 1 },
