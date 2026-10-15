@@ -26,6 +26,10 @@ export function useMachineLiveStreamRelaySocket(input: Readonly<{
     const tag = input.disconnectTag;
     const accountLifetime = input.accountLifetime;
     const [socket, setSocket] = React.useState<ServerScopedMachineLiveStreamRelaySocket | null>(null);
+    const previousDisconnect = React.useRef<Readonly<{
+        accountLifetime: typeof accountLifetime;
+        completion: Promise<void>;
+    }> | null>(null);
 
     React.useEffect(() => {
         if (!enabled || !machineId) {
@@ -36,10 +40,20 @@ export function useMachineLiveStreamRelaySocket(input: Readonly<{
         let resolved: ServerScopedMachineLiveStreamRelaySocket | null = null;
         const disconnect = (client: ServerScopedMachineLiveStreamRelaySocket) => {
             const completion = client.disconnect();
+            previousDisconnect.current = { accountLifetime, completion };
             fireAndForget(completion, { tag });
         };
-        resolveServerScopedMachineLiveStreamRelaySocket({ machineId, serverId: serverId || null, accountLifetime })
+        // Hide/show retains this subscriber's identity; its earlier admission must finish Stop
+        // before it opens again. Remounted subscribers have their own stream identity instead.
+        const closing = previousDisconnect.current;
+        const acquire = async () => {
+            if (closing && closing.accountLifetime === accountLifetime) await closing.completion;
+            if (disposed) return null;
+            return await resolveServerScopedMachineLiveStreamRelaySocket({ machineId, serverId: serverId || null, accountLifetime });
+        };
+        void acquire()
             .then((next) => {
+                if (!next) return;
                 if (disposed) {
                     disconnect(next);
                     return;
