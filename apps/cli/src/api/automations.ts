@@ -98,7 +98,8 @@ async function requestAutomationDefinition(params: Readonly<{
   const response = await axios.request({
     method: params.method,
     url: `${resolveServerHttpBaseUrl()}/v3/automations${params.automationId ? `/${encodeURIComponent(params.automationId)}` : ''}`,
-    headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' },
+    headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.token}`,
+      ...(params.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(params.body === undefined ? {} : { data: params.body }), timeout: AUTOMATION_HTTP_TIMEOUT_MS, validateStatus: () => true,
   });
   if (isAuthenticationStatus(response.status)) throw createAuthenticationHttpStatusError(response.status, 'Authentication failed while accessing automation');
