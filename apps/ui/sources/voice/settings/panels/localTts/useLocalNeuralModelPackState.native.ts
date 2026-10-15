@@ -78,7 +78,7 @@ export function useLocalNeuralModelPackState(params: {
       await refreshInstallState();
     } catch (error) {
       if (prepareAbortRef.current?.signal?.aborted) {
-        // A cancelled download keeps verified files; report what is on disk so it can be retried.
+        // Cancelling discards the partial pack; report what is on disk now.
         setModelStatus('idle');
         await refreshInstallState();
         return;

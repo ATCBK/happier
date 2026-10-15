@@ -123,7 +123,9 @@ export function LocalNeuralSttSettings(props: {
       await refreshInstalled();
     } catch (error) {
       if (abortController.signal.aborted) {
-        setModelStatus(installed ? 'ready' : 'idle');
+        // Cancelling discards the partial pack; report what is on disk now.
+        setModelStatus('idle');
+        await refreshInstalled();
       } else {
         // Verified files stay on disk after a failure; read them so the row can offer resume or discard.
         await refreshInstalled();
@@ -137,7 +139,7 @@ export function LocalNeuralSttSettings(props: {
       if (prepareAbortRef.current === abortController) prepareAbortRef.current = null;
       setProgress(null);
     }
-  }, [effectivePackId, installed, modelStatus, refreshInstalled]);
+  }, [effectivePackId, modelStatus, refreshInstalled]);
 
   const clearAssets = React.useCallback(async () => {
     if (!effectivePackId) return;

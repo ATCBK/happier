@@ -122,6 +122,26 @@ describe('LocalNeuralSttSettings (native)', () => {
     expect(typeof row(REMOVE_ROW).props.onPress).toBe('function');
   });
 
+  it('stops offering to discard saved files once a resumed download is cancelled', async () => {
+    getModelPackInstallSummarySpy.mockResolvedValue(notInstalled(12 * MB));
+    ensureModelPackInstalledSpy.mockImplementation((opts: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    }));
+    const { row } = await renderSettings();
+    await act(async () => {
+      await pressTestInstanceAsync(row(MODEL_ROW));
+    });
+
+    // Cancelling discards everything the pack had saved, including files from the earlier attempt.
+    getModelPackInstallSummarySpy.mockResolvedValue(notInstalled(0));
+    await act(async () => {
+      row(MODEL_ROW).props.rightElement.props.onPress();
+    });
+    await act(async () => {});
+
+    expect(row(REMOVE_ROW).props.onPress).toBeUndefined();
+  });
+
   it('discards a partial download after confirmation', async () => {
     getModelPackInstallSummarySpy.mockResolvedValue(notInstalled(12 * MB));
     const { row } = await renderSettings();

@@ -65,6 +65,11 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
       const data = files.get(this.uri);
       if (!data) throw new Error('move_source_missing');
       if (files.has(destination.uri)) throw new Error('move_destination_exists');
+      // As on a real filesystem, a path that holds a file cannot also be a directory.
+      for (let parent = destination.uri.slice(0, destination.uri.lastIndexOf('/')); parent.length > 'file://'.length;
+        parent = parent.slice(0, parent.lastIndexOf('/'))) {
+        if (files.has(parent)) throw new Error('move_parent_is_file');
+      }
       files.delete(this.uri);
       files.set(destination.uri, data);
       this.uri = destination.uri;
@@ -318,6 +323,18 @@ describe('modelPacks installer (native)', () => {
       expect([...fs.files.keys()].filter((uri) => uri.startsWith(`${PACK_URI}/`))).toEqual([]);
     });
 
+    it('discards files saved by a failed attempt when the user cancels a retry before files download', async () => {
+      const fs = createFs();
+      fs.files.set(`${PACK_URI}/espeak-ng-data/lang/f0`, new Uint8Array([9, 8, 7]));
+      const controller = new AbortController();
+      const pending = ensureModelPackInstalled({ ...installOptions, signal: controller.signal }, {
+        fs, fetch: () => new Promise<Response>(() => {}),
+      });
+      controller.abort();
+      await expect(pending).rejects.toThrow('aborted');
+      expect([...fs.files.keys()].filter((uri) => uri.startsWith(`${PACK_URI}/`))).toEqual([]);
+    });
+
     it('never reports more progress than the pack size when a failed response body is larger than the asset', async () => {
       useInstallerFakeClock();
       const { bytes, manifest: remote } = await packOf(2);
@@ -494,6 +511,37 @@ describe('modelPacks installer (native)', () => {
       expect([...fs.files.keys()].filter((uri) => uri.includes('/modelPackUpdates/'))).toEqual([]);
       expect(fs.files.get(`${PACK_URI}/a.bin`)).toEqual(original);
       expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest).toEqual(installed);
+    });
+
+    it('discards files staged by a failed update when the user cancels a retry before files download', async () => {
+      const fs = createFs();
+      const installed = await installedPack(fs, [{ path: 'model.bin', bytes: new Uint8Array([1]) }]);
+      const staged = 'file:///docs/happier/voice/modelPackUpdates/example/model.bin';
+      fs.files.set(staged, new Uint8Array([9]));
+      const controller = new AbortController();
+      const pending = ensureModelPackInstalled({ ...updateOptions, signal: controller.signal }, {
+        fs, fetch: () => new Promise<Response>(() => {}),
+      });
+      controller.abort();
+      await expect(pending).rejects.toThrow('aborted');
+      expect(fs.files.has(staged)).toBe(false);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest).toEqual(installed);
+    });
+
+    it('updates a pack whose new build turns a file into a directory', async () => {
+      const fs = createFs();
+      await installedPack(fs, [{ path: 'data', bytes: new Uint8Array([1]) }]);
+      const nested = new Uint8Array([2]);
+      const remote = manifest([
+        { path: 'data/model.bin', url: 'https://example.com/v2/model.bin', sha256: await sha256Hex(nested), sizeBytes: 1 },
+      ], 'v2');
+      useNativeDownloads(fs, () => nested);
+
+      await ensureModelPackInstalled({ ...updateOptions, signal: new AbortController().signal }, { fs, fetch: fetchManifest(remote) });
+
+      expect(fs.files.get(`${PACK_URI}/data/model.bin`)).toEqual(nested);
+      expect(fs.files.has(`${PACK_URI}/data`)).toBe(false);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest.version).toBe('v2');
     });
 
     it('keeps the installed pack usable when an update download fails', async () => {

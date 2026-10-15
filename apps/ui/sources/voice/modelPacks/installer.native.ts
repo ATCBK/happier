@@ -89,19 +89,14 @@ async function applyPackUpdate(opts: {
     // ignore
   }
   // The installed pack stays untouched until every changed file is verified; staged files survive a
-  // failed attempt, so retrying the update resumes instead of starting over. Cancelling discards them.
-  try {
-    await downloadManifestFiles({
-      fs: opts.fs,
-      rootDir: stagingDir,
-      manifest: { ...opts.remote, files: changed },
-      signal: opts.signal,
-      onProgress: opts.onProgress,
-    });
-  } catch (error) {
-    if (opts.signal.aborted) removePackUpdateDir(opts.fs, opts.id);
-    throw error;
-  }
+  // failed attempt, so retrying the update resumes instead of starting over.
+  await downloadManifestFiles({
+    fs: opts.fs,
+    rootDir: stagingDir,
+    manifest: { ...opts.remote, files: changed },
+    signal: opts.signal,
+    onProgress: opts.onProgress,
+  });
 
   // While files move the pack is not installed, so an interrupted swap reinstalls instead of loading a
   // mix of builds; the reinstall reuses files that already verify.
@@ -110,16 +105,17 @@ async function applyPackUpdate(opts: {
   } catch {
     // ignore
   }
-  for (const f of changed) {
-    const target = getPackFile(opts.fs, opts.rootDir, f.path, { createParents: true });
-    if (target.exists) target.delete();
-    getPackFile(opts.fs, stagingDir, f.path).move(target);
-  }
+  // Dropped files go first: a new build may turn a dropped file's path into a directory.
   const remotePaths = new Set(opts.remote.files.map((f) => f.path));
   for (const f of opts.installed.files) {
     if (remotePaths.has(f.path)) continue;
     const dropped = getPackFile(opts.fs, opts.rootDir, f.path);
     if (dropped.exists) dropped.delete();
+  }
+  for (const f of changed) {
+    const target = getPackFile(opts.fs, opts.rootDir, f.path, { createParents: true });
+    if (target.exists) target.delete();
+    getPackFile(opts.fs, stagingDir, f.path).move(target);
   }
   removePackUpdateDir(opts.fs, opts.id);
   writeInstalledManifest(opts.meta, opts.remote);
@@ -165,20 +161,26 @@ export async function ensureModelPackInstalled(
     if (!opts.manifestUrl || !opts.manifestUrl.trim()) {
       throw new Error('model_pack_manifest_url_missing');
     }
-    const remote = await fetchRemoteManifest({
-      fetchImpl,
-      manifestUrl: opts.manifestUrl.trim(),
-      timeoutMs: opts.timeoutMs,
-      signal: opts.signal,
-    });
-    if (remote.packId !== id) throw new Error('model_pack_manifest_packid_mismatch');
-    assertManifestPathsSafe(remote);
-    if (manifestsEqual(remote, installed)) {
-      removePackUpdateDir(fs, id);
-      return { packDirUri: rootDir.uri, manifest: installed };
+    try {
+      const remote = await fetchRemoteManifest({
+        fetchImpl,
+        manifestUrl: opts.manifestUrl.trim(),
+        timeoutMs: opts.timeoutMs,
+        signal: opts.signal,
+      });
+      if (remote.packId !== id) throw new Error('model_pack_manifest_packid_mismatch');
+      assertManifestPathsSafe(remote);
+      if (manifestsEqual(remote, installed)) {
+        removePackUpdateDir(fs, id);
+        return { packDirUri: rootDir.uri, manifest: installed };
+      }
+      await applyPackUpdate({ fs, id, rootDir, meta, installed, remote, signal: opts.signal, onProgress: opts.onProgress });
+      return { packDirUri: rootDir.uri, manifest: remote };
+    } catch (error) {
+      // Cancelling an update discards its staged files, including ones kept from an earlier failed attempt.
+      if (opts.signal.aborted) removePackUpdateDir(fs, id);
+      throw error;
     }
-    await applyPackUpdate({ fs, id, rootDir, meta, installed, remote, signal: opts.signal, onProgress: opts.onProgress });
-    return { packDirUri: rootDir.uri, manifest: remote };
   }
 
   if (opts.mode === 'require_installed') {
@@ -189,18 +191,18 @@ export async function ensureModelPackInstalled(
     throw new Error('model_pack_manifest_url_missing');
   }
 
-  const manifest = await fetchRemoteManifest({
-    fetchImpl,
-    manifestUrl: opts.manifestUrl.trim(),
-    timeoutMs: opts.timeoutMs,
-    signal: opts.signal,
-  });
-  if (manifest.packId !== id) {
-    throw new Error('model_pack_manifest_packid_mismatch');
-  }
-  assertManifestPathsSafe(manifest);
-
+  let manifest: ModelPackManifest;
   try {
+    manifest = await fetchRemoteManifest({
+      fetchImpl,
+      manifestUrl: opts.manifestUrl.trim(),
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
+    if (manifest.packId !== id) {
+      throw new Error('model_pack_manifest_packid_mismatch');
+    }
+    assertManifestPathsSafe(manifest);
     await downloadManifestFiles({
       fs,
       rootDir,
@@ -209,7 +211,8 @@ export async function ensureModelPackInstalled(
       onProgress: opts.onProgress,
     });
   } catch (error) {
-    // Cancelling discards the partial pack; after a failure verified files stay so retrying resumes.
+    // Cancelling discards the partial pack, including files kept from an earlier failed attempt; after a
+    // failure verified files stay so retrying resumes.
     if (opts.signal.aborted) deletePack(fs, id);
     throw error;
   }
