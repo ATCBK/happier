@@ -11,7 +11,14 @@ export type DaemonSpeechStreamTransportSelection = Readonly<{
     transport: DaemonSpeechStreamTransportKind;
 }>;
 
+export type DaemonSpeechStreamRelayEncryptionFailure = Readonly<{
+    step: 'start_metadata' | 'key_prepare' | 'key_envelope' | 'install_seal' | 'install_send'
+        | 'confirmation_wait' | 'confirmation_open' | 'confirmation_validate';
+    reason: 'failed' | 'closed' | 'aborted' | 'timeout' | 'unavailable';
+}>;
+
 export type DaemonSpeechStreamBinaryTunnelReceipt = Readonly<{
+    relayEncryptionFailure?: DaemonSpeechStreamRelayEncryptionFailure;
     routeKind: 'loopback_direct' | 'server_relay';
     frameEncoding: 'binary_frame_v2';
     carrierKind: 'binary_tunnel_frame_v2';
@@ -36,6 +43,7 @@ export type DaemonSpeechStreamBinaryTunnelReceipt = Readonly<{
 }>;
 
 export type DaemonSpeechStreamBinaryTunnelReceiptRecorder = Readonly<{
+    recordRelayEncryptionFailure: (failure: DaemonSpeechStreamRelayEncryptionFailure) => void;
     recordStreamIdentity: (identity: Readonly<{
         machineId: string;
         packId: string | null;
@@ -159,6 +167,12 @@ export function createDaemonSpeechStreamDiagnostics(options?: Readonly<{
             };
 
             return Object.freeze({
+                recordRelayEncryptionFailure: (failure): void => {
+                    updateCurrentReceipt(current => ({
+                        ...current,
+                        relayEncryptionFailure: Object.freeze({ step: failure.step, reason: failure.reason }),
+                    }));
+                },
                 recordStreamIdentity: (identity): void => {
                     updateCurrentReceipt((current) => ({
                         ...current,

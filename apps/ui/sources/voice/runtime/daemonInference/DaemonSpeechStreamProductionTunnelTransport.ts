@@ -397,6 +397,7 @@ function createSelection(input: Readonly<{
     ...(input.peerApplicationEncryption ? {
       peerApplicationEncryption: input.peerApplicationEncryption,
       onRelayAuthenticatedEvidence: receipt.recordRelayEvidence,
+      onRelayEncryptionFailure: receipt.recordRelayEncryptionFailure,
     } : {}),
   });
   let localTransportClosePromise: Promise<void> | null = null;

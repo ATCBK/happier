@@ -51,6 +51,8 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
         frame: PeerTcpTunnelFrame;
     }>) => void>();
     let closed = false;
+    let terminalFrame: Extract<PeerTcpTunnelFrame, { kind: 'abort' | 'close' }> | null = null;
+    let detach = () => {};
     const abort = (): void => {
         try {
             close();
@@ -82,13 +84,41 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
         });
     }
 
-    const detach = input.onEnvelope((raw) => {
+    function retireFromPeer(frame: NonNullable<typeof terminalFrame>): void {
+        terminalFrame = frame;
+        closed = true;
+        input.signal?.removeEventListener('abort', abort);
+        detach();
+        for (const handler of handlers) handler(frame);
+        handlers.clear();
+        substreamHandlers.clear();
+    }
+
+    detach = input.onEnvelope((raw) => {
         if (closed) return;
         const parsed = PeerTcpTunnelRelayEnvelopeSchema.safeParse(raw);
         if (!parsed.success || parsed.data.scopeUserId !== input.scopeUserId) return;
         const envelope = parsed.data;
-        if (envelope.sender.kind !== 'machine' || envelope.sender.machineId !== input.open.targetMachineId) return;
-        if (envelope.recipient.kind !== 'user') return;
+        const fromMachine = envelope.sender.kind === 'machine'
+            && envelope.sender.machineId === input.open.targetMachineId
+            && envelope.recipient.kind === 'user'
+            && (!envelope.recipient.socketId || envelope.recipient.socketId === input.relaySocketId);
+        // The server reflects a denial using the initiating participants. It is
+        // terminal evidence only, never a source of application responses.
+        const reflectedDenial = envelope.sender.kind === 'user'
+            && envelope.sender.socketId === input.relaySocketId
+            && envelope.recipient.kind === 'machine'
+            && envelope.recipient.machineId === input.open.targetMachineId;
+        if (!fromMachine && !reflectedDenial) return;
+        if (envelope.v === 1) {
+            if (envelope.frame.kind !== 'abort' && envelope.frame.kind !== 'close') return;
+            if (envelope.frame.tunnelId !== input.open.tunnelId) return;
+            if (envelope.frame.kind === 'abort') retireFromPeer(envelope.frame);
+            if (envelope.frame.kind === 'close' && !envelope.frame.halfClose) {
+                retireFromPeer({ ...envelope.frame, halfClose: false });
+            }
+            return;
+        }
 
         if (envelope.v === 2) {
             const decodedSubstream = decodePeerTcpTunnelBinarySubstreamFrame({
@@ -97,6 +127,7 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
                 maxRawPayloadBytes: input.open.relayAuthorization?.payload.maxFrameBytes ?? Number.MAX_SAFE_INTEGER,
             });
             if (decodedSubstream.ok && decodedSubstream.frame.tunnelId === input.open.tunnelId) {
+                if (!fromMachine && decodedSubstream.frame.kind !== 'abort') return;
                 for (const handler of substreamHandlers) handler({
                     substreamId: decodedSubstream.substreamId,
                     frame: decodedSubstream.frame,
@@ -112,8 +143,14 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
                 maxRawPayloadBytes: input.open.relayAuthorization?.payload.maxFrameBytes ?? Number.MAX_SAFE_INTEGER,
             });
         if (!decoded?.ok || !decoded.frame || decoded.frame.tunnelId !== input.open.tunnelId) return;
+        if (decoded.frame.kind === 'abort' || (decoded.frame.kind === 'close' && !decoded.frame.halfClose)) {
+            retireFromPeer(decoded.frame);
+            return;
+        }
+        if (!fromMachine) return;
         for (const handler of handlers) handler(decoded.frame);
     });
+    if (closed) detach();
 
     try {
         input.send(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, userToMachineEnvelope({
@@ -137,7 +174,7 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
         throw error;
     }
 
-    input.signal?.addEventListener('abort', abort, { once: true });
+    if (!closed) input.signal?.addEventListener('abort', abort, { once: true });
 
     function close(): void {
         if (closed) return;
@@ -185,6 +222,10 @@ export async function openPeerTcpTunnelRelayStream(input: Readonly<{
             sendRelayFrame(frame);
         },
         onFrame: (handler) => {
+            if (terminalFrame) {
+                handler(terminalFrame);
+                return () => undefined;
+            }
             if (closed) return () => undefined;
             handlers.add(handler);
             return () => {

@@ -6,6 +6,7 @@ import {
     PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
     PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
     PeerTcpTunnelRelayBinaryEnvelopeV2Schema,
+    PeerTcpTunnelRelayEnvelopeSchema,
     type PeerTcpTunnelOpenV1,
     type PeerTcpTunnelRelayEnvelope,
 } from '@happier-dev/protocol';
@@ -52,6 +53,45 @@ function binaryEnvelopeKind(envelope: PeerTcpTunnelRelayEnvelope): string | null
 }
 
 describe('openPeerTcpTunnelRelayStream', () => {
+    it.each(['daemon-v1', 'server-v1', 'daemon-v2'] as const)('retires %s tunnel failures and replays them to a late response waiter', async source => {
+        const { openPeerTcpTunnelRelayStream } = await import('./relayStream');
+        let receive!: (envelope: PeerTcpTunnelRelayEnvelope) => void;
+        const detach = vi.fn();
+        const stream = await openPeerTcpTunnelRelayStream({
+            scopeUserId: 'user_1', relaySocketId: 'relay_socket_1', open: binaryOpen,
+            send: () => undefined,
+            onEnvelope: handler => { receive = handler; return detach; },
+        });
+        const frame = { v: 1 as const, kind: 'abort' as const, tunnelId: open.tunnelId, reasonCode: 'relay_authorization_invalid' };
+        const envelope = PeerTcpTunnelRelayEnvelopeSchema.parse(source === 'daemon-v2' ? {
+            v: 2, scopeUserId: 'user_1', sender: { kind: 'machine', machineId: 'machine_1' },
+            recipient: { kind: 'user', socketId: 'relay_socket_1' }, encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+            frame: encodePeerTcpTunnelBinaryFrameV2({ header: {
+                version: 2, kind: 'abort', tunnelId: open.tunnelId, reasonCode: frame.reasonCode, payloadLength: 0,
+            } }),
+        } : {
+            v: 1, scopeUserId: 'user_1', frame,
+            sender: source === 'server-v1' ? { kind: 'user', socketId: 'relay_socket_1' } : { kind: 'machine', machineId: 'machine_1' },
+            recipient: source === 'server-v1' ? { kind: 'machine', machineId: 'machine_1' } : { kind: 'user', socketId: 'relay_socket_1' },
+        });
+        const seen: PeerTcpTunnelFrame[] = [];
+        stream.onFrame(value => seen.push(value));
+        // Another tab, Account or Machine must not terminate this carrier.
+        receive({ ...envelope, scopeUserId: 'other-account' });
+        receive({ ...envelope, sender: { kind: 'machine', machineId: 'other-machine' } });
+        if (source === 'server-v1') receive({ ...envelope, sender: { kind: 'user', socketId: 'other-socket' } });
+        expect(seen).toEqual([]);
+        receive(envelope);
+        expect(seen).toEqual([frame]);
+        const late: PeerTcpTunnelFrame[] = [];
+        stream.onFrame(value => late.push(value));
+        expect(late).toEqual([frame]);
+        expect(detach).toHaveBeenCalledOnce();
+        expect(() => stream.sendFrame({ v: 1, kind: 'close', tunnelId: open.tunnelId, halfClose: false, reasonCode: 'closed' }))
+            .toThrow(expect.objectContaining({ code: 'peer_tunnel_stream_closed' }));
+        await stream.close();
+    });
+
     it('retires its exact subscription when the initial OPEN send fails', async () => {
         const mod = await loadModule('./relayStream');
         const openRelayStream = mod.openPeerTcpTunnelRelayStream;

@@ -95,6 +95,48 @@ function startResponse(payload: DaemonVoiceInferenceSttStreamStartRequest) {
 }
 
 describe('DaemonSpeechStreamTunnelTransport', () => {
+  it('observes a tunnel-level abort during encrypted installation without waiting for a substream timeout', async () => {
+    const { createDaemonSpeechStreamTunnelTransport } = await import('./DaemonSpeechStreamTunnelTransport');
+    const { openPeerTcpTunnelRelayStream } = await import('@/sync/domains/machines/peer/mediation/tunnel/relayStream');
+    const { PeerTcpTunnelRelayEnvelopeSchema } = await import('@happier-dev/protocol');
+    let receive!: (envelope: unknown) => void;
+    const relay = await openPeerTcpTunnelRelayStream({
+      scopeUserId: 'account-1', relaySocketId: 'socket-1',
+      open: { ...open, routeKind: 'server_relay' },
+      onEnvelope: handler => { receive = value => handler(PeerTcpTunnelRelayEnvelopeSchema.parse(value)); return () => undefined; },
+      send: (_event, envelope) => {
+        if (envelope.v === 2) receive({
+          v: 1, scopeUserId: 'account-1', sender: { kind: 'machine', machineId: 'machine_1' }, recipient: { kind: 'user' },
+          frame: { v: 1, kind: 'abort', tunnelId: open.tunnelId, reasonCode: 'relay_authorization_invalid' },
+        });
+      },
+    });
+    const failure = vi.fn();
+    const cancel = vi.fn(async () => ({ ok: true as const, streamId: 'stream-1', generation: 3 }));
+    const transport = createDaemonSpeechStreamTunnelTransport({
+      tunnelId: open.tunnelId, stream: relay, responseTimeoutMs: 50,
+      peerApplicationEncryption: {
+        v: 1, suite: 'aes-256-gcm', flowKind: 'voice_media', routeKind: 'server_relay',
+        authorityDigest: `sha256:${'ab'.repeat(32)}`, accountId: 'account-1', machineId: 'machine_1', tunnelId: open.tunnelId,
+        applicationKind: 'speech_transcription', applicationAttemptId: 'request-1',
+        applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1('request-1'),
+      },
+      onRelayEncryptionFailure: failure,
+      controlTransport: {
+        start: async payload => ({ ...startResponse(payload), peerApplicationEncryption: {
+          v: 1, suite: 'aes-256-gcm', recipientPublicKeyBase64Url: encodeProtocolBase64(deriveBoxPublicKeyFromSeed(new Uint8Array(32).fill(9)), 'base64url'),
+        } }),
+        finish: async () => { throw new Error('unused finish'); }, cancel,
+      },
+    });
+    await expect(transport.start({ requestId: 'request-1', packId: null, language: null, format: {
+      sampleRateHz: 16_000, channelCount: 1, bitsPerSample: 16, ffmpegCodec: 'pcm_s16le',
+    } })).resolves.toMatchObject({ ok: false, errorCode: 'internal_error' });
+    expect(failure).toHaveBeenCalledWith({ step: 'confirmation_wait', reason: 'aborted' });
+    expect(cancel).toHaveBeenCalledWith({ streamId: 'stream-1', generation: 3 });
+    await relay.close();
+  });
+
   it('forwards the streaming mode selected by the live sender contract', async () => {
     const transportMod = await loadModule('./DaemonSpeechStreamTunnelTransport');
     const createTransport = transportMod.createDaemonSpeechStreamTunnelTransport;

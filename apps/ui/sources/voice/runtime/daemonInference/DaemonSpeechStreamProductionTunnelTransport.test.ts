@@ -61,6 +61,7 @@ let finishFailure = false;
 let cancelFailure = false;
 let closeFailure = false;
 let confirmation: string = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1;
+let relayDenial = false;
 let grantFailure = false;
 let authorization: PeerTcpTunnelRelayAuthorizationV2 | null = null;
 const recipientSeed = new Uint8Array(32).fill(11);
@@ -300,6 +301,13 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
       boundary.socket.emit.mockImplementation((event, raw) => {
         if (event !== PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT) return;
         const envelope = PeerTcpTunnelRelayEnvelopeSchema.parse(raw);
+        if (relayDenial && envelope.v === 1 && envelope.frame.kind === 'open') {
+          boundary.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, PeerTcpTunnelRelayEnvelopeSchema.parse({
+            ...envelope, frame: { v: 1, kind: 'abort', tunnelId: envelope.frame.open.tunnelId,
+              reasonCode: 'relay_authorization_invalid' },
+          }));
+          return;
+        }
         if (envelope.v !== 2) return;
         const session = decodePeerTcpTunnelBinaryFrameForSession({
           frame: envelope.frame, maxBinaryHeaderBytes: 65_536, maxRawPayloadBytes: 65_536,
@@ -325,6 +333,7 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     network.setSocketConfigurator(configure);
   });
   afterEach(async () => {
+    relayDenial = false;
     await account?.dispose();
     storage.setState(originalState);
     resetServerFeaturesClientForTests();
@@ -442,11 +451,20 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     expect((grants[0] as { scope: unknown }).scope).not.toHaveProperty('maxIdleMs');
     confirmation = 'invalid-confirmation'; installedKey = null;
     const failed = await sender(); await expect(failed.start()).rejects.toMatchObject({ code: 'internal_error' });
-    expect(receipt()).toMatchObject({ relayEvidence: 'pending', localTransport: 'closed' });
+    expect(receipt()).toMatchObject({ relayEvidence: 'pending', localTransport: 'closed',
+      relayEncryptionFailure: { step: 'confirmation_validate', reason: 'failed' } });
     expect(network.requests.some(request => request.method.endsWith('.cancel'))).toBe(true);
     confirmation = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1; installedKey = null;
     const retry = await sender(); await retry.start(); await retry.finish();
     expect(receipt()).toMatchObject({ localTransport: 'closed' });
+  });
+  it('retains a safe install send failure when the real relay reader receives an OPEN denial before STT starts', async () => {
+    direct = false; relayDenial = true; publishFeatures(); selectMachine(false);
+    const stream = await sender();
+    await expect(stream.start()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(receipt()).toMatchObject({ relayEvidence: 'pending', localTransport: 'closed',
+      relayEncryptionFailure: { step: 'install_send', reason: 'closed' } });
+    expect(network.requests.some(request => request.method.endsWith('.cancel'))).toBe(true);
   });
   it('fails closed before Socket/grant admission when relay mint V2 is not advertised', async () => {
     direct = false; mintVersions = []; publishFeatures();
