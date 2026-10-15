@@ -697,7 +697,7 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
     },
     observeProcessExit() {
       if (tracker) {
-        tracker.observeProcessExit();
+        tracker.observeProcessExit({ providerStopped: true });
       } else {
         // Owned process exit may arrive before observer startup or after lifecycle disposal
         // during teardown. The captured adapter still enforces the session runtime binding.

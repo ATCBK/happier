@@ -19,6 +19,23 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>)
     }
 }
 
+it.each([
+    { title: 'Windows command shim', platform: 'win32', executable: 'C:\\tools\\claude.cmd', javascript: false },
+    { title: 'JavaScript launcher without native import evidence', platform: 'linux', executable: '/tmp/claude.js', javascript: true },
+] as const)('keeps a $title exit unqualified as provider stop', async ({ platform, executable, javascript }) => {
+    mockResolveClaudeCliPath.mockReturnValue(executable);
+    mockIsClaudeCliJavaScriptFile.mockReturnValue(javascript);
+    mockSpawn.mockReturnValue({ pid: 4242, stdio: [null, null, null, null],
+        on: vi.fn((event, callback) => { if (event === 'exit') process.nextTick(() => callback(0, null)); }),
+        kill: vi.fn() });
+    const exits: Array<Readonly<{ providerStopped: boolean }>> = [];
+    await withPlatform(platform, async () => {
+        await claudeLocal({ abort: new AbortController().signal, sessionId: null, path: '/tmp',
+            onSessionFound: () => {}, onProcessExit: result => { exits.push(result); } });
+    });
+    expect(exits).toEqual([{ providerStopped: false }]);
+});
+
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const { mockSpawn, mockClaudeFindLastSession, mockResolveClaudeCliPath, mockIsClaudeCliJavaScriptFile } = vi.hoisted(() => ({
     mockSpawn: vi.fn(),

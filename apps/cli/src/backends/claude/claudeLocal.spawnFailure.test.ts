@@ -15,6 +15,7 @@ it('reports a disappeared executable and releases the local launch abort listene
     const env = createEnvKeyScope(['HAPPIER_CLAUDE_PATH', 'CLAUDE_CONFIG_DIR']);
     const abort = new AbortController();
     const stdinWasPaused = process.stdin.isPaused();
+    const exits: Array<Readonly<{ providerStopped: boolean }>> = [];
     writeFileSync(executable, '', { mode: 0o700 });
     env.patch({ HAPPIER_CLAUDE_PATH: executable, CLAUDE_CONFIG_DIR: join(directory, 'config') });
 
@@ -27,9 +28,11 @@ it('reports a disappeared executable and releases the local launch abort listene
             sessionId: null,
             path: directory,
             onSessionFound: () => undefined,
+            onProcessExit: result => { exits.push(result); },
         })).rejects.toMatchObject({ code: 'ENOENT', path: executable });
 
         expect(getEventListeners(abort.signal, 'abort')).toHaveLength(0);
+        expect(exits).toEqual([]);
     } finally {
         env.restore();
         if (stdinWasPaused) process.stdin.pause();

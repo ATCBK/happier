@@ -226,9 +226,10 @@ export function createClaudeLocalLifecycleTracker(opts: Readonly<{
     handleProviderActivityObservationLoss(reason: string): void {
       handleClaudeRuntimeActivityLoss(reason);
     },
-    observeProcessExit(): void {
+    observeProcessExit(options?: Readonly<{ providerStopped?: boolean }>): void {
       clearPendingTaskNotificationReaction();
-      handleClaudeRuntimeActivityLoss('claude_process_exit', { providerStopped: true });
+      handleClaudeRuntimeActivityLoss('claude_process_exit', options?.providerStopped === true
+        ? { providerStopped: true } : undefined);
       const snapshot = opts.lifecycle.snapshot();
       if (!snapshot.active || snapshot.terminal) return;
       opts.lifecycle.observe({

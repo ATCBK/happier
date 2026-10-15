@@ -141,6 +141,9 @@ to JavaScript. Filesystem classification alone never retires provider tasks.
 Agent SDK process capture qualifies direct provider/runtime invocations separately
 from Windows shell shims. A shim's exit alone retains unknown task inventory;
 successful owned tree cleanup can establish stop when it observed the live root.
+Local Windows shell exits use the same uncertainty rule. An abort or operation
+error from a running child does not settle its physical-exit waiter; cleanup and
+task retirement still wait for actual exit.
 Unverified owned cleanup or an unexpected native launcher exit whose provider
 termination cannot be confirmed ends the runner instead of retrying into the same
 ledger; unresolved task identities remain unknown. Native children may keep stream

@@ -147,6 +147,28 @@ describe('claude sdk query exit handling', () => {
     }
   });
 
+  it('retires tasks after an aborted legacy child physically exits', async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-query-abort-exit-'));
+    const script = join(tmpRoot, 'provider.cjs');
+    writeFileSync(script, "console.log(JSON.stringify({ type: 'system', subtype: 'init' })); setInterval(() => {}, 1000);");
+    const abort = new AbortController();
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.apply({ type: 'started', sessionId: 'owned-session', taskId: 'background-child' });
+    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+      contributionHandle: { report: async () => {}, markUnknown: async () => {}, dispose: async () => {} } });
+    const response = query({ prompt: 'hi', options: {
+      cwd: tmpRoot, executable: process.execPath, pathToClaudeCodeExecutable: script, abort: abort.signal,
+    }, onProcessExited: () => adapter.handleRuntimeLoss('claude_process_exit', { providerStopped: true }) });
+    try {
+      await response.next();
+      abort.abort();
+      await response.return();
+      expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    } finally {
+      await response.return();
+    }
+  });
+
   it('keeps rejecting exit-publication details out of default activity diagnostics', async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-query-exit-publication-'));
     const script = join(tmpRoot, 'provider.cjs');

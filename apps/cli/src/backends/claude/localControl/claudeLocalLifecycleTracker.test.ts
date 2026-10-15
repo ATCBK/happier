@@ -13,6 +13,26 @@ import type { RawJSONLines } from '../types';
 import { createClaudeLocalLifecycleTracker } from './claudeLocalLifecycleTracker';
 
 describe('createClaudeLocalLifecycleTracker', () => {
+  it('retains task custody when only the local wrapper exit was observed', async () => {
+    const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
+    const ledger = createClaudeProviderActivityLedger();
+    const reports: SessionRuntimeActivityContribution[] = [];
+    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+      contributionHandle: { report: async value => { reports.push(value); },
+        markUnknown: async () => { reports.push({ state: 'unknown', activeCount: 0 }); }, dispose: async () => {} } });
+    await adapter.activateObservation('local-observer');
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle, providerActivityLedger: ledger, runtimeActivityAdapter: adapter });
+    tracker.observeHook({ hook_event_name: 'PostToolUse', session_id: 'local-session', tool_name: 'Agent',
+      tool_response: { status: 'async_launched', agentId: 'owned-task' } });
+    await vi.waitFor(() => expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 }));
+    tracker.observeProcessExit();
+    await vi.waitFor(() => expect(reports.at(-1)).toEqual({ state: 'unknown', activeCount: 0 }));
+    expect(ledger.hasActiveProviderTasks()).toBe(true);
+    tracker.observeProcessExit({ providerStopped: true });
+    await vi.waitFor(() => expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 }));
+    expect(ledger.hasActiveProviderTasks()).toBe(false);
+    lifecycle.dispose();
+  });
   it('keeps presentation replay inert and uses only exact-session live JSONL for provider Activity', async () => {
     const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
     const reports: SessionRuntimeActivityContribution[] = [];
@@ -79,7 +99,7 @@ describe('createClaudeLocalLifecycleTracker', () => {
     expect(handle.markUnknown).not.toHaveBeenCalled();
     expect(providerActivityLedger.hasActiveProviderTasks()).toBe(false);
 
-    tracker.observeProcessExit();
+    tracker.observeProcessExit({ providerStopped: true });
     await Promise.resolve();
     expect(providerActivityLedger.hasActiveProviderTasks()).toBe(false);
     expect(reports).toHaveLength(2);
@@ -120,7 +140,7 @@ describe('createClaudeLocalLifecycleTracker', () => {
     await vi.waitFor(() => expect(handle.markUnknown).toHaveBeenCalledOnce());
     expect(providerActivityLedger.hasActiveProviderTasks()).toBe(true);
 
-    tracker.observeProcessExit();
+    tracker.observeProcessExit({ providerStopped: true });
     await vi.waitFor(() => expect(providerActivityLedger.hasActiveProviderTasks()).toBe(false));
     lifecycle.dispose();
   });

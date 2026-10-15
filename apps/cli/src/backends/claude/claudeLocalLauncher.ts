@@ -451,6 +451,7 @@ export async function claudeLocalLauncher(
                 });
 
                 const { mcpConfigJson: baseMcpConfigJson } = await session.getOrCreateHappierMcpBridge();
+                let providerStopped = false;
                 try {
                     // Every local attempt owns a fresh process. Reconcile its prelaunch inventory
                     // through the same owner as Remote before reactivating the installed scanner.
@@ -461,6 +462,7 @@ export async function claudeLocalLauncher(
                         path: session.path,
                         sessionId: resumeFromSessionId,
                         onSessionFound: handleSessionStart,
+                        onProcessExit: result => { providerStopped = result.providerStopped; },
                         onThinkingChange: applyFd3ThinkingFallback,
                         onLifecycleGapDetected: (event) => emitClaudeUnifiedLifecycleGapDetected(unifiedTelemetry, event),
                         abort: processAbortController.signal,
@@ -478,7 +480,7 @@ export async function claudeLocalLauncher(
                         hookPluginDir: session.hookPluginDir,
                     });
                 } finally {
-                    lifecycleTracker.observeProcessExit();
+                    lifecycleTracker.observeProcessExit({ providerStopped });
                     await Promise.resolve();
                 }
 
