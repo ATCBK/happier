@@ -2,7 +2,8 @@ import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('axios');
-vi.mock('./serverHttpBaseUrl', () => ({
+vi.mock('./serverHttpBaseUrl', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./serverHttpBaseUrl')>(),
   resolveServerHttpBaseUrl: () => 'https://server.example',
 }));
 vi.mock('./serverEndpointFailureLog', () => ({
@@ -14,6 +15,9 @@ import {
   ConnectedServiceCredentialHttpClient,
 } from './connectedServiceCredentialApi';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
+import { acquireRequesterAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 
 describe('connected-service credential exact 0.2.1 response boundary', () => {
   beforeEach(() => {
@@ -92,6 +96,36 @@ describe('connected-service credential exact 0.2.1 response boundary', () => {
         validateStatus: expect.any(Function),
       }),
     );
+  });
+
+  it('reads an exact claim witness freshly beside a shared encryption identity observation', async () => {
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const initial = { mode: 'plain' as const, version: 1, updatedAt: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null };
+    let serverFact = initial;
+    vi.mocked(axios.get).mockImplementation(async () => ({ status: 200, data: serverFact }));
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const observation = acquireRequesterAccountEncryptionCurrentness({
+      accountId: 'bob', token, serverBaseUrl: 'https://server.example',
+    });
+    const api = new ConnectedServiceCredentialHttpClient({ token });
+    try {
+      await expect(observation.read()).resolves.toEqual(initial);
+      // The claim response carries the newly advanced Account cursor before
+      // its socket wake is necessarily delivered to the identity observation.
+      serverFact = { ...initial, version: 2 };
+      expect(projectAutomationAccountCurrentnessWitnessV1(await api.getAccountEncryptionCurrentness()))
+        .toEqual({ mode: 'plain', version: 2, contentKeyFingerprint: null });
+      vi.mocked(axios.get).mockRejectedValue(new Error('Home unavailable'));
+      await expect(api.getAccountEncryptionCurrentness()).rejects.toBeInstanceOf(
+        AccountEncryptionCurrentnessUnavailableError,
+      );
+      await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
+      expect(observation.isCurrent(initial)).toBe(true);
+    } finally {
+      await observation.dispose();
+      await channel.close();
+    }
   });
 
   it('rejects malformed Account encryption currentness without inferring a mode', async () => {
