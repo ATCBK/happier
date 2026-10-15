@@ -5,6 +5,7 @@ import { cpus, loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { resolveKokoroVoiceSid } from '@happier-dev/protocol/voice/modelPacks/kokoro';
 
 import { reloadConfiguration } from '@/configuration';
 import { createObservedForkedWorkerProcessTracker } from './forkedWorker/processTracker.testkit';
@@ -14,7 +15,7 @@ import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from './vo
 import { resolveVoiceInferenceWorkerRequestTimeoutMs } from './voiceInferenceWorkerConfig';
 
 const KOKORO_PACK_ID = 'kokoro-82m-v1.0-onnx-q8-wasm';
-const EXPECTED_MANIFEST_SHA256 = '89b5065457e5eb54d3b2fb5c4b28b638738bbeffe4be79dc5f329df1e0f09cc0';
+const EXPECTED_MANIFEST_SHA256 = '221f9dcc5b70b98cc4dbe017402b2f6e17e36d4ca2f7a062c10127e0b90622a4';
 const EXPECTED_FILE_COUNT = 362;
 const EXPECTED_TOTAL_BYTES = 186_129_644;
 const EXPECTED_NORMALIZED_ALIAS_COUNT = 104;
@@ -188,6 +189,25 @@ describe.runIf(enabled)('canonical public Kokoro consumed lifecycle', () => {
     else process.env.HAPPIER_VOICE_INFERENCE_WORKER_REQUEST_TIMEOUT_MS = originalRequestTimeoutMs;
     reloadConfiguration();
     await rm(homeDir, { recursive: true, force: true });
+  });
+
+  it('publishes the native multi-lang v1.1 speaker catalog with its default', async () => {
+    const manifest = await fetchVoiceModelPackManifest({ packId: KOKORO_PACK_ID });
+    expect(hashVoiceModelPackManifest(manifest)).toBe(EXPECTED_MANIFEST_SHA256);
+    expect(manifest.voices).toHaveLength(103);
+    expect(manifest.defaultVoiceId).toBe('af_maple');
+    expect(manifest.voices?.slice(0, 4)).toMatchObject([
+      { id: 'af_maple', sid: 0 },
+      { id: 'af_sol', sid: 1 },
+      { id: 'bf_vale', sid: 2 },
+      { id: 'zf_001', sid: 3 },
+    ]);
+    expect(manifest.voices?.at(-1)).toMatchObject({ id: 'zm_100', sid: 102 });
+    expect(new Set(manifest.voices?.map((voice) => voice.id)).size).toBe(103);
+    for (const [sid, voice] of (manifest.voices ?? []).entries()) {
+      expect(resolveKokoroVoiceSid(manifest, voice.id, 103)).toBe(sid);
+    }
+    expect(resolveKokoroVoiceSid(manifest, null, 103)).toBe(0);
   });
 
   it('installs exact public bytes, synthesizes, cancels, restarts, and removes without leaks', async () => {
