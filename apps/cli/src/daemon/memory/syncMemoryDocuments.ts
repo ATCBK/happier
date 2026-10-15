@@ -14,6 +14,7 @@ import { fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVis
 import type { StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { logger } from '@/ui/logger';
 import type { DeepIndexDbHandle, DeepIndexDocumentEntry, DeepIndexDocumentIdentity } from './deepIndex/deepIndexDb';
 
 export type MemoryDocumentSearchScope = Readonly<{
@@ -36,6 +37,23 @@ export async function syncMemoryDocuments(params: Readonly<{
   signal?: AbortSignal;
   assertCurrent: () => void;
 }>): Promise<MemoryDocumentSearchScope> {
+  const startedAtMs = Date.now();
+  let phaseStartedAtMs = startedAtMs;
+  let phase = 'account_currentness';
+  logger.infoFile('[memoryDocuments] Admission started', {
+    scopeType: params.scope.type,
+    ...(params.scope.type === 'session' ? { sessionId: params.scope.sessionId } : {}),
+  });
+  const nextPhase = (next: string) => {
+    const now = Date.now();
+    logger.infoFile('[memoryDocuments] Admission phase', {
+      scopeType: params.scope.type,
+      ...(params.scope.type === 'session' ? { sessionId: params.scope.sessionId } : {}),
+      phase, durationMs: now - phaseStartedAtMs, elapsedMs: now - startedAtMs,
+    });
+    phase = next;
+    phaseStartedAtMs = now;
+  };
   // Bind before the first HTTP read: returning to the same Account is a new lifetime.
   const accountContext = { scopeKey: resolveAccountSettingsScopeKey(params.credentials),
     lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), settings: null };
@@ -48,6 +66,7 @@ export async function syncMemoryDocuments(params: Readonly<{
     params.signal?.throwIfAborted();
     assertAccount();
     const accountMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
+    nextPhase('session_inventory');
     const sessionIds = new Set<string>();
     if (params.scope.type === 'session') sessionIds.add(params.scope.sessionId);
     else {
@@ -65,6 +84,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         }
       }
     }
+    nextPhase('home_scope');
     return await withCliPromptLibraryArtifactReader(async reader => {
       const home = await reader.readScope();
       if (!home) throw new Error('context_source_unavailable');
@@ -79,6 +99,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         return read;
       };
       const admit = async (sessionId?: string) => {
+        nextPhase('session_metadata');
         let metadata: Record<string, unknown> | null = null;
         let machineId = params.machineId;
         if (sessionId) {
@@ -91,11 +112,13 @@ export async function syncMemoryDocuments(params: Readonly<{
           if (locality?.machineId) machineId = locality.machineId;
           else if (metadata.workspaceId !== undefined || metadata.projectId !== undefined) throw new Error('context_source_unavailable');
         }
+        nextPhase('prompt_inputs');
         const prepared = await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
           machineId, directory: typeof metadata?.path === 'string' ? metadata.path : undefined,
           serverId: home.serverId, signal: params.signal, refreshCatalogs: true, accountContext });
         if (prepared.scope?.accountId !== home.accountId) throw new Error('context_source_unavailable');
         assertions.push(prepared.assertCurrentAccount);
+        nextPhase('prompt_admission');
         const inventory = await resolvePromptStackSystemAppendBlocksV1({ ...prepared,
           scope: { ...prepared.scope, ...home, ...(sessionId ? { sessionId } : {}) }, surface: 'coding',
           memoryEnabled: sessionId ? prepared.memoryEnabled : true,
@@ -103,6 +126,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         prepared.assertCurrentAccount();
         const incomplete = inventory.admittedEntries.find(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
         if (incomplete) throw new PromptStackPreparationError('unavailable', incomplete.ref);
+        nextPhase('artifact_projection');
         for (const admitted of inventory.admittedEntries) {
           if (admitted.ref.kind !== 'doc' || admitted.outcome === 'unavailable') continue;
           const artifact = await readArtifact(admitted.ref);
@@ -145,10 +169,27 @@ export async function syncMemoryDocuments(params: Readonly<{
       for (const projection of projections.values()) params.db.replaceDocumentIndexData(projection);
       // A single Session cannot revoke another Session's attached document projection.
       if (params.scope.type === 'global') params.db.pruneDocumentIndexData({ eligibleDocuments });
+      nextPhase('complete');
       return { state: 'ready', eligibleDocuments, eligibleMemoryDocuments, assertCurrent,
         ...(params.scope.type === 'session' ? { preparation: [...preparation.values()] } : {}) };
     }, { credentials: params.credentials, signal: params.signal });
   } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    const cause: unknown = error instanceof Error ? error.cause : undefined;
+    const causeCode = cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined;
+    const abortReason: unknown = params.signal?.reason;
+    const abortCode = abortReason && typeof abortReason === 'object' && 'code' in abortReason ? abortReason.code : undefined;
+    const knownCodes = new Set(['RPC_REQUEST_TIMEOUT', 'ERR_CANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
+      'ETIMEDOUT', 'account_encryption_currentness_unavailable', 'account_storage_currentness_unavailable', 'context_source_unavailable']);
+    logger.infoFile('[memoryDocuments] Admission failed', {
+      scopeType: params.scope.type,
+      ...(params.scope.type === 'session' ? { sessionId: params.scope.sessionId } : {}),
+      phase, durationMs: Date.now() - phaseStartedAtMs, elapsedMs: Date.now() - startedAtMs,
+      cancelled: params.signal?.aborted === true,
+      errorCode: typeof code === 'string' && knownCodes.has(code) ? code : 'unclassified',
+      ...(typeof causeCode === 'string' && knownCodes.has(causeCode) ? { causeCode } : {}),
+      ...(typeof abortCode === 'string' && knownCodes.has(abortCode) ? { abortCode } : {}),
+    });
     params.signal?.throwIfAborted();
     // Incomplete admission must never disclose cached text or prune a partial global inventory.
     const pending = error instanceof Error && ('status' in error && error.status === 'preparation_pending');

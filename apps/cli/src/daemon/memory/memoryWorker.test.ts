@@ -1133,7 +1133,7 @@ describe('memoryWorker', () => {
     });
 
     vi.doMock('@/ui/logger', () => ({
-      logger: { debug: loggerDebug },
+      logger: { debug: loggerDebug, infoFile: vi.fn() },
     }));
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionById,
