@@ -616,6 +616,13 @@ it("lists a pool in the selector's own order and builds the why detail from its 
   // Hypothetical rows never replace the current queue or issue a mutation Action.
   expect(screen.findHostByTestId('cap.usedFirst.pool.personal')).toBeTruthy();
   expect(execute).not.toHaveBeenCalled();
+  const failed = bodyProps(quota, [{ query, value: [{ group, memberAccountIds: ['work', 'personal', 'side'],
+    activeAccountId: 'personal', selection: { status: 'error', machineId: 'witnessed-selector', errorCode: 'connected_service_request_failed' } }] }]);
+  await screen.update(<InjectedAuthProvider credentials={credentials}><UsageCapacityWidget {...failed} serverId={home.id}
+    id="usage_capacity" testID="cap" /></InjectedAuthProvider>);
+  expect.soft(screen.findHostByTestId('cap.usedFirst.pool.personal')).toBeTruthy();
+  expect.soft(screen.getTextContent()).toContain(t('usage.board.plans.usedFirstReadFailed'));
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.hintLoading'));
 });
 
 it('states one unreadable-order cause once under every pool that shares it (H30)', async () => {

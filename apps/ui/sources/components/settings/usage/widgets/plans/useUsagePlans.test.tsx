@@ -12,7 +12,8 @@ import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { useUsagePlans, useUsageSelectorMachineId } from './useUsagePlans';
+import { useUsagePlans, useUsagePoolSelections, useUsageSelectorMachineId } from './useUsagePlans';
+import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import { act } from 'react-test-renderer';
@@ -26,6 +27,65 @@ import { t } from '@/text';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
+
+it('retains the answered pool order during refresh and failed reads, but not after selector identity or authority changes', async () => {
+  home = await serveAccountHomes({ homes: [{ key: 'order', serverUrl: 'https://usage-order.test', accountId: 'order-account' }],
+    route: () => undefined });
+  const server = home.homes.order!;
+  publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+  const scope = { serverId: server.id, accountId: 'order-account' };
+  storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
+  const group = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool' };
+  const answer = (observedAtMs: number) => ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group, observedAtMs,
+    selection: { selected: null, reason: 'manual_strategy', excluded: [], decisionTrace: {
+      activeProfileId: null, reason: 'manual_strategy', strategy: 'manual', selectionBasis: 'manual_strategy',
+      sticky: false, orderedEligibleCandidates: [], candidates: [],
+    } } });
+  const query = normalizeUsageQuery({});
+  const pool = { group, memberAccountIds: ['work'], activeAccountId: null,
+    selection: { status: 'available' as const, machineId: 'machine', value: answer(1) } };
+  let slice = resolveUsagePageAggregation({ queries: [query], pools: [{ query, value: [pool] }] }).results[0]!;
+  let hook = await renderHook(() => useUsagePoolSelections(slice));
+  const key = `${group.service.pluginId}/${group.service.localId}:${group.groupId}`;
+  const update = async (selection: NonNullable<typeof slice.pools>[number]['selection'], members = ['work']) => {
+    slice = { ...slice, pools: [{ ...pool, memberAccountIds: members, selection }] };
+    await hook.rerender();
+  };
+  expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1 });
+  await update({ status: 'pending', machineId: 'machine' });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1 });
+  expect.soft(hook.getCurrent().get(key)).not.toHaveProperty('refreshError');
+  await update({ status: 'error', machineId: 'machine', errorCode: 'connected_service_request_failed' });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1, refreshError: 'failed' });
+  await update({ status: 'available', machineId: 'machine', value: answer(2) });
+  expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 2 });
+  expect(hook.getCurrent().get(key)).not.toHaveProperty('refreshError');
+  await update({ status: 'unsupported', errorCode: 'no_machine' });
+  expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 2, refreshError: 'no_machine' });
+  await update({ status: 'available', machineId: 'machine', value: answer(2) });
+  await hook.unmount();
+  const warm = await renderHook(() => useUsagePoolSelections({ ...slice,
+    pools: [{ ...pool, selection: { status: 'pending', machineId: 'machine' } }] }));
+  expect.soft(warm.getCurrent().get(key)).toMatchObject({ observedAtMs: 2 });
+  await warm.unmount();
+  hook = await renderHook(() => useUsagePoolSelections(slice));
+  await update({ status: 'pending', machineId: 'other-machine' });
+  expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'pending', machineId: 'machine' }, ['other-account']);
+  expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'error', machineId: 'machine', errorCode: 'denied' });
+  expect(hook.getCurrent().get(key)).toBe('failed');
+  await update({ status: 'pending', machineId: 'machine' });
+  expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'available', machineId: 'machine', value: answer(3) });
+  await update({ status: 'unsupported', machineId: 'machine', errorCode: 'unsupported' });
+  await update({ status: 'pending', machineId: 'machine' });
+  expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'available', machineId: 'machine', value: answer(4) });
+  retireActiveServerAccountScopeLifetime();
+  await update({ status: 'pending', machineId: 'machine' });
+  expect(hook.getCurrent().get(key)).toBe('loading');
+});
 
 it('changes the Usage selector when request reachability changes without a machine heartbeat', async () => {
   const { id: serverId } = await upsertAndActivateServer({ serverUrl: 'https://usage-selector.test', name: 'Usage Home' });

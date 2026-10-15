@@ -167,7 +167,8 @@ function readSharedUnreadCause(
 ): string | null {
   const causes = pools.flatMap((pool) => {
     const state = selections.get(pool.key) ?? 'loading';
-    return typeof state === 'string' || 'status' in state ? [unreadText(state)] : [];
+    return typeof state === 'string' || 'status' in state ? [unreadText(state)]
+      : state.refreshError ? [unreadText(state.refreshError)] : [];
   });
   return causes.length > 1 && causes.every((cause) => cause === causes[0]) ? causes[0]! : null;
 }
@@ -236,7 +237,7 @@ function PoolQueue(
     <View testID={props.testID} style={styles.pool}>
       <UsagePlanSectionHead
         title={title}
-        meta={strategy.label}
+        meta={[strategy.label, !props.causeBelow && state.refreshError ? unreadText(state.refreshError) : null].filter(Boolean).join(' · ')}
         action={
           <PoolWhy
             serverId={props.serverId}
@@ -410,9 +411,9 @@ export function UsagePoolSteps(props: PoolOrderProps) {
                 members={members} selection={state.selection} observedAtMs={state.observedAtMs}
                 nameOf={props.nameOf} nowMs={props.nowMs} testID={`${props.testID}.${pool.groupId}.why`} />}
               meta={
-                getPoolStrategyPresentation(
+                [getPoolStrategyPresentation(
                   state.selection.decisionTrace.strategy,
-                ).label
+                ).label, !sharedCause && state.refreshError ? unreadText(state.refreshError) : null].filter(Boolean).join(' · ')
               }
             />
             <View style={styles.steps} accessibilityRole="list">

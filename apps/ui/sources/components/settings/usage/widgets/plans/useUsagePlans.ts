@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
+import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
 import { useConnectedServiceQuotaSummaries } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { presentConnectedAccountNames, presentQualifiedConnectedAccountTarget } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
@@ -193,11 +194,18 @@ export function useUsageSelectorMachineId(): string | null {
   );
 }
 
+type ResolvedPoolSelection = Extract<ConnectedServicePoolSelectionGetResponseV1, { selection: unknown }>;
 export type UsagePoolSelectionState =
-  | ConnectedServicePoolSelectionGetResponseV1
+  | (ConnectedServicePoolSelectionGetResponseV1 & Readonly<{ refreshError?: 'failed' | 'no_machine' }>)
   | 'loading'
   | 'failed'
   | 'no_machine';
+
+const observedPoolSelections = new WeakMap<ServerAccountScopeLifetime, Map<string, Readonly<{
+  machineId: string | undefined;
+  members: string;
+  value: ResolvedPoolSelection;
+}>>>();
 
 /**
  * The Resource's admitted selector projection. It is evidence, not a controller; this hook creates
@@ -206,11 +214,42 @@ export type UsagePoolSelectionState =
 export function useUsagePoolSelections(
   slice: UsageQueryResultSlice,
 ): ReadonlyMap<string, UsagePoolSelectionState> {
-  return React.useMemo(() => new Map((slice.pools ?? []).map(pool => {
+  const lifetime = captureActiveServerAccountScopeLifetime();
+  const retained = React.useMemo(() => {
+    if (!lifetime) return new Map<string, Readonly<{ machineId: string | undefined; members: string; value: ResolvedPoolSelection }>>();
+    let observations = observedPoolSelections.get(lifetime);
+    if (!observations) { observations = new Map(); observedPoolSelections.set(lifetime, observations); }
+    return observations;
+  }, [lifetime]);
+  const projection = React.useMemo(() => new Map((slice.pools ?? []).map(pool => {
+    const key = `${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`;
     const selection = pool.selection;
+    const previous = lifetime?.isCurrent() ? retained.get(key) : undefined;
+    const authorityLost = isPluginUiResourceReadAuthorityLost({ freshness: 'unknown', pending: 'idle', subscription: 'ended',
+      ...(selection.errorCode ? { error: { code: selection.errorCode, message: selection.errorCode } } : {}) });
+    const sameSelector = previous && previous.members === JSON.stringify(pool.memberAccountIds)
+      && (previous.machineId === selection.machineId || selection.errorCode === 'no_machine'
+        && (slice.shownQuery.machines.length === 0 || slice.shownQuery.machines.includes(previous.machineId ?? '')));
+    const pending = selection.status === 'pending' || selection.status === 'not_loaded';
+    const failed = selection.status === 'error' || selection.errorCode === 'no_machine';
     const state: UsagePoolSelectionState = selection.value ??
+      (!authorityLost && sameSelector && (pending || failed)
+        ? { ...previous.value, ...(failed ? { refreshError: selection.errorCode === 'no_machine' ? 'no_machine' as const : 'failed' as const } : {}) }
+        : undefined) ??
       (selection.status === 'pending' || selection.status === 'not_loaded' ? 'loading' :
         selection.errorCode === 'no_machine' ? 'no_machine' : 'failed');
-    return [`${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`, state];
-  })), [slice.pools]);
+    return [key, state];
+  })), [slice.pools, slice.shownQuery.machines, lifetime, retained]);
+  React.useEffect(() => {
+    if (!lifetime?.isCurrent()) return;
+    for (const pool of slice.pools ?? []) {
+      const key = `${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`;
+      const value = pool.selection.value;
+      if (value && 'selection' in value) retained.set(key, { machineId: pool.selection.machineId,
+        members: JSON.stringify(pool.memberAccountIds), value });
+      else if (value || pool.selection.status !== 'pending' && pool.selection.status !== 'not_loaded'
+        && typeof projection.get(key) === 'string') retained.delete(key);
+    }
+  }, [slice.pools, lifetime, retained, projection]);
+  return projection;
 }
