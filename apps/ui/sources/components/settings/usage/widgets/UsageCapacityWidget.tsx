@@ -451,11 +451,13 @@ const styles = StyleSheet.create((theme) => ({
   // The gap keeps one cell's account name clear of the next cell's mark; the bars still read as one row.
   bar: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, rowGap: theme.space.s12 },
   run: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, rowGap: theme.space.s12, minWidth: 0 },
+  // A pool is a nested surface: it keeps the gap its own cells keep from each other, so the bars and figures sit
+  // inside its outline with air, never against it.
   pool: {
-    borderRadius: 10,
+    borderRadius: theme.borderRadius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border.default,
-    padding: theme.space.s4,
+    padding: theme.space.s12,
   },
   halfSpacer: { flexBasis: '47%', flexGrow: 1 },
   cell: { flex: 1, minWidth: 0, gap: theme.space.s6 },

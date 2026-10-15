@@ -319,7 +319,9 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             {t('usage.board.plans.unreportedWindows', { count: unreported.length })}
           </Text>
         ) : null}
-        {depletingNote}
+        {/* A window still without a pace may gain one and run out: the alert's line is held until every window has one. */}
+        {depletingNote ?? (rows.some(row => !row.window.pace)
+          ? <View style={{ minHeight: text.detail.lineHeight * (stacked ? 2 : 1) }} testID={`${props.testID}.aheadRoom`} /> : null)}
         {/* The legend explains pace marks; without any pace it explains nothing. */}
         {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
         <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice} onRetry={props.model.refresh}

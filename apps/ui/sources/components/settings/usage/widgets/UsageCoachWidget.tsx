@@ -330,13 +330,14 @@ export function UsageCoachWidget(props: UsageBodyProps) {
           reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
         />
       ) : null}
-      <View style={strip ? styles.strip : styles.list}>
+      {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
+      {shown.length > 0 || (!glance && appliedOnly.length > 0) ? <View style={strip ? styles.strip : styles.list}>
         {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
           {index > 0 ? <View style={styles.stripRule} /> : null}
           {row(finding)}
         </React.Fragment>) : shown.map(row)}
         {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
-      </View>
+      </View> : null}
       {glance && visible.length > shown.length ? <Text style={styles.quiet}>
         {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
       {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}

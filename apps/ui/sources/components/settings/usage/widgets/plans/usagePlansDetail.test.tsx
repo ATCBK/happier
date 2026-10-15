@@ -299,6 +299,8 @@ it('chooses the earliest settled depletion consistently instead of whichever acc
     .flatMap(node => node.children.filter(child => typeof child === 'string')).join(' ');
   expect(aheadText()).toContain('Plan earlier');
   expect(aheadText()).not.toContain('Plan later');
+  // The alert's line is in use, so none is held for it.
+  expect(screen.findByTestId('proj.aheadRoom')).toBeFalsy();
   await screen.update(render([...reads].reverse()));
   expect(aheadText()).toContain('Plan earlier');
 });
@@ -318,6 +320,8 @@ it('does not declare all projections missing when a settled paced window is behi
   expect(screen.findByTestId('proj.showAll')).toBeTruthy();
   expect(screen.findByTestId('proj.window.paced.weekly')).toBeFalsy();
   expect(screen.findByTestId('proj.legend')).toBeTruthy();
+  // A window still without a pace may yet run out: the alert's line is held so its arrival moves nothing.
+  expect(screen.findByTestId('proj.aheadRoom')).toBeTruthy();
   // The eight windows without a projection share a cause: said once for the widget, as a partial statement,
   // never as "No projection yet" for the whole list nor beneath every row.
   const text = screen.getTextContent();

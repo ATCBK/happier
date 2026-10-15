@@ -8,6 +8,9 @@ import {
   HappierDataMetric,
 } from '@happier-dev/plugin-ui/presentation';
 import { ChartTooltip } from '@/components/ui/charts';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { usePlanText } from './plans/UsagePlanParts';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { useDeviceType } from '@/utils/platform/responsive';
 import {
@@ -47,6 +50,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   const presentation = useWidgetPresentation();
   const phone = useDeviceType() === 'phone';
+  const text = usePlanText();
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   // The same exact legend either way; only the picture changes with the room there is.
   const waffle =
@@ -214,7 +218,15 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
             </ChartTooltip>
           )}
         />
-      ) : null}
+      ) : (
+        // The mix keeps its slot when the sources report no token split: an empty track with the reason beneath it.
+        <View style={styles.mixSlot} testID={`${props.testID}.mixUnavailable`}>
+          <View style={[styles.mixTrack, { backgroundColor: theme.colors.surface.inset }]} />
+          <Text style={[styles.mixCaption, text.detail]}>
+            {`${t('usage.context.tokenMixTitle')} · ${t('common.unavailable')}`}
+          </Text>
+        </View>
+      )}
       <UsageCoverageLine
         slice={props.slice}
         sources={['accounting', 'comparison']}
@@ -227,8 +239,11 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
 
 const UNKNOWN_VALUE = '—';
 
-const styles = StyleSheet.create(() => ({
+const styles = StyleSheet.create((theme) => ({
   body: { gap: 18 },
+  mixSlot: { gap: theme.space.s8 },
+  mixTrack: { height: 14, borderRadius: 5 },
+  mixCaption: { ...Typography.default(), color: theme.colors.text.tertiary },
   grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
   // Two figures a row whenever the card can hold two; a narrower one stacks them.
   cell: { flexGrow: 1, flexBasis: '40%', minWidth: 120 },

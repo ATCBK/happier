@@ -207,8 +207,11 @@ export function UsageDailyWidget(props: UsageBodyProps) {
     const running = props.query.granularity === 'day' && lastStart !== null && now >= lastStart && now - lastStart < 24 * 60 * 60 * 1000;
     return usageAxisTicks(labels, running ? t('usage.today') : undefined);
   }, [series, metric, byAgent, props.query.granularity]);
-  const caption = `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')}${byAgent ? ` ${t('usage.board.page.byAgent')}` : ''} · ${usagePeriodPhrase(props.query)}`;
-  useWidgetFrameBodyCaption(caption);
+  const measure = `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')} · ${usagePeriodPhrase(props.query)}`;
+  // The frame's subtitle is the same from the first paint: whether the bars split by agent is only known once the
+  // read answers, and the legend says it then. The chart's own label (for assistive technology) names the split.
+  useWidgetFrameBodyCaption(measure);
+  const caption = byAgent ? `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')} ${t('usage.board.page.byAgent')} · ${usagePeriodPhrase(props.query)}` : measure;
   if (!view || count === 0)
     return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
   const compact = presentation?.size === 'small' || presentation?.size === 'wide';

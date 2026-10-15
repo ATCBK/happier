@@ -39,6 +39,19 @@ const MATRIX_MIN_WIDTH_PX = 440;
 const SIDE_BY_SIDE_MIN_WIDTH_PX = 2 * MATRIX_MIN_WIDTH_PX;
 
 /**
+ * What the settled body measures at the two widths the page is designed for, so the reading state holds
+ * that room: side by side (calendar beside weekday × hour) and a phone (calendar over the 24-hour rhythm).
+ * Widths between them hold nothing rather than a guess.
+ */
+const SETTLED_SIDE_BY_SIDE_BODY_PX = 180;
+const SETTLED_PHONE_BODY_PX = 223;
+function settledBodyPx(width: number | undefined): number | undefined {
+  if (width === undefined) return undefined;
+  if (width >= SIDE_BY_SIDE_MIN_WIDTH_PX) return SETTLED_SIDE_BY_SIDE_BODY_PX;
+  return width < MATRIX_MIN_WIDTH_PX ? SETTLED_PHONE_BODY_PX : undefined;
+}
+
+/**
  * "When you work": the active-days calendar beside the weekday × hour rhythm, both read from the same
  * admitted activity facts in the query's own calendar (fixed offset, Monday weeks).
  */
@@ -66,7 +79,11 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
   );
   if (!view || !activity || (!hasCalendar && !hasRhythm)) {
     if (isUsageReadOutstanding(props.slice, ['accounting']))
-      return <UsageBodyReading testID={`${props.testID}.loading`} />;
+      return (
+        <View style={{ minHeight: settledBodyPx(width) }}>
+          <UsageBodyReading testID={`${props.testID}.loading`} />
+        </View>
+      );
     return (
       <UsageBodyInsufficient
         testID={`${props.testID}.empty`}

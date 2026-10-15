@@ -132,7 +132,7 @@ export function UsageBodyReading(props: Readonly<{
   testID: string;
   /**
    * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
-   * name, a bar and a caption (a list of allowance windows), or the `mix` of two figures over a strip.
+   * name, a bar and a caption (a list of allowance windows), or the `mix` of four figures over a strip.
    */
   shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }>;
 }>) {
@@ -157,7 +157,7 @@ export function UsageBodyReading(props: Readonly<{
     return (
       <View testID={props.testID} style={readingStyles.mix}>
         <View style={readingStyles.mixFigures}>
-          {[0, 1].map((index) => (
+          {[0, 1, 2, 3].map((index) => (
             <View key={index} style={readingStyles.mixFigure}>
               <HappierSkeletonBlock color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} />
               <HappierSkeletonBlock color={color} width="38%" height={22} radius={6} reducedMotion={reducedMotion} />
@@ -221,8 +221,9 @@ const readingStyles = StyleSheet.create(() => ({
   meters: { gap: USAGE_METER_METRICS.rowGapPx, paddingVertical: 4 },
   meter: { gap: 8 },
   mix: { gap: 18, paddingVertical: 4 },
-  mixFigures: { flexDirection: 'row', columnGap: 24 },
-  mixFigure: { flex: 1, gap: 8 },
+  // The Efficiency card's four figures wrap two-up exactly as the figures themselves do (UsageEfficiencyWidget).
+  mixFigures: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
+  mixFigure: { flexGrow: 1, flexBasis: '40%', minWidth: 120, gap: 8 },
   // The Period summary's settled body (a hero, its line, three captioned figures) measures this tall.
   summary: { minHeight: SETTLED_SUMMARY_BODY_PX, gap: 20 },
   summaryHero: { gap: 8 },
