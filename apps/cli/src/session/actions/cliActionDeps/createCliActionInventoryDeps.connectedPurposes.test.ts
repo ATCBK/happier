@@ -12,6 +12,9 @@ import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secret
 import { createCliActionDeps } from '../createCliActionDeps';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -57,21 +60,26 @@ describe('direct CLI and Action inventory purpose authority', () => {
     });
   });
 
-  it('reads purpose inventory with the original named Action token, authority ceiling and captured Home', async () => {
+  it.each(['spawn', 'summary'] as const)('reads %s purpose inventory with the original named Action token, authority ceiling and captured Home', async kind => {
     const accountId = 'named-purpose-inventory';
     const home = 'https://named-purpose-inventory.example.test';
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
     const actionToken = 'named-purpose-action-token';
-    const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'codex',
-      contributions: readCurrentContributionRegistry() })?.authorizedPurposes.find(scope => scope.serviceRefs[0]?.localId === 'openai-codex');
+    const agentId = kind === 'summary' ? 'claude' : 'codex';
+    const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId,
+      contributions: readCurrentContributionRegistry() })?.authorizedPurposes.find(scope => scope.serviceRefs[0]?.localId === (kind === 'summary' ? 'claude-subscription' : 'openai-codex'));
     if (!declaration?.serviceRefs[0]) throw new Error('Missing current declared Codex purpose');
     const service = declaration.serviceRefs[0];
     const snapshot = { source: 'network' as const, scopeKey: resolveAccountSettingsScopeKey(credentials),
-      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] };
-    setActiveAccountSettingsSnapshot(snapshot);
+      settings: accountSettingsParse({ backendEnabledByTargetKey: Object.fromEntries(
+        [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
+          ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === agentId]) : [])),
+      }), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] };
+    setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKey({ token: 'ambient-daemon', encryption: null }) });
     const incumbent = getActiveAccountSettingsSnapshot();
+    let current = true;
     const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: home,
-      snapshot, isCurrent: async () => true });
+      snapshot, isCurrent: async () => current });
     const denied: string[] = [];
     // Tokens are opaque HTTP credentials, not a new token parser. The real
     // Action executor and request-header owner must retain original authority.
@@ -79,6 +87,14 @@ describe('direct CLI and Action inventory purpose authority', () => {
       const url = new URL(String(input));
       expect(url.origin).toBe(home);
       const authorization = Object.entries(options?.headers ?? {}).filter(([name]) => name.toLowerCase() === 'authorization');
+      // The existing ACP row owner uses captured Account credentials. Purpose
+      // reads below must retain the named Action's original authorization.
+      if (authorization[0]?.[1] === `Bearer ${credentials.token}`) {
+        if (url.pathname.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        if (url.pathname.endsWith('/entity-rows/acp')) return { status: 200, data: { status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, definitions: [] } } } };
+      }
       if (authorization.length !== 1 || authorization[0]?.[1] !== `Bearer ${actionToken}`
         || options?.headers?.[AUTHORITY_CEILING_HEADER_V1] !== 'account_automation') {
         denied.push(url.pathname);
@@ -95,15 +111,32 @@ describe('direct CLI and Action inventory purpose authority', () => {
     });
     const executor = createActionExecutor(createCliActionDeps({ token: actionToken, credentials,
       savedSecretOperationContext: operationContext, serverId: 'named-purpose-home', serverHttpBaseUrl: home,
-      sessionId: 'named-purpose-session', mode: 'plain', ctx: null }));
-    const result = await runWithServerHttpBaseUrl(home, () => executor.execute('sessions.spawn.connected_services.list',
-      { agentId: 'codex', includeUnavailable: false }, { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } }));
+      sessionId: 'named-purpose-session', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'requester-summary-machine', invoke: async () => { throw new Error('Unexpected recursion'); } } }));
+    // The invocation's captured Home must win over the daemon's ambient Home.
+    const result = await runWithServerHttpBaseUrl('https://ambient-daemon.example.test', () => executor.execute(
+      kind === 'summary' ? 'agents.models.list' : 'sessions.spawn.connected_services.list',
+      kind === 'summary' ? { purpose: 'scm_diff_summary', machineId: 'requester-summary-machine' } : { agentId: 'codex', includeUnavailable: false },
+      { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } }));
     expect(denied).toEqual([]);
-    expect(result).toMatchObject({ ok: true, result: { defaultBindings: { v: 2, bindingsByServiceId: {
+    if (kind === 'summary') {
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok || !result.result || typeof result.result !== 'object' || !('scmDiffSummaryCatalog' in result.result)) throw new Error('Missing Summary catalog');
+      const catalog = ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog);
+      expect(catalog.profiles, JSON.stringify({ purpose: operationContext.readSnapshot()?.connectedPurposeCatalog, denied })).toEqual(expect.arrayContaining([expect.objectContaining({ structuredOutput: 'supported',
+        modelSelector: expect.objectContaining({ backendTargetKey: 'agent:happier.agent.claude/claude' }) })]));
+    } else expect(result).toMatchObject({ ok: true, result: { defaultBindings: { v: 2, bindingsByServiceId: {
       [`${service.pluginId}/${service.localId}`]: { source: 'connected', selection: 'group', groupId: 'row-group' },
     } } } });
     expect(operationContext.readSnapshot()?.connectedPurposeCatalog).toMatchObject({ status: 'ready', revision: 4 });
     expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+    if (kind === 'summary') {
+      current = false;
+      expect(await executor.execute('agents.models.list', { purpose: 'scm_diff_summary', machineId: 'requester-summary-machine' },
+        { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } })).toMatchObject({ ok: false });
+      expect(operationContext.readSnapshot()).toBeNull();
+      expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+    }
   });
 
   it.each([

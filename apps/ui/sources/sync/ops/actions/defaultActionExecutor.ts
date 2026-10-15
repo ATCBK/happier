@@ -2571,6 +2571,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return await cancelMachineAgentInstallJob({ ...accountContext.accountLifetime.scope, machineId }, jobId);
     },
     agentsModelsList: async (args) => {
+      if (args.purpose === 'scm_diff_summary') {
+        if (!accountContext || !args.machineId) return { items: [], source: 'unavailable' };
+        const { readScmDiffSummaryModelCatalogForMachine } = await import('./scmDiffSummarySettingsCatalog');
+        const catalog = await readScmDiffSummaryModelCatalogForMachine(accountContext, args.machineId, args.signal);
+        return catalog ? { items: [], scmDiffSummaryCatalog: catalog } : { items: [], source: 'unavailable' };
+      }
       if (args.probe) {
         const target = await resolveNativeInventoryProbeTarget(args);
         if (!target || !args.machineId) return { items: [], source: 'unavailable' };

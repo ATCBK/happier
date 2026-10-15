@@ -1,15 +1,16 @@
 import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isBackendTargetDisabledByAccountSettings, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
-import { decodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogMutationServicesV1 } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { decodeScmDiffSummaryModelOverride, encodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogMutationServicesV1 } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { buildScmDiffSummaryModelProfiles } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
 import { readSettings, type StoredCredentials } from '@/persistence';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { readAgentStructuredOutputCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
-import { probeAgentModelsBestEffort } from '@/capabilities/probes/agentModelsProbe';
+import { probeAgentModelsBestEffort } from './cliActionDeps/resolveAgentProbeInventoryDeps';
 import { probeAgentSignInStatus } from '@/capabilities/cliAuth/agentSignIn';
 import { readAgentRoutingIdForContributionIdentity, indexAgentRoutingIdsByContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
 import { refreshActiveAcpCatalog, readActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
-import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createVoiceSettingsOwner, type VoiceSettingsOwner } from '@happier-dev/protocol/voice/settings/voiceSettings';
 import { createExternalVoiceProviderSettingsDescriptor } from '@happier-dev/protocol/voice/settings/externalProviderSettings';
 import { createExternalVoiceProviderSettingsOwner } from '@happier-dev/protocol/voice/settings/providerSettings';
@@ -26,6 +27,10 @@ import type { VoiceAgentCatalogEntryV1 } from '@happier-dev/protocol/voice/setti
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { getAgentCore, getAgentStaticModels, isBundledAgentId } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1, type ProviderStateSharingAgentV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
+import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import { resolveSpawnConnectedServicesDefaultDisposition } from '@/session/services/spawnConnectedServicesDefaults';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 export type CliSettingsCatalogServicesV1 = ScmDiffSummaryCatalogMutationServicesV1<AccountSettings>
     & VoiceSettingsMutationServicesV1<AccountSettings> & Readonly<{
@@ -85,6 +90,9 @@ export function createCliVoiceSettingsBindingContext(): PortableVoiceSettingsBin
 /** Native model evidence comes from the same current Agent catalog and probe as Action inventory. */
 export function createCliSettingsCatalogServices(params: Readonly<{
     credentials?: StoredCredentials;
+    savedSecretOperationContext?: SavedSecretOperationContextV1;
+    serverHttpBaseUrl?: string;
+    authorizeConnectedAccountRequest?: Parameters<typeof readActiveConnectedAccountCatalog>[0]['authorizeRequest'];
     signal?: AbortSignal;
     serverId?: string;
     expectedAccountId?: string;
@@ -93,9 +101,55 @@ export function createCliSettingsCatalogServices(params: Readonly<{
 }>): CliSettingsCatalogServicesV1 {
     let remoteProof: Readonly<{ machineId: string; generation: number }> | null = null;
     let sharingProof: Readonly<{ registry: ReturnType<typeof readCurrentContributionRegistry>; generation: number }> | null = null;
-    return {
+    const operationContext = params.savedSecretOperationContext;
+    const readAccountSnapshot = () => operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    const accountIsCurrent = (lifetime: number) => operationContext ? readAccountSnapshot() !== null
+        : getActiveAccountSettingsSnapshotLifetimeToken() === lifetime;
+    const probeSummaryModels = (input: Parameters<typeof probeAgentModelsBestEffort>[0]) => runWithServerHttpBaseUrl(
+        operationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
+        () => probeAgentModelsBestEffort({ ...input, ...(operationContext ? { savedSecretOperationContext: operationContext } : {}) }));
+    const readSelectedSummaryCatalog = async (settings: AccountSettings, storedValue: string, capturedAcpCatalog?: AcpCatalogSnapshotV1, bypassCache = false) => {
+        const selector = decodeScmDiffSummaryModelOverride(storedValue);
+        if (!selector?.backendTargetKey) return null;
+        let target: ReturnType<typeof readBackendTargetRefV2>;
+        try { target = readBackendTargetRefV2(selector.backendTargetKey); } catch { return null; }
+        if (isBackendTargetDisabledByAccountSettings(settings, target)) return null;
+        const registry = readCurrentContributionRegistry();
+        const parsedKey = selector.backendTargetKey.startsWith('agent:')
+            ? [...registry.agentDefinitionsById.values()].find(entry => entry.identity
+                && listAgentExecutionTargetsV1(entry.identity, target.configuredBackendId ? [target.configuredBackendId] : [])
+                    .some(candidate => buildBackendTargetKeyV2(candidate) === selector.backendTargetKey))
+            : registry.agentDefinitionsById.get(target.backendId);
+        const configured = target.sourceKind === 'configured' || Boolean(target.configuredBackendId);
+        const configuredAgent = configured ? [...registry.agentDefinitionsById.values()].find(entry => isCustomAcpAgentContributionIdentityV1(entry.identity)) : undefined;
+        const agentId = configured ? configuredAgent?.id : parsedKey?.identity
+            ? readAgentRoutingIdForContributionIdentity(indexAgentRoutingIdsByContributionIdentity([...registry.agentDefinitionsById.values()]), parsedKey.identity)
+            : parsedKey?.id;
+        if (!agentId) return null;
+        const acpCatalog = configured ? capturedAcpCatalog ?? (params.credentials
+            ? await refreshActiveAcpCatalog({ credentials: params.credentials, signal: params.signal, operationContext }) : undefined) : undefined;
+        if (configured && acpCatalog?.status !== 'ready') return null;
+        const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+        const probe = await probeSummaryModels({ agentId, cwd: process.cwd(), accountSettings: settings,
+            catalogEntry: registry.catalogEntriesById[agentId], backendTarget: convertBackendTargetRefV2ToV1(target), bypassCache,
+            ...(params.credentials ? { credentials: params.credentials } : {}),
+            ...(acpCatalog ? { acpCatalogSnapshot: acpCatalog } : {}), ...(params.signal ? { signal: params.signal } : {}),
+        });
+        params.signal?.throwIfAborted();
+        if (probe.source === 'unavailable') return null;
+        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
+            catalogModels: parsedKey?.definition.modelConfig?.staticModels ?? getAgentStaticModels(agentId, { catalogOnly: true }),
+            agentFormats: configured ? null : readAgentStructuredOutputCapabilities(parsedKey?.richDefinition?.definition)?.formats });
+        return { profiles, isCurrent: (current: AccountSettings) => !params.signal?.aborted
+            && readCurrentContributionRegistry() === registry
+            && accountIsCurrent(lifetime)
+            && (!acpCatalog || readAccountSnapshot()?.acpCatalog === acpCatalog)
+            && JSON.stringify(current.backendEnabledByTargetKey) === JSON.stringify(settings.backendEnabledByTargetKey) };
+    };
+    const services: CliSettingsCatalogServicesV1 = {
         isCurrent: async () => {
             if (params.signal?.aborted) return false;
+            if (operationContext && !await operationContext.isCurrent()) return false;
             if (sharingProof) {
                 const state = pluginReloadController.getState();
                 if (readCurrentContributionRegistry() !== sharingProof.registry || state.generation !== sharingProof.generation
@@ -177,72 +231,82 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 && JSON.stringify(latest.backendEnabledByTargetKey) === JSON.stringify(settings.backendEnabledByTargetKey),
             };
         },
-        readScmDiffSummaryCatalog: async (settings, storedValue) => {
+        readScmDiffSummaryCatalog: async (settings, storedValue, options) => {
             params.signal?.throwIfAborted();
+            if (options?.includeConfigured) {
+                const automatic = await services.readScmDiffSummaryCatalog!(settings, '');
+                if (!automatic) return null;
+                const registry = readCurrentContributionRegistry();
+                const configuredAgent = [...registry.agentDefinitionsById.values()].find(entry => isCustomAcpAgentContributionIdentityV1(entry.identity));
+                const acpCatalog = configuredAgent && params.credentials
+                    ? await refreshActiveAcpCatalog({ credentials: params.credentials, signal: params.signal, operationContext }) : undefined;
+                const configuredTargets = acpCatalog?.status === 'ready'
+                    ? acpCatalog.record.definitions.flatMap(definition => listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, [definition.id]))
+                        .filter(target => !isBackendTargetDisabledByAccountSettings(settings, target)).map(buildBackendTargetKeyV2) : [];
+                const discoveryTargetKeys = [...new Set([...(automatic.discoveryTargetKeys ?? []), ...configuredTargets])];
+                const requestedTargets = new Set(configuredTargets);
+                const selected = decodeScmDiffSummaryModelOverride(storedValue);
+                if (selected?.backendTargetKey && discoveryTargetKeys.includes(selected.backendTargetKey)) requestedTargets.add(selected.backendTargetKey);
+                if (options.discoveryTargetKey && discoveryTargetKeys.includes(options.discoveryTargetKey)) requestedTargets.add(options.discoveryTargetKey);
+                const selectedCatalogs = await Promise.all([...requestedTargets].map(backendTargetKey => readSelectedSummaryCatalog(settings,
+                    encodeScmDiffSummaryModelOverride({ backendTargetKey, modelId: selected?.backendTargetKey === backendTargetKey ? selected.modelId : 'default' }),
+                    acpCatalog, backendTargetKey === options.discoveryTargetKey)));
+                const profiles = [...new Map([...automatic.profiles, ...selectedCatalogs.flatMap(catalog => catalog?.profiles ?? [])]
+                    .map(profile => [profile.catalogId, profile])).values()];
+                return { profiles, automaticProfiles: automatic.profiles, discoveryTargetKeys,
+                    isCurrent: current => automatic.isCurrent(current) && readCurrentContributionRegistry() === registry
+                        && (!acpCatalog || readAccountSnapshot()?.acpCatalog === acpCatalog)
+                        && selectedCatalogs.every(catalog => !catalog || catalog.isCurrent(current)) };
+            }
             if (!storedValue) {
                 const registry = readCurrentContributionRegistry();
                 const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
                 const agents = [...registry.agentDefinitionsById.values()];
+                const discoveryTargetKeys = new Set<string>();
                 const routingIds = indexAgentRoutingIdsByContributionIdentity(agents);
+                const purposeCatalog = params.credentials ? await readActiveConnectedAccountCatalog({
+                    credentials: params.credentials, key: 'purposes', signal: params.signal,
+                    operationContext, authorizeRequest: params.authorizeConnectedAccountRequest,
+                }) : null;
                 const profiles = (await Promise.all(agents.map(async entry => {
                     const targets = entry.identity ? listAgentExecutionTargetsV1(entry.identity) : [];
-                    const candidates = targets.flatMap(executionTarget => {
+                    const staticModels = entry.definition.modelConfig?.staticModels ?? getAgentStaticModels(entry.id, { catalogOnly: true });
+                    if (targets.length === 0) return [];
+                    if (targets.every(target => isBackendTargetDisabledByAccountSettings(settings, target))) return [];
+                    const defaultAuth = purposeCatalog ? resolveSpawnConnectedServicesDefaultDisposition({
+                        accountSettings: settings, agentId: entry.id, purposeCatalog,
+                    }) : null;
+                    if (defaultAuth?.kind === 'unavailable') return [];
+                    const connected = defaultAuth?.kind === 'connected';
+                    // Run admission consumes this same default-auth owner. A
+                    // signed-out native CLI does not withdraw a connected route.
+                    const signIn = connected ? null : await probeAgentSignInStatus(entry.id);
+                    params.signal?.throwIfAborted();
+                    if (!connected && signIn?.status !== 'signedIn') return [];
+                    return (await Promise.all(targets.map(async executionTarget => {
                         const agentId = readAgentRoutingIdForContributionIdentity(routingIds, executionTarget.identity);
                         if (!agentId) return [];
                         const target = readBackendTargetRefV2({ kind: 'backend', backendId: agentId, sourceKind: 'built_in' });
                         if (isBackendTargetDisabledByAccountSettings(settings, target)) return [];
+                        discoveryTargetKeys.add(buildBackendTargetKeyV2(target));
+                        const models = staticModels.length ? staticModels : (await probeSummaryModels({
+                            agentId, cwd: process.cwd(), accountSettings: settings,
+                            catalogEntry: registry.catalogEntriesById[agentId], backendTarget: convertBackendTargetRefV2ToV1(target),
+                            ...(params.credentials ? { credentials: params.credentials } : {}), signal: params.signal,
+                        })).availableModels;
                         return buildScmDiffSummaryModelProfiles({ backendTarget: target,
-                            models: entry.definition.modelConfig?.staticModels ?? getAgentStaticModels(entry.id, { catalogOnly: true }),
+                            models,
                             agentFormats: readAgentStructuredOutputCapabilities(entry.richDefinition?.definition)?.formats });
-                    });
-                    // Static model/cost facts do not prove that a native route can execute.
-                    // Explicit routes and applied-parent inheritance stay with Run admission.
-                    if (candidates.length === 0) return [];
-                    const signIn = await probeAgentSignInStatus(entry.id);
-                    params.signal?.throwIfAborted();
-                    return signIn.status === 'signedIn' ? candidates : [];
+                    }))).flat();
                 }))).flat();
-                return { profiles, isCurrent: current => !params.signal?.aborted
+                return { profiles, discoveryTargetKeys: [...discoveryTargetKeys], isCurrent: current => !params.signal?.aborted
                     && readCurrentContributionRegistry() === registry
-                    && getActiveAccountSettingsSnapshotLifetimeToken() === lifetime
+                    && accountIsCurrent(lifetime)
+                    && (purposeCatalog?.status !== 'ready' || readAccountSnapshot()?.connectedPurposeCatalog === purposeCatalog)
                     && JSON.stringify(current.backendEnabledByTargetKey) === JSON.stringify(settings.backendEnabledByTargetKey) };
             }
-            const selector = decodeScmDiffSummaryModelOverride(storedValue);
-            if (!selector?.backendTargetKey) return null;
-            let target: ReturnType<typeof readBackendTargetRefV2>;
-            try { target = readBackendTargetRefV2(selector.backendTargetKey); } catch { return null; }
-            if (isBackendTargetDisabledByAccountSettings(settings, target)) return null;
-            const registry = readCurrentContributionRegistry();
-            const parsedKey = selector.backendTargetKey.startsWith('agent:')
-                ? [...registry.agentDefinitionsById.values()].find(entry => entry.identity
-                    && listAgentExecutionTargetsV1(entry.identity, target.configuredBackendId ? [target.configuredBackendId] : [])
-                        .some(candidate => buildBackendTargetKeyV2(candidate) === selector.backendTargetKey))
-                : registry.agentDefinitionsById.get(target.backendId);
-            const configured = target.sourceKind === 'configured' || Boolean(target.configuredBackendId);
-            const configuredAgent = configured ? [...registry.agentDefinitionsById.values()].find(entry => isCustomAcpAgentContributionIdentityV1(entry.identity)) : undefined;
-            const agentId = configured ? configuredAgent?.id : parsedKey?.identity
-                ? readAgentRoutingIdForContributionIdentity(indexAgentRoutingIdsByContributionIdentity([...registry.agentDefinitionsById.values()]), parsedKey.identity)
-                : parsedKey?.id;
-            if (!agentId) return null;
-            const acpCatalog = configured && params.credentials
-                ? await refreshActiveAcpCatalog({ credentials: params.credentials, signal: params.signal }) : undefined;
-            if (configured && acpCatalog?.status !== 'ready') return null;
-            const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
-            const probe = await probeAgentModelsBestEffort({ agentId, cwd: process.cwd(), accountSettings: settings,
-                catalogEntry: registry.catalogEntriesById[agentId], backendTarget: convertBackendTargetRefV2ToV1(target),
-                ...(params.credentials ? { credentials: params.credentials } : {}),
-                ...(acpCatalog ? { acpCatalogSnapshot: acpCatalog } : {}), ...(params.signal ? { signal: params.signal } : {}),
-            });
-            params.signal?.throwIfAborted();
-            if (probe.source === 'unavailable') return null;
-            const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
-                catalogModels: parsedKey?.definition.modelConfig?.staticModels ?? getAgentStaticModels(agentId, { catalogOnly: true }),
-                agentFormats: configured ? null : readAgentStructuredOutputCapabilities(parsedKey?.richDefinition?.definition)?.formats });
-            return { profiles, isCurrent: current => !params.signal?.aborted
-                && readCurrentContributionRegistry() === registry
-                && getActiveAccountSettingsSnapshotLifetimeToken() === lifetime
-                && (!acpCatalog || readActiveAcpCatalog() === acpCatalog)
-                && JSON.stringify(current.backendEnabledByTargetKey) === JSON.stringify(settings.backendEnabledByTargetKey) };
+            return readSelectedSummaryCatalog(settings, storedValue);
         },
     };
+    return services;
 }

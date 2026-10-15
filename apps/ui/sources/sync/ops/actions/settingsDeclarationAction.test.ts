@@ -80,6 +80,9 @@ import type { ServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeatu
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { captureLazyActionAccountContext } from './actionAccountContext';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { readAcpCatalogInContext } from '@/sync/api/account/apiAcpCatalog';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { darkTheme } from '@/theme';
@@ -1050,8 +1053,25 @@ function readSummaryCatalogAccount() {
             const network = await installSessionOpsNetworkBoundary();
             let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
             onTestFinished(async () => { account?.dispose(); await network.dispose(); summaryCatalogAccount = null; });
-            const home = await network.addHome('https://settings-summary.example.test', 'settings-summary-account');
+            const serverUrl = 'https://settings-summary.example.test';
+            const accountId = 'settings-summary-account';
+            const token = `test.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 1,
+                provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.test`;
+            const home = await network.addHome(serverUrl, accountId, { credentials: { token } });
+            await setServerProfileIdentityForUrl(serverUrl, 'srv_settings_summary');
+            const machineCatalog = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId: 'srv_settings_summary',
+                accountId, machineId: 'settings-summary-machine', actionId: 'agents.models.list', tokenEpoch: 1, execute(input) {
+                    expect(input).toMatchObject({ purpose: 'scm_diff_summary', machineId: 'settings-summary-machine' });
+                    const profiles = getResolvedBackendCatalogEntries({ enabledAgentIds: getEnabledAgentIds(settingsDefaults),
+                        backendEnabledByTargetKey: settingsDefaults.backendEnabledByTargetKey }).flatMap(entry => buildScmDiffSummaryModelProfiles({
+                        backendTarget: readBackendTargetRefV2(entry.backendTarget), models: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
+                        agentFormats: getAgentCore(entry.agentId)?.structuredOutput?.formats }));
+                    return { items: [], scmDiffSummaryCatalog: { profiles, automaticProfiles: profiles,
+                        discoveryTargetKeys: profiles.flatMap(profile => profile.modelSelector?.backendTargetKey ?? []) } };
+                } });
             network.setHttpResponder(async (url, init) => {
+                const external = await machineCatalog.handle(new URL(String(url)), init);
+                if (external) return external;
                 expect(init?.method ?? 'GET').toBe('GET');
                 const path = new URL(String(url)).pathname;
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
@@ -1073,7 +1093,13 @@ async function offeredSummaryProfiles() {
     const before = storage.getState();
     onTestFinished(() => storage.setState(before, true));
     storage.setState({ settings: settingsDefaults });
-    const { catalog } = await readAcpCatalogInContext(await readSummaryCatalogAccount());
+    const account = await readSummaryCatalogAccount();
+    const machine = createMachineFixture({ id: 'settings-summary-machine', activeAt: Date.now() });
+    storage.setState({ settings: { ...settingsDefaults, machineAdministrationTargetsLocalV1: {
+        [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.sourceControl]: { serverIdentityId: 'srv_settings_summary', machineId: machine.id } } },
+        profileScope: account.accountLifetime.scope, machines: { [machine.id]: machine },
+        machineListByServerId: { [account.serverId]: [machine] }, machineListStatusByServerId: { [account.serverId]: 'idle' } });
+    const { catalog } = await readAcpCatalogInContext(account);
     return getResolvedBackendCatalogEntries({
         enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: settingsDefaults.backendEnabledByTargetKey }),
         backendEnabledByTargetKey: settingsDefaults.backendEnabledByTargetKey,

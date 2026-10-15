@@ -1393,6 +1393,20 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect((res as any).result.items).toEqual([{ id: 'plan', label: 'Plan' }]);
   });
 
+  it('admits the exact-machine executable summary catalog through the existing model inventory Action', async () => {
+    const deps = createDeps();
+    deps.agentsModelsList = async args => ({ items: [], scmDiffSummaryCatalog: { profiles: [], automaticProfiles: [], discoveryTargetKeys: [] }, purpose: args.purpose });
+    const executor = createActionExecutor(deps);
+    expect(await executor.execute('agents.models.list', { machineId: 'm1', purpose: 'scm_diff_summary' }))
+      .toMatchObject({ ok: true, result: { scmDiffSummaryCatalog: { profiles: [] }, purpose: 'scm_diff_summary' } });
+    expect(getActionSpec('agents.models.list').inputSchema.safeParse({ purpose: 'scm_diff_summary' }).success).toBe(false);
+    const discovery = { purpose: 'scm_diff_summary', machineId: 'm1', discoveryTargetKey: 'agent:happier.agent.codex/codex',
+      modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'selected-model' } };
+    deps.agentsModelsList = async args => ({ items: [], request: args });
+    expect(await executor.execute('agents.models.list', discovery)).toMatchObject({ ok: true, result: { request: discovery } });
+    expect(getActionSpec('agents.models.list').inputSchema.safeParse({ machineId: 'm1', agentId: 'codex', discoveryTargetKey: discovery.discoveryTargetKey }).success).toBe(false);
+  });
+
   const hostStampedServerInventoryCases = [
     ['agents.models.list', 'agentsModelsList', {
       agentId: 'claude',

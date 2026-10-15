@@ -1592,6 +1592,9 @@ export type ActionExecutorDeps = Readonly<{
   machineAgentInstallRead?: (args: DaemonAgentInstallReadRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallReadResponse>;
   machineAgentInstallCancel?: (args: DaemonAgentInstallCancelRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallCancelResponse>;
   agentsModelsList: (args: Readonly<{
+    purpose?: 'scm_diff_summary';
+    discoveryTargetKey?: string;
+    modelSelector?: import('../../scm/diffSummary.js').ScmDiffSummaryModelSelector;
     agentId?: string;
     machineId?: string;
     serverId?: string;
@@ -1601,7 +1604,7 @@ export type ActionExecutorDeps = Readonly<{
     /** Only the admitted Session-spawn model field requests the Provider read projection. */
     includeProviderProjection?: true;
     signal?: AbortSignal;
-  }>) => Promise<unknown>;
+  }>, context?: ActionExecutorContext) => Promise<unknown>;
   agentsConfigOptionsList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; modelId?: string; probe?: AgentInventoryProbeInput }>) => Promise<unknown>;
   agentsSessionModesList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; probe?: AgentInventoryProbeInput }>) => Promise<unknown>;
   spawnProfilesList?: (args: Readonly<{ agentId?: string; backendTargetKey?: string; limit?: number }>) => Promise<unknown>;

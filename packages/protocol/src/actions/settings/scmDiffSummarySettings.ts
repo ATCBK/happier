@@ -1,17 +1,37 @@
 import { ScmDiffSummaryModelSelectorSchema, ScmDiffSummaryOutputLanguageSchema, type ScmDiffSummaryModelSelector } from '../../scm/diffSummary.js';
-import { buildBackendTargetKeyV2, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
+import { BackendTargetKeyV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
 import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 import type { CapabilitySupport } from '../../providers/capabilities/v1.js';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettings } from '../../account/settings/accountSettings.js';
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { z } from 'zod/mini';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+
+/** Read-only observation of the executing machine's admitted summary candidates. */
+const ScmDiffSummaryCatalogProfileSchema = lazyZodSchema(() => z.strictObject({
+        catalogId: z.string(), title: z.string(),
+        modelSelector: z.optional(ScmDiffSummaryModelSelectorSchema),
+        structuredOutput: z.optional(z.enum(['supported', 'unsupported', 'unknown'])),
+        costTier: z.optional(z.enum(['low', 'standard', 'premium'])),
+}));
+export const ScmDiffSummaryModelCatalogObservationV1Schema = lazyZodSchema(() => z.strictObject({
+    profiles: z.array(ScmDiffSummaryCatalogProfileSchema),
+    automaticProfiles: z.array(ScmDiffSummaryCatalogProfileSchema),
+    discoveryTargetKeys: z.array(BackendTargetKeyV2Schema),
+}));
 
 export type ScmDiffSummarySettingsV1 = Pick<AccountSettings, 'scm.diffSummary.prefetch' | 'scm.diffSummary.modelProfileOverride'>
     & Partial<Pick<AccountSettings, 'scm.diffSummary.outputLanguage' | 'scm.diffSummary.investigateSurroundingFiles'>>;
 export type ScmDiffSummaryCatalogMutationServicesV1<T extends ScmDiffSummarySettingsV1 = ScmDiffSummarySettingsV1> = Readonly<{
-    readScmDiffSummaryCatalog?: (settings: T, storedValue: string) => Promise<Readonly<{
+    readScmDiffSummaryCatalog?: (settings: T, storedValue: string, options?: Readonly<{
+        includeConfigured: boolean;
+        discoveryTargetKey?: string;
+    }>) => Promise<Readonly<{
         profiles: readonly ScmDiffSummaryCatalogProfile[];
+        automaticProfiles?: readonly ScmDiffSummaryCatalogProfile[];
+        discoveryTargetKeys?: readonly string[];
         isCurrent: (settings: T) => boolean;
     }> | null>;
 }>;

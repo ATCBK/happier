@@ -1632,6 +1632,7 @@ export function createCliActionDeps(params: Readonly<{
   };
 
   const inventoryDeps = createCliActionInventoryDeps({ ...params, callMachineAction,
+    localMachineId: params.machineActionDirectTargetTransport?.machineId,
     authorizeConnectedAccountRequest: (context, request) => resolveServerRequestHeaders(context,
       context?.externalActionExecutionAuthorization?.binding.actionId ?? 'sessions.spawn.connected_services.list', request),
     readCurrentSessionMetadata: () => readCurrentSessionMetadata(),

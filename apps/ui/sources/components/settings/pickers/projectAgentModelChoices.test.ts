@@ -3,6 +3,8 @@ import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/cata
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { projectAgentModelChoices, type AgentModelChoiceSource } from './projectAgentModelChoices';
+import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 describe('shared background Agent/model choices', () => {
     const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['codex'], acpCatalogSnapshot: {
@@ -15,9 +17,30 @@ describe('shared background Agent/model choices', () => {
     const sources: readonly AgentModelChoiceSource[] = entries.map(entry => ({ entry, models, catalogModels: models, runnerCapable: true, discoverable: true }));
     const configuredKey = 'agent:happier.agent.custom-acp/custom-acp:definition:codex';
 
+    it('offers only the executing catalog candidates and never defaults a signed-out static route', () => {
+        const connectedProfiles = buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(configuredKey), models });
+        const connected = projectAgentModelChoices({ purpose: 'walkthrough', sources, executableProfiles: connectedProfiles, automaticProfiles: [], defaultModelTitle: 'Default' });
+        expect(connected.catalogProfiles).toEqual(connectedProfiles);
+        expect(connected.defaultProfile).toBeNull();
+        expect([...connected.selections.values()].every(selection => selection.modelSelection.agentTargetKey === configuredKey)).toBe(true);
+        const native = sources.find(source => source.entry.kind === 'builtInAgent');
+        if (!native) throw new Error('Expected native grouping metadata');
+        const orderedProfiles = [...connectedProfiles, ...buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(native.entry.backendTarget), models })];
+        const ordered = projectAgentModelChoices({ purpose: 'walkthrough', sources, executableProfiles: orderedProfiles,
+            automaticProfiles: orderedProfiles.filter(profile => profile.modelSelector?.backendTargetKey !== configuredKey), defaultModelTitle: 'Default' });
+        expect(ordered.defaultProfile?.modelSelector?.backendTargetKey).toBe(buildBackendTargetKeyV2(native.entry.backendTarget));
+        expect(ordered.catalogProfiles).toEqual(orderedProfiles);
+        for (const executableProfiles of [[], undefined]) {
+            const unavailable = projectAgentModelChoices({ purpose: 'walkthrough', sources, executableProfiles, defaultModelTitle: 'Default' });
+            expect(unavailable.defaultProfile).toBeNull();
+            expect(unavailable.selections.size).toBe(0);
+        }
+    });
+
     it('shares grouping, cost/default facts and exact configured identity while filtering by purpose', () => {
         const selected = ProviderBoundModelRefSchema.parse({ agentTargetKey: configuredKey, providerConnectionId: null, modelId: 'custom/model' });
-        const walkthrough = projectAgentModelChoices({ purpose: 'walkthrough', sources, selected, defaultModelTitle: 'Default' });
+        const executableProfiles = sources.flatMap(source => buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(source.entry.backendTarget), models }));
+        const walkthrough = projectAgentModelChoices({ purpose: 'walkthrough', sources, executableProfiles, automaticProfiles: executableProfiles, selected, defaultModelTitle: 'Default' });
         expect(walkthrough.groups).toHaveLength(2);
         expect(walkthrough.groups.every(group => group.offered.length === 1 && group.hiddenModelCount === 1)).toBe(true);
         expect(walkthrough.defaultProfile).toMatchObject({ costTier: 'low', modelSelector: { modelId: 'structured' } });

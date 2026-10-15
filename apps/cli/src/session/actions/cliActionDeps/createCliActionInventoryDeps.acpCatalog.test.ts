@@ -18,6 +18,9 @@ import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { buildAgentBackendInventoryItems } from '../inventory/buildAgentBackendInventoryItems';
 import { buildReviewEngineInventoryItems } from '../inventory/buildReviewEngineInventoryItems';
+import { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 
 const record = { v: 1, definitions: [{ id: 'row-review', name: 'row-review', title: 'Row Review', launch: { kind: 'command' as const, command: 'review-agent', args: ['acp'] },
    env: {}, capabilities: { supportsLoadSession: true, supportsModes: 'yes', supportsModels: 'yes',
@@ -125,7 +128,7 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
 }
 
 describe('ACP Action inventory row authority', () => {
-  it.each(['models', 'session_modes'] as const)('returns native %s evidence only for an explicit configured probe in its requested workspace', async kind => {
+  it.each(['models', 'session_modes', 'summary'] as const)('returns native %s evidence only for an explicit configured probe in its requested workspace', async kind => {
     await withTempDir('happier-acp-action-probe-', async directory => {
       // Genuine executable boundary: the real ACP transport negotiates this
       // agent's session state; catalog admission, probing and Actions are real.
@@ -147,6 +150,7 @@ describe('ACP Action inventory row authority', () => {
                 models: { currentModelId: 'agent-model', availableModels: [{
                   id: 'agent-model', name: 'Agent model', description: process.cwd(),
                   contextWindowTokens: 32000,
+                  capabilities: { structuredOutput: 'supported' },
                   modelOptions: [{ id: 'reasoning', name: 'Reasoning', type: 'select', currentValue: 'private-current-value',
                     options: [{ value: 'private-current-value', name: 'Current reasoning' }] }],
                 }] },
@@ -164,8 +168,60 @@ describe('ACP Action inventory row authority', () => {
         launch: { kind: 'command', command: process.execPath, args: [script] },
       }] } satisfies AcpCatalogRecordV1;
       const { credentials, operationContext, requests, incumbent } = await createInventory('ready', { initialRecord });
+      if (kind === 'summary') {
+        const snapshot = operationContext.readSnapshot();
+        if (!snapshot) throw new Error('Requester snapshot retired');
+        await operationContext.replaceAccountSettings({ ...snapshot, settingsVersion: snapshot.settingsVersion + 1, settings: accountSettingsParse({
+          backendEnabledByTargetKey: Object.fromEntries([...readCurrentContributionRegistry().agentDefinitionsById.values()]
+            .flatMap(entry => entry.identity ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), false]) : [])),
+        }) });
+      }
       const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
-        savedSecretOperationContext: operationContext, sessionId: 'requester-session', mode: 'plain', ctx: null }));
+        savedSecretOperationContext: operationContext, sessionId: 'requester-session', mode: 'plain', ctx: null,
+        machineActionDirectTargetTransport: { machineId: 'configured-summary-machine', invoke: async () => { throw new Error('Unexpected recursion'); } } }));
+      if (kind === 'summary') {
+        const read = async (discover = false) => {
+          const result = await executor.execute('agents.models.list', { purpose: 'scm_diff_summary', machineId: 'configured-summary-machine',
+            ...(discover ? { discoveryTargetKey: targetKey } : {}) }, { surface: 'cli', authority: 'account_automation' });
+          expect(result).toMatchObject({ ok: true });
+          if (!result.ok || !result.result || typeof result.result !== 'object' || !('scmDiffSummaryCatalog' in result.result)) throw new Error('Missing catalog');
+          return ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog);
+        };
+        const catalog = await read();
+        expect(catalog.profiles).toEqual(expect.arrayContaining([expect.objectContaining({ structuredOutput: 'unknown',
+          modelSelector: { backendTargetKey: targetKey, modelId: 'agent-model' } })]));
+        expect(catalog.automaticProfiles).toEqual([]);
+        expect(catalog.discoveryTargetKeys).toContain(targetKey);
+        // Runtime import follows the cross-App parity harness convention: the
+        // pure picker consumer runs here without adding UI aliases to CLI compilation.
+        const picker: { projectAgentModelChoices(input: Readonly<{ purpose: 'walkthrough'; sources: readonly unknown[];
+          executableProfiles: typeof catalog.profiles; automaticProfiles: typeof catalog.automaticProfiles;
+          discoveryTargetKeys: readonly string[]; defaultModelTitle: string }>): Readonly<{
+            selections: Map<string, unknown>; defaultProfile: unknown; groups: readonly { discoverable: boolean }[];
+          }> } = await import(new URL('../../../../../ui/sources/components/settings/pickers/projectAgentModelChoices.ts', import.meta.url).href);
+        const project = (profiles: typeof catalog.profiles) => picker.projectAgentModelChoices({ purpose: 'walkthrough',
+          sources: [{ entry: { kind: 'configuredBackend', backendTarget: targetKey, agentId: 'custom-acp', title: 'Row Review' },
+            models: [], catalogModels: [], runnerCapable: true, discoverable: true }],
+          executableProfiles: profiles, automaticProfiles: catalog.automaticProfiles, discoveryTargetKeys: catalog.discoveryTargetKeys, defaultModelTitle: 'Default' });
+        // ACP does not prove JSON support for this model. The real consumer
+        // keeps discovery reachable without inventing an executable model.
+        expect(project(catalog.profiles).selections.size).toBe(0);
+        expect(project(catalog.profiles).defaultProfile).toBeNull();
+        expect(project([]).groups).toMatchObject([{ discoverable: true }]);
+        expect(await read(true)).toMatchObject({ profiles: catalog.profiles });
+        const current = operationContext.readSnapshot();
+        if (!current) throw new Error('Requester retired before the disabled-target check');
+        await operationContext.replaceAccountSettings({ ...current, settingsVersion: current.settingsVersion + 1, settings: accountSettingsParse({
+          ...current.settings, backendEnabledByTargetKey: { ...current.settings.backendEnabledByTargetKey, [targetKey]: false },
+        }) });
+        const disabled = await read(true);
+        expect(disabled.profiles).toEqual([]);
+        expect(disabled.discoveryTargetKeys).not.toContain(targetKey);
+        expect(requests).toContain(`GET ${ACP_CATALOG_ROWS_ROUTE_V1}`);
+        expect(requests.some(request => request.startsWith('POST'))).toBe(false);
+        expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+        return;
+      }
       const actionId = kind === 'models' ? 'agents.models.list' : 'agents.session_modes.list';
       const id = kind === 'models' ? 'agent-model' : 'agent-mode';
       const label = kind === 'models' ? 'Agent model' : 'Agent mode';

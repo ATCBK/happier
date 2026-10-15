@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import { BugReportSubmitInputSchema, BugReportSubmitOutputSchema, projectBugReportSubmitInput } from './specs/bugReport.js';
 import { ModelFavoriteMutationV1Schema } from '../providers/modelFavoritesV1.js';
 import { PLUGIN_EXECUTION_ORIGIN_ACTION_SPECS } from './specs/pluginExecutionOrigin.js';
@@ -433,6 +434,7 @@ import { BackendTargetKeySchema } from '../backends/targets/backendTargetRef.js'
 import { BackendTargetKeyV2Schema, BackendTargetRefV2Schema } from '../backends/targets/backendTargetRefV2.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../connect/connectedServiceBindings.js';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema } from '../capabilities/agentProbeObservation.js';
+import { ScmDiffSummaryModelCatalogObservationV1Schema } from './settings/scmDiffSummarySettings.js';
 import { normalizeConnectedServiceSelectionInput } from '../connect/normalizeConnectedServiceSelectionInput.js';
 import { ExecutionRunListRequestSchema } from '../execution/runs/listRequest.js';
 import { ExecutionRunCancelTurnRequestSchema, ExecutionRunCancelTurnResponseSchema } from '../execution/runs/cancelTurn.js';
@@ -2276,6 +2278,9 @@ function inventoryOutputWithProbeObservation(observationSchema: z.ZodMiniType) {
 }
 
 const AgentsModelsListInputSchema = lazyZodSchema(() => z.strictObject({
+  purpose: z.optional(z.literal('scm_diff_summary')),
+  discoveryTargetKey: z.optional(BackendTargetKeyV2Schema),
+  modelSelector: z.optional(ScmDiffSummaryModelSelectorSchema),
   agentId: z.optional(z.string().check(z.minLength(1))),
   backendTargetKey: z.optional(z.union([BackendTargetKeySchema, BackendTargetKeyV2Schema])),
   machineId: z.optional(z.string().check(z.minLength(1))),
@@ -2283,6 +2288,13 @@ const AgentsModelsListInputSchema = lazyZodSchema(() => z.strictObject({
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(200))),
   probe: z.optional(AgentInventoryProbeInputSchema),
 }).check(z.superRefine((value, ctx) => {
+  if (value.purpose === 'scm_diff_summary') {
+    if (!value.machineId || value.agentId || value.backendTargetKey || value.probe || value.limit !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'Summary catalog requires only an exact machine target', path: ['machineId'] });
+    }
+    return;
+  }
+  if (value.discoveryTargetKey || value.modelSelector) ctx.addIssue({ code: 'custom', message: 'Summary catalog purpose is required', path: ['purpose'] });
   if (!value.agentId && !value.backendTargetKey) {
     ctx.addIssue({
       code: "custom",
@@ -8023,7 +8035,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       ],
     },
     inputSchema: AgentsModelsListInputSchema,
-    outputSchema: lazyZodSchema(() => inventoryOutputWithProbeObservation(AgentModelsProbeObservationSchema)),
+    outputSchema: lazyZodSchema(() => inventoryOutputWithProbeObservation(AgentModelsProbeObservationSchema).check(z.superRefine((value, ctx) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, 'scmDiffSummaryCatalog')) return;
+      const catalog = ScmDiffSummaryModelCatalogObservationV1Schema.safeParse(Reflect.get(value, 'scmDiffSummaryCatalog'));
+      if (!catalog.success) for (const issue of catalog.error.issues) ctx.addIssue({ ...issue, path: ['scmDiffSummaryCatalog', ...issue.path] });
+    }))),
   },
   {
     id: 'agents.config_options.list', approval: {result: 'required'},

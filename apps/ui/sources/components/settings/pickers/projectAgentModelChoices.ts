@@ -1,9 +1,9 @@
 import { buildBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderModelDescriptorV1 } from '@happier-dev/protocol/models/descriptor';
-import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
+import { buildScmDiffSummaryModelProfiles } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
 import { selectAgentModelProfilesForPurpose, type AgentModelChoicePurpose } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
-import { resolveScmDiffSummaryDefaultModelProfile, type ScmDiffSummaryCatalogProfile } from '@/settings/scmDiffSummary/settings';
+import { resolveScmDiffSummaryDefaultModelProfile, type ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 
 /** Purpose changes capability admission, never Agent identity. */
@@ -31,6 +31,9 @@ export function readAgentModelChoiceTarget(entry: ResolvedBackendCatalogEntry): 
 export function projectAgentModelChoices(params: Readonly<{
     purpose: AgentModelChoicePurpose;
     sources: readonly AgentModelChoiceSource[];
+    executableProfiles?: readonly ScmDiffSummaryCatalogProfile[];
+    automaticProfiles?: readonly ScmDiffSummaryCatalogProfile[];
+    discoveryTargetKeys?: readonly string[];
     selected?: ProviderBoundModelRef | null;
     defaultBackendTarget?: BackendTargetRefV2 | null;
     defaultModelTitle: string;
@@ -38,7 +41,7 @@ export function projectAgentModelChoices(params: Readonly<{
     const selections = new Map<string, AgentModelSelection>();
     const groups = params.sources.flatMap(source => {
         const target = readAgentModelChoiceTarget(source.entry);
-        if (!target || !source.runnerCapable) return [];
+        if (!target || params.purpose === 'runner' && !source.runnerCapable) return [];
         const targetKey = buildBackendTargetKeyV2(target);
         const models = [...source.models];
         if (params.purpose === 'runner') {
@@ -46,7 +49,11 @@ export function projectAgentModelChoices(params: Readonly<{
             if (params.selected?.agentTargetKey === targetKey && !models.some(model => model.id === params.selected?.modelId))
                 models.push({ id: params.selected.modelId, name: params.selected.modelId });
         }
-        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models, catalogModels: source.catalogModels, agentFormats: source.agentFormats });
+        const profiles = params.purpose === 'walkthrough'
+            ? (params.executableProfiles ?? []).filter(profile => profile.modelSelector?.backendTargetKey === targetKey)
+            : buildScmDiffSummaryModelProfiles({ backendTarget: target, models, catalogModels: source.catalogModels, agentFormats: source.agentFormats });
+        const discoverable = params.purpose === 'walkthrough' ? params.discoveryTargetKeys?.includes(targetKey) === true : source.discoverable;
+        if (params.purpose === 'walkthrough' && profiles.length === 0 && !discoverable) return [];
         const offered = selectAgentModelProfilesForPurpose(profiles, params.purpose);
         for (const profile of offered) {
             const modelSelector = profile.modelSelector;
@@ -55,12 +62,12 @@ export function projectAgentModelChoices(params: Readonly<{
             selections.set(profile.catalogId, { backendTarget: target, modelSelection, modelSelector });
         }
         return [{ entry: source.entry, target, targetKey, profiles, offered,
-            hiddenModelCount: profiles.length - offered.length, discoverable: source.discoverable,
+            hiddenModelCount: profiles.length - offered.length, discoverable,
             customModelIdAllowed: params.purpose === 'runner' }];
     });
-    const catalogProfiles = groups.flatMap(group => group.profiles);
+    const catalogProfiles = params.purpose === 'walkthrough' ? params.executableProfiles ?? [] : groups.flatMap(group => group.profiles);
     const defaultProfile = params.purpose === 'walkthrough'
-        ? resolveScmDiffSummaryDefaultModelProfile(catalogProfiles, params.defaultBackendTarget)
+        ? resolveScmDiffSummaryDefaultModelProfile(params.automaticProfiles ?? [], params.defaultBackendTarget)
         : groups.find(group => group.targetKey === (params.selected?.agentTargetKey
             ?? (params.defaultBackendTarget ? buildBackendTargetKeyV2(params.defaultBackendTarget) : null)))?.offered.find(profile => profile.modelSelector?.modelId === 'default') ?? null;
     return { groups, selections, catalogProfiles, defaultProfile };

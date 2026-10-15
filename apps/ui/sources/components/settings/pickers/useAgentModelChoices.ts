@@ -14,6 +14,12 @@ import { decodeScmDiffSummaryModelOverride, encodeScmDiffSummaryModelOverride } 
 import { t } from '@/text';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { readScmDiffSummaryModelCatalogForMachine } from '@/sync/ops/actions/scmDiffSummarySettingsCatalog';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import type { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import { projectAgentModelChoices, readAgentModelChoiceTarget as targetFor, type AgentModelChoicePurpose } from './projectAgentModelChoices';
 export type { AgentModelSelection } from './projectAgentModelChoices';
@@ -44,6 +50,35 @@ export function useAgentModelChoices(params: Readonly<{
     }), [enabledAgentIds, acpCatalog, backendEnabledByTargetKey, daemon.inputs]);
     const selected = decodeScmDiffSummaryModelOverride(params.value);
     const purpose = params.purpose ?? 'walkthrough';
+    const [summaryCatalog, setSummaryCatalog] = React.useState<Readonly<{
+        lifetime: ServerAccountScopeLifetime;
+        machineId: string; serverId: string; catalog: ReturnType<typeof ScmDiffSummaryModelCatalogObservationV1Schema.parse>;
+    }> | null>(null);
+    const [catalogRefresh, setCatalogRefresh] = React.useState(0);
+    const summaryServerId = params.serverId || getActiveServerSnapshot().serverId;
+    const catalogBindings = useServerCredentialAccountScopeBindings([summaryServerId]);
+    const catalogLifetime = catalogBindings.values().next().value ?? null;
+    React.useEffect(() => {
+        if (purpose !== 'walkthrough' || !observing || !params.machineId || !catalogLifetime) return;
+        const machineId = params.machineId;
+        const abort = new AbortController();
+        let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
+        void (async () => {
+            try {
+                account = await captureLazyActionAccountContext(summaryServerId, abort.signal);
+                const catalog = await readScmDiffSummaryModelCatalogForMachine(account, machineId, abort.signal,
+                    { discoveryTargetKey, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
+                if (!abort.signal.aborted && catalogLifetime.isCurrent()) setSummaryCatalog(catalog
+                    ? { lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog } : null);
+            } catch { if (!abort.signal.aborted) setSummaryCatalog(null); }
+            finally { account?.dispose(); }
+        })();
+        return () => { abort.abort(); account?.dispose(); };
+    }, [purpose, observing, params.machineId, params.value, summaryServerId, daemon.inputs, backendEnabledByTargetKey, catalogRefresh, discoveryTargetKey, catalogLifetime]);
+    const executableCatalog = summaryCatalog && summaryCatalog.machineId === params.machineId && summaryCatalog.serverId === summaryServerId
+        && summaryCatalog.lifetime === catalogLifetime && summaryCatalog.lifetime.isCurrent() ? summaryCatalog.catalog : null;
+    const catalogInput = { executableProfiles: executableCatalog?.profiles, automaticProfiles: executableCatalog?.automaticProfiles,
+        discoveryTargetKeys: executableCatalog?.discoveryTargetKeys };
     const selectedModelSelection = selected?.backendTargetKey && selected.modelId
         ? ProviderBoundModelRefSchema.parse({ agentTargetKey: selected.backendTargetKey, providerConnectionId: null, modelId: selected.modelId }) : null;
     const selectedEntry = entries.find((entry) => {
@@ -63,7 +98,7 @@ export function useAgentModelChoices(params: Readonly<{
             runnerCapable: capability === null || (capability.success && capability.data.supported),
             discoverable: purpose === 'runner' || entry.kind === 'configuredBackend' || entry === discoveryEntry || entry === selectedEntry || agentFormats?.includes('json') === true };
     });
-    const initialDefault = projectAgentModelChoices({ purpose, sources, selected: selectedModelSelection,
+    const initialDefault = projectAgentModelChoices({ purpose, sources, ...catalogInput, selected: selectedModelSelection,
         defaultBackendTarget: params.defaultBackendTarget, defaultModelTitle: t('agentInput.model.useCliSettings') }).defaultProfile;
     const defaultEntry = entries.find(entry => {
         const target = targetFor(entry);
@@ -74,9 +109,9 @@ export function useAgentModelChoices(params: Readonly<{
     const probe = useNewSessionPreflightModelsState({ backendTarget: probeTarget,
         runtimeCarrierAgentId: probeEntry?.agentId, selectedMachineId: params.machineId ?? null,
         capabilityServerId: params.serverId ?? '',
-        enabled: observing && Boolean(params.machineId) && (probeEntry?.kind !== 'configuredBackend' || catalogReady),
+        enabled: purpose === 'runner' && observing && Boolean(params.machineId) && (probeEntry?.kind !== 'configuredBackend' || catalogReady),
     });
-    const projected = projectAgentModelChoices({ purpose, selected: selectedModelSelection,
+    const projected = projectAgentModelChoices({ purpose, ...catalogInput, selected: selectedModelSelection,
         defaultBackendTarget: params.defaultBackendTarget, defaultModelTitle: t('agentInput.model.useCliSettings'),
         sources: sources.map(source => {
             const target = targetFor(source.entry);
@@ -115,10 +150,10 @@ export function useAgentModelChoices(params: Readonly<{
         const id = `backend-discovery:${targetKey}`;
         discoveryTargets.set(id, targetKey);
         const probing = probeEntry === entry;
-        const failed = probing && probe.probe.failed;
+        const failed = purpose === 'runner' && probing && probe.probe.failed;
         // The row keeps its height while discovery runs: only its trailing spinner and, on failure, its wording change.
         items.push({ id, category: entry.title, title: failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels'),
-            rightElement: probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
+            rightElement: purpose === 'runner' && probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
     }
     const defaultSelection = defaultProfile ? selections.get(defaultProfile.catalogId) : undefined;
     // An unset choice follows the default: it resolves to that row's selection without writing it.
@@ -130,5 +165,5 @@ export function useAgentModelChoices(params: Readonly<{
     return { open, setOpen, discoveryTargetKey, setDiscoveryTargetKey, selections, discoveryTargets, customModelTargets, items, sections,
         catalogProfiles, defaultProfile, groups: projected.groups,
         selectedItem: items.find(item => item.id === effectiveId), selectionAvailable: selections.has(params.value),
-        onRefresh: probe.probe.onRefresh };
+        onRefresh: purpose === 'walkthrough' ? () => setCatalogRefresh(value => value + 1) : probe.probe.onRefresh };
 }

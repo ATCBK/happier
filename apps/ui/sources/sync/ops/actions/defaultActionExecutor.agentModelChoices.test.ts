@@ -15,6 +15,10 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { projectAgentModelChoices } from '@/components/settings/pickers/projectAgentModelChoices';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
+import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 
 // Native/browser storage and Home HTTP are boundaries; picker, declarations,
 // default executor, Account mutation/CAS and strict Run admission stay real.
@@ -30,7 +34,10 @@ describe('background model selection through Account Settings Actions', () => {
     it.each(['agent', 'mcp'] as const)('persists the shared picker selection for both anchors on %s', async surface => {
         const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: getEnabledAgentIds(settingsDefaults),
             backendEnabledByTargetKey: settingsDefaults.backendEnabledByTargetKey });
+        const profiles = entries.flatMap(entry => buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(entry.backendTarget),
+            models: getAgentStaticModels(entry.agentId, { catalogOnly: true }), agentFormats: getAgentCore(entry.agentId)?.structuredOutput?.formats }));
         const choices = projectAgentModelChoices({ purpose: 'walkthrough', defaultModelTitle: 'Default',
+            executableProfiles: profiles, automaticProfiles: profiles,
             sources: entries.map(entry => ({ entry, models: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
                 catalogModels: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
                 agentFormats: getAgentCore(entry.agentId)?.structuredOutput?.formats, runnerCapable: true, discoverable: false })) });
@@ -38,11 +45,26 @@ describe('background model selection through Account Settings Actions', () => {
         if (!choice) throw new Error('Expected a real supported model from the shared picker');
         const summary = choices.defaultProfile!.catalogId;
         const runner = LlmTaskRunnerConfigV1WriteSchema.parse({ v: 1, modelSelection: choice.modelSelection, permissionMode: 'no_tools' });
-        const accountSettings = settingsParse({ actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
+        const machine = createMachineFixture({ id: 'model-machine', activeAt: Date.now() });
+        const serverUrl = `https://background-models-${surface}.test`;
+        const serverIdentityId = `srv_background_models_${surface}`;
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId: 'model-account',
+            machineId: machine.id, actionId: 'agents.models.list', tokenEpoch: 0,
+            execute: input => {
+                expect(input).toMatchObject({ purpose: 'scm_diff_summary', machineId: machine.id,
+                    modelSelector: choice.modelSelector });
+                return { items: [], scmDiffSummaryCatalog: { profiles, automaticProfiles: profiles, discoveryTargetKeys: profiles.flatMap(profile => profile.modelSelector?.backendTargetKey ?? []) } };
+            } });
+        const accountSettings = settingsParse({ machineAdministrationTargetsLocalV1: {
+            [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.sourceControl]: { serverIdentityId, machineId: machine.id } },
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
             approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'] } }) });
-        const home = await serveActionHomes({ homes: [{ key: 'models', serverUrl: `https://background-models-${surface}.test`,
-            serverIdentityId: `srv_background_models_${surface}`, accountId: 'model-account', currentAccount: true,
-            settings: accountSettings }], route: request => {
+        const home = await serveActionHomes({ homes: [{ key: 'models', serverUrl,
+            serverIdentityId, accountId: 'model-account', currentAccount: true,
+            settings: accountSettings }], route: async request => {
+                const external = await boundary.handle(request.url, { method: request.method,
+                    ...(request.method !== 'GET' ? { body: JSON.stringify(request.body) } : {}) });
+                if (external) return external;
                 if (request.path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
                     content: { t: 'plain', v: { v: 1, definitions: [] } } });
                 if (request.path === '/v1/features/authenticated' || request.path === '/v1/features')
@@ -55,6 +77,8 @@ describe('background model selection through Account Settings Actions', () => {
             // Hydrate the served Account through its real owner before policy admission.
             // A disconnected Socket cannot deliver bootstrap Settings to the live projection.
             getStorage().getState().applySettingsForScope({ serverId: address.id, accountId: 'model-account' }, accountSettings, 1);
+            getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [address.id]: [machine] },
+                machineListStatusByServerId: { [address.id]: 'idle' } });
             const executor = createDefaultActionExecutor();
             const context = { surface, authority: 'account_automation' as const, serverId: address.id, expectedAccountId: 'model-account' };
             for (const [anchor, value] of [['sourceControl.summaryModel', summary], ['session.resume.summaryModel', runner]] as const) {

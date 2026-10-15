@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import * as z from 'zod/mini';
 import { actionStartTargetUnavailableV1 } from './executor/actionStartDiagnostics.js';
 import { resolveInputOptions, resolveTypedInputFieldOptions, normalizeResolvedOptions, tryNormalizeExecutionBackendOptionValue, readReviewNarratorOptions, buildAgentInventorySelectionArgs } from '../inputs/inputOptions.js';
@@ -8028,6 +8029,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
 
         if (actionId === 'agents.models.list') {
+          if (data.purpose === 'scm_diff_summary') {
+            return completeActionResult(await deps.agentsModelsList({ purpose: 'scm_diff_summary',
+              ...(typeof data.discoveryTargetKey === 'string' ? { discoveryTargetKey: data.discoveryTargetKey } : {}),
+              ...(data.modelSelector ? { modelSelector: ScmDiffSummaryModelSelectorSchema.parse(data.modelSelector) } : {}),
+              machineId: String(data.machineId), ...(ctx.serverId ? { serverId: ctx.serverId } : {}),
+              ...(ctx.signal ? { signal: ctx.signal } : {}) }, ctx));
+          }
           const resolvedSelection = resolveActionBackendTargetSelection({
             agentId: readOptionalString(data.agentId),
             backendTargetKey: readOptionalString(data.backendTargetKey),

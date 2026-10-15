@@ -160,8 +160,27 @@ The summary fallback (and detached generation) resolves an unset preference to a
 with admitted structured-output support. Automatic native candidates also require
 the Agent's existing sign-in probe to report signed in on the executing machine;
 static model membership alone does not establish executable credentials.
+The same catalog also considers the Agent's canonical connected-account default
+route, independently of native sign-in, and uses the canonical model probe when
+an executable Agent supplies no static model list.
 An unset UI preference leaves the generation model selector absent so this
 host owner can choose from that evidence without a client-side Agent/model pin.
+In 0.3 development, the Summary picker and its Settings admission read this same
+executing-machine catalog through `agents.models.list` with
+`purpose: 'scm_diff_summary'` and the exact `machineId`. The observation separates
+offered `profiles` from `automaticProfiles`; only the latter enter the shared
+default ranking. The catalog owner also reads admitted configured ACP definitions
+and selected-model evidence through its existing configured/explicit probe branch.
+`discoveryTargetKey` requests fresh model evidence for that admitted target, and
+`modelSelector` carries the selected model for Settings admission. The returned
+`discoveryTargetKeys` keep discovery reachable when a configured target has no
+proven JSON model. Unknown ACP capability evidence never becomes JSON support.
+All Account reads and currentness checks use the invocation's captured operation
+context and Home; Connected Account purpose requests retain its request
+authorization. These observations do not replace the daemon's ambient Account.
+A missing observation supplies
+no candidates; static UI descriptors and failed native probes cannot create a
+default or restore a signed-out route.
 Explicit selections and attached applied-parent routes retain Run admission.
 The picker, prefetch and direct generation
 Action consume the same selection owner; explicit selections retain precedence.

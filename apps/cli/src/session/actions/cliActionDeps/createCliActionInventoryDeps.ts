@@ -42,6 +42,8 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { projectSpawnMcpServersPreviewInventory } from './resolveSpawnMcpServersPreviewInventory';
+import { createCliSettingsCatalogServices } from '../settingsCatalogServices';
+import { encodeScmDiffSummaryModelOverride, ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import {
   type SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -380,6 +382,7 @@ async function probeActionConfigOptionsBestEffort(params: Readonly<{
 }
 
 export function createCliActionInventoryDeps(params: Readonly<{
+  localMachineId?: string;
   token: string;
   serverId?: string;
   serverHttpBaseUrl?: string;
@@ -623,7 +626,25 @@ export function createCliActionInventoryDeps(params: Readonly<{
       await captured.assertCurrent();
       return { items };
     },
-    agentsModelsList: async (args) => {
+    agentsModelsList: async (args, context) => {
+      if (args.purpose === 'scm_diff_summary') {
+        if (!args.machineId || args.machineId !== params.localMachineId) return { items: [], source: 'unavailable' };
+        const settings = await readAccountSettings();
+        if (!settings) return { items: [], source: 'unavailable' };
+        const services = createCliSettingsCatalogServices({ credentials: params.savedSecretOperationContext?.credentials ?? params.credentials,
+          savedSecretOperationContext: params.savedSecretOperationContext,
+          serverHttpBaseUrl: acpServerHttpBaseUrl,
+          authorizeConnectedAccountRequest: params.authorizeConnectedAccountRequest
+            ? request => params.authorizeConnectedAccountRequest!(context, request) : undefined,
+          serverId: args.serverId ?? params.serverId, signal: args.signal });
+        const catalog = await services.readScmDiffSummaryCatalog!(settings,
+          args.modelSelector ? encodeScmDiffSummaryModelOverride(args.modelSelector) : settings['scm.diffSummary.modelProfileOverride'],
+          { includeConfigured: true, discoveryTargetKey: args.discoveryTargetKey });
+        const current = await readAccountSettings();
+        if (!catalog || !current || !catalog.isCurrent(current) || !await services.isCurrent()) return { items: [], source: 'unavailable' };
+        return { items: [], scmDiffSummaryCatalog: ScmDiffSummaryModelCatalogObservationV1Schema.parse({ profiles: catalog.profiles,
+          automaticProfiles: catalog.automaticProfiles, discoveryTargetKeys: catalog.discoveryTargetKeys }) };
+      }
       const agentId = args.agentId;
       const backendTargetKey = typeof (args as { backendTargetKey?: unknown }).backendTargetKey === 'string'
         ? (args as { backendTargetKey?: string }).backendTargetKey?.trim() ?? ''
