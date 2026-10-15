@@ -444,7 +444,8 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
         }`,
       }));
       if (!current() || typeof locator !== 'string' || !locator || locator.length > 256) return undefined;
-      const target: CredentialTarget = { ...view, tabId: handle.targetId, frameId, documentId,
+      const target: CredentialTarget = { browserSessionId: view.browserSessionId, viewId: view.viewId,
+        tabId: handle.targetId, frameId, documentId,
         navigationGeneration: navigation.navigationGeneration, origin,
         field: { fieldId: String(node.backendNodeId), focusId: String(node.backendNodeId), locator } };
       return await proveCredentialTarget(target, objects) ? target : undefined;

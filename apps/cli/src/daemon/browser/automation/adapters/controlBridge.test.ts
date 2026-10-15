@@ -345,7 +345,9 @@ describe('control adapter automation transport bridge', () => {
     });
     const bridge = createControlAdapterAutomationTransport({ adapter: controlAdapter(),
       contextCapture: boundary.contextCapture, browserContext: routes });
-    const query = () => bridge.dispatchPageQuery({ ...view, actionKind: 'semanticSnapshot', navigationGeneration: 3, payload: {} });
+    const controller = new AbortController();
+    const query = () => bridge.dispatchPageQuery({ ...view, actionKind: 'semanticSnapshot', navigationGeneration: 3, payload: {},
+      signal: controller.signal, deadlineMs: Date.now() + 60_000 });
     const observed = await query();
     expect(observed).toMatchObject({ ok: true, data: {
       focusedCredentialTarget: { ...view, tabId: HANDLE.targetId, frameId: 'frame', documentId: 'document',
