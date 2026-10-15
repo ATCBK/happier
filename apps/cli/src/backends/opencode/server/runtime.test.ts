@@ -23,6 +23,7 @@ import {
   OPENCODE_CONNECTED_AUTH_NOT_MATERIALIZED_CODE,
 } from './runtime';
 import { normalizeOpenCodeV2Event } from './openCodeV2EventAdapter';
+import { projectOpenCodeSessionMcpServers } from './openCodeMcpToolNames';
 import { isTerminalOpenCodeToolPartStatus } from './runtime/createOpenCodeForegroundToolTracker';
 import { OPENCODE_SERVER_RESTARTED_DURING_TURN_ISSUE_CODE } from './runtime/createOpenCodeManagedServerTurnInterruptionSupervisor';
 import {
@@ -121,6 +122,11 @@ function createOpenCodeServerRuntime(
 type OpenCodeRuntimePromptHarness = Readonly<{
   sendPromptWithMeta(params: ProviderPromptWithMeta): Promise<void>;
 }>;
+
+function sessionMcpName(sessionId: string, serverName: string): string {
+  const projection = projectOpenCodeSessionMcpServers(sessionId, { [serverName]: { command: process.execPath } });
+  return projection.registrations[0]!.projectedName;
+}
 
 function createReadyMcpServers() {
   return {
@@ -885,7 +891,7 @@ describe('createOpenCodeServerRuntime', () => {
 
     expect(client.mcpAdd).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--happier',
+      name: sessionMcpName('happy_sess_opencode', 'happier'),
       config: {
         type: 'local',
         enabled: true,
@@ -925,11 +931,11 @@ describe('createOpenCodeServerRuntime', () => {
     await secondRuntime.startOrLoad({});
     await firstRuntime.reset();
 
-    expect(directoryMcpStatus.get('happier-session-happy_sess_first--happier')).toBe('disabled');
-    expect(directoryMcpStatus.get('happier-session-happy_sess_second--happier')).toBe('connected');
+    expect(directoryMcpStatus.get(sessionMcpName('happy_sess_first', 'happier'))).toBe('disabled');
+    expect(directoryMcpStatus.get(sessionMcpName('happy_sess_second', 'happier'))).toBe('connected');
     expect(firstClient.mcpDisconnect).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_first--happier',
+      name: sessionMcpName('happy_sess_first', 'happier'),
     });
 
     await secondRuntime.reset();
@@ -964,7 +970,7 @@ describe('createOpenCodeServerRuntime', () => {
     await resetPromise;
     expect(client.mcpDisconnect).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_cleanup--happier',
+      name: sessionMcpName('happy_sess_cleanup', 'happier'),
     });
   });
 
@@ -973,7 +979,7 @@ describe('createOpenCodeServerRuntime', () => {
     let resolveSlowCustomMcp!: () => void;
     client.mcpAdd.mockImplementation(async (input?: unknown) => {
       const name = (input as { name?: unknown } | undefined)?.name;
-      if (name === 'happier-session-happy_sess_opencode--slow_custom') {
+      if (name === sessionMcpName('happy_sess_opencode', 'slow_custom')) {
         await new Promise<void>((resolve) => {
           resolveSlowCustomMcp = resolve;
         });
@@ -1027,7 +1033,7 @@ describe('createOpenCodeServerRuntime', () => {
       await expect.poll(() => client.mcpAdd.mock.calls.length).toBe(2);
       expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
         directory: '/tmp',
-        name: 'happier-session-happy_sess_opencode--happier',
+        name: sessionMcpName('happy_sess_opencode', 'happier'),
         config: {
           type: 'local',
           enabled: true,
@@ -1537,7 +1543,7 @@ describe('createOpenCodeServerRuntime', () => {
     await expect.poll(() => client.mcpAdd.mock.calls.length).toBe(2);
     expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
       directory: '/tmp/opencode-session-dir',
-      name: 'happier-session-happy_sess_opencode--happier',
+      name: sessionMcpName('happy_sess_opencode', 'happier'),
       config: {
         type: 'local',
         enabled: true,
@@ -1578,7 +1584,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(client.mcpAdd).toHaveBeenCalledTimes(2);
     expect(client.mcpAdd).toHaveBeenNthCalledWith(1, {
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--broken_first',
+      name: sessionMcpName('happy_sess_opencode', 'broken_first'),
       config: {
         type: 'local',
         enabled: true,
@@ -1587,7 +1593,7 @@ describe('createOpenCodeServerRuntime', () => {
     });
     expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--healthy_second',
+      name: sessionMcpName('happy_sess_opencode', 'healthy_second'),
       config: {
         type: 'local',
         enabled: true,
@@ -1597,7 +1603,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(debugSpy).toHaveBeenCalledWith(
       '[OpenCodeServer] Failed to register MCP server (non-fatal)',
       expect.objectContaining({
-        serverName: 'happier-session-happy_sess_opencode--broken_first',
+        serverName: sessionMcpName('happy_sess_opencode', 'broken_first'),
         error: expect.any(Error),
       }),
     );
@@ -3537,7 +3543,7 @@ describe('createOpenCodeServerRuntime', () => {
             sessionID: 'ses_1',
             messageID: 'msg_tool_custom_1',
             callID: 'call_custom_mcp_1',
-            tool: 'happier-session-happy_sess_opencode--qa_marker_stdio_20260306_get_marker',
+            tool: `${sessionMcpName('happy_sess_opencode', 'qa_marker_stdio_20260306')}_get_marker`,
             state: {
               status: 'completed',
               input: {},
