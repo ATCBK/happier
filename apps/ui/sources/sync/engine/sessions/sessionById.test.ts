@@ -99,6 +99,56 @@ function createDeferred<T>(): {
 }
 
 describe('fetchAndApplySessionById', () => {
+  it.each([undefined, 0])('leaves an unbounded Session read to its transport when timeoutMs is %s', async (timeoutMs) => {
+    vi.useFakeTimers();
+    try {
+      const started = createDeferred<void>();
+      const response = createDeferred<Response>();
+      const applySessions = vi.fn();
+      const resultPromise = fetchAndApplySessionById({
+        sessionId: 'slow-session', credentials: { token: 't' },
+        accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+        encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map(),
+        request: (_path, init) => new Promise<Response>((resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          response.promise.then(resolve, reject);
+          started.resolve();
+        }),
+        applySessions, log: { log: () => {} }, includeTurnsProjection: false, timeoutMs,
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(10_001);
+      response.resolve(Response.json({ session: {
+        id: 'slow-session', createdAt: 1, updatedAt: 1, seq: 0, active: false, activeAt: 0,
+        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
+        metadataVersion: 1, metadata: JSON.stringify({ name: 'Garden notes' }),
+        agentStateVersion: 0, agentState: null, share: null,
+      } }));
+      expect(await resultPromise).toMatchObject({ ok: true, session: { id: 'slow-session' } });
+      expect(applySessions.mock.calls[0]?.[0]).toMatchObject([{ id: 'slow-session', metadata: { name: 'Garden notes' } }]);
+    } finally { vi.useRealTimers(); }
+  });
+  it('retains an explicitly requested Session read deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = createDeferred<void>();
+      const applySessions = vi.fn();
+      const resultPromise = fetchAndApplySessionById({
+        sessionId: 'bounded-session', credentials: { token: 't' },
+        accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+        encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map(), timeoutMs: 25,
+        request: (_path, init) => new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          started.resolve();
+        }),
+        applySessions, log: { log: () => {} }, includeTurnsProjection: false,
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await resultPromise).toMatchObject({ ok: false, session: null });
+      expect(applySessions).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
   it('returns a scoped Session refusal for an embed detail 403 without Account auth recovery', async () => {
     const frame = await createEmbedEncryption();
     try {

@@ -37,7 +37,7 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ push: vi.fn(), navigate: vi.fn() }));
 // Machine RPC is the external daemon transport; selection, custody and summary logic stay real.
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
@@ -107,6 +107,7 @@ afterEach(async () => {
     const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
     await serverScopedRpcSocketPool.stopAll();
     navigation.push.mockClear();
+    navigation.navigate.mockClear();
     webLocks.restore();
     installHomeGovernanceBoundaries(homes);
 });
@@ -229,6 +230,27 @@ it('shows unavailable preparation rather than fabricating counts from the open i
     const rendered = screen.getTextContent();
     expect(rendered).toContain('common.unavailable');
     expect(rendered).not.toContain('2 facts');
+    await screen.unmount();
+});
+
+it('opens a qualified fact source before its Session is loaded on this client', async () => {
+    const source = { serverId, sessionId: 'unloaded-source-session' };
+    const ref = await seedDocument({ v: 1, index: [
+        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source },
+        fact('manual', 'Keep release notes concise.'),
+    ], topics: [] });
+    expect(storage.getState().sessions[source.sessionId]).toBeUndefined();
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} />
+    </InjectedAuthProvider>);
+    await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    expect(Boolean(screen.findByTestId('memory-document.fact.manual.source'))).toBe(false);
+    expect(Boolean(screen.findByTestId('memory-document.fact.from-session.source'))).toBe(true);
+    await screen.pressByTestIdAsync('memory-document.fact.from-session.source');
+    // The real navigation owner must carry the fact's Home, not require a loaded Session/title.
+    expect(navigation.navigate).toHaveBeenCalledWith(
+        `/session/${source.sessionId}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
+    );
     await screen.unmount();
 });
 

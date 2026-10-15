@@ -735,9 +735,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
-  // The Session a fact came from is a link at the end of its line (lab `c-mem`), when this client
-  // can name it and the host can open it; otherwise its name is plain text.
-  const sourceLink = source && sourceName && onOpenSession ? () => onOpenSession(source) : undefined;
+  // The qualified ref is enough to open the source; a second client may not have its title yet.
+  const sourceLink = source && onOpenSession ? () => onOpenSession(source) : undefined;
   const actions = React.useMemo((): ItemAction[] => {
     const list: ItemAction[] = [];
     if (props.writable) {
@@ -766,7 +765,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
       testID={props.testID}
       text={fact.text}
       metadata={facts}
-      source={sourceName ? { label: sourceName, accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
+      source={source ? { label: sourceName || t('memoryContext.memory.openSource'), accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
       archived={props.archived}
       expired={expired}
       host={memoryFactHost}

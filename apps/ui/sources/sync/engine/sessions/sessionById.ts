@@ -125,7 +125,7 @@ async function readSessionByIdHttp(params: Readonly<{
   token: string;
   request: SessionByIdRequest;
   requestAuthority?: object;
-  timeoutMs: number;
+  timeoutMs?: number;
   accessProjectionVersion?: 1;
 }>): Promise<SessionByIdHttpRead> {
   const key = buildSessionByIdHttpReadKey(params);
@@ -148,9 +148,11 @@ async function readSessionByIdHttp(params: Readonly<{
   }
 
   const promise = (async () => {
-    const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timeoutId = controller ? setTimeout(() => controller.abort(), Math.max(1, timeoutMs)) : null;
+    // The transport owns reachability/recovery. Only an explicit caller deadline may shorten it.
+    const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? params.timeoutMs : null;
+    const controller = timeoutMs !== null && typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller && timeoutMs !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
       const response = await params.request(
         `/v2/sessions/${encodeURIComponent(params.sessionId)}${params.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`,
@@ -362,7 +364,6 @@ export async function fetchAndApplySessionById(params: Readonly<{
       : {}),
   });
 
-  const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let responseOk = false;
   let responseStatus = 0;
   let body: unknown = null;
@@ -373,7 +374,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
       token: params.credentials.token,
       request: params.request,
       requestAuthority: params.requestAuthority,
-      timeoutMs,
+      timeoutMs: params.timeoutMs,
       accessProjectionVersion: params.accessProjectionVersion,
     });
     responseOk = response.ok;
