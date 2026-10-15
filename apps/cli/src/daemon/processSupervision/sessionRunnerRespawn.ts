@@ -28,6 +28,7 @@ export type SessionRunnerRespawnDisposition = 'ignored' | 'scheduled' | 'termina
 export type SessionRunnerRespawnManager = Readonly<{
   hasPendingIntendedRestarts: () => boolean;
   markStopRequested: (sessionId: string, request: StopRequest) => void;
+  prepareAutomaticResumeAdmission: (sessionId: string) => () => boolean;
   prepareFreshExplicitResumeAdmission: (sessionId: string) => () => void;
   handleUnexpectedExit: (
     trackedSession: TrackedSession,
@@ -191,7 +192,11 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   logDebug: (message: string, payload?: unknown) => void;
   logWarn: (message: string) => void;
 }>): SessionRunnerRespawnManager {
-  const stopRequestedBySessionId = new Map<string, StopRequest>();
+  const stopRequestedBySessionId = new Map<string, { request: StopRequest; active: boolean }>();
+  const readActiveStopRequest = (sessionId: string) => {
+    const stop = stopRequestedBySessionId.get(sessionId);
+    return stop?.active ? stop.request : undefined;
+  };
   const stateBySessionId = new Map<
     string,
     { controller: RestartController; timer: NodeJS.Timeout | null; intended: boolean }
@@ -218,7 +223,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       { random: params.random },
     );
 
-    const stopRequest = stopRequestedBySessionId.get(sessionId);
+    const stopRequest = readActiveStopRequest(sessionId);
     if (stopRequest) controller.markStopRequested(stopRequest);
 
     stateBySessionId.set(sessionId, { controller, timer: null, intended: false });
@@ -367,13 +372,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
     const timer = setTimeout(() => {
       void (async () => {
+        let stopRetirementReported = false;
         const finishIfCycleRetired = (): boolean => {
-          const stopRequest = stopRequestedBySessionId.get(sessionId);
+          const stopRequest = readActiveStopRequest(sessionId);
           // Explicit Resume can clear Stop while an old Home read is still pending.
           // Clearing that intent does not revive the retired supervision cycle.
           if (!stopRequest) return stateBySessionId.get(sessionId) !== existing;
-          endRespawnCycle(sessionId);
-          params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
+          if (stateBySessionId.get(sessionId) === existing) endRespawnCycle(sessionId);
+          if (!stopRetirementReported) {
+            stopRetirementReported = true;
+            params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
+          }
           return true;
         };
 
@@ -419,8 +428,19 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         );
 
         void params
-          .spawnSession(respawnOptions, { sessionId, previousPid, trackedSession, intended: existing.intended })
+          .spawnSession({
+            ...respawnOptions,
+            beforeSessionRunnerLaunch: async () => {
+              // Launch preparation can outlive Stop. Keep the existing cycle's
+              // custody through the physical launch, including an awaited caller hook.
+              if (finishIfCycleRetired()) return false;
+              if (respawnOptions.beforeSessionRunnerLaunch
+                && !await respawnOptions.beforeSessionRunnerLaunch()) return false;
+              return !finishIfCycleRetired();
+            },
+          }, { sessionId, previousPid, trackedSession, intended: existing.intended })
           .then((result) => {
+            if (finishIfCycleRetired()) return;
             if (result && typeof result === 'object'
               && 'errorCode' in result
               && result.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING) {
@@ -479,6 +499,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
             scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, trackedSession);
           })
           .catch((error) => {
+            if (finishIfCycleRetired()) return;
             params.logDebug(`[DAEMON RUN] Failed to respawn runner for session ${sessionId}`, error);
             const retryEvent: TerminationEvent = {
               type: 'spawn_error',
@@ -510,13 +531,19 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     markStopRequested: (sessionIdRaw: string, request: StopRequest) => {
       const sessionId = normalizeSessionId(sessionIdRaw);
       if (!sessionId) return;
-      stopRequestedBySessionId.set(sessionId, request);
+      stopRequestedBySessionId.set(sessionId, { request, active: true });
       const existing = stateBySessionId.get(sessionId);
       if (existing) {
         existing.controller.markStopRequested(request);
         clearTimer(sessionId);
         stateBySessionId.delete(sessionId);
       }
+    },
+    prepareAutomaticResumeAdmission: (sessionIdRaw: string) => {
+      const sessionId = normalizeSessionId(sessionIdRaw);
+      const admittedStop = stopRequestedBySessionId.get(sessionId);
+      const allowed = admittedStop?.active !== true;
+      return () => allowed && stopRequestedBySessionId.get(sessionId) === admittedStop;
     },
     prepareFreshExplicitResumeAdmission: (sessionIdRaw: string) => {
       const sessionId = normalizeSessionId(sessionIdRaw);
@@ -527,7 +554,9 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         if (!sessionId) return;
         const currentStopRequest = stopRequestedBySessionId.get(sessionId) ?? null;
         if (currentStopRequest !== admittedStopRequest) return;
-        stopRequestedBySessionId.delete(sessionId);
+        // Keep the actual last Stop witness so a completed explicit Resume cannot
+        // revive automatic launch preparation that began before that Stop.
+        if (currentStopRequest) currentStopRequest.active = false;
         stateBySessionId.get(sessionId)?.controller.clearStopRequested();
       };
     },
@@ -537,7 +566,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       const sessionId = normalizeSessionId(trackedSession.happySessionId);
       if (!sessionId) return 'ignored';
       const forceRestart = options?.forceRestart === true;
-      const stopRequest = stopRequestedBySessionId.get(sessionId);
+      const stopRequest = readActiveStopRequest(sessionId);
       if (stopRequest) return 'ignored';
 
       if (exit.code === SESSION_RUNNER_EXIT_CODES.CONTINUATION_UNREACHABLE) {

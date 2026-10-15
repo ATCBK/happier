@@ -562,8 +562,10 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   }, 180_000);
 
-  it.each([false, true])('admits an intended shutdown replacement through the real spawn owner and settles its terminal refusal (late disposal: %s)', async (disposeDuringLaunch) => {
+  it.each(['shutdown', 'shutdown-dispose', 'stop', 'internal-stop'] as const)('settles a prepared replacement through the real spawn owner when %s retires its launch custody', async (retirement) => {
     let daemon: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | undefined;
+    const daemonMutationCustody = createDaemonSessionMutationCustody({ credentials: storage.credentials });
+    storage.sourceChecks = [];
     let shuttingDown = false;
     let launchReached = false;
     let signalSent = false;
@@ -593,13 +595,14 @@ describe('Custom ACP fresh daemon launch composition', () => {
         runtimeDescriptorV1: producedDescriptor, existingSessionId: sessionId, resume: 'pr536-native-thread',
         beforeSessionRunnerLaunch: async () => {
           launchReached = true;
-          expect(shuttingDown).toBe(true);
-          if (!disposeDuringLaunch) return false;
+          expect(shuttingDown).toBe(retirement === 'shutdown' || retirement === 'shutdown-dispose');
+          if (retirement === 'shutdown') return false;
           const bootstrapDir = join(storage.home, 'tmp', 'runner-agent-session-bootstraps');
           const [file] = await readdir(bootstrapDir);
           storage.runnerBootstrapPath = join(bootstrapDir, file!);
-          storage.runnerSpawn = () => { physicalLaunchReached = true; throw new Error('Physical launch reached after control disposal'); };
-          await daemon?.stopControlServer();
+          storage.runnerSpawn = () => { physicalLaunchReached = true; throw new Error('Physical launch reached after custody retirement'); };
+          if (retirement === 'stop' || retirement === 'internal-stop') await daemon?.stopSession(sessionId);
+          else await daemon?.stopControlServer();
           return true;
         } } };
     const trackedSessions = new Map([[tracked.pid, tracked]]);
@@ -624,6 +627,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
     try {
       daemon = await startDaemonSessionControlRuntime({ machineId: 'df38-machine', serverId: 'df38-home',
         serverBaseUrl: configuration.serverUrl, credentials: storage.credentials, api,
+        daemonSessionMutationCustody: daemonMutationCustody,
         connectedServicesMaterializationBaseDir: join(storage.home, 'connected-services'),
         getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
         pidToTrackedSession: trackedSessions, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
@@ -632,26 +636,41 @@ describe('Custom ACP fresh daemon launch composition', () => {
         requestShutdown: () => {}, isShuttingDown: () => shuttingDown,
         processEnv: { HAPPIER_DAEMON_SESSION_RESPAWN_MAX_ATTEMPTS: '1', HAPPIER_DAEMON_SESSION_INTENDED_RESTART_MAX_ATTEMPTS: '1',
           HAPPIER_DAEMON_SESSION_RESPAWN_BASE_DELAY_MS: '50', HAPPIER_DAEMON_SESSION_RESPAWN_JITTER_MS: '0' } });
-      const persistence = await import('@/persistence');
-      const currentSettings = await persistence.readSettings();
-      spies.push(vi.spyOn(persistence, 'readSettings').mockResolvedValueOnce({ ...currentSettings, restartSessionRunnersOnUpdate: true }));
-      const refresh = daemon.restartStaleSessionRunnersAfterDaemonStart();
-      await vi.waitFor(() => expect(signalSent).toBe(true));
-      shuttingDown = true;
-      await expect(daemon.spawnSession({ directory: storage.home })).resolves.toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
-      storage.runnerExited = true;
-      await daemon.onChildExited(tracked.pid, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
-      await vi.waitFor(() => expect(launchReached).toBe(true));
-      const response = await refresh;
-      expect(response).toMatchObject({ status: 'completed', result: { failedCount: 1 } });
+      if (retirement === 'internal-stop') {
+        // Recovery/wake consumers use this same internal Resume admission owner.
+        trackedSessions.delete(tracked.pid);
+        storage.runnerExited = true;
+        const response = await daemon.spawnSession(tracked.spawnOptions!);
+        expect(launchReached).toBe(true);
+        expect(physicalLaunchReached).toBe(false);
+        expect(response, JSON.stringify(response)).toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+        if (response.type !== 'error') throw new Error('Expected retired launch custody refusal');
+        expect(SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(response)))
+          .toMatchObject({ errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+      } else {
+        const persistence = await import('@/persistence');
+        const currentSettings = await persistence.readSettings();
+        spies.push(vi.spyOn(persistence, 'readSettings').mockResolvedValueOnce({ ...currentSettings, restartSessionRunnersOnUpdate: true }));
+        const refresh = daemon.restartStaleSessionRunnersAfterDaemonStart();
+        await vi.waitFor(() => expect(signalSent).toBe(true));
+        shuttingDown = retirement !== 'stop';
+        if (shuttingDown) await expect(daemon.spawnSession({ directory: storage.home })).resolves.toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+        storage.runnerExited = true;
+        await daemon.onChildExited(tracked.pid, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
+        await vi.waitFor(() => expect(launchReached).toBe(true));
+        const response = await refresh;
+        expect(response).toMatchObject({ status: 'completed', result: { failedCount: 1 } });
+      }
       expect(physicalLaunchReached).toBe(false);
       await vi.waitFor(() => expect(daemon?.hasPendingRunnerRestarts()).toBe(false));
     } finally {
       await daemon?.stopControlServer();
+      await daemonMutationCustody.close();
       for (const spy of spies.reverse()) spy.mockRestore();
       vi.stubGlobal('fetch', originalFetch);
       storage.runnerCommand = ''; storage.runnerExited = false; storage.runnerWrapperPid = 0;
       storage.runnerSpawn = null; storage.runnerBootstrapPath = '';
+      storage.sourceChecks = null;
     }
   });
 

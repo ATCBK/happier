@@ -12675,12 +12675,12 @@ describe('startDaemonSessionControlRuntime', () => {
             return managerOptionsRef.current;
         };
         let disposition: 'scheduled' | 'already_running' = 'scheduled';
+        const createRespawnManager = sessionRunnerRespawnModule.createSessionRunnerRespawnManager;
         const managerSpy = vi.spyOn(sessionRunnerRespawnModule, 'createSessionRunnerRespawnManager')
             .mockImplementation((options) => {
                 managerOptionsRef.current = options;
                 return {
-                    markStopRequested: vi.fn(),
-                    prepareFreshExplicitResumeAdmission: vi.fn(() => vi.fn()),
+                    ...createRespawnManager(options),
                     handleUnexpectedExit: vi.fn((tracked) => {
                         if (disposition === 'already_running') {
                             options.onRespawnTerminal?.({

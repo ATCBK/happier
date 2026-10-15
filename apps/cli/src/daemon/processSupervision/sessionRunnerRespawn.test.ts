@@ -17,6 +17,71 @@ type RespawnOptionsResolver = (input: Readonly<{
 }>) => SpawnSessionOptions | Promise<SpawnSessionOptions>;
 
 describe('createSessionRunnerRespawnManager', () => {
+  it('does not revive earlier automatic launch admission when explicit Resume clears Stop', () => {
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true, maxRestarts: 2, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+      isSessionAlreadyRunning: async () => false, spawnSession: async () => ({ type: 'success' }),
+      random: () => 0, logDebug: () => {}, logWarn: () => {},
+    });
+    const beforeStop = manager.prepareAutomaticResumeAdmission('recovering-session');
+    expect(beforeStop()).toBe(true);
+    manager.markStopRequested('recovering-session', { reason: 'daemon_stop_session', requestedAtMs: 100 });
+    const whileStopped = manager.prepareAutomaticResumeAdmission('recovering-session');
+    expect(beforeStop()).toBe(false);
+    expect(whileStopped()).toBe(false);
+    manager.prepareFreshExplicitResumeAdmission('recovering-session')();
+    expect(beforeStop()).toBe(false);
+    expect(whileStopped()).toBe(false);
+    const afterResume = manager.prepareAutomaticResumeAdmission('recovering-session');
+    expect(afterResume()).toBe(true);
+    manager.markStopRequested('recovering-session', { reason: 'daemon_stop_session', requestedAtMs: 101 });
+    expect(afterResume()).toBe(false);
+  });
+
+  it.each(['stop', 'stop-then-resume', 'launch-refused'] as const)(
+    'keeps a prepared runner from launching after %s', async retirement => {
+      vi.useFakeTimers();
+      try {
+        let finishPreparation!: () => void;
+        const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+        const launchedPids: number[] = [];
+        let preparationStarted = false;
+        const upstreamLaunchAdmission = vi.fn(async () => retirement !== 'launch-refused');
+        const manager = createSessionRunnerRespawnManager({
+          enabled: true, maxRestarts: 2, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+          isSessionAlreadyRunning: async () => false,
+          // The process adapter prepares launch resources asynchronously, then invokes
+          // the same final admission hook as executeSpawnSessionRequest before OS spawn.
+          spawnSession: async options => {
+            preparationStarted = true;
+            await preparation;
+            if (options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) {
+              return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE };
+            }
+            launchedPids.push(222);
+            return { type: 'success', pid: 222 };
+          },
+          random: () => 0, logDebug: () => {}, logWarn: () => {},
+        });
+        manager.handleUnexpectedExit({ startedBy: 'daemon', pid: 111, happySessionId: 'prepared-runner',
+          spawnOptions: { directory: '/repo', beforeSessionRunnerLaunch: upstreamLaunchAdmission } },
+        { reason: 'process-exit', code: 1, signal: null });
+        await vi.advanceTimersByTimeAsync(50);
+        expect(preparationStarted).toBe(true);
+        if (retirement !== 'launch-refused') {
+          manager.markStopRequested('prepared-runner', { reason: 'daemon_stop_session', requestedAtMs: 100 });
+          if (retirement === 'stop-then-resume') manager.prepareFreshExplicitResumeAdmission('prepared-runner')();
+        }
+        finishPreparation();
+        await vi.advanceTimersByTimeAsync(50);
+        expect(launchedPids).toEqual([]);
+        if (retirement === 'launch-refused') expect(upstreamLaunchAdmission).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('retains a typed startup dependency failure without repeatedly launching the runner', async () => {
     vi.useFakeTimers();
     try {
