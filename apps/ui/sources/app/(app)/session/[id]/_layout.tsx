@@ -13,6 +13,8 @@ import { buildScopedSessionRouteHref, createSessionRouteServerScope, readSession
 import { useActiveRetainedSessionListQueryStates } from '@/components/sessions/shell/sessionListPaneRetention';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
+import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
+import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 
 function useSessionLayoutParams() {
     const layoutParams = useLocalSearchParams<Record<string, string | string[] | undefined>>();
@@ -97,5 +99,9 @@ export default function OrdinarySessionRouteLayout() {
         return <SessionInvalidLinkFallback />;
     }
 
-    return <Slot />;
+    const viewerAddress = normalizeSessionAddress(explicitServerId ?? resolvedServerId, sessionId);
+    return viewerAddress ? <SessionViewerDestinationScope key={sessionAddressKey(viewerAddress)}
+        sessionId={viewerAddress.sessionId} serverId={viewerAddress.serverId}>
+        <Slot />
+    </SessionViewerDestinationScope> : <Slot />;
 }

@@ -17,6 +17,8 @@ import { NavigationTitleChromeProvider, useNavigationChromeShowsBack, useNavigat
 import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
 import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootStackRouteOptions';
 import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
+import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
+import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 
 const EMPTY_SCREEN_OPTIONS: NativeStackNavigationOptions = {};
 
@@ -77,6 +79,9 @@ export function DestinationInstanceHost(props: Readonly<{
 }>): React.ReactNode {
     const rootOptions = useRootStackRouteOptions();
     const match = matchWorkspaceDestinationRoute(props.pathname);
+    const sessionAddress = props.ref.kind === 'session' || props.ref.kind === 'sessionDetails'
+        || match?.routeKey.startsWith('session/[id]/')
+        ? normalizeSessionAddress(props.ref.params.serverId, props.ref.params.id) : null;
     const baseOptions = resolveRootStackRouteOptions(rootOptions, match ? workspaceRouteFiles[match.routeKey] : undefined) ?? EMPTY_SCREEN_OPTIONS;
     const value = React.useMemo<DestinationInstanceContextValue>(() => ({
         tabId: props.tabId,
@@ -89,7 +94,10 @@ export function DestinationInstanceHost(props: Readonly<{
     return <DestinationInstanceContext.Provider value={value}>
         <PluginSurfaceFocusEligibilityProvider active={value.focused} presentationActive={value.visible} currentUiContextActive={value.focused}>
             <DestinationNavigationChrome scopeKey={`destination:${props.tabId}`} phone={props.phone === true} navigation={props.navigation} baseOptions={baseOptions}>
-                {props.children}
+                {sessionAddress ? <SessionViewerDestinationScope key={sessionAddressKey(sessionAddress)}
+                    sessionId={sessionAddress.sessionId} serverId={sessionAddress.serverId}>
+                    {props.children}
+                </SessionViewerDestinationScope> : props.children}
             </DestinationNavigationChrome>
         </PluginSurfaceFocusEligibilityProvider>
     </DestinationInstanceContext.Provider>;

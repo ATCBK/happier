@@ -137,7 +137,7 @@ it.each([true, false])('leaves phone Details through the real comparison Back wi
     await screen.unmount();
 });
 
-it('opens the real phone Git walkthrough through workspace navigation and returns to the conversation', async () => {
+it.each([false, true])('opens phone Details through workspace navigation and returns to the conversation with Watch=%s', async (watch) => {
     const snapshot = fileViewSnapshot({ rootPath: '/tmp/repo', entries: [{
         path: 'alpha.txt', kind: 'modified', includeStatus: 'unmodified', pendingStatus: 'modified',
         hasIncludedDelta: false, hasPendingDelta: true, previousPath: null,
@@ -157,6 +157,9 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
     const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
     const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { WorkspaceDestinationBody } = await import('@/components/appShell/workspace/WorkspaceDestinationBody');
+    const { readSessionPresentationAdapterAtAddress } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
+    const { SessionViewerSourceAccountScopeProvider } = await import('@/components/sessions/viewer/SessionViewerSourceAccountScope');
     const { SessionCockpitShell } = await import('./SessionCockpitShell');
     const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
     const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
@@ -165,7 +168,10 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
     const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
     const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
-    route.params = { id: 's1', serverId: fixture.home.id, mobileSurface: 'git', right: 'git' };
+    const { createSessionScmReviewDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+    const { buildActiveDetailsRouteParams } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+    route.params = { id: 's1', serverId: fixture.home.id, mobileSurface: watch ? 'chat' : 'git' };
+    if (!watch) route.params.right = 'git';
     route.href = `/session/s1?${new URLSearchParams(route.params)}`;
     const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
         externalSessions: false, inbox: false, workflows: false, friends: false,
@@ -193,7 +199,8 @@ it('opens the real phone Git walkthrough through workspace navigation and return
             return <DestinationInstanceHost tabId={selected.id} ref={selected.target}
                 pathname={new URL(href, 'https://happier.test').pathname} focused visible phone
                 navigation={navigation.navigationForTab(selected.id)}>
-                <Probe />{selected.target.kind === 'sessionDetails' ? <SessionDetailsDestinationBody /> : <SessionDestinationBody />}
+                <Probe /><WorkspaceDestinationBody target={selected.target} pathname={new URL(href, 'https://happier.test').pathname}
+                    renderSession={() => <SessionDestinationBody />} renderSessionDetails={() => <SessionDetailsDestinationBody />} />
             </DestinationInstanceHost>;
         }}</WorkspaceProvider><MobileBottomChromeHost />
     </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider>);
@@ -204,12 +211,26 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     });
     await measure();
     await flushHookEffects({ cycles: 20 });
-    expect(screen.tree.findAllByType(SessionCockpitShell).map(node => node.props.surface)).toEqual(['git']);
-    await vi.waitFor(async () => {
-        await measure();
-        expect(screen.findHostByTestId('session-rightpanel-git-walkthrough')).not.toBeNull();
-    });
-    await screen.pressByTestIdAsync('session-rightpanel-git-walkthrough');
+    const sourceLifetime = watch ? screen.findAllByType(SessionViewerSourceAccountScopeProvider)
+        .map(provider => provider.props.accountLifetime).find(lifetime => lifetime?.isCurrent()) : null;
+    if (watch) {
+        expect(sourceLifetime?.isCurrent()).toBe(true);
+        // Phone Watch uses this real registered adapter; the header opener is desktop-only.
+        await act(async () => expect(readSessionPresentationAdapterAtAddress({ serverId: fixture.home.id, sessionId: 's1' })
+            ?.apply({ kind: 'viewer.open', source: 'computer' })).toEqual({ status: 'applied' }));
+        expect(screen.findHostByTestId('session-viewer-sticky')).not.toBeNull();
+        const tab = createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+        await act(async () => expect(workspace.openHref(`/session/s1/details?${new URLSearchParams({
+            serverId: fixture.home.id, ...buildActiveDetailsRouteParams([tab], tab.key),
+        })}`)).toBe(true));
+    } else {
+        expect(screen.tree.findAllByType(SessionCockpitShell).map(node => node.props.surface)).toEqual(['git']);
+        await vi.waitFor(async () => {
+            await measure();
+            expect(screen.findHostByTestId('session-rightpanel-git-walkthrough')).not.toBeNull();
+        });
+        await screen.pressByTestIdAsync('session-rightpanel-git-walkthrough');
+    }
     await flushHookEffects({ cycles: 20 });
     await measure();
     await flushHookEffects({ cycles: 20 });
@@ -223,6 +244,7 @@ it('opens the real phone Git walkthrough through workspace navigation and return
         details: 'scmReview', comparison: 'workingTree', view: 'walkthrough',
     } });
     expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+    if (watch) expect(sourceLifetime?.isCurrent()).toBe(true);
     observingReturn = true;
     await screen.pressByTestIdAsync('scm-comparison-phone-back');
     await flushHookEffects({ cycles: 20 });
@@ -232,13 +254,18 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     expect(screen.findHostByTestId('agent-input-composer')).not.toBeNull();
     expect(screen.findHostByTestId('session-cockpit-scene:chat')).not.toBeNull();
     expect(screen.findHostByTestId('session-cockpit-scene:git')).toBeNull();
+    expect(screen.findHostByTestId('session-viewer-sticky') !== null).toBe(watch);
+    if (watch) expect(screen.findAllByType(SessionViewerSourceAccountScopeProvider)
+        .some(provider => provider.props.accountLifetime === sourceLifetime)).toBe(true);
     expect(pane.scopeState?.right.isOpen).toBe(false);
     // The returned destination must never receive an open Git presentation:
     // web's pane URL writer can publish that first snapshot before Chat effects.
     expect(returnedRightPresentations.length).toBeGreaterThan(0);
     expect(returnedRightPresentations).not.toContain(true);
-    expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+    // The Git opener retains a pane tab; direct Details selection is URL-owned.
+    if (!watch) expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     await screen.unmount();
+    if (watch) expect(sourceLifetime?.isCurrent()).toBe(false);
 });
 
 it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s phone Details route to its qualified Session when history leads Home', async (experience) => {
