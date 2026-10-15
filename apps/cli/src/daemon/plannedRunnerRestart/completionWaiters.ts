@@ -13,6 +13,8 @@ export type RestartCompletionWaiters = Readonly<{
   /** Returns the in-flight completion for a restart of `previousPid`, if one is pending. */
   join: (sessionId: string, previousPid: number, intent?: PlannedRunnerRestartIntent) => Promise<RestartSessionRunnerCompletion> | null;
   settle: (sessionId: string, previousPid: number, completion: RestartSessionRunnerCompletion) => void;
+  /** True while any restart completion is still pending (signalled runner not yet respawned or timed out). */
+  hasPending: () => boolean;
 }>;
 
 type PendingWaiter = Readonly<{
@@ -100,5 +102,5 @@ export function createRestartCompletionWaiters(params: Readonly<{ timeoutMs: num
     return pending.promise;
   };
 
-  return { create, join, settle };
+  return { create, join, settle, hasPending: () => waiters.size > 0 };
 }

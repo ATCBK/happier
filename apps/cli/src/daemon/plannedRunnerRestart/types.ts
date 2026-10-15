@@ -46,7 +46,8 @@ export type PlannedRunnerRestartNotSignaledReason =
   | 'superseded'
   | 'activity_in_progress'
   | 'duplicate_restart'
-  | 'terminal_restart';
+  | 'terminal_restart'
+  | 'shutting_down';
 
 export type PlannedRunnerRestartSignalActivityGateResult =
   | boolean

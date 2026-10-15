@@ -263,9 +263,12 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
   requestRestart: RequestRestart;
   resolveActivityDisabledReason?: ResolveActivityDisabledReason;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
+  /** Checked before each runner; returning false ends the pass with the results so far. */
+  shouldContinue?: () => boolean;
 }>): Promise<RestartAllSessionRunnersResult> {
   const results: RestartSessionRunnerResult[] = [];
   for (const tracked of input.trackedSessions) {
+    if (input.shouldContinue && !input.shouldContinue()) break;
     const sessionId = normalizeString(tracked.happySessionId);
     if (!sessionId) continue;
     results.push(await restartSessionRunnerOnCurrentRuntime({

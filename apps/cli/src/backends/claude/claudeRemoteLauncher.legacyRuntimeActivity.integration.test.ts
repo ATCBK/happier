@@ -334,6 +334,7 @@ describe.sequential('claudeRemoteLauncher legacy Runtime Activity subscriber', (
     });
     const hookObserved = createDeferred<void>();
     const finishQuery = createDeferred<void>();
+    const sdkFinished = createDeferred<void>();
     type ObservationHooks = Record<string, Array<{ hooks: Array<(data: SessionHookData) => Promise<unknown>> }>>;
     const createQuery: NonNullable<Parameters<typeof actualClaudeRemoteAgentSdk.claudeRemoteAgentSdk>[0]['createQuery']> = params => {
       // This fixture implements the consumed external SDK query/hook boundary only.
@@ -351,14 +352,18 @@ describe.sequential('claudeRemoteLauncher legacy Runtime Activity subscriber', (
       } as unknown as Query;
     };
     mockClaudeRemoteAgentSdk.mockImplementation((opts: Parameters<typeof actualClaudeRemoteAgentSdk.claudeRemoteAgentSdk>[0]) => (
-      actualClaudeRemoteAgentSdk.claudeRemoteAgentSdk({ ...opts, createQuery })
+      actualClaudeRemoteAgentSdk.claudeRemoteAgentSdk({ ...opts, claudeExecutablePath: '/tmp/claude', createQuery })
+        .finally(() => sdkFinished.resolve(undefined))
     ));
     session.queue.push('continue', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true, claudeUnifiedTerminalEnabled: false },
       { userMessageLocalId: 'cold-sdk-workflow-resume' });
     const launcher = claudeRemoteLauncher(session);
     const switchHandler = await switchHandlerReady;
     try {
-      await hookObserved.promise;
+      await Promise.race([
+        hookObserved.promise,
+        sdkFinished.promise.then(() => { throw new Error('SDK runner ended before observing the authenticated resume hook'); }),
+      ]);
       const ledger = session.getProviderTaskActivityLedger();
       if (!ledger) throw new Error('Expected actual session ledger');
       await vi.waitFor(() => expect({
