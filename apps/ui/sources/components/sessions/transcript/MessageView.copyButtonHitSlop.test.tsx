@@ -70,7 +70,7 @@ vi.mock('@/utils/sessions/discardedCommittedMessages', () => ({
 }));
 
 vi.mock('expo-clipboard', () => ({
-    setStringAsync: vi.fn(),
+    setStringAsync: vi.fn(async () => true),
 }));
 
 vi.mock('@expo/vector-icons', () => ({

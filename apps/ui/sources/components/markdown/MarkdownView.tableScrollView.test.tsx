@@ -12,7 +12,9 @@ declare global {
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-installMarkdownCommonModuleMocks();
+installMarkdownCommonModuleMocks({
+    storage: () => vi.importActual('@/sync/domains/state/storage'),
+});
 
 const setStringAsyncSpy = vi.fn<(text: string) => Promise<boolean>>(async (_text) => true);
 
