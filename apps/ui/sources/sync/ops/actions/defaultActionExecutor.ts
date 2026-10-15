@@ -247,15 +247,14 @@ import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/s
 import {
   preflightWorkspaceDestinationReplacement,
   startSessionHandoff as startSessionHandoffOp,
-import { listWorkspaceSyncRelationshipsOnController } from '@/sync/ops/workspaceSyncRelationshipsListRpc';
+} from '@/sync/ops/sessionHandoffs';
+import { createWorkspaceSyncRelationshipOnController } from '@/sync/ops/workspaceSyncRelationshipCreateRpc';
 import {
   disableWorkspaceSyncRelationship,
   enableWorkspaceSyncRelationship,
   flushWorkspaceSyncRelationship,
   terminatePersistedWorkspaceSyncRelationship,
 } from '@/sync/ops/workspaceSync';
-} from '@/sync/ops/sessionHandoffs';
-import { createWorkspaceSyncRelationshipOnController } from '@/sync/ops/workspaceSyncRelationshipCreateRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import {
   sendSessionMessageWithServerScope,
@@ -1932,10 +1931,6 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       serverId,
       targetReplacementApproval,
       targetReplacementApprovalReceiptId,
-    workspaceSyncRelationshipsList: async ({ input, signal }) => await listWorkspaceSyncRelationshipsOnController({
-      input, account: accountContext, ...(signal ? { signal } : {}),
-    }),
-
       signal,
     }) => await createWorkspaceSyncRelationshipOnController({
       input,
@@ -1947,12 +1942,6 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       ...(signal ? { signal } : {}),
     }),
 
-    sessionHandoffStart: async ({
-      sessionId,
-      targetMachineId,
-      targetPath,
-      targetSessionStorageMode,
-      stateTransfer,
     workspaceSyncRelationshipTerminate: async ({ input, serverId, signal }) => {
       const scope = accountContext?.accountLifetime.scope;
       if (!scope || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
@@ -2002,6 +1991,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return { v: 1 as const, relationshipId: input.relationshipId, status };
     },
 
+    sessionHandoffStart: async ({
+      sessionId,
+      targetMachineId,
+      targetPath,
+      targetSessionStorageMode,
+      stateTransfer,
       workspaceAction,
       serverId,
       actionRequestId,
