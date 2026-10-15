@@ -16,7 +16,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useUsageMeterListFirstReadReserve } from './usageBodyKit';
+import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -410,5 +410,31 @@ describe('the allowance list holds its first-read room once', () => {
         // A later re-read puts accounts back to pending: the retained rows keep their height, no blank room is added.
         await hook.rerender({ answered: false });
         expect(hook.getCurrent()).toBeUndefined();
+    });
+});
+
+describe('a settled list body keeps the tallest height it has drawn', () => {
+    const layout = (height: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width: 400, height } } }) as never;
+    it('holds the floor through shorter re-reads, ignores layouts before the settle, and starts over when the list changes shape', async () => {
+        const hook = await renderHook(({ settled, shapeKey }: { settled: boolean; shapeKey: string }) => useSettledBodyHeightFloor(settled, shapeKey),
+            { initialProps: { settled: false, shapeKey: 'wide' } });
+        // The first-read reserve owns the room before the settle.
+        await act(async () => { hook.getCurrent()!.onLayout(layout(500)); });
+        expect(hook.getCurrent()!.minHeight).toBeUndefined();
+        await hook.rerender({ settled: true, shapeKey: 'wide' });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(491)); });
+        // A re-read drops the pace alert: the body is shorter, the floor is not.
+        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
+        expect(hook.getCurrent()!.minHeight).toBe(491);
+        // A re-read puts accounts back to pending: the floor holds.
+        await hook.rerender({ settled: false, shapeKey: 'wide' });
+        expect(hook.getCurrent()!.minHeight).toBe(491);
+        await hook.rerender({ settled: true, shapeKey: 'wide' });
+        // Show all / a resize is a deliberate new shape, not a re-read.
+        await hook.rerender({ settled: true, shapeKey: 'narrow' });
+        expect(hook.getCurrent()!.minHeight).toBeUndefined();
+        await act(async () => { hook.getCurrent()!.onLayout(layout(300)); });
+        expect(hook.getCurrent()!.minHeight).toBe(300);
     });
 });

@@ -26,6 +26,7 @@ import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
+  useSettledBodyHeightFloor,
   useUsageMeterListFirstReadReserve,
   UsageBodyInsufficient,
   UsageShowAllRows,
@@ -206,12 +207,16 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
   // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
   // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
+  const settled = projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0;
   const firstReadReserve = useUsageMeterListFirstReadReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice),
-    projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0,
-    width !== null && width < STACKED_BELOW_PX);
+    settled, width !== null && width < STACKED_BELOW_PX);
   const reserve = list ? firstReadReserve : undefined;
   const readingShape = reserve?.shape;
-  const bodyStyle = reserve ? [styles.body, { minHeight: reserve.minHeight }] : styles.body;
+  // After that settle, every re-read swaps the pace alert / shared reason / legend: they do so inside the
+  // height the list has already shown, so the cards beside and below it never move.
+  const floor = useSettledBodyHeightFloor(list && settled, `${expanded}:${width !== null && width < STACKED_BELOW_PX}`);
+  const bodyStyle = reserve ? [styles.body, { minHeight: reserve.minHeight }]
+    : floor.minHeight !== undefined ? [styles.body, { minHeight: floor.minHeight }] : styles.body;
   if (projection.accounts.length === 0) {
     return (
       <View style={bodyStyle}>
@@ -271,7 +276,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     const reasons = lead.rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
     const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
     return (
-      <View style={bodyStyle} testID={`${props.testID}.projections`}>
+      <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.projections`}>
         {rows.length ? (
           <UsageMeterStack testID={`${props.testID}.windows`}>
             {lead.rows.map((row) => (

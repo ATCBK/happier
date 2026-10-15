@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
@@ -491,6 +491,27 @@ export function useUsageMeterListFirstReadReserve(
   const settledOnce = React.useRef(false);
   if (everyAccountAnswered) settledOnce.current = true;
   return settledOnce.current ? undefined : readUsageMeterListReserve(slice, accountCount, narrow);
+}
+
+/**
+ * The height a settled list body has shown, kept while it stays open. Its optional lines (the pace alert, the
+ * shared reason, the legend) come and go with every read, so the body keeps the tallest height it has drawn and
+ * they come and go inside it. The floor starts over when the viewer changes the list's own shape (Show all, a
+ * resize), so a deliberate collapse is never held open. Before the first settle the first-read reserve holds the room.
+ */
+export function useSettledBodyHeightFloor(settled: boolean, shapeKey: string): Readonly<{
+  minHeight: number | undefined;
+  onLayout: (event: LayoutChangeEvent) => void;
+}> {
+  const [floor, setFloor] = React.useState<Readonly<{ shapeKey: string; height: number }>>({ shapeKey, height: 0 });
+  const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+    if (!settled) return;
+    const height = Math.ceil(event.nativeEvent.layout.height);
+    setFloor((current) => current.shapeKey !== shapeKey ? { shapeKey, height }
+      : height > current.height ? { shapeKey, height } : current);
+  }, [settled, shapeKey]);
+  // A re-read puts accounts back to pending: the floor recorded while settled stays, only new layouts wait for a settle.
+  return { minHeight: floor.shapeKey === shapeKey && floor.height > 0 ? floor.height : undefined, onLayout };
 }
 
 /** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */
