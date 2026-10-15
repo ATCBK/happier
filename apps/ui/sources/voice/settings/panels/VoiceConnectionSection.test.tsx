@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { MAX_VOICE_TIMER_DELAY_MS } from '@happier-dev/protocol/voice/settings/timing';
 
 import { renderScreen } from '@/dev/testkit';
 import {
   readLocalConversationVoiceSettings,
-  VoiceLocalConversationSchema,
   voiceSettingsDefaults,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
@@ -23,7 +23,7 @@ describe('VoiceConnectionSection', () => {
     await act(async () => { field()!.props.onBlur(); });
     expect(readLocalConversationVoiceSettings(setVoice.mock.lastCall![0] as VoiceSettings).networkTimeoutMs).toBe(90000);
 
-    const admittedMaximumMs = VoiceLocalConversationSchema.shape.networkTimeoutMs.unwrap().maxValue!;
+    const admittedMaximumMs = MAX_VOICE_TIMER_DELAY_MS;
     await act(async () => { field()!.props.onChangeText(String(Math.ceil(admittedMaximumMs / 1000) + 1)); });
     await act(async () => { field()!.props.onBlur(); });
     expect(readLocalConversationVoiceSettings(setVoice.mock.lastCall![0] as VoiceSettings).networkTimeoutMs).toBe(admittedMaximumMs);

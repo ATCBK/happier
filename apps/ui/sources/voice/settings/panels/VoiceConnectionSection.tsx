@@ -17,9 +17,9 @@ import { resolveVoiceProviderIdFromSettings } from '@/voice/settings/resolveVoic
 import { VOICE_ADVANCED_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 
 // The admitted range is the setting's own schema; this row only converts it to seconds.
-const TIMEOUT_SCHEMA = VoiceLocalConversationSchema.shape.networkTimeoutMs.unwrap();
-const MIN_TIMEOUT_MS = TIMEOUT_SCHEMA.minValue ?? 0;
-const MAX_TIMEOUT_MS = TIMEOUT_SCHEMA.maxValue ?? Number.MAX_SAFE_INTEGER;
+const TIMEOUT_SCHEMA = VoiceLocalConversationSchema.shape.networkTimeoutMs._zod.def.innerType;
+const MIN_TIMEOUT_MS = Math.max(TIMEOUT_SCHEMA._zod.bag.minimum ?? 0, TIMEOUT_SCHEMA._zod.bag.exclusiveMinimum ?? 0);
+const MAX_TIMEOUT_MS = TIMEOUT_SCHEMA._zod.bag.maximum ?? Number.MAX_SAFE_INTEGER;
 
 /**
  * "Give up on a speech request after": Local voice's request timeout for endpoints and speech
