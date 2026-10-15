@@ -150,6 +150,12 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
      * would not say enough (the Look panel's Horizon and Wallpaper).
      */
     iconPlacement?: 'only' | 'leading';
+    /**
+     * `plain` only. `'none'`: a row with little room shows each tab as its glyph alone (still named
+     * for assistive technology and on hover), so a neighbour can keep its own text. Needs a glyph on
+     * every tab. Default `'all'`.
+     */
+    labels?: 'all' | 'none';
     /** Expand each segment to the platform touch-target floor when its consumer owns enough room. */
     targetSize?: 'platform';
     /** Accessible name for the group. */
@@ -510,6 +516,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
         });
     }, [measured, overflow, plain, props.tabs, rowWidth]);
     const showIcons = plain && fit.icons;
+    const glyphOnly = plain && props.labels === 'none' && props.tabs.every((tab) => tab.icon != null);
     const visibleTabs = React.useMemo(() => (overflow ? props.tabs.slice(0, fit.visibleCount) : props.tabs), [fit.visibleCount, overflow, props.tabs]);
     const hiddenTabs = React.useMemo(() => (overflow ? props.tabs.slice(fit.visibleCount) : []), [fit.visibleCount, overflow, props.tabs]);
     const activeHidden = hiddenTabs.some((tab) => isHappierTabSelected(props.activeTabId, tab.id));
@@ -698,7 +705,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                 tabFrameTarget,
                                 HAPPIER_FOCUS_RING_DELEGATED_STYLE,
                             ]}
-                            {...(iconOnly ? ({ title: tab.label } as object) : {})}
+                            {...(iconOnly || glyphOnly ? ({ title: tab.label } as object) : {})}
                             accessibilityRole={valueChoice ? 'radio' : 'tab'}
                             accessibilityLabel={unavailableReason ? `${tabName}, ${unavailableReason}` : tabName}
                             accessibilityState={valueChoice
@@ -734,7 +741,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     />
                                 ) : null}
                                 {plain ? (
-                                    <PlainTabCaption tab={tab} icon={showIcons} active={active} />
+                                    <PlainTabCaption tab={tab} icon={showIcons} active={active} label={!glyphOnly} />
                                 ) : iconOnly ? (
                                     <View style={styles.tabIcon}>{tab.icon}</View>
                                 ) : (
@@ -792,6 +799,8 @@ function PlainTabCaption(props: Readonly<{
     tab: Pick<SegmentedTab, 'label' | 'icon' | 'count' | 'id'>;
     icon: boolean;
     active: boolean;
+    /** The words are drawn (false: the glyph stands alone for a tab that is not chosen). */
+    label?: boolean;
     /** Off-screen measuring copy: drawn with the surface's own padding so widths match. */
     measuring?: boolean;
     /** Measure as a content-sized segment on the track (its padding and label), not a plain page tab. */
@@ -804,10 +813,12 @@ function PlainTabCaption(props: Readonly<{
         <View style={[styles.tabCaption, styles.plainCaption]}>
             {props.icon && props.tab.icon ? <View style={styles.tabIcon}>{props.tab.icon}</View> : null}
             {props.more ? <Icon name="dots-three" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> : null}
-            <Text numberOfLines={1} style={[styles.tabLabel, props.segmented ? null : styles.plainLabel, props.active ? styles.tabLabelActive : null]}>
-                {props.tab.label}
-                {props.tab.count ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
-            </Text>
+            {props.label === false ? null : (
+                <Text numberOfLines={1} style={[styles.tabLabel, props.segmented ? null : styles.plainLabel, props.active ? styles.tabLabelActive : null]}>
+                    {props.tab.label}
+                    {props.tab.count ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
+                </Text>
+            )}
         </View>
     );
     return props.measuring

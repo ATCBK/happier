@@ -187,6 +187,28 @@ describe('SessionViewerHost', () => {
     await result.unmount();
   });
 
+  it('sizes the frame to hold the switch, the Machine chip and the buttons side by side', async () => {
+    const { result, frame } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 800 });
+    const layOut = async (testID: string, width: number) => {
+      await act(async () => {
+        invokeTestInstanceHandler(
+          result.tree.root.find(
+            (node) => node.props?.testID === testID && typeof node.props.onLayout === 'function',
+          ),
+          'onLayout',
+          { nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } },
+        );
+      });
+    };
+    await layOut('session-viewer-source-capsule', 150);
+    await layOut('session-viewer-buttons-capsule', 90);
+    const withoutChip = frame().props.minWidth as number;
+    await layOut('session-viewer-machine', 100);
+    // The chip's own width and the gap that separates it join the row.
+    expect((frame().props.minWidth as number) - withoutChip).toBe(100 + 6);
+    await result.unmount();
+  });
+
   it('docks when the area cannot hold a usable frame beside the composer', async () => {
     const { result, harness } = await mountOpen(AGENT_PRESENCE, {
       width: 1200,

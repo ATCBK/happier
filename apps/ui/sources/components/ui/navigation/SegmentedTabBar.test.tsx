@@ -932,3 +932,19 @@ describe('SegmentedTabBar measured overflow', () => {
         expect(onSelectTab).toHaveBeenCalledWith('services');
     });
 });
+
+describe('SegmentedTabBar plain labels', () => {
+    it('draws only the glyphs when labels are "none", and every tab keeps its accessible name', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const tabs = PAGE_TABS.slice(0, 2);
+        const screen = await renderScreen(
+            <SegmentedTabBar presentation="plain" labels="none" tabs={tabs} activeTabId="overview" onSelectTab={() => {}} testIDPrefix="page" />,
+        );
+        for (const tab of tabs) {
+            const node = requireTab(screen, `page:${tab.id}`);
+            expect(node.findAll((child) => String(child.type) === 'Text')).toHaveLength(0);
+            expect(node.findAll((child) => String(child.type) === 'Glyph')).toHaveLength(1);
+            expect(node.props.accessibilityLabel).toBe(tab.label);
+        }
+    });
+});

@@ -40,7 +40,7 @@ function createHost(): Readonly<{ host: HappierCapsuleHost; settle: () => void }
   let settle = () => {};
   const host: HappierCapsuleHost = {
     Surface: (props) => <div data-testid={props.testID} data-elevation={props.elevation}>{props.children}</div>,
-    Text: (props) => <span>{props.children}</span>,
+    Text: (props) => <span data-lines={props.numberOfLines}>{props.children}</span>,
     Button: (props) => (
       <button type="button" data-testid={props.testID} onClick={props.onPress}>{props.title}</button>
     ),
@@ -213,6 +213,20 @@ describe('HappierPresenceCapsule', () => {
       await click(byTestId(mounted.container, 'p-check-again'));
       expect(onCheckAgain).toHaveBeenCalledTimes(1);
       expect(byTestId(mounted.container, 'p-hand-back')).toBeTruthy();
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('lets the sentence that names the Machine wrap instead of clipping the name', () => {
+    const { host } = createHost();
+    const mounted = mountThroughReactNativeWeb(
+      <HappierPresenceCapsule presence={{ kind: 'agent', controlEpoch: 1 }} copy={{ ...COPY, agentTitle: 'Claude is working on fly-bot-1' }}
+        colors={COLORS} host={host} onTakeControl={async () => ({ status: 'accepted' })} placement="inline" testID="p" />,
+    );
+    try {
+      const title = [...mounted.container.querySelectorAll('span')].find((node) => node.textContent === 'Claude is working on fly-bot-1');
+      expect(title?.getAttribute('data-lines')).toBe('2');
     } finally {
       mounted.unmount();
     }

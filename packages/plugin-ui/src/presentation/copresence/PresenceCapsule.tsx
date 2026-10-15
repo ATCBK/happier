@@ -303,7 +303,8 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
           </host.Text>
         ) : (
           <View style={[styles.text, compact || props.placement !== 'dock' ? styles.textCompact : null]}>
-            <host.Text role="title" color={colors.text} numberOfLines={1}>{title}</host.Text>
+            {/* A narrow capsule wraps the sentence rather than clip the Machine or window it names. */}
+            <host.Text role="title" color={colors.text} numberOfLines={2}>{title}</host.Text>
             {detail ? (
               // The warning is the one line that must be read whole, so it may wrap.
               <host.Text role="meta" color={detailColor} numberOfLines={mayHaveLanded ? 2 : 1}>{detail}</host.Text>

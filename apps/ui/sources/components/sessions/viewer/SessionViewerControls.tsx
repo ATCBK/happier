@@ -37,6 +37,8 @@ import { useSessionViewerMachine } from './useSessionViewerMachine';
 const ROW_GAP = 6;
 /** The anchored source picker's width (lab `b-mac` `.fa-srcpop`), never wider than the window allows. */
 const SOURCE_PICKER_WIDTH = 360;
+/** The Machine name is identity, not content: past this width it ellipsizes inside its chip. */
+const IDENTITY_MAX_WIDTH = 176;
 
 const stylesheet = StyleSheet.create(() => ({
   row: {
@@ -47,8 +49,11 @@ const stylesheet = StyleSheet.create(() => ({
     gap: ROW_GAP,
   },
   identity: {
-    flexShrink: 1,
     minWidth: 0,
+    maxWidth: IDENTITY_MAX_WIDTH,
+  },
+  identityShrinks: {
+    flexShrink: 1,
   },
   grow: {
     flex: 1,
@@ -84,14 +89,18 @@ export function SessionViewerControls(
   const [picker, setPicker] =
     React.useState<ComputerTargetPickerRequest | null>(null);
   const sourceAnchorRef = React.useRef<View | null>(null);
-  const widthsRef = React.useRef({ source: 0, buttons: 0 });
+  const widthsRef = React.useRef({ source: 0, identity: 0, buttons: 0 });
   const onMinWidthChange = props.onMinWidthChange;
   const measure = React.useCallback(
-    (part: 'source' | 'buttons') => (event: LayoutChangeEvent) => {
+    (part: 'source' | 'identity' | 'buttons') => (event: LayoutChangeEvent) => {
       widthsRef.current[part] = event.nativeEvent.layout.width;
-      const { source, buttons } = widthsRef.current;
+      const { source, identity, buttons } = widthsRef.current;
+      // The Machine chip is part of the row it has to fit in: its name shows whole (up to the chip's
+      // own cap) instead of being squeezed to its status dot by the switch and the buttons.
       if (source > 0 && buttons > 0)
-        onMinWidthChange?.(Math.ceil(source + buttons + ROW_GAP));
+        onMinWidthChange?.(
+          Math.ceil(source + buttons + ROW_GAP + (identity > 0 ? identity + ROW_GAP : 0)),
+        );
     },
     [onMinWidthChange],
   );
@@ -200,6 +209,9 @@ export function SessionViewerControls(
           <SegmentedTabBar
             presentation="plain"
             compact
+            // A phone frame is as wide as the column: the sources are their glyphs, so the Machine's
+            // name has the room it needs beside the switch.
+            labels={controller.phone ? 'none' : undefined}
             segmentSizing="content"
             accessibilityLabel={t('computerUse.presentation.sourceA11y')}
             testIDPrefix="session-viewer-source"
@@ -228,7 +240,16 @@ export function SessionViewerControls(
       </View>
       </CompanionNoDragRegion>
       {machineName ? (
-        <View style={stylesheet.identity} testID="session-viewer-machine">
+        <View
+          // A floating frame grows to the chip's natural width (measured below); a phone frame is as
+          // wide as the column, so there the chip ellipsizes in what is left.
+          style={[
+            stylesheet.identity,
+            controller.phone ? stylesheet.identityShrinks : null,
+          ]}
+          onLayout={measure('identity')}
+          testID="session-viewer-machine"
+        >
           <HappierIdentityCapsule
             name={machineName}
             leading={
