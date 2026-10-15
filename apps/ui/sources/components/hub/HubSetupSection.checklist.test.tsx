@@ -31,6 +31,8 @@ const state = vi.hoisted(() => ({
     window: { width: 1600, height: 900 },
     push: null as null | ((href: unknown) => void),
 }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 // Native crypto adapters are unavailable here; E2EE uses the real Account codecs.
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
@@ -201,6 +203,8 @@ describe('HubSetupSection as a checklist (Settings Overview)', () => {
 
     it('completes the recovery key only after its saved acknowledgement, not modal close', async () => {
         legacyAccount = await createSecretSettingsTestHarness({ mode: 'e2ee' });
+        const { sync } = await import('@/sync/sync');
+        await sync.resumeSync('manual');
         const serverId = resolveServerProfileScopeIdForIdentifier(legacyAccount.scope.serverId);
         const machine = createMachineFixture({ id: 'm1', metadata: null });
         storage.setState({ isDataReady: true, machines: { [machine.id]: machine },
@@ -217,7 +221,7 @@ describe('HubSetupSection as a checklist (Settings Overview)', () => {
         expect(computer.findByTestId('hub-setup.recoveryKey')).toBeTruthy();
         await computer.unmount();
         state.window = { width: 360, height: 800 };
-        vi.stubGlobal('navigator', { maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)' });
+        vi.stubGlobal('navigator', { maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)', locks: globalThis.navigator.locks });
         const phone = await renderCurrentSection(legacyAccount.credentials, serverId);
         expect(phone.findByTestId('hub-setup.connectComputer')).toBeTruthy();
         expect(phone.getTextContent()).toContain(progress(1, 3));

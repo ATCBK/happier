@@ -1,7 +1,7 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, StrictJsonValueSchema, type PluginJsonSchemaV2 } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { buildWidgetAreaActionInputV1, createPluginWidgetAreaHostPortV1, PluginUiWidgetAreaRequestV1Schema, PluginUiWidgetAreaResultV1Schema } from '@happier-dev/protocol/plugins/ui';
@@ -64,9 +64,6 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 // The signed-in viewer is the area's Account: a widget never reads for another viewer.
 const viewer = vi.hoisted(() => ({ serverId: 'home', accountId: 'viewer' }));
 const widgetDemand = vi.hoisted(() => ({ active: new Set<string>(), reads: [] as string[], opens: 0, releases: 0 }));
-vi.mock('@/sync/domains/state/storage', async importOriginal => (await import('@/dev/testkit/mocks/storage')).createPartialStorageModuleMock(importOriginal, {
-    useActiveServerAccountScope: () => viewer,
-}));
 vi.mock('@react-navigation/native', async () => ({
     ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
     useIsFocused: () => true,
@@ -213,7 +210,15 @@ async function submitAreaAdd(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await flushHookEffects({ cycles: 4 });
 }
 
-afterEach(() => { standardCleanup(); storage.setState({ artifacts: {} }); });
+let viewerConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let viewerRequest: ReturnType<typeof createHomeHubArtifactHttpBoundary>['request'];
+beforeEach(async () => {
+    viewerRequest = createHomeHubArtifactHttpBoundary(scope.accountId).request;
+    viewerConnection = await restoreServerAccountForTest({ serverUrl: 'https://home', accountId: scope.accountId,
+        request: (url, init) => viewerRequest(url, init) });
+    expect(viewerConnection.home.id).toBe(scope.serverId);
+});
+afterEach(async () => { standardCleanup(); await viewerConnection?.dispose(); storage.setState({ artifacts: {} }); });
 
 /**
  * Public Project-aside fixture: explicit portable identities and the already-injected upstream
@@ -434,6 +439,11 @@ describe('a plugin page widget area', () => {
             inputs: { fields: [] }, inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } } });
         const instance: WidgetInstanceV1 = { v: 1, id: 'wide-copy', definition: { kind: 'artifact', artifactId: definition.id }, bindings: {} };
+        const definitionHttp = createLayoutArtifactHttpBoundary(scope.accountId, { artifactId: definition.id,
+            kind: 'widget-definition.v1', defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value),
+            buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+        definitionHttp.seed(definition);
+        viewerRequest = definitionHttp.request;
         await area.store.apply({ kind: 'add', instance, size: 'medium' });
         storage.setState({ artifacts: { ...storage.getState().artifacts, [definition.id]: {
             id: definition.id, ownerAccountId: scope.accountId, isDecrypted: true, title: definition.name,
@@ -442,7 +452,7 @@ describe('a plugin page widget area', () => {
         const saved = await area.store.read();
         const screen = await renderScreen(page(area.hostApi, 'happier'));
         await flushHookEffects({ cycles: 4 });
-        expect(screen.root.findAllByType(CardGridCell).filter(cell => cell.props.span === 'row')).toHaveLength(1);
+        expect(screen.findAllByType(CardGridCell).filter(cell => cell.props.span === 'row')).toHaveLength(1);
         expect(screen.findByTestId('prs.pinned.widget.wide-copy.frame.viewport')).not.toBeNull();
         expect(await area.store.read()).toEqual(saved);
     });
@@ -894,8 +904,8 @@ describe('a declarative page’s widget area node', () => {
 describe('the Project aside adapter', () => {
     it('does not open a Project layout without a current matching Account lifetime', async () => {
         const screen = await renderScreen(
-            <ProjectAsideWidgets serverId="home" projectName="happier"
-                activeCheckout={{ id: 'w1', serverId: 'home', machineId: 'm1', rootPath: '/code/happier', createdAtMs: 1 }}
+            <ProjectAsideWidgets serverId="other-home" projectName="happier"
+                activeCheckout={{ id: 'w1', serverId: 'other-home', machineId: 'm1', rootPath: '/code/happier', createdAtMs: 1 }}
                 activeCheckoutLabel="MacBook Pro · main" testID="project.widgets" />,
         );
         expect(screen.findByTestId('project.widgets.unavailable')).not.toBeNull();

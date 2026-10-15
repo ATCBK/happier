@@ -15,6 +15,8 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock({ Platform: { get OS() { return boundary.platformOS; }, select: (options: Record<string, unknown>) => options[boundary.platformOS] ?? options.native ?? options.default } });
 });
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter', () => ({
     subscribeToNativeHardwareKeyboardEvents: boundary.subscribe,
     configureNativeHardwareKeyboardConsumableEventSignatures: boundary.configure,
@@ -31,10 +33,11 @@ beforeEach(async () => {
     environment = await restoreServerAccountForTest({ serverUrl: 'http://find-keys.test' });
     getStorage().setState(state => ({ settings: { ...state.settings, keyboardShortcutsV2Enabled: false,
         keyboardSingleKeyShortcutsEnabled: false, keyboardShortcutDisabledCommandIdsV1: [], keyboardShortcutOverridesV1: {} } }));
-    dom = new JSDOM('<!doctype html><textarea></textarea>');
+    dom = new JSDOM('<!doctype html><textarea></textarea>', { url: 'http://find-keys.test' });
     vi.stubGlobal('window', dom.window);
     vi.stubGlobal('document', dom.window.document);
-    vi.stubGlobal('navigator', { platform: 'Linux' });
+    // Keep the browser storage-lock boundary installed by Account restoration.
+    vi.stubGlobal('navigator', { platform: 'Linux', locks: globalThis.navigator.locks });
 });
 afterEach(async () => {
     standardCleanup();
