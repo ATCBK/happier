@@ -30,6 +30,7 @@ import { UsageWidgetPage } from './UsageWidgetPage';
 import { UsageFilterBar } from './UsageFilterBar';
 import { getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
 import { t } from '@/text';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -70,11 +71,15 @@ afterEach(async () => {
 describe('mounted Usage page scope commands', () => {
     it('admits the deep-linked view and selects from a closing menu across a page republish', async () => {
         const selectedRoutes: string[] = [];
+        const inventoryRead = createDeferred<void>();
+        const inventoryStarted = createDeferred<void>();
         let artifact: ReturnType<typeof createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>> | undefined;
         home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-page-layout-link.test', accountId: 'account-a' }],
             route: request => request.path === '/v1/kv/bulk' ? Response.json({ values: [] })
                 : request.path === '/v2/usage/query' ? Response.json(accounting)
-                : artifact?.request(request.url, { method: request.method }) });
+                : request.path === '/v1/artifacts' && request.method === 'GET'
+                    ? (inventoryStarted.resolve(), inventoryRead.promise.then(() => artifact?.request(request.url, { method: request.method })))
+                    : artifact?.request(request.url, { method: request.method }) });
         const server = home.homes.a!;
         publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
         const surface: WidgetSurfaceRefV1 = { serverId: server.id, accountId: 'account-a',
@@ -96,7 +101,14 @@ describe('mounted Usage page scope commands', () => {
                     onLayoutChange={layoutId => selectedRoutes.push(layoutId)} />
             </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
         </InjectedAuthProvider>);
-        expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('work');
+        await inventoryStarted.promise;
+        await flushHookEffects({ cycles: 10 });
+        // The cold list and layout are one admitted page: data cannot paint
+        // beneath a temporary preset-only navigation strip.
+        expect.soft(screen.findAllByType(WidgetSurface)).toHaveLength(0);
+        expect.soft(Boolean(screen.findHostByTestId('usage-area.unavailable'))).toBe(false);
+        expect.soft(Boolean(screen.findHostByTestId('usage-area.loading'))).toBe(true);
+        inventoryRead.resolve();
         await vi.waitFor(() => expect(screen.findAllByType(WidgetSurface).map(node => node.props.instance.id)).toEqual(['work-only']));
         expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('work');
         await act(async () => {

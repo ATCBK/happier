@@ -409,10 +409,10 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
             check(signal);
             // The existing Artifact page maximum, not a dashboard count limit.
             const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal }); check(signal);
-            for (const item of page.items) {
-                if (item.ownerAccountId !== scope.accountId || item.access !== 'owner') continue;
+            await Promise.all(page.items.map(async item => {
+                if (item.ownerAccountId !== scope.accountId || item.access !== 'owner') return;
                 const header = readWidgetSurfaceArtifactHeaderV1(item);
-                if (!header || !sameAreaOwner(header.surface)) continue;
+                if (!header || !sameAreaOwner(header.surface)) return;
                 const revision = 'bodyVersion' in item && typeof item.bodyVersion === 'number'
                     ? { headerVersion: item.headerVersion, bodyVersion: item.bodyVersion } : null;
                 if (presetFor(header.surface)) {
@@ -420,7 +420,7 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
                     // A concurrently removed personal copy returns to the host preset projection.
                     if (row) entries.set(item.artifactId, rowSummary(row));
                 } else entries.set(item.artifactId, summarize(header.surface, header.title, header.sortKey ?? 'a0', revision));
-            }
+            }));
             cursor = page.nextCursor;
         } while (cursor);
         return [...entries.values()].sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : a.artifactId.localeCompare(b.artifactId));

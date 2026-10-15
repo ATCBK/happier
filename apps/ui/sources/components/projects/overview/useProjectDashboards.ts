@@ -21,6 +21,8 @@ import { resumeActionExecutionResult } from '@/components/approvals/actionApprov
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { t } from '@/text';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type ProjectDashboardsState = Readonly<{
   status: 'loading' | 'ready' | 'offline';
@@ -34,6 +36,9 @@ export type ProjectDashboardMutation = Readonly<
 >;
 
 const LOADING_INVENTORY: ProjectDashboardsState = { status: 'loading', dashboards: [] };
+// The acknowledged inventory belongs to the Account, beyond any one route's
+// subscribers. Retirement discards the weakly held observation and private names.
+const accountInventories = new WeakMap<ServerAccountScopeLifetime, Map<string, ProjectDashboardsState>>();
 
 /** A generic failure does not establish that a named-layout write never committed. */
 export function isWidgetAreaLayoutOutcomeUnknown(errorCode: string | undefined): boolean {
@@ -89,19 +94,29 @@ export function useWidgetAreaLayouts(
   const surfaceKey = surface ? JSON.stringify([
     surface.serverId, surface.accountId, buildWidgetSurfaceArtifactIdV1(surface), surface.artifactId ?? null,
   ]) : null;
-  const observation = React.useMemo(() => ({ surfaceKey }), [surfaceKey]);
+  const activeLifetime = captureActiveServerAccountScopeLifetime();
+  const lifetime = activeLifetime && areServerAccountScopesEqual(activeLifetime.scope, scope) ? activeLifetime : null;
+  const retained = React.useMemo(() => {
+    if (!lifetime) return null;
+    let inventories = accountInventories.get(lifetime);
+    if (!inventories) { inventories = new Map(); accountInventories.set(lifetime, inventories); }
+    return inventories;
+  }, [lifetime]);
+  const observation = React.useMemo(() => ({ surfaceKey, lifetime }), [surfaceKey, lifetime]);
   const currentObservation = React.useRef(observation);
   currentObservation.current = observation;
   const mounted = React.useRef(true);
-  const [inventory, setInventory] = React.useState(() => ({ observation, state: LOADING_INVENTORY }));
+  const initial = surfaceKey ? retained?.get(surfaceKey) ?? LOADING_INVENTORY : LOADING_INVENTORY;
+  const [inventory, setInventory] = React.useState(() => ({ observation, state: initial }));
   // Withdraw another scope's private names synchronously, before its replacement read settles.
-  const state = inventory.observation === observation ? inventory.state : LOADING_INVENTORY;
+  const state = inventory.observation === observation ? inventory.state : initial;
   const generation = React.useRef(0);
   React.useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; generation.current++; };
   }, []);
-  const isCurrent = React.useCallback(() => mounted.current && currentObservation.current === observation, [observation]);
+  const isCurrent = React.useCallback(() => mounted.current && currentObservation.current === observation
+    && (lifetime?.isCurrent() ?? true), [observation, lifetime]);
   const interest = React.useMemo(() => ({ controller: new AbortController() }), [observation]);
   React.useEffect(() => {
     if (interest.controller.signal.aborted) interest.controller = new AbortController();
@@ -155,21 +170,22 @@ export function useWidgetAreaLayouts(
         ].safeParse(outcome.result)
       : null;
     if (!isCurrent() || current !== generation.current) return null;
+    if (parsed?.success && surfaceKey) retained?.set(surfaceKey, { status: 'ready', dashboards: parsed.data.layouts });
     setInventory((previous) => ({ observation, state: parsed?.success
       ? { status: 'ready', dashboards: parsed.data.layouts }
       : { status: 'offline', dashboards: previous.observation === observation ? previous.state.dashboards : [] },
     }));
     return parsed?.success ? parsed.data.layouts : null;
-  }, [interest, isCurrent, observation, run, surface]);
+  }, [interest, isCurrent, observation, run, surface, surfaceKey, retained]);
 
   React.useEffect(() => {
     setInventory(previous => previous.observation === observation
-      ? previous : { observation, state: LOADING_INVENTORY });
+      ? previous : { observation, state: surfaceKey ? retained?.get(surfaceKey) ?? LOADING_INVENTORY : LOADING_INVENTORY });
     // Same-area publications include newly created layouts, not only already-known inventory IDs.
     // Unrelated Artifact and store updates keep this subscription's projection unchanged.
     void load();
     return () => { generation.current++; };
-  }, [load, observation, publications]);
+  }, [load, observation, publications, retained, surfaceKey]);
 
   const mutate = React.useCallback(
     async (

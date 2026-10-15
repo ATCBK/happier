@@ -16,6 +16,28 @@ function boundary() {
 }
 
 describe('personal widget areas at the Account Artifact owner', () => {
+    it('reads personalized preset bodies together so one slow preset does not serialize the inventory', async () => {
+        const b = boundary();
+        const core: WidgetSurfaceRefV1 = { ...surface, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
+        const presets = ['overview', 'plans'].map(id => ({ id, name: id, items: [] }));
+        const owner = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface: core, presets, isCurrent: () => true });
+        for (const preset of await owner.list()) await owner.rename({ surface: preset.surface, expectedRevision: null, name: `My ${preset.name}` });
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let first: string | undefined;
+        let siblingStarted = false;
+        const reading = createWidgetAreaLayoutArtifactPortV1({ ...b.dashboardTransport, read: async (id, options) => {
+            if (!first) { first = id; await held; }
+            else if (id !== first) siblingStarted = true;
+            return b.transport.read(id, options);
+        } }, { surface: core, presets, isCurrent: () => true }).list();
+        try {
+            // The second preset must start while the first is still unanswered.
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(siblingStarted).toBe(true);
+        } finally { release(); }
+        expect((await reading).map(row => row.name)).toEqual(['My overview', 'My plans']);
+    });
     it('reads and personalizes every host-produced Usage preset without a mounted page', async () => {
         const b = boundary();
         const core: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'one', owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };

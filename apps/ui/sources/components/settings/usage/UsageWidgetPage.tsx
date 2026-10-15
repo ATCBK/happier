@@ -230,17 +230,6 @@ function UsagePageDocument(
       ? (admittedSurface.owner.layoutId ?? 'overview')
       : 'overview';
   const listed = layouts.state.dashboards;
-  const views = React.useMemo(
-    () =>
-      listed.length
-        ? listed
-        : USAGE_WIDGET_PRESET_IDS.map((id) => ({
-            id,
-            name: props.names[id],
-            isPreset: true,
-          })),
-    [listed, props.names],
-  );
   const viewOf = (
     summary:
       | WidgetAreaLayoutSummaryV1
@@ -257,7 +246,7 @@ function UsagePageDocument(
           summary,
         }
       : { ...summary, summary: null };
-  const tabs = React.useMemo(() => views.map(viewOf), [views]);
+  const tabs = React.useMemo(() => listed.map(viewOf), [listed]);
   const tabViews = React.useMemo(
     () =>
       tabs.map((tab) => ({
@@ -473,6 +462,19 @@ function UsagePageDocument(
     [],
   );
   const preset = ready?.preset ?? null;
+  const waitingLayout = React.useMemo(() => ({ ...layout, state: { status: 'loading' as const } }), [layout]);
+
+  // The cold inventory and layout start together. Admit the list before any
+  // data body, so the page never publishes a temporary preset-only tab strip.
+  // A warm mount already has its Account's acknowledged inventory.
+  if (layouts.state.status === 'loading') return (
+    <>
+      <UsagePageHeader slices={[]} query={null} {...(props.sessionId ? { sessionId: props.sessionId } : {})} />
+      <WidgetArea port={props.port} layout={waitingLayout} context={props.context} geometry="grid"
+        title={t('usage.board.page.title')} surfaceName={t('usage.board.page.title')}
+        dashboard={{ addLabel: t('usage.board.page.addWidget'), emptyTitle: t('usage.board.page.emptyView') }} testID="usage-area" />
+    </>
+  );
 
   return (
     <>

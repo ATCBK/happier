@@ -10,6 +10,11 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { WidgetAreaLayoutsExecute } from './useProjectDashboards';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 // Install transport boundaries before the named-layout/approval consumer graph.
 installHomeGovernanceBoundaries(createHomeGovernanceHarness());
@@ -17,6 +22,47 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 
 afterEach(standardCleanup);
+
+it('retains the acknowledged Account layout list on a warm mount while the replacement list is unanswered', async () => {
+    const previous = storage.getState();
+    const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-retention.test', accountId: 'account' }], route: () => undefined });
+    const server = home.homes.a!;
+    publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+    const scope = { serverId: server.id, accountId: 'account' };
+    storage.setState({ artifacts: {}, profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
+    const surface: WidgetSurfaceRefV1 = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
+    const boundary = createWorkBoardArtifactBoundary();
+    let held = createDeferred<void>();
+    let hold = false;
+    const transport = { ...boundary.forAccount(scope.accountId), delete: boundary.transport.delete,
+        list: async (...args: Parameters<typeof boundary.transport.list>) => { if (hold) await held.promise; return boundary.transport.list(...args); } };
+    const owner = createWidgetAreaLayoutArtifactPortV1(transport, { surface, isCurrent: () => true });
+    await owner.create({ layoutId: 'mine', name: 'My usage' });
+    const unused = async (): Promise<never> => { throw new Error('unexpected_mutation'); };
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+        widgetSurfaceActions: { corePage: createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true })) },
+        widgetAreaLayouts: { list: () => owner.list(), create: unused, rename: unused, delete: unused, reorder: unused, reset: unused, undo: unused } }));
+    const execute: WidgetAreaLayoutsExecute = (actionId, args) => executor.execute(actionId, args, {
+        surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId, authority: 'present_user', actionCaller: { kind: 'host' },
+    });
+    try {
+        const cold = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
+        await vi.waitFor(() => expect(cold.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']));
+        await cold.unmount();
+        hold = true;
+        const warm = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
+        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        await warm.rerender();
+        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        held.resolve();
+        await warm.unmount();
+        held = createDeferred<void>();
+        retireActiveServerAccountScopeLifetime();
+        const retired = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
+        expect(retired.getCurrent().state.dashboards).toEqual([]);
+        await retired.unmount();
+    } finally { held.resolve(); retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
+});
 
 it('refreshes mounted inventory for new and removed same-area publications through another Action entry point', async () => {
     const previous = storage.getState();
