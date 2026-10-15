@@ -73,6 +73,10 @@ export type UseSimulatorRelayIngestionResult = Readonly<{
 }>;
 
 const EMPTY_PLAYER_STATES: Readonly<Record<string, SimulatorPreviewStreamState | undefined>> = {};
+// A responsive shell can remount while its source is still admitting the old capture. Reopening
+// the exact same source/viewer waits for that late admission's final Stop, even across mounts.
+// Entries exist only for closing admissions and remove themselves when that admission settles.
+const closingAdmissions = new Map<string, Promise<void>>();
 
 function createStreamIdentityKey(input: Readonly<{
     serverId?: string | null;
@@ -292,16 +296,22 @@ export function useSimulatorRelayIngestion(
             }
         });
 
-        void openMachineLiveStreamRelayClient({
-            ...clientInput,
-            onAuthorized: (request) => {
-                if (request.authorization) scheduleRenewal(request.authorization.payload.exp);
-            },
-        })
+        const previousAdmission = closingAdmissions.get(streamIdentityKey);
+        const opening = (async () => {
+            await previousAdmission;
+            if (disposed) return null;
+            return await openMachineLiveStreamRelayClient({
+                ...clientInput,
+                onAuthorized: (request) => {
+                    if (request.authorization) scheduleRenewal(request.authorization.payload.exp);
+                },
+            });
+        })()
             .then((result) => {
                 // Cleanup can precede registration at the source. Stop the exact
                 // viewer again when a late successful start becomes reachable.
-                if (disposed) { if (result.ok) stop(); return; }
+                if (disposed) { if (result?.ok) stop(); return; }
+                if (!result) return;
                 if (result.ok) return;
                 ended = true;
                 clearRenewal();
@@ -313,6 +323,7 @@ export function useSimulatorRelayIngestion(
             .finally(() => {
                 openSettled = true;
                 if (disposed) unsubscribe();
+                if (closingAdmissions.get(streamIdentityKey) === opening) closingAdmissions.delete(streamIdentityKey);
             });
 
         return () => {
@@ -321,6 +332,7 @@ export function useSimulatorRelayIngestion(
             stop();
             // A late accepted capture needs its own final Stop before the carrier retires.
             if (openSettled) unsubscribe();
+            else closingAdmissions.set(streamIdentityKey, opening);
         };
     }, [attempt, enabled, transport, serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId]);
 
