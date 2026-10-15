@@ -2,7 +2,7 @@ import { composeWorkflowRunWorkerUpdateV1 } from '@happier-dev/protocol/workflow
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { resolveWorkflowRunDataKeyV1 } from '@happier-dev/protocol/workflows/workflowRunDataKeyV1';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
-import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveWorkflowSessionInputLocalIdV2, SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
 import { WorkflowAuthoredInputV1Schema, WorkflowRunSummaryV1Schema, WorkflowRunInvocationIndexV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowAcceptedSnapshotV1, WorkflowRunSummaryV1, WorkflowRunInvocationIndexV1, WorkflowProgressEnvelopeV1, WorkflowRunEncryptionV1, ValidatedAutomationAccountEncryptionV1 } from '@happier-dev/protocol';
@@ -198,9 +198,15 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
       }
       const authored = WorkflowAuthoredInputV1Schema.parse(step.row.progress.input);
       if (authored.renderedText === undefined) throw new Error('workflow_delivery_input_not_frozen');
+      const { admittedPermissionCeiling, sourceAuthority } = step.accepted.authorization;
+      const causalPermissionAuthority = SessionInputCausalPermissionAuthorityV1Schema.parse({
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling,
+        ...(sourceAuthority ? { sourceAuthority: { kind: 'mediatedExternal', ...sourceAuthority, admittedPermissionCeiling } } : {}),
+      });
       return { kind: 'workflow_step', localInputId: step.localInputId,
         text: authored.renderedText,
         workflowInvocation: { runId: step.runId, invocationRecordId: step.row.index.id },
+        causalPermissionAuthority,
         workDepth: step.accepted.workDepth, acknowledgeAccepted: () => undefined,
       };
     },

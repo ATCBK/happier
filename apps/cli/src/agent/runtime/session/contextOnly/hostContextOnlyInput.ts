@@ -1,5 +1,5 @@
 import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
-import type { WorkerUpdateV1 } from '@happier-dev/protocol';
+import type { SessionInputCausalPermissionAuthorityV1, WorkerUpdateV1 } from '@happier-dev/protocol';
 import type { SessionFollowPreparedContext } from '../follow/sessionFollowContextReconciler';
 import { measureSessionFollowUtf8Bytes } from '../follow/sessionFollowContextBudget';
 
@@ -14,6 +14,7 @@ export type HostContextOnlySourceInput =
   | Readonly<{
       kind: 'workflow_step'; localInputId: string; text: string;
       workflowInvocation: WorkflowInvocationIdentity;
+      causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
       workDepth: number;
       acknowledgeAccepted: () => void;
     }>;

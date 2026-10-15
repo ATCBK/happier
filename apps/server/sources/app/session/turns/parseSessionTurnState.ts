@@ -9,6 +9,9 @@ export type SessionTurnStoredRow = Readonly<{
     agentId?: string | null;
     agentTurnId?: string | null;
     status: string;
+    initiator?: string;
+    workDepth?: number;
+    workflowInvocationJson?: string | null;
     startedAt: StoredBigInt;
     updatedAt: StoredBigInt;
     terminalAt?: StoredBigInt;
@@ -91,6 +94,10 @@ export function parseStoredSessionTurn(row: SessionTurnStoredRow): SessionTurnV1
 
     return {
         turnId: row.turnId,
+        ...(row.initiator !== undefined && row.workDepth !== undefined
+            ? parseStoredSessionTurnFacts({ initiator: row.initiator, workDepth: row.workDepth,
+                workflowInvocationJson: row.workflowInvocationJson ?? null })
+            : {}),
         ...(row.agentId ? { agentId: row.agentId } : {}),
         ...(row.agentTurnId ? { agentTurnId: row.agentTurnId } : {}),
         status: status.data,

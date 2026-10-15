@@ -6,6 +6,14 @@ import {
 } from "./parseSessionTurnState";
 
 describe("parseSessionTurnState", () => {
+    it.each(["user", "agent_session", "host", "workflow"] as const)("projects persisted %s turn facts through the strict reader", (initiator) => {
+        const facts = { initiator, workDepth: 3,
+            ...(initiator === "workflow" ? { workflowInvocation: { runId: "run-1", invocationRecordId: "step-1" } } : {}) };
+        const row = { turnId: "quiet-turn", status: "failed", startedAt: 100, updatedAt: 200, terminalAt: 200,
+            ...facts, workflowInvocationJson: facts.workflowInvocation ? JSON.stringify(facts.workflowInvocation) : null };
+        expect(parseStoredSessionTurn(row)).toMatchObject(facts);
+    });
+
     it("preserves remote-dev persisted provider process-exit-after-switch runtime issues", () => {
         const issueJson = JSON.stringify({
             v: 1,

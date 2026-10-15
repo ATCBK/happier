@@ -8,6 +8,18 @@ import {
 } from '../../index.js';
 
 describe('SessionTurnV1 protocol', () => {
+  it('validates immutable host facts without requiring them on retained projections', () => {
+    const base = { turnId: 'quiet-turn', status: 'failed', startedAt: 100, updatedAt: 200 };
+    expect(SessionTurnV1Schema.safeParse(base).success).toBe(true);
+    const facts = { initiator: 'workflow', workDepth: 1,
+      workflowInvocation: { runId: 'own-run', invocationRecordId: 'own-input' } };
+    expect(SessionTurnV1Schema.parse({ ...base, ...facts })).toMatchObject(facts);
+    for (const invalid of [{ initiator: 'unknown' }, { workDepth: -1 },
+      { workflowInvocation: { ...facts.workflowInvocation, foreign: true } }]) {
+      expect(SessionTurnV1Schema.safeParse({ ...base, ...facts, ...invalid }).success).toBe(false);
+    }
+  });
+
   const issue = {
     v: 1,
     scope: 'primary_session',

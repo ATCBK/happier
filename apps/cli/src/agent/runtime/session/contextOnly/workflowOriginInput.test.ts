@@ -12,6 +12,7 @@ import {
   convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
   prepareWorkflowRunDataKeyV1,
   resolveValidatedAutomationAccountEncryptionV1,
+  SessionInputCausalPermissionAuthorityV1Schema,
   type AvailableE2eeAutomationAccountEncryptionV1,
   type WorkflowRunRecipientCensusResponseV1,
   type WorkflowRunSummaryV1,
@@ -180,7 +181,13 @@ describe('origin workflow current-state pull', () => {
     expect(await input?.recheckAdmission(signal)).toBe(false);
   });
 
-  it.each([true, false])('uses the positive host fact, not publisher custody, for restart and same-identity Resume (dispatched: %s)', async (dispatched) => {
+  it.each([
+    { dispatched: true, ceiling: 'default' as const, sourceAuthority: undefined },
+    { dispatched: false, ceiling: 'read-only' as const, sourceAuthority: undefined },
+    { dispatched: false, ceiling: 'default' as const, sourceAuthority: {
+      mediatorPluginId: 'happier.channels', sourceRef: 'own-channel', sourceRevisionOrEpoch: 'revision-1', remoteApprovalMaxScope: 'request' as const,
+    } },
+  ])('uses the positive host fact, not publisher custody, for restart and same-identity Resume (dispatched: $dispatched, ceiling: $ceiling)', async ({ dispatched, ceiling, sourceAuthority }) => {
     const rootId = 'root';
     const invocationId = 'step';
     const localInputId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId, invocationRecordId: invocationId });
@@ -200,6 +207,12 @@ describe('origin workflow current-state pull', () => {
       return { index, contentEnvelope };
     };
     const row = makeRow(invocationId, false);
+    const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, envelope: parseWorkflowStoredContentEnvelopeV1(acceptedEnvelope) });
+    if (opened.kind !== 'available') throw new Error('expected accepted snapshot');
+    const inputEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: { ...opened.content,
+        authorization: { ...opened.content.authorization, admittedPermissionCeiling: ceiling, ...(sourceAuthority ? { sourceAuthority } : {}) } } }));
     const restored: string[] = [];
     const port = createWorkflowOriginContextInputPort({ accountId, originSessionId: 'origin', machineId: 'machine',
       readDispatchFact: async () => dispatched ? 'dispatched' : 'not_dispatched', onDispatchedInput: (input) => { restored.push(input.localInputId); },
@@ -207,7 +220,7 @@ describe('origin workflow current-state pull', () => {
       storage: { execute: async (operation) => {
         if (operation.operation === 'run-key.census') return plainCensus;
         if (operation.operation === 'delivery.pull') return { runs: [{ run: { ...run, state: 'running', originDeliveryAckRevision: null },
-          acceptedEnvelope, resultEnvelope: null, checkpointEnvelope: null, invocations: [], hasOriginInputCandidates: true }] };
+          acceptedEnvelope: inputEnvelope, resultEnvelope: null, checkpointEnvelope: null, invocations: [], hasOriginInputCandidates: true }] };
         if (operation.operation === 'invocations.list') return {
           invocations: [row.index], progressEnvelopesByInvocationId: { [invocationId]: row.contentEnvelope },
         };
@@ -220,8 +233,13 @@ describe('origin workflow current-state pull', () => {
       expect(await port.take(signal)).toBeNull();
       expect(restored).toContain(localInputId);
     } else {
-      expect(await port.take(signal)).toMatchObject({ kind: 'workflow_step', localInputId,
+      const input = await port.take(signal);
+      expect(input).toMatchObject({ kind: 'workflow_step', localInputId,
         text: 'Frozen role instructions\n\nCommitted input\n\nFrozen result contract' });
+      expect(input?.kind === 'workflow_step'
+        ? SessionInputCausalPermissionAuthorityV1Schema.parse(input.causalPermissionAuthority) : null)
+        .toEqual({ kind: 'admittedSessionInputV1', admittedPermissionCeiling: ceiling,
+          ...(sourceAuthority ? { sourceAuthority: { kind: 'mediatedExternal', ...sourceAuthority, admittedPermissionCeiling: ceiling } } : {}) });
       // RPC withdrawal is decided by the origin admission owner, not this pull adapter.
       // After its producer reoffers the same physical invocation, no second custody set may hide it.
       expect(await port.take(signal)).toMatchObject({ kind: 'workflow_step', localInputId });
