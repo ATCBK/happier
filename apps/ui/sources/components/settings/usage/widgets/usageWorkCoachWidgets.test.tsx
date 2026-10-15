@@ -159,10 +159,21 @@ const props = { model, slice, query, serverId: 'home' };
 describe('Work and Coach widget bodies', () => {
   it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
-      accounting: [{ query, status: 'available', value: slice.accounting! }],
+      accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
       sources: [{ source: 'how_you_work', status: 'pending' }], nowMs: 1000 }).results[0]!;
     const screen = await renderScreen(<UsageCoachWidget {...props} slice={pendingSlice}
       model={{ ...model, slice: pendingSlice, pending: true }} id="usage_coach" testID="first-coach" />);
+    expect(screen.findHostByTestId('first-coach.empty')).toBeNull();
+    expect(screen.findHostByTestId('first-coach.loading')).not.toBeNull();
+    // A subsequent progress revision retains the incomplete evaluation as stale.
+    // That qualification is not proof that the private evidence has answered.
+    const retainedPending = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
+      previous: { v: 1, results: [pendingSlice] },
+      sources: [{ source: 'how_you_work', status: 'pending' }], nowMs: 1000 }).results[0]!;
+    expect(retainedPending.coach?.currentness).toBe('stale');
+    await screen.update(<UsageCoachWidget {...props} slice={retainedPending}
+      model={{ ...model, slice: retainedPending, pending: true }} id="usage_coach" testID="first-coach" />);
     expect(screen.findHostByTestId('first-coach.empty')).toBeNull();
     expect(screen.findHostByTestId('first-coach.loading')).not.toBeNull();
     const settledSlice = resolveUsagePageAggregation({ queries: [query],

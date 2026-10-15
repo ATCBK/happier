@@ -74,9 +74,14 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
       ),
     [summaries.accountIdentities],
   );
-  const serviceLabelOf = React.useCallback((account: UsagePlanAccount) =>
-    resolveQualifiedConnectedServiceRegistryDisplayName(registry, account.service, t, localizePluginText),
-  [registry, localizePluginText]);
+  const serviceLabelOf = React.useCallback((account: UsagePlanAccount) => {
+    // Descriptor arrival must not rename an unanswered account mid-read.
+    // Released built-in names are already available synchronously; other
+    // services keep the generic label until their own first read answers.
+    if (account.observedAtMs === null && ['pending', 'not_loaded'].includes(account.state.status)
+      && !serviceEntryOf(account)?.legacyServiceId) return t('connectedServices.fallbackName');
+    return resolveQualifiedConnectedServiceRegistryDisplayName(registry, account.service, t, localizePluginText);
+  }, [registry, localizePluginText, serviceEntryOf]);
   const names = React.useMemo(
     () =>
       presentConnectedAccountNames(

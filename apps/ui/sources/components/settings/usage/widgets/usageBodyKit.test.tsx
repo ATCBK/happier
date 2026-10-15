@@ -34,6 +34,26 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(screen.getTextContent()).not.toContain(t('usage.board.page.noUsageTitle'));
         expect(screen.findByTestId('daily.loading')).toBeTruthy();
     });
+    it('keeps Rhythm reading until activity answers and retains known activity during refresh', async () => {
+        const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true, activityResolution: 'both' });
+        const cold = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'pending' }] }).results[0]!;
+        const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice: cold, pending: true, error: null,
+            freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
+        const render = (slice: UsageQueryResultSlice) => <UsageRhythmWidget query={query} slice={slice} model={{ ...model, slice }}
+            serverId="home" id="usage_rhythm" testID="rhythm-read" />;
+        const screen = await renderScreen(render(cold));
+        expect(screen.findByTestId('rhythm-read.empty')).toBeNull();
+        expect(screen.findByTestId('rhythm-read.loading')).not.toBeNull();
+        const empty = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
+            ...usageQaAccountingFixture(), activity: { calendarDays: [], weekdayHourBuckets: [] },
+        } }] }).results[0]!;
+        await screen.update(render(empty));
+        expect(screen.findByTestId('rhythm-read.empty')).not.toBeNull();
+        const known = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'pending', value: usageQaAccountingFixture() }] }).results[0]!;
+        await screen.update(render(known));
+        expect(screen.findByTestId('rhythm-read.rhythm')).not.toBeNull();
+        expect(screen.findByTestId('rhythm-read.loading')).toBeNull();
+    });
     it.each([false, true])('keeps the real open-ended QA calendar and gaps visible (relative: %s)', async relative => {
         const accounting = usageQaAccountingFixture();
         const query = normalizeUsageQuery({ period: relative ? { relative: '7days' } : { startMs: 1791064800000 },

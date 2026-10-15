@@ -20,6 +20,9 @@ import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { applyConnectedMetadataCatalogSnapshot } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { ConnectedPresentationRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { t } from '@/text';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
@@ -50,6 +53,7 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
   publishAppliedActiveServerSnapshot({ serverId, serverUrl: home.homes.plans!.serverUrl, generation: 0 });
   const scope = { serverId, accountId: 'plans-account' };
   const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
+  const email = { service: { pluginId: 'acme.email', localId: 'email' }, accountId: 'mail' };
   storage.setState({ profileScope: scope, settingsScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId, connectedAccountsV4: [
     { ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
       credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [],
@@ -57,8 +61,9 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
   ] }) });
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.plans!.serverUrl))!;
   const source = QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account', ref });
-  const slice = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({})], sources: [
+  let slice = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({})], sources: [
     { source: `quota:${JSON.stringify(source)}`, status: 'pending' },
+    { source: `quota:${JSON.stringify({ bindingKind: 'account', ref: email })}`, status: 'pending' },
   ] }).results[0]!;
   let refreshed = false;
   const model = { refreshing: false, refresh: async () => { refreshed = true; } };
@@ -68,6 +73,19 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
   try {
     const cold = hook.getCurrent();
     expect.soft(cold.nameOf(cold.projection.accounts[0]!).title).toBe('Studio account');
+    expect(cold.nameOf(cold.projection.accounts[1]!).serviceLabel).toBe(t('connectedServices.fallbackName'));
+    await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans', status: 'ready', conflicts: [], errorReason: null,
+      descriptors: [{ id: 'email', serviceId: 'email', pluginId: 'acme.email', title: 'Email IMAP + SMTP', provenance: 'external',
+        sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
+          outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] },
+    captureActiveServerAccountScopeLifetime()!));
+    await hook.rerender();
+    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe(t('connectedServices.fallbackName'));
+    // Once the account's read answers, the already-hydrated service title can be shown.
+    slice = { ...slice, sources: slice.sources.map(state => state.source === `quota:${JSON.stringify({ bindingKind: 'account', ref: email })}`
+      ? { ...state, status: 'partial' } : state) };
+    await hook.rerender();
+    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
     await act(async () => {
       const presentation = ConnectedPresentationRecordV1Schema.parse({ v: 1, entries: [
         { v: 1, subject: { kind: 'account', account: ref }, label: 'Work subscription' },

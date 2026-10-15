@@ -38,7 +38,6 @@ import {
   UsageBodyInsufficient,
   UsageBodyReading,
   UsageCoverageLine,
-  readUsageCoverageGaps,
   SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
   useSettledBodyHeightFloor,
@@ -53,7 +52,7 @@ import {
   type UsageCoachController,
   type UsageCoachSnapshot,
 } from './usageCoachController';
-import { projectUsageCoachFindings } from './usageCoachPresentation';
+import { projectUsageCoachFindings, readUsageCoachState } from './usageCoachPresentation';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Below this body width the Overview strip's three columns would crush their titles; it lists instead. */
@@ -241,8 +240,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   // The strip holds its populated height while the evidence it reads is outstanding, so the loading
   // state, the "need more evidence" line and the findings come and go inside one height; once settled it
   // keeps the tallest height it has drawn, so a re-read never moves what sits below.
-  const reading = readUsageCoverageGaps(props.slice, ['how_you_work', 'accounting'])
-    .some(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+  const reading = readUsageCoachState(props.slice) === 'reading';
   const floor = useSettledBodyHeightFloor(!reading, `${glance}:${strip}`);
   const bodyStyle = [styles.body, strip && reading ? { minHeight: SETTLED_COACH_STRIP_BODY_PX }
     : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null];
@@ -321,8 +319,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
       {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
       {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
       {visible.length === 0 && appliedOnly.length === 0 ? (
-        props.slice.sources.some(source => ['accounting', 'how_you_work'].includes(source.source) && source.status === 'pending')
-          && coach.currentness !== 'stale' ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
+        reading ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
         <SurfaceStateCard
           testID={`${props.testID}.empty`}
           kind="empty"

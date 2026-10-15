@@ -25,7 +25,9 @@ import {
 } from '../usageSeriesPresentation';
 import {
   UsageBodyInsufficient,
+  UsageBodyReading,
   UsageCoverageLine,
+  isUsageReadOutstanding,
   useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -63,6 +65,8 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
       : null,
   );
   if (!view || !activity || (!hasCalendar && !hasRhythm)) {
+    if (isUsageReadOutstanding(props.slice, ['accounting']))
+      return <UsageBodyReading testID={`${props.testID}.loading`} />;
     return (
       <UsageBodyInsufficient
         testID={`${props.testID}.empty`}
