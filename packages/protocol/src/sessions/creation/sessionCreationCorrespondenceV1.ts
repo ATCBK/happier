@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
-import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
 import { SessionModelSelectionV1Schema } from '../../providers/selection/v1.js';
 import { AgentSessionConfigurationSnapshotV1Schema } from '../../runtime/agentSessionV1.js';
 import { AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
@@ -26,7 +26,7 @@ export const SessionManagedCreationV1Schema = lazyZodSchema(() => z.strictObject
 }));
 export type SessionManagedCreationV1 = z.infer<typeof SessionManagedCreationV1Schema>;
 
-export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.strictObject({
+const createSessionCreationImmutableRecipeSchema = () => z.strictObject({
   ...AgentSessionToolPolicyShapeV1,
   execution: z.strictObject({
     machineId: z.string().check(z.trim(), z.minLength(1)),
@@ -60,7 +60,29 @@ export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.stri
   { directory: recipe.execution.directory, checkoutCreationDraft: recipe.checkout },
   context,
   ['checkout'],
-))));
+)));
+export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(createSessionCreationImmutableRecipeSchema);
+defineStoredReadProjection(SessionCreationImmutableRecipeV1Schema, () => z.pipe(z.transform((value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const recipe = value as Record<string, unknown>;
+  let capabilitySelection = recipe.capabilitySelection;
+  // Retained creation provenance used the MCP-only carrier before capabilities
+  // converged. Missing or malformed provenance must not become defaults.
+  if (capabilitySelection === undefined && recipe.mcpSelection !== undefined) {
+    if (recipe.mcpSelection === null) capabilitySelection = null;
+    else if (typeof recipe.mcpSelection === 'object' && !Array.isArray(recipe.mcpSelection)) {
+      capabilitySelection = readCapabilitySelectionCarrierV1(recipe) ?? undefined;
+    }
+  }
+  const execution = recipe.execution;
+  return {
+    ...recipe,
+    ...(capabilitySelection === undefined ? {} : { capabilitySelection }),
+    ...(execution && typeof execution === 'object' && !Array.isArray(execution) && 'directory' in execution
+      && typeof execution.directory === 'string'
+      ? { execution: { ...execution, directory: { kind: 'path', path: execution.directory } } } : {}),
+  };
+}), createStoredReadSchema(createSessionCreationImmutableRecipeSchema())));
 export type SessionCreationImmutableRecipeV1 = z.infer<
   typeof SessionCreationImmutableRecipeV1Schema
 >;

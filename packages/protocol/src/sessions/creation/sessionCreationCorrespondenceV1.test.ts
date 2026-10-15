@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { deriveSessionCreationTagV1 } from './sessionCreationIdentityV1.js';
 import {
   normalizeSessionCreationOrganizationPlacementV1,
+  SessionCreationCorrespondenceV1ReadSchema,
   SessionCreationCorrespondenceV1Schema,
   sessionCreationCorrespondenceMatchesV1,
 } from './sessionCreationCorrespondenceV1.js';
+import { openSessionOwnerMetadataEnvelopeV1 } from '../metadata/sessionMetadataEnvelopesV1.js';
+import { sealAccountScopedBlobCiphertext } from '../../crypto/accountScopedCipher.js';
 
 const correspondence = {
   v: 1,
@@ -34,7 +37,70 @@ const correspondence = {
   },
 } as const;
 
+// Retained recipe shape from c080ffae7a^ (string path) and d21562d62d^
+// (MCP carrier), reproduced in QA owner rows cmujud4k30009tm6wvv9dkcf8
+// and cmv4fpftk004mm2sarz6k3i12. Values are non-sensitive test fixtures.
+const retainedCorrespondence = {
+  v: 1,
+  sessionCreationTag: correspondence.sessionCreationTag,
+  recipe: {
+    execution: { machineId: 'machine-1', directory: '/workspace/project' },
+    organization: { folderId: null, tagIds: ['tag-a', 'tag-b'] },
+    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+    modelSelection: null,
+    profileId: null,
+    requestedPermissionMode: null,
+    agentModeId: null,
+    configuration: null,
+    connectedServices: null,
+    mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['selected-server'], forceExcludeServerIds: [] },
+    transcriptStorage: null,
+    terminal: null,
+    agentSessionStartupInstructionsMarkerV1: null,
+    checkout: null,
+  },
+} as const;
+
 describe('SessionCreationCorrespondenceV1', () => {
+  it.each(['string', 'intent'] as const)('opens retained %s-directory creation provenance through the owner envelope without weakening current writes', directoryKind => {
+    const retained = { ...retainedCorrespondence, recipe: { ...retainedCorrespondence.recipe,
+      execution: { ...retainedCorrespondence.recipe.execution,
+        directory: directoryKind === 'string' ? '/workspace/project' : { kind: 'path', path: '/workspace/project' } },
+    } };
+    const expected = { ...correspondence, recipe: { ...correspondence.recipe,
+      capabilitySelection: { mcp: retainedCorrespondence.recipe.mcpSelection },
+    } };
+    expect(SessionCreationCorrespondenceV1Schema.safeParse(retained).success).toBe(false);
+    const material = { type: 'dataKey', machineKey: new Uint8Array(32).fill(13) } as const;
+    const ownerMetadata = { v: 1, system: { sessionCreationCorrespondenceV1: retained } };
+    for (const accountMode of ['plain', 'e2ee'] as const) {
+      const envelope = accountMode === 'plain' ? { t: 'plain', v: ownerMetadata } : { t: 'encrypted',
+        c: sealAccountScopedBlobCiphertext({ kind: 'session_owner_metadata', material, payload: ownerMetadata,
+          randomBytes: length => new Uint8Array(length).fill(7) }) };
+      expect(openSessionOwnerMetadataEnvelopeV1({ accountMode, envelope, material: accountMode === 'plain' ? null : material }))
+        .toMatchObject({ ok: true, ownerMetadata: { system: { sessionCreationCorrespondenceV1: expected } } });
+    }
+    expect(SessionCreationCorrespondenceV1ReadSchema.parse(retained)).toEqual(expected);
+    expect(sessionCreationCorrespondenceMatchesV1(retained, expected)).toBe(true);
+    expect(sessionCreationCorrespondenceMatchesV1(retained, { ...expected, recipe: { ...expected.recipe,
+      capabilitySelection: null,
+    } })).toBe(false);
+  });
+
+  it('retains null legacy selection while refusing malformed or missing provenance and preserving managed-checkout constraints', () => {
+    const retained = { ...retainedCorrespondence, recipe: { ...retainedCorrespondence.recipe, mcpSelection: null } };
+    expect(sessionCreationCorrespondenceMatchesV1(retained, correspondence)).toBe(true);
+    for (const recipe of [
+      { ...retained.recipe, execution: { ...retained.recipe.execution, directory: '' } },
+      { ...retained.recipe, mcpSelection: { forceIncludeServerIds: 42 } },
+      { ...retained.recipe, mcpSelection: 42 },
+      { ...retained.recipe, mcpSelection: undefined },
+      { ...retained.recipe, capabilitySelection: { mcp: { forceIncludeServerIds: 42 } } },
+      { ...retained.recipe, execution: { machineId: 'machine-1', directory: { kind: 'managed' } },
+        checkout: { kind: 'git_worktree', finalDirectory: '/checkout', baseRef: null, branchMode: 'new' } },
+    ]) expect(SessionCreationCorrespondenceV1ReadSchema.safeParse({ ...retained, recipe }).success).toBe(false);
+  });
+
   it('retains the exact managed birth resource in immutable retry meaning', () => {
     const managedCreation = { homeId: 'home', managedId: 'managed',
       controller: { machineId: 'controller', installationId: 'installation' } };
