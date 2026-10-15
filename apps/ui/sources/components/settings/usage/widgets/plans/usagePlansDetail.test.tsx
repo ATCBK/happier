@@ -320,8 +320,8 @@ it('does not declare all projections missing when a settled paced window is behi
   expect(screen.findByTestId('proj.showAll')).toBeTruthy();
   expect(screen.findByTestId('proj.window.paced.weekly')).toBeFalsy();
   expect(screen.findByTestId('proj.legend')).toBeTruthy();
-  // A window still without a pace may yet run out: the alert's line is held so its arrival moves nothing.
-  expect(screen.findByTestId('proj.aheadRoom')).toBeTruthy();
+  // Every read has answered and no alert came: no blank line is kept above the legend for one that never arrives.
+  expect(screen.findByTestId('proj.aheadRoom')).toBeFalsy();
   // The eight windows without a projection share a cause: said once for the widget, as a partial statement,
   // never as "No projection yet" for the whole list nor beneath every row.
   const text = screen.getTextContent();
