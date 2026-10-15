@@ -23,6 +23,15 @@ acceptance remain owned by the existing terminal readiness and custody paths.
 Once a provider effect may have occurred, steering failures do not automatically
 replay the prompt through ordinary delivery.
 
+## Composer busy-steer policy (development)
+
+`decideSessionMessageDelivery` owns the requested action for ordinary composer
+sends. Both configured delivery modes, **Queue in agent** and **Pending until
+ready**, honor **Steer immediately** by durably enqueuing `steer_if_active` when
+the session supports steering. An explicit per-send Pending intent or the
+**Server pending** busy policy keeps `enqueue`. Runtime readiness and payload
+steerability still gate delivery through the existing Pending owner.
+
 ## UI settlement convergence (development)
 
 Provider acceptance carries the exact Pending `localId` to `SessionClient`, which
