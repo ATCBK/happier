@@ -32,7 +32,7 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { createSessionRunSnapshotFixture } from './sessionRunnerSnapshot.fixture';
+import { createSessionRunSnapshotFixture, createSnapshotSessionPendingTransport } from './sessionRunnerSnapshot.fixture';
 import { deriveConnectedServiceRunMaterializeToken } from '@/daemon/connectedServices/runs/capabilityToken';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
 import { normalizeExecutionRunRpcPayload } from '@/session/services/executionRuns';
@@ -177,6 +177,7 @@ it('admits Session-hosted Runs through tracked daemon HTTP and current MCP occur
   const composition: { manager?: ExecutionRunHostBridgeContract } = {};
   const session = createMutableApiSessionClientFixture({ sessionId, metadata,
     overrides: { getBackendTarget: () => backendTarget,
+      ...createSnapshotSessionPendingTransport(),
       enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
       setExecutionRunWorkerUpdateSource: source => { composition.manager = source; } } });
   const controls: Partial<SessionRuntimeControls> = {};
@@ -286,6 +287,31 @@ it('admits Session-hosted Runs through tracked daemon HTTP and current MCP occur
     expect(ownedMaterialization.json()).not.toMatchObject({
       errorMessage: 'Execution-run connected services runner identity is not current',
     });
+    // Complete a retained turn and send another through the real native loader
+    // and daemon snapshot channel, before any fixture retirement or reload.
+    const retainedOwner = composition.manager;
+    const retainedResponse = await rpc.handleRequest({
+      method: sessionId + ':' + SESSION_RPC_METHODS.EXECUTION_RUN_START, callerAuthority: 'present_user',
+      params: ExecutionRunStartRequestSchema.parse({ intent: 'delegate', backendTarget: childTarget, childSelection: 'agentDefault',
+        instructions: 'retained-snapshot-turn-1', permissionMode: 'read_only',
+        localInputId: 'retained-initial',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' }),
+    });
+    expect(retainedResponse, JSON.stringify(retainedResponse)).toMatchObject({ runId: expect.any(String) });
+    const retained = ExecutionRunStartResponseSchema.parse(retainedResponse);
+    await vi.waitFor(() => {
+      expect(retainedOwner.get(retained.runId)).toMatchObject({ sessionId });
+      const current = retainedOwner.getPublic(retained.runId);
+      const firstTurn = [current?.inputTurns?.current, current?.inputTurns?.last]
+        .find(turn => turn?.inputIds.includes('retained-initial'));
+      expect(firstTurn, JSON.stringify(current)).toMatchObject({ state: 'completed' });
+      expect(current).toMatchObject({ status: 'running', turnInFlight: false });
+    }, { timeout: 10_000 });
+    expect(await retainedOwner.send(retained.runId, { message: 'retained-snapshot-turn-2', localInputId: 'retained-followup' }))
+      .toMatchObject({ ok: true });
+    expect(await retainedOwner.waitForInputTurn(retained.runId, 'retained-followup')).toMatchObject({ turn: { state: 'completed' } });
+    expect(await readFile(join(home, 'native-inputs.jsonl'), 'utf8')).toContain('retained-snapshot-turn-2');
+    expect(retainedOwner.getPublic(retained.runId)).toMatchObject({ status: 'running', turnInFlight: false });
     expect(pluginReloadController.getState().activeRegistry).toBeNull();
     // Actual controller disposal observes lease custody, rather than release call counts.
     const disposed = vi.spyOn(fixture.registry, 'dispose');

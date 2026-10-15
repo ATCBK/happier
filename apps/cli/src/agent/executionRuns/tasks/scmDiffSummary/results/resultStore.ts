@@ -517,7 +517,8 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
             }
             const firstIndex = current.stops.findIndex((stop) => pending.stopIds!.includes(stop.id));
             const stops = current.stops.flatMap((stop, index) => index === firstIndex
-              ? incoming.stops.map((refined) => ({ ...refined, title: selected.find((original) => original.id === refined.id)!.title }))
+              ? incoming.stops.map((refined) => stored.result.walkthroughProvenance?.stops.some(provenance => provenance.stopId === refined.id && provenance.titleEdited)
+                ? { ...refined, title: selected.find((original) => original.id === refined.id)!.title } : refined)
               : pending.stopIds!.includes(stop.id) ? [] : [stop]);
             normalized = { walkthrough: { ...current, stops } };
           }

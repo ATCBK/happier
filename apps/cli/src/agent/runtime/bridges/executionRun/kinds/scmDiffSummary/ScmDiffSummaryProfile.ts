@@ -8,7 +8,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ExecutionRunIntentProfile, ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 
-import { buildDiffSummaryPrompt } from './buildDiffSummaryPrompt';
+import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask } from './buildDiffSummaryPrompt';
 import { loadScmDiffSummaryContext } from './loadScmDiffSummaryContext';
 import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from './presentScmDiffSummaryModelContext';
@@ -309,7 +309,8 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
         ? 'Explain the selected findings, without changing walkthrough prose or giving a verdict. Return only reviewExplanations, one {stopId, markdown} per selected stop.'
         : 'Publish only the requested structured outputs; retain exact captured change references.',
       ...(selectedStops && !explanationInput?.reviewExplanation ? [
-        'Return only the selected stops with unchanged stop IDs and exact selected change-ref coverage. Preserve their titles. Set otherChangeRefs to []. Unselected stops are preserved by the saved-result owner.',
+        buildDiffSummaryRefinementTask({ stops: selectedStops,
+          editedStopIds: saved.walkthroughProvenance?.stops.filter(stop => stop.titleEdited).map(stop => stop.stopId) ?? [] }),
       ] : []),
       findingCitationInstructions,
     ] : [])].filter(Boolean).join('\n');

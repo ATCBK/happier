@@ -7,7 +7,7 @@ import { buildReviewCommentsOutboundMessage } from '@happier-dev/protocol/messag
 import { ScmDiffSummaryResultReadInputSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultRevisionInputSchema, ScmDiffSummaryRefineInputSchema, ScmDiffSummaryAddOutputsInputSchema, ScmDiffSummaryDiscussInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ScmComparison, ScmReviewedMarkResponse, ReviewCommentDraftMessageV1, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
-import { buildDiffSummaryPrompt } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/buildDiffSummaryPrompt';
+import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/buildDiffSummaryPrompt';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/presentScmDiffSummaryModelContext';
 import { findingCitationInstructions, presentReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
@@ -93,7 +93,9 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   const taskInstructions = reviewExplanation
     ? 'Explain the selected findings, without changing walkthrough prose or giving a verdict. Return only reviewExplanations, one {stopId, markdown} per selected stop.'
     : params.actionId === 'scm.diffSummary.refine'
-    ? `Refine the ${outputs[0]} output${stopIds ? ` for stops ${stopIds.join(', ')}` : ''}.\nPublish only the requested structured output; retain exact captured change references.${stopIds ? '\nReturn only the selected stops with unchanged stop IDs and exact selected change-ref coverage. Preserve their titles. Set otherChangeRefs to []. Unselected stops are preserved by the saved-result owner.' : ''}`
+    ? `Refine the ${outputs[0]} output${stopIds ? ` for stops ${stopIds.join(', ')}` : ''}.\nPublish only the requested structured output; retain exact captured change references.${selectedStops ? '\n' + buildDiffSummaryRefinementTask({
+      stops: selectedStops, editedStopIds: result.walkthroughProvenance?.stops.filter(stop => stop.titleEdited).map(stop => stop.stopId) ?? [],
+    }) : ''}`
     : params.actionId === 'scm.diffSummary.addOutputs'
       ? `Add the requested outputs: ${outputs.join(', ')}. Use the saved comparison and existing outputs. Publish the requested structured outputs.`
       : '';
@@ -170,13 +172,18 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
       ...(reviewInput ? { metaOverrides: reviewInput.metaOverrides } : {}) })
     : execute('execution.run.send', { ...runTarget, runId: previousRunId, message, localInputId: inputId,
       ...(affordances.canResume ? { resume: true } : {}) })).catch(() => null);
-  if (!sent || !sent.ok) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
+  if (!sent) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
+  // A transport failure does not prove that the input was never admitted.
+  // Preserve its typed reason while retaining the uncertain input basis.
+  if (!sent.ok) return { success: false, errorCode: 'admission_unknown',
+    error: sent.errorCode ?? 'admission_unknown' };
   if (!sessionId) {
     if (!ExecutionRunSendResponseSchema.safeParse(sent.result).success) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
     return { ...begun, runId: previousRunId, inputId };
   }
   const admitted = SessionMessageSendResultV1Schema.safeParse(sent.result);
-  if (!admitted.success || admitted.data.status === 'outcomeUnknown') return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
+  if (!admitted.success) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
+  if (admitted.data.status === 'outcomeUnknown') return { success: false, errorCode: 'admission_unknown', error: admitted.data.code };
   if (admitted.data.status === 'rejected') {
     await store.abandonInput({ ...scope, inputId });
     return { success: false, errorCode: 'admission_failed', error: admitted.data.code };

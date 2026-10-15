@@ -624,17 +624,17 @@ describe('saved SCM result owner', () => {
     expect(latest).toMatchObject({ success: true, result: { revision: 1, output: { outputs: { walkthrough: { value: { title: 'Device A' } } } } } });
   });
 
-  it('publishes targeted prose only, preserving manual titles, neighboring stops, summary and commit proposals', async () => {
+  it.each([false, true])('publishes targeted prose and generated titles, preserving manual titles (%s) and unselected output', async (manualTitle) => {
     const { store, request } = await setup();
-    await store.edit({ ...request, expectedRevision: 0, edit: { kind: 'renameStop', stopId: 's1', title: 'Personal title' } });
-    await store.beginRefinement({ ...request, expectedRevision: 1, output: 'walkthrough', stopIds: ['s1'], inputId: 'refine' });
+    if (manualTitle) await store.edit({ ...request, expectedRevision: 0, edit: { kind: 'renameStop', stopId: 's1', title: 'Personal title' } });
+    await store.beginRefinement({ ...request, expectedRevision: manualTitle ? 1 : 0, output: 'walkthrough', stopIds: ['s1'], inputId: 'refine' });
     const updated = await store.publish({ ...request, inputId: 'refine', modelOutput: { walkthrough: {
-      title: 'Model title', intro: 'Model intro', stops: [{ id: 's1', title: 'Model stop', explanationMarkdown: 'Refined first', changeRefs: ['c1'] }], otherChangeRefs: [],
+      title: 'Parcours', intro: 'Modifications', stops: [{ id: 's1', title: 'Préserver l’état', explanationMarkdown: 'Explication affinée', changeRefs: ['c1'] }], otherChangeRefs: [],
     } } });
-    expect(updated).toMatchObject({ success: true, result: { revision: 2, output: { summaryMarkdown: 'Keep the summary', outputs: {
+    expect(updated).toMatchObject({ success: true, result: { revision: manualTitle ? 2 : 1, output: { summaryMarkdown: 'Keep the summary', outputs: {
       summary: output.outputs?.summary, commitPlan: output.outputs?.commitPlan,
       walkthrough: { value: { title: 'Original', intro: 'Intro', stops: [
-        { id: 's1', title: 'Personal title', explanationMarkdown: 'Refined first', changeRefs: ['change-1'] }, output.outputs?.walkthrough?.value?.stops[1],
+        { id: 's1', title: manualTitle ? 'Personal title' : 'Préserver l’état', explanationMarkdown: 'Explication affinée', changeRefs: ['change-1'] }, output.outputs?.walkthrough?.value?.stops[1],
       ] } },
     } } } });
   });

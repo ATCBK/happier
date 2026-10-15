@@ -46,6 +46,25 @@ function createScmResultActionExecutor(scmActionExecute: NonNullable<ActionExecu
 }
 
 describe('saved SCM result Action boundary', () => {
+  it.each(['rejected', 'outcomeUnknown', 'transportFailure'] as const)('preserves the actual %s follow-up admission outcome', async outcome => {
+    const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
+    const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.refine',
+      input: { cwd, resultId: saved.resultId, expectedRevision: 0, output: 'walkthrough', instructions: 'Shorten the explanation.' },
+      workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] },
+      executeCanonicalAction: async actionId => actionId === 'execution.run.get' ? { ok: true, result: { run } }
+        : outcome === 'transportFailure'
+          ? { ok: false, errorCode: 'execution_run_target_unavailable', error: 'Execution Run executable snapshot is unavailable' }
+          : { ok: true, result: outcome === 'rejected' ? { status: outcome, code: 'session_input_target_unavailable' }
+            : { status: outcome, localId: 'uncertain-input', code: 'machine_admission_pending_custody_unconfirmed' } },
+    });
+    getActionSpec('scm.diffSummary.refine').outputSchema.parse(response);
+    expect(response).toMatchObject({ success: false, errorCode: outcome === 'rejected' ? 'admission_failed' : 'admission_unknown',
+      error: outcome === 'transportFailure' ? expect.stringContaining('execution_run_target_unavailable')
+        : outcome === 'outcomeUnknown' ? expect.stringContaining('machine_admission_pending_custody_unconfirmed')
+        : 'session_input_target_unavailable' });
+    expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
+      result: { output: { outputs: output.outputs } } });
+  });
   it('admits an RPC parent’s canonical child with its requester and approval context while refusing direct closed RPC', async () => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
     const context: ActionExecutorContext = {
@@ -188,6 +207,7 @@ describe('saved SCM result Action boundary', () => {
     expect(await executeScmActionOperation({ actionId: operation === 'discuss' ? 'scm.diffSummary.discuss' : 'scm.diffSummary.refine', input: {
       cwd, resultId: created.resultId, expectedRevision: 0, stopIds: ['stop'],
       ...(operation === 'discuss' ? { message: 'Explain this stop' } : { output: 'walkthrough', instructions: 'Explain finding',
+        outputLanguage: 'fr',
         ...(operation !== 'refine' ? { reviewExplanation: { targets } } : {}) }),
     }, workingDirectory: cwd, executeCanonicalAction, actionContext: { surface: 'rpc', authority: 'present_user' } }))
       .toMatchObject({ success: true, runId: operation === 'seedExplain' ? 'seeded' : run.runId });
@@ -219,6 +239,13 @@ describe('saved SCM result Action boundary', () => {
       filePath: 'code.ts', body: expect.stringContaining('Current manual reasoning'),
       anchor: { kind: 'diffLine', side: 'after', newLine: 2 }, snapshot: { selectedLines: [], beforeContext: [], afterContext: [] },
       }] });
+    } else if (operation === 'refine') {
+      expect(sent?.message).toContain('Prose language: fr');
+      expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent!.localId,
+        modelOutput: { walkthrough: { title: 'Parcours', intro: '', otherChangeRefs: [], stops: [{ id: 'stop',
+          title: 'Préserver l’état', explanationMarkdown: 'Explication affinée', changeRefs: ['c1'] }] } } }))
+        .toMatchObject({ success: true, result: { output: { outputs: { summary: output.outputs?.summary,
+          walkthrough: { value: { stops: [{ title: 'Préserver l’état' }] } } } } } });
     }
   });
   it.each([false, true])('starts one labelled seeded generator preserving saved provider selection (original available=%s)', async (originalAvailable) => {

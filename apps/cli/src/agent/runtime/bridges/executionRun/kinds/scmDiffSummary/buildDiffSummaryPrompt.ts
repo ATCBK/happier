@@ -12,6 +12,19 @@ export type ScmDiffSummaryPromptFile = Readonly<{
   binary?: boolean;
 }>;
 
+/** Retained and replacement turns share the saved owner's title-edit policy. */
+export function buildDiffSummaryRefinementTask(params: Readonly<{
+  stops: readonly Readonly<{ id: string; title: string }>[];
+  editedStopIds: readonly string[];
+}>): string {
+  const manualTitles = params.stops.filter(stop => params.editedStopIds.includes(stop.id)).map(stop => ({ id: stop.id, title: stop.title }));
+  return [
+    'Return only the selected stops with unchanged stop IDs and exact selected change-ref coverage. Set otherChangeRefs to []. Unselected stops are preserved by the saved-result owner.',
+    'Generate selected stop titles in the admitted prose language, except manually edited titles.',
+    `Preserve these manually edited titles exactly: ${JSON.stringify(manualTitles)}.`,
+  ].join('\n');
+}
+
 export function buildDiffSummaryPrompt(params: Readonly<{
   metadata: ScmDiffSummaryMetadata;
   files: readonly ScmDiffSummaryPromptFile[];
@@ -88,6 +101,7 @@ export function buildDiffSummaryPrompt(params: Readonly<{
     '- Cite findings or describe settled review context only when real review findings are supplied to this run. Otherwise make no claim that anything was reviewed.',
     '- Resolved review context explains prior decisions; outdated threads do not establish settled context. Partial or failed review is not clean review.',
     language.success ? `Prose language: ${language.data}` : 'Prose language: follow the requesting user\'s language.',
+    '- The prose language applies to summaryMarkdown, risks, testImpact, suggestedPrBody, all walkthrough prose, commitPlan.groups[].message (subject and body), and rationale. Preserve Conventional Commit type/scope tokens as identifiers.',
     '- Translate prose only. Preserve JSON keys, references, identifiers, paths, code and enum values.',
     ...(params.taskInstructions ? ['Host task:', params.taskInstructions] : []),
     '',
