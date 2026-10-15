@@ -1,7 +1,6 @@
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
-import { assertPromptStackArtifactHeaderV1, hasRequiredPromptStackSystemAppendEntriesV1, PromptStackPreparationError, type PromptStackScopeV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
-import { readRetainedPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { assertPromptStackArtifactHeaderV1, PromptStackPreparationError, type PromptStackScopeV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { migrateRetainedSessionWorkContextV1, readSessionMemoryEnabledV1, SessionDisabledInheritedEntryIdsV1Schema,
   SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -12,7 +11,6 @@ import { sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, readActiveAccountPromptStackSources,
   readAccountPromptStackSources,
-  readAccountProfilePromptStackSources,
   isActiveAccountSettingsSnapshotLifetimeCurrent,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
@@ -74,10 +72,6 @@ export type SessionPromptStackInput = Readonly<{
   /** Preserve the caller's original Account admission across asynchronous preparation. */
   accountContext?: SessionPromptStackAccountContext;
   operationContext?: SavedSecretOperationContextV1;
-  /** Coding augmentation may omit unknown inventory; corpus admission remains strict. */
-  allowOptionalAccountLibrary?: boolean;
-  /** Prior canonical selections prevent omission only; never fallback read inputs. */
-  knownAccountEntries?: readonly PromptStackEntryV1[];
 }>;
 
 export type PreparedSessionPromptStackInputs = Readonly<{
@@ -96,7 +90,6 @@ export type PreparedSessionPromptStackInputs = Readonly<{
   createdAsBot: boolean;
   disabledInheritedEntryIds: readonly string[];
   accountSnapshot: ActiveAccountSettingsSnapshot | null;
-  optionalAccountLibraryUnavailable?: Readonly<{ status: 'unavailable'; reason: string }>;
   /** Recheck after document reads, including failed preparation, before publishing private facts. */
   assertCurrentAccount: () => void;
 }>;
@@ -147,7 +140,6 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       ...(projectKey ? { projectKey } : {}), ...(profileId ? { profileId } : {}),
     } : null;
     let currentAccount = readCurrentAccount();
-    const observedBeforeDemand = currentAccount ? readAccountPromptStackSources(currentAccount, { surface: 'coding' }) : null;
     if (accountContext.scopeKey && currentAccount && input.credentials) {
       const demand: Promise<unknown>[] = [];
       const { prepareActivePromptLibraryRecord, refreshActivePromptLibraryCatalog } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
@@ -175,33 +167,7 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       ? readAccountPromptStackSources(currentAccount, sourceSelection) : readActiveAccountPromptStackSources({
       scopeKey: accountContext.scopeKey, lifetimeToken: accountContext.lifetimeToken, surface: 'coding', profileId,
     }) : null;
-    let optionalAccountLibraryUnavailable: PreparedSessionPromptStackInputs['optionalAccountLibraryUnavailable'];
-    let profileEntries: readonly PromptStackEntryV1[] | undefined;
-    if (accountSources?.status === 'unavailable') {
-      const reason = accountSources.reason;
-      const optionalAvailability = reason === 'catalog-unobserved' || reason === 'loading' || reason === 'unreachable'
-        || reason === 'unsupported' || reason === 'source-version-conflict' || reason === 'authority-not-confirmed';
-      if (!input.allowOptionalAccountLibrary || !optionalAvailability || !currentAccount) return unavailable(reason);
-      let knownEntries = input.knownAccountEntries ?? (observedBeforeDemand?.status === 'ready' ? observedBeforeDemand.accountEntries : undefined);
-      if (knownEntries === undefined && currentAccount.source !== 'none' && currentAccount.rawSettings) {
-        const retained = readRetainedPromptLibraryRecordV1(currentAccount.rawSettings, 'coding');
-        if (retained.status !== 'ready' || retained.record.key !== 'coding') return unavailable('invalid-stored-content');
-        knownEntries = retained.record.value.entries;
-      }
-      const requiredness = { surface: 'coding' as const, accountEntries: knownEntries ?? [], disabledInheritedEntryIds,
-        memoryEnabled: readSessionMemoryEnabledV1(metadata), scope, signal: input.signal };
-      let required = await hasRequiredPromptStackSystemAppendEntriesV1(requiredness);
-      if (required && requiredness.memoryEnabled === false && input.credentials) {
-        required = await withCliPromptLibraryArtifactReader(reader => hasRequiredPromptStackSystemAppendEntriesV1({
-          ...requiredness, readArtifactHeader: reader.readArtifactHeader,
-        }), input);
-      }
-      if (required) return unavailable(reason);
-      const profile = readAccountProfilePromptStackSources(currentAccount, sourceSelection);
-      if (profile.status !== 'ready') return unavailable(profile.reason);
-      profileEntries = profile.profileEntries;
-      optionalAccountLibraryUnavailable = { status: 'unavailable', reason };
-    }
+    if (accountSources?.status === 'unavailable') return unavailable(accountSources.reason);
     if (!input.credentials && (workspaceId !== undefined || projectId !== undefined)) return unavailable();
     const projectEntries = input.credentials ? await resolveSessionProjectPromptStack({
       credentials: input.credentials, metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
@@ -212,7 +178,6 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       credentials: input.credentials, operationContext: input.operationContext, serverId, scope, settings, profileId,
       ...(currentAccount?.profileCatalog ? { profileCatalog: currentAccount.profileCatalog } : {}),
       ...(accountSources?.status === 'ready' ? { accountEntries: accountSources.accountEntries, profileEntries: accountSources.profileEntries } : {}),
-      ...(optionalAccountLibraryUnavailable ? { accountEntries: [], profileEntries, optionalAccountLibraryUnavailable } : {}),
       sessionEntries, projectEntries, memoryEnabled: readSessionMemoryEnabledV1(metadata),
       createdAsBot: metadata?.createdAsBot === true, disabledInheritedEntryIds, accountSnapshot: currentAccount, assertCurrentAccount,
     };

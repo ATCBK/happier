@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
 import type { AgentSessionStartupInstructionsV1, SessionRolePromptContextV1, CodingPromptBehaviorV1 } from '@happier-dev/protocol';
-import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { HostSessionRuntimeRunOptions } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
@@ -13,7 +12,7 @@ import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { resolvePluginPromptAssetBlocks, resolvePluginToolPromptContributions } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import { resolveEffectiveCodingPromptPlan } from './resolveEffectiveCodingPrompt';
 import { prepareSessionPromptStackInputs } from './sessionPromptStack';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources, readAccountProfilePromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountProfilePromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PromptStackAdmittedEntryV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { createPromptCompositionScope, type PromptPlanComposition } from '../promptComposition';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -115,10 +114,6 @@ export function createSessionPromptPlanResolver(params: Readonly<{
   const accountContext = {
     scopeKey: accountScopeKey ?? null, lifetimeToken: accountLifetimeToken,
   };
-  const initialAccount = getActiveAccountSettingsSnapshot();
-  const initialSources = accountScopeKey && initialAccount?.scopeKey === accountScopeKey
-    ? readAccountPromptStackSources(initialAccount, { surface: 'coding' }) : null;
-  let knownAccountEntries: readonly PromptStackEntryV1[] | undefined = initialSources?.status === 'ready' ? initialSources.accountEntries : undefined;
   const serverId = params.serverId ?? params.opts.credentials?.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
   async function resolve(args: SessionPromptPlanResolveArgs & Readonly<{ includeAdmittedInventory: true }>): Promise<SessionPromptPlanWithAdmittedInventory>;
   async function resolve(args?: SessionPromptPlanResolveArgs): Promise<string>;
@@ -152,11 +147,9 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       credentials: params.opts.credentials, metadata: params.session.getMetadataSnapshot(), sessionId: params.session.sessionId,
       machineId: params.machineId, directory: params.directory, signal, serverId,
       operationContext,
-      allowOptionalAccountLibrary: true, knownAccountEntries,
       accountContext: { ...accountContext, settings: params.opts.accountSettingsContext?.settings ?? null },
     });
-    const { accountSnapshot: currentAccount, assertCurrentAccount, optionalAccountLibraryUnavailable, ...stackInputs } = preparedStack;
-    if (!optionalAccountLibraryUnavailable && stackInputs.accountEntries !== undefined) knownAccountEntries = stackInputs.accountEntries;
+    const { accountSnapshot: currentAccount, assertCurrentAccount, ...stackInputs } = preparedStack;
     const { settings, profileId } = stackInputs;
     const skills = params.readSessionSkills?.();
     const skillIndex = skills?.plan.plan === 'index' && toolDelivery !== 'unsupported'
@@ -195,7 +188,6 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
     }
     const unavailable = promptContributions.optionalPromptAssetsUnavailable === true
-      || optionalAccountLibraryUnavailable !== undefined
       || plan.admittedEntries.some(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
     if (unavailable && !optionalLibraryUnavailable) {
       const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [

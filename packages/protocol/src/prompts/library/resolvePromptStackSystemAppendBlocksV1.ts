@@ -121,22 +121,6 @@ function omittedByMemoryPolicy(ref: PromptArtifactRefV1, header: Readonly<Record
   return true;
 }
 
-/** Prior entries can prevent omission; they never authorize stale document-body reads. */
-export async function hasRequiredPromptStackSystemAppendEntriesV1(args: Omit<PromptStackSystemAppendInputV1, 'readArtifact'>): Promise<boolean> {
-  for (const { entry, layer } of selectPromptStackSystemAppendEntriesV1(args)) {
-    if (!entry.required) continue;
-    args.signal?.throwIfAborted();
-    if (args.memoryEnabled === false && args.readArtifactHeader) {
-      const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && args.scope ? { serverId: args.scope.serverId } : {}) };
-      const header = await args.readArtifactHeader(ref);
-      args.signal?.throwIfAborted();
-      if (header && omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) continue;
-    }
-    return true;
-  }
-  return false;
-}
-
 /** Account → Profile → Project → Session is shared by coding and bound Voice. */
 export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSystemAppendInputV1): Promise<PromptStackSystemAppendResultV1> {
   const entries = selectPromptStackSystemAppendEntriesV1(args);

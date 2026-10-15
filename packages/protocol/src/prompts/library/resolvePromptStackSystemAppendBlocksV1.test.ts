@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionInstructionsContextIntentV1 } from '../../actions/sessionStateFieldActions.js';
 import { writeSessionContextIntentV1ToMetadata } from '../../sessions/context/sessionContextV1.js';
 
-import { hasRequiredPromptStackSystemAppendEntriesV1, resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1.js';
+import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1.js';
 import predecessorPickerStack from '../../../fixtures/0.2-picker-skill-instructions-stack.json';
 import { PromptStackEntryV1StoredSchema } from './promptStacksV1.js';
 import { decodeBase64 } from '../../crypto/base64.js';
@@ -50,7 +50,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     revision: { headerVersion: 1, bodyVersion: 1 },
   });
 
-  it('uses current placement, inherited exclusions and Memory-off policy for required Account eligibility', async () => {
+  it('uses current placement, inherited exclusions and Memory-off policy for required Account entries', async () => {
     const scope = { serverId: 'home', accountId: 'account' };
     let kind = 'memory_doc.v1';
     const input = { surface: 'coding' as const, scope, memoryEnabled: false,
@@ -62,14 +62,16 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
       ], disabledInheritedEntryIds: ['excluded'],
       readArtifactHeader: async () => ({ header: { v: 1, kind, title: 'Current document' } }),
     };
-    expect(await hasRequiredPromptStackSystemAppendEntriesV1(input)).toBe(false);
     expect(await resolvePromptStackSystemAppendBlocksV1({ ...input,
       readArtifact: async () => { throw new Error('Memory-off must not demand a body'); },
     })).toEqual({ blocks: [], admittedEntries: [] });
     kind = 'prompt_doc.v2';
-    expect(await hasRequiredPromptStackSystemAppendEntriesV1(input)).toBe(true);
+    expect((await resolvePromptStackSystemAppendBlocksV1({ ...input,
+      readArtifact: async ref => artifact(ref.artifactId),
+    })).blocks).toEqual(['memory']);
     kind = 'memory_doc.v1';
-    await expect(hasRequiredPromptStackSystemAppendEntriesV1({ ...input, accountEntries: [],
+    await expect(resolvePromptStackSystemAppendBlocksV1({ ...input, accountEntries: [],
+      readArtifact: async () => { throw new Error('Wrong-kind instructions must not demand a body'); },
       sessionEntries: [{ ...entry('session.instructions'), required: true }],
     })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'wrong_kind' });
   });
