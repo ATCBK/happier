@@ -861,6 +861,39 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 })) } : priorBatch ?? (sharedAllowance ? { v: 1 as const, results: [sharedAllowance] } : undefined);
                 const contentFor = async (batch: UsageQueryBatchResult): Promise<ResourceContent> => {
                     requireCurrent(sharedContext, options?.signal);
+                    // An older in-flight batch may publish after a sibling has
+                    // settled. Pending is activity, never a replacement for those facts.
+                    if (allowance) {
+                        const opened = readOpenedQuotaScope(sharedContext);
+                        const admitted = new Map(opened?.sources.map(({ source, key }) =>
+                            [createCanonicalJsonSigningInput(source), getQualifiedQuotaSnapshotEntry(key)]));
+                        const states = new Map(allowance.sources.map(state => [state.source, state]));
+                        const reads = new Map(allowance.quota?.map(read => [createCanonicalJsonSigningInput(read.source), read]));
+                        batch = { ...batch, results: batch.results.map(slice => {
+                            const replacements = new Map<string, ConnectedServiceQuotaGetResultV1>();
+                            const sources = slice.sources.map(state => {
+                                if (!state.source.startsWith('quota:') || !['pending', 'not_loaded'].includes(state.status)) return state;
+                                const key = state.source.slice('quota:'.length);
+                                const settled = states.get(state.source);
+                                const read = reads.get(key);
+                                const admission = admitted.get(key);
+                                if (!settled || ['pending', 'not_loaded'].includes(settled.status) || !read || !admission
+                                    || !canRetainQuotaRead(admission, read)) return state;
+                                replacements.set(key, read);
+                                return settled;
+                            });
+                            if (!replacements.size) return slice;
+                            const quota = new Map(slice.quota?.map(read => [createCanonicalJsonSigningInput(read.source), read]));
+                            replacements.forEach((read, key) => quota.set(key, read));
+                            const qualified = sources.filter(state => state.source.startsWith('quota:'));
+                            const status = qualified.every(state => state.status === 'available') ? 'available' as const
+                                : qualified.some(state => state.status === 'stale') ? 'stale' as const : 'partial' as const;
+                            const clocks = qualified.flatMap(state => state.asOfMs === undefined ? [] : [state.asOfMs]);
+                            const settledSources = sources.map(state => state.source === 'quota'
+                                ? { ...state, status, ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}) } : state);
+                            return { ...slice, quota: [...quota.values()], sources: settledSources };
+                        }) };
+                    }
                     const first = batch.results[0];
                     if (first) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
                         quota: first.quota, sources: first.sources.filter(source => source.source === 'quota' || source.source.startsWith('quota:')),

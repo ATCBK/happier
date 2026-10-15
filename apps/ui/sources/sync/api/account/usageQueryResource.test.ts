@@ -121,6 +121,66 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('does not let an older pending batch erase the Account allowance settled by another batch', async () => {
+    const now = Date.now();
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'retained' };
+    const source = { bindingKind: 'account' as const, ref };
+    const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+    const record = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
+      staleAfterMs: 600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+      meters: [{ meterId: 'weekly', label: 'Weekly', usedPct: 40, utilizationPct: 40, used: null, limit: null,
+        unit: 'count', status: 'ok', resetsAt: now + 86_400_000, windowDurationMs: 7 * 86_400_000 }] });
+    const slowAccounting = createDeferred<void>();
+    const slowHistory = createDeferred<void>();
+    let holdAllHistory = false;
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') {
+        const query = UsageAnalyticsQueryRequestSchema.parse(request.body);
+        if (query.dateRange?.startMs === 1000) await slowAccounting.promise;
+        return Response.json(value);
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({
+        source, recordId: record.recordId, providerAccountId: ref.accountId, fetchedAt: now, staleAfterMs: 600_000 });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') return Response.json({ content: { t: 'plain', v: record },
+        metadata: { fetchedAt: now, staleAfterMs: 600_000, status: 'ok' }, sources: [source] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+        const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+          request.url.searchParams.get('query'));
+        if (!('projection' in query) && !('history' in query)) return undefined;
+        const range = 'projection' in query ? query.projection.range : query.history.range;
+        if (holdAllHistory || range.startAtMs === 1000) await slowHistory.promise;
+        return Response.json({ entries: [], nextCursor: null });
+      }
+      return undefined;
+    }, { connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    const store = getUsageQueryResourceStore(captured);
+    const entryFor = (startMs: number) => store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ period: { startMs, endMs: now }, includeSessionEvidence: false, includeWorkEvidence: false })] }) });
+    const slow = entryFor(1000);
+    const stopSlow = slow.subscribe(() => {}, false);
+    const fast = entryFor(2000);
+    const stopFast = fast.subscribe(() => {}, false);
+    const sliceOf = (entry: typeof slow) => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    try {
+      await expect.poll(() => slow.getSnapshot().value && sliceOf(slow).quota?.length).toBe(1);
+      await expect.poll(() => fast.getSnapshot().pending).toBe('idle');
+      expect(projectUsagePlans(sliceOf(fast).quota, now, undefined, sliceOf(fast).sources).tightest).not.toBeNull();
+      slowAccounting.resolve();
+      await expect.poll(() => slow.getSnapshot().value && sliceOf(slow).accounting?.totals.eventCount).toBe(1);
+      holdAllHistory = true;
+      const returning = entryFor(3000);
+      const stopReturning = returning.subscribe(() => {}, false);
+      try {
+        await expect.poll(() => returning.getSnapshot().value !== undefined).toBe(true);
+        const slice = sliceOf(returning);
+        expect(projectUsagePlans(slice.quota, now, undefined, slice.sources).tightest?.window.remainingFraction).toBe(0.6);
+      } finally { stopReturning(); }
+    } finally { slowAccounting.resolve(); slowHistory.resolve(); stopSlow(); stopFast(); }
+  });
   it('keeps settled quota history through unrelated store churn and equivalent Profile refreshes', async () => {
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
     const source = { bindingKind: 'account' as const, ref };
