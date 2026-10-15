@@ -177,6 +177,9 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
             serverId: params.serverId,
             ...(params.accountId ? { accountId: params.accountId } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
+            // As in CLI Stop, retirement owns the operation lifetime. Keep route/setup
+            // bounded, but do not expire an issued Stop at the generic RPC deadline.
+            operationTimeoutMs: null,
             // Stop is safe to reroute only before emission. Once issued, replaying the
             // same session id can terminate a replacement that resumed after the first exit.
             onIssued: () => {},

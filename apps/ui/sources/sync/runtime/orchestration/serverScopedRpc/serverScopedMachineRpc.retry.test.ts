@@ -146,6 +146,41 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         }
     });
 
+    it.each(['reply', 'cancel'] as const)('keeps canonical Stop under the admitted operation lifetime: %s', async outcome => {
+        const { stopSessionViaDaemonMachineRpc } = await import('@/sync/ops/sessionStopStrategy');
+        const { StopSessionResultSchema } = await import('@happier-dev/protocol/sessionStop');
+        const issued = createDeferred<void>();
+        const reply = createDeferred<void>();
+        const controller = new AbortController();
+        boundary.setRpcAckResponder(async request => {
+            const decoded = await decodeRequest(request);
+            expect(request.method).toBe(RPC_METHODS.STOP_SESSION);
+            expect(decoded.params).toEqual({ sessionId: 'slow-stopped-session' });
+            issued.resolve();
+            await reply.promise;
+            const result = StopSessionResultSchema.parse({ status: 'stopped' });
+            return { ok: true, result: await socketRpcCodec.encodeResponse(content, result, decoded.callId) };
+        });
+        vi.useFakeTimers();
+        try {
+            const pending = stopSessionViaDaemonMachineRpc({ serverId: home.id, accountId: 'account-a',
+                machineId: 'machine-1', sessionId: 'slow-stopped-session', signal: controller.signal });
+            const settled = vi.fn();
+            void pending.then(settled, settled);
+            await issued.promise;
+            await vi.advanceTimersByTimeAsync(31_000);
+            expect(settled).not.toHaveBeenCalled();
+            expect(boundary.requests).toHaveLength(1);
+            if (outcome === 'cancel') controller.abort();
+            else reply.resolve();
+            await expect(pending).resolves.toMatchObject({ type: outcome === 'cancel' ? 'failed' : 'stopped' });
+            expect(boundary.requests).toHaveLength(1);
+        } finally {
+            reply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
     it('does not poison reachability when an inner transport timeout precedes the caller deadline', async () => {
         boundary.setRpcAckResponder(async () => {
             throw Object.assign(new Error('Inner phase timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
