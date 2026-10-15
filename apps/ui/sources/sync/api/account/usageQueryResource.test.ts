@@ -121,6 +121,95 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('keeps settled quota history through unrelated store churn and equivalent Profile refreshes', async () => {
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
+    const source = { bindingKind: 'account' as const, ref };
+    const recordKey = { providerId: 'codex', accountSubjectId: 'provider-work', subjectKind: 'account', quotaScope: 'account' } as const;
+    const now = Date.now();
+    const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'provider-work' },
+      observedAtMs: now, fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp', confidence: 'confirmed',
+      state: 'loaded_data', meters: [] });
+    let historyRequests = 0;
+    let accountingRequests = 0;
+    const profile = { connectedAccountsV4: [{ ref, status: 'connected' as const, authenticationModeId: 'manual',
+      revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz',
+      configurationReady: false, configurationRevision: null, scopes: [] }] };
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') { accountingRequests++; return Response.json(value); }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({ source,
+        recordId: snapshot.recordId, providerAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000 });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') return Response.json({ content: { t: 'plain', v: snapshot },
+        metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+        historyRequests++;
+        return Response.json({ entries: [], nextCursor: null });
+      }
+      if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
+      return undefined;
+    }, profile);
+    // The real Home harness starts Sync catch-up asynchronously. Its broad
+    // Account wake legitimately rereads Usage; finish it before measuring
+    // unchanged cache publications against a settled Resource baseline.
+    const { sync } = await import('@/sync/sync');
+    await sync.resumeSync('manual');
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    const basis = getActiveServerSnapshot();
+    const credentialsKey = resolveAuthCredentialsScopeKey(captured.credentials);
+    const quotaContext = { credentials: captured.credentials, ref,
+      serverBasis: { serverId: basis.serverId, generation: basis.generation },
+      credentialScope: [basis.serverId, String(basis.generation), credentialsKey].join('\u0000') };
+    const quotaKey = buildQualifiedQuotaSnapshotScopeKey(quotaContext);
+    loadQualifiedQuotaSnapshotOnce(quotaKey, quotaContext);
+    await expect.poll(() => getQualifiedQuotaSnapshotEntry(quotaKey).read).toBe(true);
+    const providerScope = buildProviderAccountUsageScopeKey({ serverId: basis.serverId,
+      generation: basis.generation, credentialScope: credentialsKey });
+    updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+      snapshot, loading: false, hadError: false, nextFetchAtMs: now + 60_000, consecutiveErrors: 0 } }));
+    const query = normalizeUsageQuery({ period: { startMs: now - 1000, endMs: now },
+      includeSessionEvidence: false, includeWorkEvidence: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
+      input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const release = entry.subscribe(() => {}, true);
+    try {
+      await entry.refresh();
+      expect(entry.getSnapshot().pending).toBe('idle');
+      const settled = decodeUsageQueryResource(entry.getSnapshot().value!);
+      expect(settled.results[0]?.sources).toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
+      const before = { historyRequests, accountingRequests };
+      for (let index = 0; index < 128; index++) storage.setState({ isDataReady: !storage.getState().isDataReady });
+      for (let index = 0; index < 8; index++) {
+        const state = storage.getState();
+        storage.setState({ profile: { ...state.profile, connectedAccountsV4: structuredClone(state.profile.connectedAccountsV4),
+          connectedAccountGroupsV4: structuredClone(state.profile.connectedAccountGroupsV4) },
+          profileScope: { ...captured.accountLifetime.scope } });
+      }
+      await flushHookEffects();
+      expect({ historyRequests, accountingRequests }).toEqual(before);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!)).toBe(settled);
+      // Acquisition/presentation revisions are not new Usage evidence. A second
+      // cache subscriber and an unchanged admission must not restart this batch.
+      for (const loading of [true, false]) {
+        updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+          ...entries[snapshot.recordId]!, snapshot: structuredClone(snapshot), loading, nextFetchAtMs: now + 120_000 } }));
+        await flushHookEffects({ cycles: 30 });
+      }
+      expect({ historyRequests, accountingRequests }, 'loading-only provider rows must not wake the Resource').toEqual(before);
+      await reloadQualifiedQuotaSnapshotAfterRecovery(quotaContext);
+      await flushHookEffects({ cycles: 30 });
+      expect({ historyRequests, accountingRequests }, 'unchanged cache evidence must not wake the Resource').toEqual(before);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!)).toBe(settled);
+      await entry.refresh();
+      expect(historyRequests).toBeGreaterThan(before.historyRequests);
+      const beforeReplacement = accountingRequests;
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+        ...entries[snapshot.recordId]!, snapshot: { ...snapshot, fetchedAtMs: now + 1, observedAtMs: now + 1 } } }));
+      await expect.poll(() => accountingRequests).toBeGreaterThan(beforeReplacement);
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+    } finally { release(); }
+  });
+
   it('keeps one Capacity and Usage allowance timeline across arrivals, navigation, rereads and failure', async () => {
     const { readPlanAccountsStatement, readPendingPlanAccountCount } = await import('@/components/settings/usage/widgets/plans/UsagePlanParts');
     const { useUsagePlans } = await import('@/components/settings/usage/widgets/plans/useUsagePlans');

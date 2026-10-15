@@ -948,7 +948,19 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
             if (!keys.has(key)) { dispose(); qualifiedUnwatches.delete(key); }
         }
         for (const key of keys) if (!qualifiedUnwatches.has(key)) {
-            qualifiedUnwatches.set(key, subscribeQualifiedQuotaSnapshotEntry(key, () => owner.invalidate()));
+            let observed = getQualifiedQuotaSnapshotEntry(key);
+            qualifiedUnwatches.set(key, subscribeQualifiedQuotaSnapshotEntry(key, () => {
+                const next = getQualifiedQuotaSnapshotEntry(key);
+                const admissionChanged = next.supported !== observed.supported || next.usageRecordId !== observed.usageRecordId;
+                const settled = !next.loading && !next.refreshing;
+                const changed = admissionChanged || settled && (next.error === null) !== (observed.error === null);
+                // Beginning acquisition clears the cache's error optimistically;
+                // only its settled answer can replace that error observation.
+                if (admissionChanged || settled) observed = next;
+                // This reader consumes admission, not the cache's acquisition
+                // flags. Starting/finishing an unchanged read is not invalidation.
+                if (changed) owner.invalidate();
+            }));
         }
     }
     syncQualifiedSubscriptions();
@@ -976,8 +988,13 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     const unwatchProvider = subscribeProviderAccountUsageCache(() => {
         const rows = readProviderRows();
         if (rows === observedRows) return;
+        const previous = observedRows;
         observedRows = rows;
-        owner.invalidate();
+        // Cache loading, retry deadlines and observation-only publications do
+        // not change Usage facts. Preserve real replacement/removal and errors.
+        const keys = new Set([...Object.keys(previous ?? {}), ...Object.keys(rows ?? {})]);
+        if ([...keys].some(key => previous?.[key]?.hadError !== rows?.[key]?.hadError
+            || !sameStrictJsonValue(previous?.[key]?.snapshot, rows?.[key]?.snapshot))) owner.invalidate();
     });
     let observedFeatures = getCachedServerFeaturesSnapshot({ serverId: lifetime.scope.serverId });
     const unwatchFeatures = subscribeServerFeaturesSnapshot(() => {
