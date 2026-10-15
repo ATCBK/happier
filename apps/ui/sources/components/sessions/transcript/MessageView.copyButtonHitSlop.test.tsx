@@ -233,4 +233,30 @@ describe('MessageView (copy button hitSlop)', () => {
         },
     );
 
+    it('clears the copied glyph and reports a refused retry after a successful message copy', async () => {
+        platformState.os = 'android';
+        vi.resetModules();
+        const { MessageView } = await import('./MessageView');
+        const Clipboard = await import('expo-clipboard');
+        const { Modal } = await import('@/modal');
+        const writes = vi.mocked(Clipboard.setStringAsync);
+        writes.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+        const alert = vi.mocked(Modal.alert);
+        alert.mockClear();
+        const message = {
+            kind: 'agent-text', id: 'copy-retry-message', localId: null, createdAt: 1, text: 'Copy this message',
+        } satisfies Message;
+        const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
+        const button = screen.findByTestId('transcript-message-copy:copy-retry-message');
+        if (!button) throw new Error('Missing message copy action');
+        const glyph = () => button.findAll((node) => typeof node.type === 'string'
+            && String(node.type) === 'Icon')[0]?.props.name;
+        await act(async () => { await button.props.onPress(); });
+        expect(glyph()).toBe('check');
+        expect(alert).not.toHaveBeenCalled();
+        await act(async () => { await button.props.onPress(); });
+        expect(glyph()).toBe('copy');
+        expect(alert).toHaveBeenCalledWith('common.error', 'items.failedToCopyToClipboard');
+    });
+
 });

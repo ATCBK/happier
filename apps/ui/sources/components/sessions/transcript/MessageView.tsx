@@ -67,6 +67,7 @@ import { resolveToolRowPinAction } from '@/components/sessions/transcript/toolCa
 import type { TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import type { PersistedSessionMessagePinV1 } from '@/sync/domains/messages/pins/sessionMessagePins';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useStreamingTextSmoothing } from '@/components/sessions/transcript/streaming/useStreamingTextSmoothing';
 import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
@@ -1553,8 +1554,8 @@ function ForkMessageButton(props: {
 
 function CopyMessageButton(props: { markdown: string; testID?: string; invertedActionsLayout?: boolean; onHoverIn?: () => void; onHoverOut?: () => void }) {
   const { theme } = useUnistyles();
-  const [copied, setCopied] = React.useState(false);
-  const resetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { markCopied, isCopied, clearCopiedFeedback } = useTemporaryCopyFeedback();
+  const copied = isCopied();
   const hitSlop = Platform.OS === 'web' ? undefined : 15;
 
   const markdown = props.markdown || '';
@@ -1566,29 +1567,16 @@ function CopyMessageButton(props: { markdown: string; testID?: string; invertedA
     try {
       const ok = await setClipboardStringSafe(markdown);
       if (!ok) {
+        clearCopiedFeedback();
         Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
         return;
       }
-      setCopied(true);
-
-      if (resetTimer.current) {
-        clearTimeout(resetTimer.current);
-      }
-      resetTimer.current = setTimeout(() => {
-        setCopied(false);
-      }, 1200);
+      markCopied();
     } catch (error) {
+      clearCopiedFeedback();
       Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
     }
-  }, [isCopyable, markdown]);
-
-  React.useEffect(() => {
-    return () => {
-      if (resetTimer.current) {
-        clearTimeout(resetTimer.current);
-      }
-    };
-  }, []);
+  }, [clearCopiedFeedback, isCopyable, markCopied, markdown]);
 
   if (!isCopyable) {
     return null;
