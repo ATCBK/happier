@@ -24,7 +24,7 @@ import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTar
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { PluginConnectedAccountAuthenticationV2Schema, type JsonValue } from '@happier-dev/protocol';
 import type { PluginServices, PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import { ManagedBootstrapCredentialCreateV1Schema, ManagedControllerReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedBootstrapCredentialCreateV1Schema, ManagedControllerCurrentInputV1Schema, ManagedControllerReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { logger } from '@/ui/logger';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SharedSavedSecretCreateInputV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
@@ -398,8 +398,11 @@ describe('managed acquisition durable custody', () => {
         const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', enrolledMachineId: 'ordinary-machine',
             resource: { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {} } });
         const writes: string[] = [];
-        vi.spyOn(axios, 'post').mockImplementation(async url => {
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
             writes.push(String(url));
+            // The HTTP boundary consumes the same closed request as Home's
+            // controller/current route; enrollment resource facts stay separate.
+            if (String(url).endsWith('/current')) ManagedControllerCurrentInputV1Schema.parse(body);
             return { status: 200, data: { machine: retained, ...(String(url).endsWith('/context') ? { requestId: 'original-request' } : {}) } };
         });
         const results: Partial<Record<'bootstrap' | 'exec', JsonValue>> = {

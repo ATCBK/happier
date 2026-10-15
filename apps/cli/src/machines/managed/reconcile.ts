@@ -523,7 +523,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
             if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
                 throw new ManagedMachineControllerError('provider_unavailable');
             }
-            return await params.client.row('current', correlation);
+            return await params.client.row('current', params.client.correlation(machine));
         }, native,
         materializeBootstrapCredential: async (reference) => {
             if (reference.resourceId !== machine.bootstrapCredentialRef?.resourceId || bootstrapCredentialRevision === undefined) {
@@ -532,7 +532,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
             return await materializeBootstrapCredential(params, machine, bootstrapCredentialRevision);
         },
     });
-    machine = await params.client.row('current', correlation);
+    machine = await params.client.row('current', params.client.correlation(machine));
     if (machine.enrolledMachineId !== enrollment.machineId) throw new ManagedMachineControllerError('enrollment_retired');
     return null;
 }
