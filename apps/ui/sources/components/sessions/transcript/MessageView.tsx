@@ -505,7 +505,7 @@ function UserTextBlock(props: {
   forkCommon: TranscriptForkCommon;
   messageDisplayCommon: TranscriptMessageDisplayCommon;
 }) {
-  const [isMessageHovered, setIsMessageHovered] = React.useState(false);
+  const { isHovered: isMessageHovered, hoverProps } = useRowActionHoverHost();
   const [isCopyButtonHovered, setIsCopyButtonHovered] = React.useState(false);
   const [isActionRowFocused, setIsActionRowFocused] = React.useState(false);
   const handleActionsFocus = React.useCallback(() => setIsActionRowFocused(true), []);
@@ -678,15 +678,7 @@ function UserTextBlock(props: {
   // not inside a chat bubble background, and without echoing displayText fallback.
   if (isStructuredOnly) {
     return (
-      <Pressable
-        disabled={!isWeb}
-        {...(isWeb
-          ? {
-              onHoverIn: () => setIsMessageHovered(true),
-              onHoverOut: () => setIsMessageHovered(false),
-            }
-          : null)}
-      >
+      <View {...hoverProps}>
         <View
           style={[styles.structuredUserMessageContainer, props.historical ? styles.historicalMessageContainer : null]}
         >
@@ -800,20 +792,12 @@ function UserTextBlock(props: {
             />
           </MessageActionRow>
         </View>
-      </Pressable>
+      </View>
     );
   }
 
   return (
-    <Pressable
-      disabled={!isWeb}
-      {...(isWeb
-        ? {
-            onHoverIn: () => setIsMessageHovered(true),
-            onHoverOut: () => setIsMessageHovered(false),
-          }
-        : null)}
-    >
+    <View {...hoverProps}>
       <View
         style={[styles.userMessageContainer, props.historical ? styles.historicalMessageContainer : null]}
       >
@@ -947,7 +931,7 @@ function UserTextBlock(props: {
           </MessageActionRow>
         </View>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -973,7 +957,7 @@ function AgentTextBlock(props: {
   forkCommon: TranscriptForkCommon;
   messageDisplayCommon: TranscriptMessageDisplayCommon;
 }) {
-  const [isMessageHovered, setIsMessageHovered] = React.useState(false);
+  const { isHovered: isMessageHovered, hoverProps } = useRowActionHoverHost();
   const [isCopyButtonHovered, setIsCopyButtonHovered] = React.useState(false);
   const [isActionRowFocused, setIsActionRowFocused] = React.useState(false);
   const handleActionsFocus = React.useCallback(() => setIsActionRowFocused(true), []);
@@ -1251,15 +1235,7 @@ function AgentTextBlock(props: {
   });
 
   return (
-    <Pressable
-      disabled={!isWeb}
-      {...(isWeb
-        ? {
-            onHoverIn: () => setIsMessageHovered(true),
-            onHoverOut: () => setIsMessageHovered(false),
-          }
-        : null)}
-    >
+    <View {...hoverProps}>
       <TranscriptJumpAttention
         sessionId={props.sessionId}
         routeMessageId={buildMessageRouteId(props.message)}
@@ -1465,7 +1441,7 @@ function AgentTextBlock(props: {
           />
         </MessageActionRow>
       </TranscriptJumpAttention>
-    </Pressable>
+    </View>
   );
 }
 

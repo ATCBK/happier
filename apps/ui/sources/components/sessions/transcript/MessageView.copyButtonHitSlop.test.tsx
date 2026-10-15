@@ -206,19 +206,24 @@ describe('MessageView (copy button hitSlop)', () => {
             const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
             const copyButton = screen.findByTestId('transcript-message-copy:gesture-message');
             if (!copyButton) throw new Error('Missing child copy action');
-            let wrapper: ReactTestInstance | null = copyButton.parent;
-            while (wrapper && !(typeof wrapper.type === 'string' && String(wrapper.type) === 'Pressable')) {
-                wrapper = wrapper.parent;
+            const ancestors: ReactTestInstance[] = [];
+            for (let node = copyButton.parent; node; node = node.parent) {
+                if (typeof node.type === 'string') ancestors.push(node);
             }
-            if (!wrapper) throw new Error('Missing message hover wrapper');
-            // This is the RN boundary's responder admission contract. A callback-free enabled
-            // Pressable still acquires the JS responder and cancels a hesitant child scroll.
-            if (branch !== 'web') expect(wrapper.props.disabled).toBe(true);
+            // A hover-only message host must neither acquire the RN JS responder nor
+            // publish the available message and its actions as a disabled accessibility node.
+            expect(ancestors.some((node) => String(node.type) === 'Pressable')).toBe(false);
+            expect(ancestors.some((node) => node.props.disabled === true
+                || node.props.accessibilityState?.disabled === true)).toBe(false);
             if (branch === 'web') {
-                expect(wrapper.props.disabled).not.toBe(true);
-                expect(typeof wrapper.props.onHoverIn).toBe('function');
-                expect(typeof wrapper.props.onHoverOut).toBe('function');
-                await act(async () => { wrapper.props.onHoverIn(); });
+                const wrapper = ancestors.find((node) => typeof node.props.onPointerEnter === 'function');
+                if (!wrapper) throw new Error('Missing passive hover host');
+                const actions = () => screen.findAllHostsByTestId('transcript-message-actions:gesture-message')[0];
+                expect(flattenStyle(actions().props.style).pointerEvents).toBe('none');
+                await act(async () => { wrapper.props.onPointerEnter(); });
+                expect(flattenStyle(actions().props.style).pointerEvents).toBe('auto');
+                await act(async () => { wrapper.props.onPointerLeave(); });
+                expect(flattenStyle(actions().props.style).pointerEvents).toBe('none');
             }
             expect(copyButton.props.disabled).not.toBe(true);
             const writes = vi.mocked(Clipboard.setStringAsync);
