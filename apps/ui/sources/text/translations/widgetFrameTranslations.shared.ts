@@ -185,7 +185,7 @@ export const widgetFrameTranslationsEnglish = { en: {
         groupA11y: ({ name }) => `Group: ${name}`,
         groupCount: ({ count }) => `Group · ${count}`,
         groupCopyOf: ({ count, index, total }) => `Group · ${count} · Copy ${index} of ${total}`,
-        groupNameCopyOf: ({ name, index, total }) => `${name} · Copy ${index} of ${total}`,
+        groupNameCopyOf: ({ name, index, total }) => `${name} · Copy ${index} of ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Group · 1 widget' : `Group · ${count} widgets`,
         addsAtWidth: ({ width }) => `Adds it at ${width} width.`,
         presetEdited: "Edited",

@@ -2,7 +2,8 @@ import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
-import { TextInput } from '@/components/ui/text/Text';
+import { View } from 'react-native';
+import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -122,11 +123,10 @@ function WidgetFrameTitleField(props: Readonly<{
             });
         } else props.onCancel?.();
     };
-    return (
-        <>
+    const input = (
         <TextInput
             testID={props.testID}
-            style={[styles.input, props.persistent ? styles.field : null]}
+            style={[styles.input, props.persistent ? styles.fieldInput : null]}
             value={draft}
             editable={!saving}
             accessibilityState={{ busy: saving && !homeUnreachable }}
@@ -141,10 +141,24 @@ function WidgetFrameTitleField(props: Readonly<{
                 if (event.nativeEvent.key === 'Escape') finish(false);
             }}
         />
+    );
+    return (
+        <>
+        {props.persistent ? (
+            // The field is as wide as its name, up to the room the bar has; past that the name ends in an ellipsis.
+            // An unseen copy of the text gives the box its width, the input sits over it.
+            <View style={styles.field}>
+                <Text style={[styles.input, styles.sizer]} numberOfLines={1} aria-hidden>{draft || props.placeholder || ' '}</Text>
+                {input}
+            </View>
+        ) : input}
         {saving && props.serverId ? <HomeReachabilityGate variant="line" relevantServerIds={[props.serverId]}>{null}</HomeReachabilityGate> : null}
         </>
     );
 }
+
+// react-native-web draws a clipped single-line input with an ellipsis through this web-only property.
+const WEB_TEXT_OVERFLOW = { textOverflow: 'ellipsis' };
 
 const styles = StyleSheet.create((theme) => ({
     // The frame title's own type, so renaming never shifts the header.
@@ -156,10 +170,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     // Always there: it reads as a field, at the control radius, and gives way to the bar's controls.
     field: {
-        flexGrow: 1,
         flexShrink: 1,
         minWidth: 96,
-        maxWidth: 220,
         paddingVertical: theme.space.s4,
         paddingHorizontal: theme.space.s10,
         borderRadius: theme.borderRadius.md,
@@ -167,4 +179,15 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
     },
+    fieldInput: {
+        position: 'absolute',
+        left: theme.space.s10,
+        right: theme.space.s10,
+        top: theme.space.s4,
+        bottom: theme.space.s4,
+        paddingVertical: 0,
+        paddingHorizontal: 0,
+        ...WEB_TEXT_OVERFLOW,
+    },
+    sizer: { opacity: 0, paddingVertical: 0 },
 }));

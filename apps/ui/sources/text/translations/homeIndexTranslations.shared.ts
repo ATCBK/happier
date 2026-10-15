@@ -49,7 +49,7 @@ export const homeIndexTranslationsEnglish = { en: {
         customizeTitle: 'Customize Home',
         customizeDescription: 'Drag to reorder. Saved to your account, so every device shows the same Home.',
         customizing: "Customizing Home",
-        customizingHint: "Drag widgets into, out of and between groups",
+        customizingHint: "Drag widgets between groups; move built-in sections from Sections",
         sections: "Sections",
         newRow: "Drop here to start a new row",
         newRowVerb: "Move to a new row",
