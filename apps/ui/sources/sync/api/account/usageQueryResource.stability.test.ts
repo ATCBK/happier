@@ -7,6 +7,9 @@ import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/act
 import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from './usageQueryResource';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { storage } from '@/sync/domains/state/storage';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => {
@@ -15,6 +18,47 @@ afterEach(async () => {
     await home?.dispose();
     home = undefined;
     vi.restoreAllMocks();
+});
+
+it('seeds the same accounting query from its Account facts when a route mounts a different batch', async () => {
+    const pending = createDeferred<void>();
+    let hold = false;
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch-retention.test', accountId: 'account-a' }],
+        route: async request => {
+            if (request.path !== '/v2/usage/query') return undefined;
+            if (hold) await pending.promise;
+            return Response.json({ v: 1, totals: { eventCount: 1,
+                tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 },
+                cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+                series: [{ bucketStartMs: 1000, bucketEndMs: 2000, eventCount: 1,
+                    tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 },
+                    cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] });
+        } });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    const captured = captureUiUsageQueryAccountContext(credentials)!;
+    storage.setState({ profileScope: captured.accountLifetime.scope,
+        profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
+    const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 }, includeWorkEvidence: false, includeSessionEvidence: false });
+    const store = getUsageQueryResourceStore(captured);
+    const initial = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const release = initial.subscribe(() => {}, false);
+    await expect.poll(() => initial.getSnapshot().pending).toBe('idle');
+    const before = decodeUsageQueryResource(initial.getSnapshot().value!).results[0]!.accounting;
+    release();
+    hold = true;
+    const returning = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query,
+        normalizeUsageQuery({ ...query, agents: ['claude'] })] }) });
+    const stop = returning.subscribe(() => {}, false);
+    try {
+        await expect.poll(() => returning.getSnapshot().value !== undefined).toBe(true);
+        const shown = decodeUsageQueryResource(returning.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
+        expect(shown.accounting).toEqual(before);
+        expect(shown.sources.find(source => source.source === 'accounting')?.status).toBe('pending');
+        expect(decodeUsageQueryResource(returning.getSnapshot().value!).results.find(slice => slice.key !== getUsageQueryKey(query))?.accounting,
+            'a differently filtered query cannot inherit these facts').toBeUndefined();
+    } finally { pending.resolve(); stop(); }
 });
 
 it('preserves an unchanged batched slice across Resource revisions without sharing it across retired authority', async () => {

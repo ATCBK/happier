@@ -282,6 +282,13 @@ describe('usage query captured Resource adapter', () => {
       expect.soft((await renderBody(homeEntry)).findHostByTestId('timeline.state')).not.toBeNull();
       const paces = settled.accounts.map(account => account.windows.map(window => window.pace));
       expect(paces[0]?.[0]).not.toBeNull();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 600_001);
+      try {
+        await homeEntry.refresh();
+        expect.soft(projectionOf(homeEntry).accounts[0]?.state.status).toBe('stale');
+        expect.soft(projectionOf(homeEntry).accounts.map(account => account.windows.map(window => window.pace)),
+          'aging the same observation must not erase its last settled projection before this window resets').toEqual(paces);
+      } finally { clock.mockRestore(); }
       releasePlaceholderHome();
       // Usage's batch has different accounting demand, but exactly the same Account allowance sources.
       holdHistory = true;

@@ -334,6 +334,21 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             && retained.current.recordId === value.current.recordId
             && canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(scope.sources[index]!.key), retained);
         if (unobservedReplacement) value = retained;
+        let retainedPace = false;
+        if (value?.current && retained?.current && sameStrictJsonValue(value.current, retained.current)
+            && canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(scope.sources[index]!.key), retained)) {
+            const previousPaces = new Map(retained.pace.map(row => [row.meterId, row.value]));
+            const pace = value.pace.map(row => {
+                const prior = previousPaces.get(row.meterId);
+                // The same observation aging is not a replacement projection.
+                // Keep its witnessed pace, marked stale, within that reset window.
+                if (row.value.status !== 'unavailable' || row.value.reason !== 'stale' || prior?.status !== 'available'
+                    || prior.window.resetAtMs <= Date.now()) return row;
+                retainedPace = true;
+                return { ...row, value: prior };
+            });
+            if (retainedPace) value = { ...value, pace };
+        }
         progressValues[index] = value;
         const failure = failures.get(index);
         sources[index] = { source: sources[index]!.source,
@@ -341,7 +356,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             // Incompleteness alone cannot say whether its producer is still running.
             // Allowance/history has answered at its last page, independently of
             // the Pending-work and price facets that may still be reading.
-            status: failure ? value ? 'stale' : 'error' : unobservedReplacement ? 'stale' : settled || value?.pageProjection || value?.history?.nextCursor === null
+            status: failure ? value ? 'stale' : 'error' : unobservedReplacement || retainedPace ? 'stale' : settled || value?.pageProjection || value?.history?.nextCursor === null
                 ? value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'available' : 'partial' : 'pending',
             ...(value?.current && wasConnectedServiceQuotaObserved(value.current) ? { asOfMs: value.current.fetchedAtMs } : {}),
             ...(failure ? { errorCode: failure } : {}),
@@ -752,6 +767,10 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     // New query ranges still read their own history; these facts seed the body
     // until that replacement answers, rather than claiming its range is read.
     let allowance: Pick<UsageQueryBatchResult['results'][number], 'key' | 'requestedQuery' | 'shownQuery' | 'quota' | 'sources' | 'pending'> | undefined;
+    // Queries move between route batches as visible widgets register. These
+    // are the same Account Resource's accounting facts, independent of batch membership.
+    const accountingByQuery = new Map<string, Pick<UsageQueryBatchResult['results'][number],
+        'key' | 'requestedQuery' | 'shownQuery' | 'accounting' | 'sources' | 'pending'>>();
     const sessionInputs = new Map<string, { seq: number | undefined; basis: string; needsAdmission: boolean;
         value?: SessionInputEvidence; read: Promise<SessionInputEvidence | null> }>();
     const readSessionState = (id: string) => {
@@ -826,18 +845,31 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 const entry = owner.store.getEntry(reference);
                 const retained = entry.getSnapshot().value;
                 const ownPrevious = retained ? decodeUsageQueryResource(retained) : undefined;
+                const queries = normalizeUsageQueryBatchInput(reference.input).queries;
+                const previousByKey = new Map(ownPrevious?.results.map(slice => [slice.key, slice]));
+                const previousSlices = queries.flatMap(query => {
+                    const key = getUsageQueryKey(query);
+                    const slice = previousByKey.get(key) ?? accountingByQuery.get(key);
+                    return slice ? [slice] : [];
+                });
+                const priorBatch = previousSlices.length ? { v: 1 as const, results: previousSlices } : undefined;
                 const sharedAllowance = allowance;
-                const previous = ownPrevious && sharedAllowance ? { ...ownPrevious, results: ownPrevious.results.map(slice => ({
+                const previous = priorBatch && sharedAllowance ? { ...priorBatch, results: priorBatch.results.map(slice => ({
                     ...slice, quota: sharedAllowance.quota,
                     sources: [...slice.sources.filter(source => source.source !== 'quota' && !source.source.startsWith('quota:')),
                         ...sharedAllowance.sources],
-                })) } : ownPrevious ?? (sharedAllowance ? { v: 1 as const, results: [sharedAllowance] } : undefined);
+                })) } : priorBatch ?? (sharedAllowance ? { v: 1 as const, results: [sharedAllowance] } : undefined);
                 const contentFor = async (batch: UsageQueryBatchResult): Promise<ResourceContent> => {
                     requireCurrent(sharedContext, options?.signal);
                     const first = batch.results[0];
                     if (first) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
                         quota: first.quota, sources: first.sources.filter(source => source.source === 'quota' || source.source.startsWith('quota:')),
                         pending: first.sources.some(source => (source.source === 'quota' || source.source.startsWith('quota:')) && source.status === 'pending') };
+                    for (const slice of batch.results) if (slice.accounting
+                        && slice.sources.some(source => source.source === 'accounting' && source.status !== 'pending' && source.status !== 'not_loaded')) {
+                        accountingByQuery.set(slice.key, { key: slice.key, requestedQuery: slice.requestedQuery, shownQuery: slice.shownQuery,
+                            accounting: slice.accounting, sources: slice.sources.filter(source => source.source === 'accounting'), pending: false });
+                    }
                     const current = entry.getSnapshot().value;
                     // Reconcile each revision against the same entry's admitted
                     // value so unrelated slices keep their selected references.
@@ -879,7 +911,13 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                         } }),
                 }, { signal: options?.signal });
                 requireCurrent(sharedContext, options?.signal);
-                if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+                if (!result.ok) {
+                    if (['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface'].includes(result.errorCode)) {
+                        allowance = undefined;
+                        accountingByQuery.clear();
+                    }
+                    throw Object.assign(new Error(result.error), { code: result.errorCode });
+                }
                 // The final value supersedes any progress revision that has not
                 // started materializing yet. Finish only the in-flight digest.
                 queuedProgress = null;
@@ -959,6 +997,8 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         owner.store.dispose();
         evidenceAbort.abort();
         sessionInputs.clear();
+        accountingByQuery.clear();
+        allowance = undefined;
         accountStores.delete(lifetime);
         unwatch();
         unwatchProvider();
@@ -972,6 +1012,8 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         owner.store.dispose();
         evidenceAbort.abort();
         sessionInputs.clear();
+        accountingByQuery.clear();
+        allowance = undefined;
         accountStores.delete(lifetime);
         listeners.clear();
         unwatch();
