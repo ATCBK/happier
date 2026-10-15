@@ -27,9 +27,10 @@ const w = (id: string, size: WidgetSizeV1, extra?: Omit<PresetWidget, 'id' | 'si
  */
 const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>> = {
     overview: [{ width: 'full', widgets: [w('usage_daily', 'tall'), w('usage_period_summary', 'medium'), w('usage_capacity', 'medium'),
-        w('usage_coach', 'full'), w('usage_projections', 'medium'), w('usage_efficiency', 'medium'),
-        // Lab wgusage-CD ends on When you work; the ledger and Sources keep their own views.
-        w('usage_rhythm', 'full')] }],
+        // Efficiency's four figures are the compact one: the group's column packing stacks it over Rhythm
+        // beside the Projections list, so neither column ends in a half-empty cell (lab wgusage-CD).
+        w('usage_coach', 'full'), w('usage_projections', 'medium'), w('usage_efficiency', 'small'),
+        w('usage_rhythm', 'medium')] }],
     // Cost facts holds the money facts and the prices line behind them, so it takes the full band.
     costs: [{ width: 'full', widgets: [w('usage_cost_facts', 'full', { metric: 'cost' }), w('usage_daily', 'tall', { metric: 'cost' }),
         w('usage_breakdowns', 'tall', { metric: 'cost', breakdown: ['agent'] }), w('usage_plan_fit', 'medium', { metric: 'cost' }),

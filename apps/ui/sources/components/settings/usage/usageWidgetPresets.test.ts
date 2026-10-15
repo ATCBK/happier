@@ -5,6 +5,7 @@ import { createWidgetSurfaceArtifactPortV1,
 import { createUsageWidgetPresets, USAGE_WIDGET_PRESET_IDS } from './usageWidgetPresets';
 import { buildWidgetCandidateSetup } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { selectBuiltinWidgetCandidates } from '@/components/widgets/widgetCatalog';
+import { packWidgetGroupBands, resolveWidgetGroupCells } from '@/components/widgets/group/widgetGroupLayout';
 
 const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>;
 const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'account', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
@@ -49,6 +50,14 @@ describe('Usage host fragment presets', () => {
             { size: 'tall', instance: { definition: { id: 'usage_daily' } } },
             { size: 'medium', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'medium', instance: { definition: { id: 'usage_capacity' } } }]);
+        // The group packs Overview without a half-empty column: the Projections list beside Efficiency over Rhythm.
+        const children = first.kind === 'group' ? first.children : [];
+        const nameOf = (id: string) => children.find(child => child.instance.id === id)?.instance.definition;
+        const bands = packWidgetGroupBands(resolveWidgetGroupCells('corePage', children.map(child => ({ id: child.instance.id, size: child.size }))), 2);
+        const last = bands[bands.length - 1]!;
+        expect(last.kind).toBe('columns');
+        expect(last.kind === 'columns' ? last.columns.map(column => column.map(cell => nameOf(cell.id)?.kind === 'builtin' ? nameOf(cell.id)!.id : '')) : [])
+            .toEqual([['usage_projections'], ['usage_efficiency', 'usage_rhythm']]);
     });
 
     it('uses declared Usage inputs for every definition; Home owns values and Project follows only projects', () => {
