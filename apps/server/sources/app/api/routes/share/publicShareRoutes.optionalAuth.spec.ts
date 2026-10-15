@@ -329,7 +329,10 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         expect(route.app.authenticate).not.toHaveBeenCalled();
         expect(verifyToken).toHaveBeenCalledTimes(1);
         expect(reply.statusCode).toBe(200);
-        expect(payload).toEqual({ messages: [{ id: "m1", seq: 1, content: "c", localId: "l1", createdAt: 1, updatedAt: 2 }] });
+        expect(payload).toEqual({
+            messages: [{ id: "m1", seq: 1, content: "c", localId: "l1", createdAt: 1, updatedAt: 2 }],
+            hasMore: false,
+        });
         expect(dbMocks.db.sessionMessage.findMany).not.toHaveBeenCalled();
     });
 });

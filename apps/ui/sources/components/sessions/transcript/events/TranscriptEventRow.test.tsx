@@ -767,6 +767,18 @@ describe('TranscriptEventRow', () => {
         expect(serialized).not.toContain(t('message.unknownEvent'));
     });
 
+    it('does not describe a terminal policy decision as a user cancellation', async () => {
+        const screen = await renderScreen(<TranscriptEventRow event={{
+            type: 'connected-service-runtime-auth-recovery',
+            status: 'cancelled', serviceId: 'claude-subscription', profileId: 'work',
+            terminal: true, reason: 'switch_reason_disabled',
+        }} />);
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).not.toContain(t('message.connectedServiceRuntimeAuthRecoveryCancelled'));
+        expect(serialized).toContain(t('message.connectedServiceRuntimeAuthRecoveryStopped'));
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-runtime-auth-recovery' })).toBeTruthy();
+    });
+
     it('renders runtime-auth recovery recovered events without diagnostic data', async () => {
         const screen = await renderScreen(
             <TranscriptEventRow

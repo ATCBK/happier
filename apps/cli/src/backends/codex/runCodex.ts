@@ -1895,6 +1895,7 @@ export async function runCodex(opts: {
                 endpoint: codexSharedAppServer.endpoint,
             });
         }
+        const initialConnectedServiceRuntimeIdentity = resolveCodexInitialConnectedServiceRuntimeIdentity(codexAppServerProcessEnv, session);
         codexAppServerRuntime = createCodexAppServerRuntime({
             directory,
             activeServerDir: configuration.activeServerDir,
@@ -1917,7 +1918,8 @@ export async function runCodex(opts: {
                 : codexSharedAppServer
                     ? { createClient: codexSharedAppServer.createClient }
                     : {}),
-            initialConnectedServiceRuntimeIdentity: resolveCodexInitialConnectedServiceRuntimeIdentity(codexAppServerProcessEnv, session),
+            initialConnectedServiceRuntimeIdentity,
+            initializeChatGptAuthTokens: !useCodexAppServerDaemonProxy,
             session,
             transcriptSession: createCurrentSessionTranscriptPort(() => session),
             onThinkingChange: (value) => { thinking = value; },

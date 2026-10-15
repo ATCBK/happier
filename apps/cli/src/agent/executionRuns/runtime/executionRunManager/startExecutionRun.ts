@@ -430,6 +430,7 @@ export async function startExecutionRun(args: Readonly<{
       };
       args.controllers.set(runId, ctrl);
       controllerOccurrence = ctrl;
+      args.onPublicStateUpdated?.(runId);
       await args.writeActivityMarker(runId, args.getNowMs(), { force: true }).catch(() => {});
       return startResult;
     }
@@ -645,6 +646,7 @@ export async function startExecutionRun(args: Readonly<{
           const profile = resolveExecutionRunIntentProfile(args.params.intent);
           await args.send(runId, { message: profile.buildPrompt(start) });
         }
+        if (args.controllers.get(runId) === ctrl) args.onPublicStateUpdated?.(runId);
       } catch (error: unknown) {
         await failBackendProvisioning(error);
       }

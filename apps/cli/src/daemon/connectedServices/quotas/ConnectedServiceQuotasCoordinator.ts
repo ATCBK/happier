@@ -236,11 +236,24 @@ export type ConnectedServiceGroupQuotaProbeResult = Readonly<{
 export const DEFAULT_CONNECTED_SERVICE_QUOTA_FETCH_TIMEOUT_MS = 15_000;
 const CONNECTED_SERVICE_GROUP_QUOTA_PROBE_MAX_CONCURRENCY = 4;
 
-export type AutomaticQuotaResetContext = Readonly<{ groupId: string; sessionId?: string }>;
+export type AutomaticQuotaResetContext = Readonly<{ groupId: string; sessionId?: string; providerLimitIds?: ReadonlyArray<string> }>;
 export type AutomaticQuotaResetConsumedEvent = AutomaticQuotaResetContext & Readonly<{
   serviceId: ConnectedServiceId;
   profileId: string;
   receipt: ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1;
+}>;
+
+type RecoveryCreditConsumeInput = Readonly<{
+  serviceId: ConnectedServiceId;
+  profileId: string;
+  idempotencyKey: string;
+  providerCreditId?: string;
+  automaticResetContext?: AutomaticQuotaResetContext;
+}>;
+
+type RecoveryCreditConsumeInFlight = Readonly<{
+  promise: Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>;
+  automaticProviderLimitIds: ReadonlyArray<string> | undefined;
 }>;
 
 export class ConnectedServiceQuotasCoordinator {
@@ -304,7 +317,7 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly persistedInBandQuotaStateByKey = new Map<string, PersistedInBandQuotaState>();
   private readonly quotaLifecycleStateByGroupKey = new Map<string, ConnectedServiceAuthGroupQuotaLifecycleState>();
   private readonly recoveryCreditConsumeResultsByKey = new Map<string, ConnectedServiceQuotaRecoveryCreditConsumeResult>();
-  private readonly recoveryCreditConsumeInFlightByKey = new Map<string, Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>>();
+  private readonly recoveryCreditConsumeInFlightByKey = new Map<string, RecoveryCreditConsumeInFlight>();
   private readonly startupCurrentSourceRefreshByKey = new Map<string, ConnectedServiceUsageSourceV1>();
   private readonly discoveredProfileIdsByServiceId = new Map<ConnectedServiceId, ReadonlySet<string>>();
   private lastDiscoveryAt = 0;
@@ -2900,11 +2913,15 @@ export class ConnectedServiceQuotasCoordinator {
         continue;
       }
       const key = buildConnectedServiceUsageSourceKey(parsed.data);
-      if (
-        this.startupCurrentSourceRefreshByKey.has(key)
-        || this.startupCurrentSourceRefreshByKey.size
-          >= ConnectedServiceQuotasCoordinator.MAX_STARTUP_CURRENT_SOURCE_REFRESHES
-      ) {
+      if (this.startupCurrentSourceRefreshByKey.has(key)) {
+        // Coalesce the binding while retaining the latest ready-source request. An
+        // earlier in-flight observation may clear only the request it captured.
+        this.startupCurrentSourceRefreshByKey.set(key, parsed.data);
+        ignored += 1;
+        continue;
+      }
+      if (this.startupCurrentSourceRefreshByKey.size
+          >= ConnectedServiceQuotasCoordinator.MAX_STARTUP_CURRENT_SOURCE_REFRESHES) {
         ignored += 1;
         continue;
       }
@@ -2923,12 +2940,10 @@ export class ConnectedServiceQuotasCoordinator {
     ));
   }
 
-  private clearScheduledCurrentSourceRefreshesForBinding(input: Readonly<{
-    serviceId: ConnectedServiceId;
-    profileId: string;
-  }>): void {
-    for (const [key, source] of this.startupCurrentSourceRefreshByKey.entries()) {
-      if (source.serviceId === input.serviceId && source.profileId === input.profileId) {
+  private clearScheduledCurrentSourceRefreshes(sources: readonly ConnectedServiceUsageSourceV1[]): void {
+    for (const source of sources) {
+      const key = buildConnectedServiceUsageSourceKey(source);
+      if (this.startupCurrentSourceRefreshByKey.get(key) === source) {
         this.startupCurrentSourceRefreshByKey.delete(key);
       }
     }
@@ -3506,6 +3521,7 @@ export class ConnectedServiceQuotasCoordinator {
     now: number;
     idempotencyKey: string;
     providerCreditId?: string;
+    providerLimitIds?: ReadonlyArray<string>;
   }>): Promise<Readonly<
     { type: 'timeout' }
     | { type: 'result'; outcome: Exclude<ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1['status'], 'unknown_after_timeout'> }
@@ -3524,6 +3540,7 @@ export class ConnectedServiceQuotasCoordinator {
       now: input.now,
       idempotencyKey: input.idempotencyKey,
       ...(input.providerCreditId ? { providerCreditId: input.providerCreditId } : {}),
+      ...(input.providerLimitIds ? { providerLimitIds: input.providerLimitIds } : {}),
       signal: controller.signal,
     });
 
@@ -3562,6 +3579,7 @@ export class ConnectedServiceQuotasCoordinator {
     now: number;
     idempotencyKey: string;
     providerCreditId?: string;
+    providerLimitIds?: ReadonlyArray<string>;
   }>): Promise<Readonly<
     { type: 'timeout' }
     | {
@@ -3576,6 +3594,7 @@ export class ConnectedServiceQuotasCoordinator {
       now: input.now,
       idempotencyKey: input.idempotencyKey,
       ...(input.providerCreditId ? { providerCreditId: input.providerCreditId } : {}),
+      ...(input.providerLimitIds ? { providerLimitIds: input.providerLimitIds } : {}),
     });
     return consumed.type === 'timeout'
       ? consumed
@@ -3627,6 +3646,14 @@ export class ConnectedServiceQuotasCoordinator {
     ].join('\u0000');
   }
 
+  private findUnknownRecoveryCreditConsumeResult(serviceId: ConnectedServiceId, profileId: string): ConnectedServiceQuotaRecoveryCreditConsumeResult | undefined {
+    const profileLedgerPrefix = `${serviceId}\u0000${profileId}\u0000`;
+    for (const [key, result] of this.recoveryCreditConsumeResultsByKey) {
+      if (key.startsWith(profileLedgerPrefix) && result.receipt?.status === 'unknown_after_timeout') return result;
+    }
+    return undefined;
+  }
+
   public async consumeAvailableRecoveryCreditForProfile(input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
@@ -3641,11 +3668,8 @@ export class ConnectedServiceQuotasCoordinator {
     });
     if (!profileId) return unavailable();
     // A newer inventory observation cannot reconcile an earlier ambiguous debit.
-    // Keep unselected recovery on the original receipt for this coordinator lifetime.
-    const profileLedgerPrefix = `${serviceId}\u0000${profileId}\u0000`;
-    for (const [key, result] of this.recoveryCreditConsumeResultsByKey) {
-      if (key.startsWith(profileLedgerPrefix) && result.receipt?.status === 'unknown_after_timeout') return result;
-    }
+    const unknown = this.findUnknownRecoveryCreditConsumeResult(serviceId, profileId);
+    if (unknown) return unknown;
     try {
       const accountMode = await resolveConnectedServiceAccountMode(this.api);
       if (accountMode === 'unknown') return unavailable();
@@ -3665,14 +3689,6 @@ export class ConnectedServiceQuotasCoordinator {
         .sort((a, b) => (a.expiresAtMs ?? Infinity) - (b.expiresAtMs ?? Infinity));
       const providerCreditId = available[0]?.providerCreditId;
       if (!providerCreditId && credits.availableCount <= 0) return unavailable();
-      // Preparation awaits above may overlap session Apply or another group's reset.
-      // Join that profile's issued operation rather than deriving a second debit key.
-      for (const [key, pending] of this.recoveryCreditConsumeInFlightByKey) {
-        if (key.startsWith(profileLedgerPrefix)) return await pending;
-      }
-      for (const [key, result] of this.recoveryCreditConsumeResultsByKey) {
-        if (key.startsWith(profileLedgerPrefix) && result.receipt?.status === 'unknown_after_timeout') return result;
-      }
       return await this.consumeRecoveryCreditForProfile({
         serviceId,
         profileId,
@@ -3689,13 +3705,27 @@ export class ConnectedServiceQuotasCoordinator {
     }
   }
 
-  public async consumeRecoveryCreditForProfile(input: Readonly<{
-    serviceId: ConnectedServiceId;
-    profileId: string;
-    idempotencyKey: string;
-    providerCreditId?: string;
-    automaticResetContext?: AutomaticQuotaResetContext;
-  }>): Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult> {
+  private async joinRecoveryCreditConsume(input: RecoveryCreditConsumeInput, pending: RecoveryCreditConsumeInFlight,
+    sameSelector: boolean): Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult> {
+    const result = await pending.promise;
+    const callerTargets = input.automaticResetContext
+      ? new Set(input.automaticResetContext.providerLimitIds ?? []) : undefined;
+    const pendingTargets = pending.automaticProviderLimitIds === undefined
+      ? undefined : new Set(pending.automaticProviderLimitIds);
+    const sameTargets = pendingTargets === undefined ? callerTargets === undefined
+      : callerTargets !== undefined && pendingTargets.size === callerTargets.size
+        && [...pendingTargets].every((target) => callerTargets.has(target));
+    // A refusal for another selector or automatic target proves no debit. Let this
+    // caller attempt its own intent after the prior action settles; spent or uncertain
+    // receipts always stay shared across competing requests.
+    if ((!sameSelector || !sameTargets) && (result.receipt?.status === 'not_available'
+      || result.receipt?.status === 'nothing_to_reset')) {
+      return await this.consumeRecoveryCreditForProfile(input);
+    }
+    return result;
+  }
+
+  public async consumeRecoveryCreditForProfile(input: RecoveryCreditConsumeInput): Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult> {
     const serviceId = ConnectedServiceIdSchema.parse(input.serviceId);
     const profileId = String(input.profileId ?? '').trim();
     const idempotencyKey = String(input.idempotencyKey ?? '').trim();
@@ -3720,7 +3750,7 @@ export class ConnectedServiceQuotasCoordinator {
     // An unselected caller has no snapshot basis. Resolve its inventory here so
     // automatic recovery and session Apply share the same credit and receipt owner.
     if (!providerCreditId && idempotencyKey === buildRecoveryCreditConsumeIdempotencyKey({ serviceId, profileId })) {
-      return await this.consumeAvailableRecoveryCreditForProfile({ serviceId, profileId });
+      return await this.consumeAvailableRecoveryCreditForProfile({ serviceId, profileId, automaticResetContext: input.automaticResetContext });
     }
 
     const ledgerKey = this.buildRecoveryCreditConsumeLedgerKey({
@@ -3731,8 +3761,19 @@ export class ConnectedServiceQuotasCoordinator {
     });
     const completed = this.recoveryCreditConsumeResultsByKey.get(ledgerKey);
     if (completed) return completed;
-    const inFlight = this.recoveryCreditConsumeInFlightByKey.get(ledgerKey);
-    if (inFlight) return await inFlight;
+    const unknown = this.findUnknownRecoveryCreditConsumeResult(serviceId, profileId);
+    if (unknown) return unknown;
+    const profileLedgerPrefix = `${serviceId}\u0000${profileId}\u0000`;
+    const selectedLedgerPrefix = `${profileLedgerPrefix}${providerCreditId ?? ''}\u0000`;
+    const aggregateLedgerPrefix = `${profileLedgerPrefix}\u0000`;
+    // Different observation keys may still compete for the same provider debit. An
+    // aggregate request overlaps any selected credit; distinct selected credits do not.
+    for (const [key, pending] of this.recoveryCreditConsumeInFlightByKey) {
+      if (key.startsWith(profileLedgerPrefix)
+        && (!providerCreditId || key.startsWith(selectedLedgerPrefix) || key.startsWith(aggregateLedgerPrefix))) {
+        return await this.joinRecoveryCreditConsume(input, pending, key.startsWith(selectedLedgerPrefix));
+      }
+    }
 
     const consumePromise = this.consumeRecoveryCreditForProfileOnce({
       serviceId,
@@ -3741,10 +3782,18 @@ export class ConnectedServiceQuotasCoordinator {
       idempotencyKey,
       ...(providerCreditId ? { providerCreditId } : {}),
     });
-    this.recoveryCreditConsumeInFlightByKey.set(ledgerKey, consumePromise);
+    this.recoveryCreditConsumeInFlightByKey.set(ledgerKey, {
+      promise: consumePromise,
+      automaticProviderLimitIds: input.automaticResetContext
+        ? [...(input.automaticResetContext.providerLimitIds ?? [])] : undefined,
+    });
     try {
       const result = await consumePromise;
-      if (result.receipt) {
+      // A target-specific automatic refusal proves no debit, not that the credit is
+      // unusable for a later manual choice. Spent and ambiguous receipts always replay.
+      const automaticNoEffect = input.automaticResetContext && (result.receipt?.status === 'not_available'
+        || result.receipt?.status === 'nothing_to_reset');
+      if (result.receipt && !automaticNoEffect) {
         this.recoveryCreditConsumeResultsByKey.set(ledgerKey, result);
       }
       return result;
@@ -3809,6 +3858,7 @@ export class ConnectedServiceQuotasCoordinator {
         now,
         idempotencyKey,
         ...(providerCreditId ? { providerCreditId } : {}),
+        ...(input.automaticResetContext ? { providerLimitIds: input.automaticResetContext.providerLimitIds ?? [] } : {}),
       });
       if (consumed.type === 'timeout') {
         return {
@@ -4033,7 +4083,7 @@ export class ConnectedServiceQuotasCoordinator {
         const groupId = source.groupId?.trim();
         const groupGeneration = source.groupGeneration;
         if (!groupId || typeof groupGeneration !== 'number') {
-          this.startupCurrentSourceRefreshByKey.delete(buildConnectedServiceUsageSourceKey(source));
+          this.clearScheduledCurrentSourceRefreshes([source]);
           continue;
         }
         const group = await this.readCurrentQuotaGroupForContext({
@@ -4046,7 +4096,7 @@ export class ConnectedServiceQuotasCoordinator {
             member.enabled && member.profileId.trim() === source.profileId
           ));
         if (!isCurrentMember) {
-          this.startupCurrentSourceRefreshByKey.delete(buildConnectedServiceUsageSourceKey(source));
+          this.clearScheduledCurrentSourceRefreshes([source]);
           continue;
         }
         addContext({
@@ -4174,8 +4224,9 @@ export class ConnectedServiceQuotasCoordinator {
             directTargets: directGroupTargets,
           });
           const existing = await this.readExistingQuotaSnapshot({ accountMode, serviceId, profileId });
+          const scheduledRefreshes = this.listScheduledCurrentSourceRefreshesForBinding({ serviceId, profileId });
           const forcedRefresh = this.shouldForceQuotaRefresh(existing.existing)
-            || this.listScheduledCurrentSourceRefreshesForBinding({ serviceId, profileId }).length > 0;
+            || scheduledRefreshes.length > 0;
 
           const failureState = this.failureStateByBindingKey.get(bindingKey);
           const quotaFresh = fetcher && this.isExistingQuotaSnapshotFresh({ existing: existing.existing, now, fetcher, forcedRefresh });
@@ -4188,7 +4239,7 @@ export class ConnectedServiceQuotasCoordinator {
             && (!previousSubscription || now - previousSubscription.observedAtMs >= Math.max(previousSubscription.staleAfterMs, subscriptionFetcher.pollPolicy?.minPollIntervalMs ?? 0));
           if (quotaFresh) {
             this.failureStateByBindingKey.delete(bindingKey);
-            this.clearScheduledCurrentSourceRefreshesForBinding({ serviceId, profileId });
+            this.clearScheduledCurrentSourceRefreshes(scheduledRefreshes);
           }
           if (!quotaDue && !subscriptionDue) continue;
 
@@ -4236,7 +4287,7 @@ export class ConnectedServiceQuotasCoordinator {
               });
               pendingSoftSwitchTargets.push(...directGroupTargets);
               this.failureStateByBindingKey.delete(bindingKey);
-              this.clearScheduledCurrentSourceRefreshesForBinding({ serviceId, profileId });
+              this.clearScheduledCurrentSourceRefreshes(scheduledRefreshes);
             }
             continue;
           }
@@ -4296,7 +4347,7 @@ export class ConnectedServiceQuotasCoordinator {
           pendingSoftSwitchTargets.push(...directGroupTargets);
           void recordedAccountUsage;
           this.failureStateByBindingKey.delete(bindingKey);
-          this.clearScheduledCurrentSourceRefreshesForBinding({ serviceId, profileId });
+          this.clearScheduledCurrentSourceRefreshes(scheduledRefreshes);
         } catch (error) {
           const bindingKey = this.makeBindingKey({ serviceId, profileId });
           const credentialHealthStatus = await this.persistCredentialHealthForQuotaFailure({

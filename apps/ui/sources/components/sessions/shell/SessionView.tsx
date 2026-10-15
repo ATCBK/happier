@@ -252,7 +252,7 @@ import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
 import { Keyboard, Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, HERO_SPINNER_SIZE } from '@/components/ui/feedback/ActivitySpinner';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { sessionSwitch } from '@/sync/ops';
@@ -1933,7 +1933,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     <SessionAuthRecoveryFallback message={authSurfaceState.message} />
                 ) : routeHydrationRetrying ? (
                     <View testID="session-route-retrying" style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
-                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={HERO_SPINNER_SIZE} color={theme.colors.text.secondary} />
                         {routeHydrationRetryStatusKey ? (
                             <Text style={{ color: theme.colors.text.secondary, marginTop: 10, textAlign: 'center' }}>
                                 {t(routeHydrationRetryStatusKey)}
@@ -1943,7 +1943,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 ) : ((!isDataReady && !session) || routeHydrationLoading) ? (
                     // Loading state
                     <View testID="session-route-loading" style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={HERO_SPINNER_SIZE} color={theme.colors.text.secondary} />
                     </View>
                 ) : !session && (routeHydrationTerminalMissing || !routeHydrationState) ? (
                     // Deleted state
@@ -2365,7 +2365,7 @@ const SessionTranscriptPlaceholder = React.memo(function SessionTranscriptPlaceh
     return isLoaded ? (
         <EmptyMessages session={session} />
     ) : (
-        <ActivitySpinner size="small" color={activityColor} />
+        <ActivitySpinner size={HERO_SPINNER_SIZE} color={activityColor} />
     );
 });
 
@@ -3649,6 +3649,7 @@ function SessionViewLoaded({
         const facts: ArmedAgentContinuationCanonicalFacts | null = factsAreReadable
             ? {
                 currentAgentId: liveComposerState.agentId,
+                currentBackendTarget: sessionActionDefaultBackend?.backendTarget ?? { kind: 'builtInAgent', agentId: liveComposerState.agentId },
                 sessionActive: sessionRuntimeStatusSource.active === true,
                 input: armedContinuationInputCustody,
             }
@@ -3657,12 +3658,14 @@ function SessionViewLoaded({
             result: activeArmedContinuationOutcome.result,
             labels: activeArmedContinuationOutcome.labels,
             targetAgentId: activeArmedContinuationOutcome.intent.selection.agentId,
+            targetBackendTarget: activeArmedContinuationOutcome.intent.selection.backendTarget,
             facts,
         });
     }, [
         armedContinuationInputCustody,
         activeArmedContinuationOutcome,
         liveComposerState.agentId,
+        sessionActionDefaultBackend?.backendTarget,
         sessionRuntimeStatusSource.active,
     ]);
     // Memoized because it feeds the composer badge list: a fresh object every
@@ -4016,7 +4019,7 @@ function SessionViewLoaded({
         const intent = inSessionAgentPicker.armedContinuation;
         if (intent === null) return null;
         const entry = sessionAgentCatalogEntries.find((catalogEntry) => (
-            catalogEntry.providerAgentId === intent.selection.agentId
+            catalogEntry.targetKey === buildBackendTargetKey(intent.selection.backendTarget ?? { kind: 'builtInAgent', agentId: intent.selection.agentId })
         ));
         return {
             agentId: intent.selection.agentId,
@@ -4036,12 +4039,12 @@ function SessionViewLoaded({
     // nothing presentational has to be persisted and later read back in a
     // language the reader has since changed.
     const buildArmedContinuationLabels = React.useCallback((
-        targetAgentId: string,
+        selection: ComposerAgentContinuationIntentV1['selection'],
     ): ArmedAgentContinuationLabels => ({
         sourceAgentLabel: currentAgentLabel,
         targetAgentLabel: sessionAgentCatalogEntries.find((catalogEntry) => (
-            catalogEntry.providerAgentId === targetAgentId
-        ))?.title ?? targetAgentId,
+            catalogEntry.targetKey === buildBackendTargetKey(selection.backendTarget ?? { kind: 'builtInAgent', agentId: selection.agentId })
+        ))?.title ?? selection.agentId,
     }), [currentAgentLabel, sessionAgentCatalogEntries]);
     const restoredArmedContinuationOutcomeKeyRef = React.useRef<string | null>(null);
     React.useLayoutEffect(() => {
@@ -4077,7 +4080,7 @@ function SessionViewLoaded({
             scopeKey: activeServerAccountScopeKey,
             result: { type: 'outcome_unknown', localId: submission.localId },
             intent,
-            labels: buildArmedContinuationLabels(intent.selection.agentId),
+            labels: buildArmedContinuationLabels(intent.selection),
             localId: submission.localId,
             reconciled: false,
         });
@@ -4167,6 +4170,7 @@ function SessionViewLoaded({
         if (!gaugeSource) return null;
         return computeConnectedServiceQuotaGaugeViewModel({
             snapshot: gaugeSource.snapshot,
+            activeModelId: modelMode,
             windowMode: sessionProviderUsageGaugeWindowMode,
             windowModes: sessionProviderUsageGaugeWindowModesSetting,
             additionalMeterIds: connectedServiceQuotaProfileRef
@@ -4184,6 +4188,7 @@ function SessionViewLoaded({
         });
     }, [
         connectedServiceQuotaActiveAccountLabel,
+        modelMode,
         connectedServiceQuotaDisplaySnapshot,
         providerUsageDisplaySnapshotSource?.kind,
         providerUsageGaugeSource,
@@ -5284,6 +5289,7 @@ function SessionViewLoaded({
                 connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
                 connectedServicesProviderStateSharingSettingsV1: settings.connectedServicesProviderStateSharingSettingsV1,
                 connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
+                connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
             },
             switchingDisabledReason: connectedServicesAuthSwitchDisabledReason,
             sessionActive: session.active === true,
@@ -5692,7 +5698,7 @@ function SessionViewLoaded({
                     scopeKey: activeServerAccountScopeKey,
                     result,
                     intent: destination.intent,
-                    labels: buildArmedContinuationLabels(destination.intent.selection.agentId),
+                    labels: buildArmedContinuationLabels(destination.intent.selection),
                     localId: destination.localId,
                     reconciled: false,
                 });

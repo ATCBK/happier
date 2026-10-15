@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
+import { Modal } from '@/modal';
+import { storage } from '@/sync/domains/state/storage';
+
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 
 import { HappyError } from '@/utils/errors/errors';
 import { t } from '@/text';
@@ -50,6 +58,72 @@ function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
 }
 
 describe('executeSessionAction', () => {
+    beforeEach(() => {
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
+        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }) });
+    });
+
+    it.each([
+        [SESSION_ACTION_ARCHIVE_ID, 'session.archive', 'archiveSession'],
+        [SESSION_ACTION_UNARCHIVE_ID, 'session.unarchive', 'unarchiveSession'],
+    ] as const)('honors cancellation when confirmation is enabled for %s', async (actionId, protocolId, operation) => {
+        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { [protocolId]: { approvalRequiredSurfaces: ['ui_button'] } },
+        }) });
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const mutate = vi.fn(async () => ({ success: true }));
+        await executeSessionAction({
+            actionId,
+            target: createTarget({ archivedAt: actionId === SESSION_ACTION_UNARCHIVE_ID ? 1 : null }),
+            context: { operations: { [operation]: mutate, clearSessionVisibleWhenInactive: () => {} } },
+        });
+        expect(Modal.confirm).toHaveBeenCalled();
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[2]?.destructive).toBe(false);
+        expect(mutate).not.toHaveBeenCalled();
+    });
+
+    it.each([SESSION_ACTION_ARCHIVE_ID, SESSION_ACTION_UNARCHIVE_ID] as const)('runs %s immediately when confirmation is off', async (actionId) => {
+        const mutate = vi.fn(async () => ({ success: true }));
+        await executeSessionAction({
+            actionId,
+            target: createTarget({ archivedAt: actionId === SESSION_ACTION_UNARCHIVE_ID ? 1 : null }),
+            context: { operations: { archiveSession: mutate, unarchiveSession: mutate, clearSessionVisibleWhenInactive: () => {} } },
+        });
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        expect(mutate).toHaveBeenCalledWith('session_1', { serverId: 'server_1' });
+    });
+
+    it('retains stop confirmation when archive discovers an active session after the click', async () => {
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const stopSession = vi.fn(async () => ({ success: true }));
+        const archiveSession = vi.fn(async (): Promise<{ success: boolean; code?: string }> => ({ success: true }))
+            .mockResolvedValueOnce({ success: false, code: 'session_active' });
+        await executeSessionAction({
+            actionId: SESSION_ACTION_ARCHIVE_ID,
+            target: createTarget(),
+            context: { operations: {
+                archiveSession,
+                stopSession,
+            } },
+        });
+        expect(Modal.confirm).toHaveBeenCalled();
+        expect(stopSession).not.toHaveBeenCalled();
+    });
+
+    it('does not stop or archive an active session when the stop confirmation is cancelled', async () => {
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const stopSession = vi.fn(async () => ({ success: true }));
+        const archiveSession = vi.fn(async () => ({ success: true }));
+        const result = await executeSessionAction({
+            actionId: SESSION_ACTION_ARCHIVE_ID,
+            target: createTarget({ active: true }),
+            context: { operations: { stopSession, archiveSession } },
+        });
+        expect(result).toBe(false);
+        expect(stopSession).not.toHaveBeenCalled();
+        expect(archiveSession).not.toHaveBeenCalled();
+    });
     it('archives an active session through the stop/archive flow', async () => {
         const stopArchiveFlow = vi.fn(async () => undefined);
         const archiveSession = vi.fn(async () => ({ success: true as const }));

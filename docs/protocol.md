@@ -124,6 +124,16 @@ Field names below match on-wire payloads.
 - `usage`: `{ type: "usage", id: sessionId, key, tokens, cost, timestamp }`
 - `machine-status`: `{ type: "machine-status", machineId, online, timestamp }`
 
+In current development source, execution-run activity uses the existing public
+`status`, `runClass` and optional `turnInFlight` facts through
+`isExecutionRunActive`. A running long-lived handle with an observed
+`turnInFlight: false` remains available for follow-up without contributing
+background work. Bounded runs remain active until their outcome settles;
+provisioning and older producers without a turn observation remain conservatively
+active. The CLI publishes the same work transitions to runtime activity and its
+public run observers. Reachability and retained handle lifetime remain separate
+from this current-work projection.
+
 ### Client -> server WebSocket events
 - `ping` -> callback `{}`
 

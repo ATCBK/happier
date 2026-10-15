@@ -11,6 +11,11 @@ import { createBackendControllerMessageHandler } from '@/agent/executionRuns/run
 import { resolveExecutionRunIntentProfile } from '@/agent/executionRuns/profiles/intentRegistry';
 import { createStreamedTranscriptWriter, type StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
 
+export type ResumedExecutionRunBackend = Readonly<{
+  backend: AgentBackend;
+  connectedServicesRegistration?: NonNullable<ExecutionRunState['launch']>['connectedServicesRegistration'];
+}>;
+
 export async function resumeBackendControllerForResumableRun(args: Readonly<{
   runId: string;
   run: ExecutionRunState;
@@ -23,11 +28,11 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
    * backend with the run's runId isolation. It may throw — a fail-closed connected-services error is
    * mapped to a typed resume failure below.
    */
-  createBackend: () => Promise<AgentBackend>;
+  createBackend: () => Promise<ResumedExecutionRunBackend>;
   sendAcp: AcpSendFn;
   parentProvider: ACPProvider;
   streamedTranscriptSession: StreamedTranscriptWriterSession | null;
-  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
+  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   getNowMs: () => number;
   admitRuntimeActivity: (runId: string) => Promise<void>;
   rollbackRuntimeActivityAfterFailedAdmission: (reason: string) => Promise<void>;
@@ -94,8 +99,10 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   };
 
   let backend: AgentBackend;
+  let prepared: ResumedExecutionRunBackend;
   try {
-    backend = await args.createBackend();
+    prepared = await args.createBackend();
+    backend = prepared.backend;
   } catch (e: unknown) {
     args.budgetRegistry?.releaseExecutionRun(args.runId);
     // Fail closed: a resumable run bound to a connected account must not recreate on ambient auth.
@@ -192,12 +199,16 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     controllerPreparing = false;
     args.runs.set(args.runId, {
       ...args.run,
+      ...(prepared.connectedServicesRegistration ? {
+        launch: { ...args.run.launch, connectedServicesRegistration: prepared.connectedServicesRegistration },
+      } : {}),
       status: 'running',
       finishedAtMs: undefined,
       error: undefined,
       resumeHandle: { kind: 'vendor_session.v1', backendTarget: args.run.backendTarget, vendorSessionId: loaded.sessionId },
     });
     args.onPublicStateUpdated?.(args.runId);
+    await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true, resumed: true });
     return { ok: true };
   } catch (e: any) {
     controllerPreparing = false;

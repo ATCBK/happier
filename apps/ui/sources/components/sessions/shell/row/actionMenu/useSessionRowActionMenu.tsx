@@ -5,7 +5,7 @@ import { t } from '@/text';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { HappyError } from '@/utils/errors/errors';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
+import { confirmSessionStop, executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
 import {
     SESSION_ACTION_ARCHIVE_ID,
     SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
@@ -164,30 +164,11 @@ export function useSessionRowActionMenu(params: Readonly<{
     });
 
     const confirmStopSession = React.useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.stopSession'),
-            t('sessionInfo.stopSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.stopSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
+        if (!await confirmSessionStop()) return;
         performStopMutation();
     }, [performStopMutation]);
 
     const confirmArchiveSession = React.useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.archiveSession'),
-            t('sessionInfo.archiveSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.archiveSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
         performArchiveMutation();
     }, [performArchiveMutation]);
 

@@ -96,6 +96,37 @@ describe('ClaudeRemoteSubagentFileCollector', () => {
     } finally { collector.cleanup(); await rm(dir, { recursive: true, force: true }); }
   });
 
+  it('projects nested native completions within the owning imported sidechain and retains copied XML as user text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'issue-506-nested-'));
+    const file = join(dir, 'agent-parent.jsonl');
+    const sidechainId = 'parent-tool';
+    const toolUseId = 'nested-tool';
+    const xml = '<task-notification><task-id>nested-agent</task-id><status>completed</status><result>Nested outcome</result></task-notification>';
+    await writeFile(file, makeJsonl([
+      { type: 'assistant', uuid: 'nested-launch', isSidechain: true, agentId: 'parent-agent', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input: { prompt: 'nested work' } }] } },
+      { type: 'attachment', uuid: 'nested-complete', isSidechain: true, agentId: 'parent-agent', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: xml } },
+      { type: 'user', uuid: 'nested-ack', isSidechain: true, agentId: 'parent-agent', toolUseResult: { status: 'async_launched', agentId: 'nested-agent' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Async agent launched successfully.' }] } },
+      { type: 'user', uuid: 'nested-copy', isSidechain: true, agentId: 'parent-agent', message: { role: 'user', content: xml } },
+    ]));
+    const imported: RawJSONLines[] = [];
+    const collector = new ClaudeRemoteSubagentFileCollector({ emitImported: body => { imported.push(body); }, watchFile: () => () => {} });
+    try {
+      await collector.registerSidechainFile({ sidechainId, agentId: 'parent-agent', filePath: file, source: 'workflow-agent' });
+      await collector.syncAll();
+      const outcome = imported.find(row => row.uuid === 'nested-complete');
+      expect(outcome?.type).toBe('user');
+      if (!outcome || outcome.type !== 'user') throw new Error('Missing nested conversation completion');
+      expect(outcome.isSidechain).toBe(true);
+      expect(outcome.sidechainId).toBe(sidechainId);
+      expect(outcome.message.content).toEqual([expect.objectContaining({ type: 'tool_result', tool_use_id: toolUseId, content: [{ type: 'text', text: 'Nested outcome' }] })]);
+      const copied = imported.find(row => row.uuid === 'nested-copy');
+      expect(copied?.type).toBe('user');
+      expect(copied?.origin).toBeUndefined();
+      if (!copied || copied.type !== 'user') throw new Error('Missing copied user text');
+      expect(copied.message.content).toBe(xml);
+    } finally { collector.cleanup(); await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('imports agent-team subagent JSONL records as sidechains keyed by the Agent tool_use id', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happy-agent-team-sidechains-'));
     const agentId = 'Alpha@team-test';

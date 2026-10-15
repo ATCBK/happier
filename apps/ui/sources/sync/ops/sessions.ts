@@ -33,6 +33,7 @@ import type {
     SpawnSessionResult,
     SendableAskUserQuestionAnswerPayload,
 } from '@happier-dev/protocol';
+import { ConnectedServiceAuthSelectionUnsupportedError, machineRpcWithConnectedServiceAuthAdmission } from './connectedServiceAuthSupport';
 import {
     SessionForkRpcResultSchema,
     SessionRollbackRpcResultSchema,
@@ -322,13 +323,16 @@ async function runResumeSession(
             ...(agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1 } : {}),
         });
 
-        const result = await machineRpcWithServerScope<unknown, ResumeHappySessionRpcParams>({
+        const result = await machineRpcWithConnectedServiceAuthAdmission<ResumeHappySessionRpcParams>({
             machineId,
             method: RPC_METHODS.SPAWN_HAPPY_SESSION,
             payload: params,
             serverId,
             timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv(),
             ...(preferScopedMachineRpc ? { preferScoped: true } : {}),
+        }, {
+            backendTarget,
+            connectedServices: parsedConnectedServices,
         });
         const normalizedResult = normalizeSpawnSessionResult(result);
         if (shouldPresentAsResuming) {
@@ -342,6 +346,9 @@ async function runResumeSession(
     } catch (error) {
         if (shouldPresentAsResuming) {
             storage.getState().clearSessionResuming(options.sessionId);
+        }
+        if (error instanceof ConnectedServiceAuthSelectionUnsupportedError) {
+            return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST, errorMessage: error.message };
         }
         if (isAccountSettingsScopeChangedDuringSpawnPreparationError(error)) {
             return {

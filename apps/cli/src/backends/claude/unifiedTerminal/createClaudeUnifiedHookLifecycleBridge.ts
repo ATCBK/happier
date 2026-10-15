@@ -36,7 +36,7 @@ import { isClaudeUnifiedTrustedHookActivationEvidence } from './claudeUnifiedHoo
 import { normalizeClaudeUnifiedPromptIdentityText } from './promptIdentity';
 
 export type ClaudeUnifiedSessionHookSubscription = (
-  callback: (data: SessionHookData) => void,
+  callback: (data: SessionHookData, observation?: Readonly<{ observedAt?: number; startupReplay?: true }>) => void,
 ) => (() => void) | null | undefined;
 
 export type ClaudeUnifiedHookLifecycleBridge = ClaudeUnifiedStartableDisposable & Readonly<{
@@ -114,7 +114,7 @@ function disposeSubscription(dispose: (() => void) | null): void {
 }
 
 function readHookEventName(data: SessionHookData): string {
-  const raw = data.hook_event_name ?? data.hookEventName;
+  const raw = data.hook_event_name ?? data.hookEventName ?? data.eventName;
   return typeof raw === 'string' ? raw : '';
 }
 
@@ -567,8 +567,10 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
         runtimeActivityAdapter: opts.runtimeActivityAdapter ?? null,
         providerActivityLedger: opts.providerActivityLedger,
       });
-      unsubscribe = opts.subscribeClaudeSessionHooks((data) => {
+      unsubscribe = opts.subscribeClaudeSessionHooks((data, observation) => {
         const hookEventName = readHookEventName(data);
+        // The workflow source resolves startup native identity and terminal ordering after replay.
+        if (hookEventName === 'SubagentStart' && observation?.startupReplay) return;
         // Sidechain (subagent) hooks carry an agent_id attribution. They must not
         // drive main-conversation lifecycle behavior: prompt acceptance, compaction
         // gating, turn-terminal projection, release-all permission unblocking, or

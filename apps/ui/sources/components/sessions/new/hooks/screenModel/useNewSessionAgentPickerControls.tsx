@@ -306,6 +306,7 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
                 connectedServicesProfileLabelByKey: params.settings.connectedServicesProfileLabelByKey ?? {},
                 connectedServicesDefaultProfileByServiceId: params.settings.connectedServicesDefaultProfileByServiceId ?? {},
                 connectedServicesDefaultAuthByAgentIdV1: params.settings.connectedServicesDefaultAuthByAgentIdV1,
+                connectedServicesAdditionalDefaultAuthByAgentIdV1: params.settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
             },
             connectedServicesFeatureEnabled: params.connectedServicesFeatureEnabled === true,
             accountGroupsFeatureEnabled: params.connectedServicesAccountGroupsFeatureEnabled === true,

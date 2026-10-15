@@ -5,6 +5,7 @@ import {
 } from './connectedServiceSchemas.js';
 
 export type ConnectedServiceOauthCredentialRawMetadata = Readonly<{
+  project_id?: string;
   claudeAiOauth?: Readonly<{
     subscriptionType?: string;
     rateLimitTier?: string;
@@ -27,8 +28,10 @@ function readString(value: unknown): string | undefined {
 
 export function normalizeConnectedServiceOauthCredentialRawMetadata(
   raw: unknown,
+  serviceId?: ConnectedServiceId,
 ): ConnectedServiceOauthCredentialRawMetadata | null {
   const root = isRecord(raw) ? raw : {};
+  const projectId = serviceId === 'antigravity' ? readString(root.project_id) : undefined;
   const claudeAiOauthRaw = isRecord(root.claudeAiOauth)
     ? root.claudeAiOauth
     : isRecord(root['claude.ai_oauth'])
@@ -40,7 +43,11 @@ export function normalizeConnectedServiceOauthCredentialRawMetadata(
     ...(subscriptionType ? { subscriptionType } : {}),
     ...(rateLimitTier ? { rateLimitTier } : {}),
   };
-  return Object.keys(claudeAiOauth).length > 0 ? { claudeAiOauth } : null;
+  const normalized = {
+    ...(Object.keys(claudeAiOauth).length > 0 ? { claudeAiOauth } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 export function buildConnectedServiceCredentialRecord(
@@ -96,7 +103,7 @@ export function buildConnectedServiceCredentialRecord(
             tokenType: params.oauth.tokenType,
             providerAccountId: params.oauth.providerAccountId,
             providerEmail: params.oauth.providerEmail,
-            raw: normalizeConnectedServiceOauthCredentialRawMetadata(params.oauth.raw),
+            raw: normalizeConnectedServiceOauthCredentialRawMetadata(params.oauth.raw, params.serviceId),
           },
           token: null,
         }

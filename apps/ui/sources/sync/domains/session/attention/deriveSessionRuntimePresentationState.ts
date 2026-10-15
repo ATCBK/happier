@@ -196,6 +196,28 @@ export function deriveSessionRuntimePresentationState(
     };
 }
 
+/** The last witnessed attachment after the existing reconnect grace expires; never a terminal outcome. */
+export function readSessionRuntimeLostSinceMs(
+    input: Pick<DeriveSessionRuntimePresentationStateInput, 'active' | 'activeAt' | 'presence'>,
+    nowMs: number,
+): number | null {
+    if (input.active !== false || input.presence === 'online') return null;
+    const lastSeenAtMs = normalizeRuntimeStatusTimestamp(input.activeAt);
+    return lastSeenAtMs !== null && !isFreshTimestamp(lastSeenAtMs, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)
+        ? lastSeenAtMs
+        : null;
+}
+
+/** Newer child evidence can outlive the owning session's last attachment observation. */
+export function isSessionOwnedActivityUnobserved(
+    runtimeLostSinceMs: number | null | undefined,
+    latestObservedAtMs: number | null | undefined,
+): boolean {
+    return runtimeLostSinceMs != null
+        && !(typeof latestObservedAtMs === 'number' && Number.isFinite(latestObservedAtMs)
+            && latestObservedAtMs > runtimeLostSinceMs);
+}
+
 export function readFreshInProgressRuntimeSignalTimestamps(
     input: DeriveSessionRuntimePresentationStateInput,
     nowMs: number,
@@ -256,6 +278,12 @@ export function resolveNextSessionRuntimePresentationFreshnessAtMs(
     for (const timestamp of readSessionRuntimePresentationFreshnessTimestamps(input, nowMs)) {
         if (!isFreshTimestamp(timestamp, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)) continue;
         expirations.push(Math.trunc(timestamp) + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
+    }
+    if (input.active === false && input.presence !== 'online') {
+        const lastSeenAtMs = normalizeRuntimeStatusTimestamp(input.activeAt);
+        if (lastSeenAtMs !== null && isFreshTimestamp(lastSeenAtMs, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)) {
+            expirations.push(lastSeenAtMs + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
+        }
     }
     if (expirations.length === 0) return null;
     return Math.min(...expirations);

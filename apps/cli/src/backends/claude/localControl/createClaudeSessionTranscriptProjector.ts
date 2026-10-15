@@ -15,7 +15,7 @@ import {
   CLAUDE_GOAL_WORK_STATE_ITEM_ID,
   CLAUDE_GOAL_WORK_STATE_SOURCE_FAMILY,
 } from '../workState/claudeGoalStatus';
-import type { ClaudeWorkflowActivitySource } from '../workflows/claudeWorkflowActivitySource';
+import type { ClaudeWorkflowActivitySource, ClaudeWorkflowActivityObservationContext } from '../workflows/claudeWorkflowActivitySource';
 import { filterWorkflowOwnedWorkStateItems } from '../workflows/claudeWorkflowOwnedWorkState';
 import { mapClaudeRateLimitEventToUsageDetails, type NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { surfaceClaudeRateLimitRuntimeIssue } from '../connectedServices/surfaceClaudeRuntimeIssues';
@@ -112,7 +112,7 @@ export function createClaudeSessionTranscriptProjector(params: Readonly<{
   observeCommitted(message: RawJSONLines): Promise<void>;
   observeRaw(
     value: unknown,
-    observation?: Readonly<{ historicalReplay?: boolean }>,
+    observation?: ClaudeWorkflowActivityObservationContext,
   ): void;
   /**
    * Remove the published Claude goal work-state item (used by the active-session clear effector,
@@ -298,7 +298,7 @@ export function createClaudeSessionTranscriptProjector(params: Readonly<{
   const observeWithVisibleSender = (
     message: RawJSONLines,
     sender: (visibleMessage: RawJSONLines) => void,
-    options?: Readonly<{ historicalReplay?: boolean }>,
+    options?: ClaudeWorkflowActivityObservationContext,
   ): void => {
       const previousSender = sendVisibleMessage;
       sendVisibleMessage = sender;

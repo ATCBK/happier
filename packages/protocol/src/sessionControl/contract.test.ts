@@ -166,6 +166,33 @@ describe('sessionControl contract exports', () => {
     expect(summaryParsed.data.runtimeActivityActiveCount).toBe(2);
   });
 
+  it('validates optional Machine binding and canonical permission intent on session summaries', () => {
+    const summary = {
+      id: 'sess_binding',
+      createdAt: 1,
+      updatedAt: 2,
+      active: false,
+      activeAt: 0,
+      encryption: { type: 'dataKey' },
+    };
+    expect(protocol.SessionSummarySchema.safeParse(summary).success).toBe(true);
+    expect(protocol.SessionSummarySchema.safeParse({
+      ...summary,
+      machineId: 'machine-target',
+      permissionMode: 'safe-yolo',
+    }).success).toBe(true);
+    for (const invalid of [
+      { machineId: '' },
+      { machineId: '   ' },
+      { machineId: 1 },
+      { permissionMode: 'unknown' },
+      { permissionMode: 'acceptEdits' },
+      { permissionMode: null },
+    ]) {
+      expect(protocol.SessionSummarySchema.safeParse({ ...summary, ...invalid }).success).toBe(false);
+    }
+  });
+
   it('declares rollback eligibility sequence facts on session summaries and records', () => {
     expect(typeof (protocol as any).SessionSummarySchema.shape.rollbackEligibleTurnStarts?.safeParse).toBe('function');
     expect(typeof (protocol as any).V2SessionRecordSchema.shape.rollbackEligibleTurnStarts?.safeParse).toBe('function');

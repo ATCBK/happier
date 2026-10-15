@@ -91,6 +91,7 @@ describe('connectedServiceSchemas', () => {
         expect(ConnectedServiceIdSchema.parse('anthropic')).toBe('anthropic');
         expect(ConnectedServiceIdSchema.parse('claude-subscription')).toBe('claude-subscription');
         expect(ConnectedServiceIdSchema.parse('gemini')).toBe('gemini');
+        expect(ConnectedServiceIdSchema.parse('antigravity')).toBe('antigravity');
         expect(ConnectedServiceIdSchema.parse('github')).toBe('github');
     });
 

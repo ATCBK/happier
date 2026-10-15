@@ -1,4 +1,8 @@
 import {
+  AGY_OAUTH_CLIENT_ID,
+  AGY_OAUTH_CLIENT_SECRET,
+  AGY_OAUTH_TOKEN_URL,
+  AGY_OAUTH_SCOPES,
   CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
   CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES,
   CLAUDE_CODE_REQUIRED_OAUTH_SCOPES,
@@ -8,6 +12,7 @@ import {
   CLAUDE_OAUTH_TOKEN_URL,
   GEMINI_CLI_OAUTH_CLIENT_ID,
   GEMINI_CLI_OAUTH_CLIENT_SECRET,
+  GEMINI_CLI_OAUTH_SCOPES,
   GEMINI_CLI_OAUTH_TOKEN_URL,
   OPENAI_CODEX_OAUTH_CLIENT_ID,
   OPENAI_CODEX_OAUTH_TOKEN_URL,
@@ -52,9 +57,9 @@ export type ConnectedAccountRefreshCredentialEvidence =
     }>;
 
 export type ConnectedAccountOAuthDescriptor = Readonly<{
-  clientIdEnv: string;
+  clientIdEnv?: string;
   defaultClientId: string;
-  tokenUrlEnv: string;
+  tokenUrlEnv?: string;
   defaultTokenUrl: string;
   refreshTokenBody: 'form' | 'json';
   scopes: readonly string[];
@@ -205,6 +210,35 @@ function resolveClaudeSubscriptionNativeOauthRaw(
 
 export const CONNECTED_ACCOUNT_DESCRIPTORS = [
   {
+    id: 'antigravity',
+    displayName: 'Google Antigravity',
+    providerDisplayName: 'Antigravity',
+    credentialKind: 'oauth',
+    oauth: {
+      defaultClientId: AGY_OAUTH_CLIENT_ID,
+      defaultClientSecret: AGY_OAUTH_CLIENT_SECRET,
+      defaultTokenUrl: AGY_OAUTH_TOKEN_URL,
+      refreshTokenBody: 'form',
+      scopes: AGY_OAUTH_SCOPES,
+      mapCredentialPayload: ({ now, payload }) => {
+        const data = isRecord(payload) ? payload : {};
+        const projectId = readString(data.project_id);
+        return {
+          accessToken: readRequiredString(data.access_token),
+          refreshToken: readRequiredString(data.refresh_token),
+          idToken: readString(data.id_token),
+          scope: readString(data.scope),
+          tokenType: readString(data.token_type),
+          providerAccountId: readString(data.providerAccountId),
+          providerEmail: readString(data.providerEmail),
+          expiresAt: resolveExpiresAtFromPayload({ now, payload: data }),
+          raw: projectId ? { project_id: projectId } : null,
+        };
+      },
+    },
+    ui: { iconName: 'google', oauthAddActionModes: ['paste'] },
+  },
+  {
     id: 'openai-codex',
     displayName: 'OpenAI Codex',
     providerDisplayName: 'OpenAI',
@@ -335,7 +369,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
       tokenUrlEnv: 'HAPPIER_CONNECTED_SERVICES_GEMINI_OAUTH_TOKEN_URL',
       defaultTokenUrl: GEMINI_CLI_OAUTH_TOKEN_URL,
       refreshTokenBody: 'form',
-      scopes: [],
+      scopes: GEMINI_CLI_OAUTH_SCOPES,
       mapCredentialPayload: ({ now, payload }) => {
         const data = isRecord(payload) ? payload : {};
         return {
@@ -405,11 +439,11 @@ export function resolveConnectedAccountOauthConfig(
     throw new Error(`Connected account does not support OAuth refresh: ${serviceId}`);
   }
   const oauth = descriptor.oauth;
-  const clientId = resolveNonEmptyEnv(env[oauth.clientIdEnv], oauth.defaultClientId);
-  const tokenUrl = resolveNonEmptyEnv(env[oauth.tokenUrlEnv], oauth.defaultTokenUrl);
+  const clientId = resolveNonEmptyEnv(oauth.clientIdEnv ? env[oauth.clientIdEnv] : undefined, oauth.defaultClientId);
+  const tokenUrl = resolveNonEmptyEnv(oauth.tokenUrlEnv ? env[oauth.tokenUrlEnv] : undefined, oauth.defaultTokenUrl);
   const clientSecret =
-    oauth.clientSecretEnv && oauth.defaultClientSecret
-      ? resolveNonEmptyEnv(env[oauth.clientSecretEnv], oauth.defaultClientSecret)
+    oauth.defaultClientSecret
+      ? resolveNonEmptyEnv(oauth.clientSecretEnv ? env[oauth.clientSecretEnv] : undefined, oauth.defaultClientSecret)
       : undefined;
 
   return {

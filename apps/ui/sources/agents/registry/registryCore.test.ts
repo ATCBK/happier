@@ -161,7 +161,7 @@ describe('agents/registryCore', () => {
         expect(getAgentCore('agy')).toMatchObject({
             id: 'agy',
             cli: { detectKey: 'agy', machineLoginKey: 'antigravity-cli', spawnAgent: 'agy' },
-            sessionModes: { kind: 'none' },
+            sessionModes: { kind: 'acpAgentModes' },
             model: { dynamicProbe: 'auto', acpModelConfigOptionId: 'model' },
             resume: { vendorResumeIdField: 'agySessionId', supportsVendorResume: true },
             sessionStorage: { direct: false, persisted: true },
@@ -230,8 +230,8 @@ describe('agents/registryCore', () => {
             connectRoute: null,
         });
         expect(getAgentCore('agy').uiConnectedService).toEqual({
-            serviceId: null,
-            label: 'Antigravity',
+            serviceId: 'antigravity',
+            label: 'Google Antigravity',
             connectRoute: null,
         });
     });

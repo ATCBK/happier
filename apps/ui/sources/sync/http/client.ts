@@ -1,7 +1,7 @@
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
-import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol';
+import { redactPublicShareCapabilityUrl, withConnectedServiceReaderSupport } from '@happier-dev/protocol';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { createEndpointSupervisedRequest } from '@/sync/runtime/connectivity/createEndpointSupervisedRequest';
 import { getEndpointSupervisorForServer } from '@/sync/runtime/connectivity/endpointSupervisorPool';
@@ -171,7 +171,7 @@ export async function serverFetch(
     const localAbortSequence = abortSequence;
     const snapshot = getActiveServerSnapshot();
     const normalizedPath = normalizePath(path);
-    const requestUrl = normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://')
+    let requestUrl = normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://')
         ? normalizedPath
         : `${snapshot.serverUrl}${normalizedPath}`;
 
@@ -230,6 +230,8 @@ export async function serverFetch(
             );
         }
     }
+
+    if (hasAuthorization) requestUrl = withConnectedServiceReaderSupport(requestUrl);
 
     const requestController = new AbortController();
     inFlightControllers.add(requestController);

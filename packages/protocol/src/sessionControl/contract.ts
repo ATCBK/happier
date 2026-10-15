@@ -13,6 +13,7 @@ import { ActionUiPlacementSchema } from '../actions/actionUiPlacements.js';
 import { SubAgentRunResultV2Schema } from '../tools/v2/index.js';
 import { StopSessionIncompleteReasonSchema } from '../sessionStop.js';
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
+import { SESSION_PERMISSION_MODES } from '../sessionMetadata/sessionPermissionModes.js';
 import {
   PrimaryTurnStatusV1Schema,
   SessionRuntimeIssueV1Schema,
@@ -205,6 +206,8 @@ export const SessionSummarySchema = z.object({
   title: z.string().min(1).optional(),
   path: z.string().optional(),
   host: z.string().optional(),
+  machineId: z.string().trim().min(1).optional(),
+  permissionMode: z.enum(SESSION_PERMISSION_MODES).exclude(['acceptEdits', 'bypassPermissions']).optional(),
   share: z.object({
     accessLevel: z.string().min(1),
     canApprovePermissions: z.boolean(),

@@ -77,6 +77,17 @@ Auth flows:
 - `POST /v1/account/settings`
 - `POST /v1/usage/query`
 
+Provider Account Usage in development also uses
+`/v3/connect/provider-account-usage/:recordId`. Plain writes keep the strict
+base snapshot in `content.v` and optional supplemental facts in `metadata`.
+`metadata.recoveryCreditDetails` is admitted only with the canonical
+`connectedServices.quotaRecoveryCreditDetails` feature enabled. Clients require
+an explicit server-enabled bit before sending it; older servers still receive
+the supported base usage and recovery-credit shape. Encrypted records carry
+account-sealed details beside the base ciphertext instead of readable metadata.
+See [quota recovery compatibility](compatibility.md#quota-recovery-details-02-development)
+and [encryption](encryption.md) for the owning wire and privacy boundaries.
+
 ### Push tokens
 - `POST /v1/push-tokens`
 - `DELETE /v1/push-tokens/:token`

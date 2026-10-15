@@ -40,7 +40,6 @@ import {
     resolveClaudeEffortForModel,
     resolveClaudeUltracodeForModel,
 } from '@/backends/claude/utils/claudeEffort';
-import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
 import { withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
@@ -175,6 +174,8 @@ export async function claudeRemoteAgentSdk(opts: {
 
     // Callbacks
     onSessionFound: (id: string, data?: SessionHookData) => void;
+    /** Authenticated SDK hooks share the existing workflow observation channel without transcript output. */
+    onSessionHook?: (data: SessionHookData) => void;
     onThinkingChange?: (thinking: boolean) => void;
     onProviderPromptStarted?: () => void | Promise<void>;
     onMessage: (message: SDKMessage) => void;
@@ -605,6 +606,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	        getMode: () => mode,
 	        onSessionFound: (sessionId, data) => recordSessionFound(sessionId, data as any),
 	        onSessionHook: (data) => {
+	            opts.onSessionHook?.(data);
 	            const activity = readClaudeSessionHookProviderTaskActivity(data);
 	            if (!activity) return;
 	            publishClaudeProviderTaskRuntimeActivity({
@@ -690,14 +692,6 @@ export async function claudeRemoteAgentSdk(opts: {
             claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
             claudeCodeIncludeInNativeHistory: mode.claudeCodeIncludeInNativeHistory,
         });
-        const xdgIsolationEnv = resolveClaudeCodeXdgIsolation({
-            backendId: 'claude',
-            scope: 'session',
-            isolationId:
-                typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0
-                    ? opts.sessionId.trim()
-                    : `pid_${process.pid}`,
-        });
         const resumeSessionAt =
             typeof opts.resumeSessionAt === 'string' && opts.resumeSessionAt.trim().length > 0
                 ? opts.resumeSessionAt.trim()
@@ -726,7 +720,6 @@ export async function claudeRemoteAgentSdk(opts: {
             return Object.keys(out).length > 0 ? out : undefined;
         })();
         const claudeSubprocessEnv = withCurrentHappierSessionId({
-            ...xdgIsolationEnv,
             ...buildClaudeSubprocessEnv({ envOverlay: sessionEnvOverlay }),
         }, opts.happySessionId ?? '');
         logClaudeRuntimeAuthEnvDiagnostic({

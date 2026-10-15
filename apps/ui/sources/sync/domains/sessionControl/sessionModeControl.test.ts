@@ -22,6 +22,29 @@ function createMetadata(overrides: Partial<Metadata> = {}): Metadata {
 }
 
 describe('sessionModeControl', () => {
+  it.each(['agy', 'customAcp', 'opencode'] as const)('infers legacy Plan only when %s advertises it, preserving explicit pending IDs', async (agentId) => {
+    const { computeSessionModePickerControl } = await import('./sessionModeControl');
+    const metadata = createMetadata({
+      permissionMode: 'plan',
+      sessionModesV1: {
+        v: 1, provider: agentId, updatedAt: 1, currentModeId: 'default',
+        availableModes: [{ id: 'default', name: 'Default' }, { id: 'auto_edit', name: 'Auto Edit' }],
+      },
+    });
+    expect(computeSessionModePickerControl({ agentId, metadata })).toMatchObject({
+      requestedModeId: null, effectiveModeId: 'default', isPending: false,
+    });
+    metadata.sessionModesV1!.availableModes.push({ id: 'plan', name: 'Plan' });
+    expect(computeSessionModePickerControl({ agentId, metadata })).toMatchObject({
+      requestedModeId: 'plan', effectiveModeId: 'plan', isPending: true,
+    });
+    metadata.sessionModesV1!.availableModes.pop();
+    metadata.sessionModeOverrideV1 = { v: 1, updatedAt: 2, modeId: 'plan' };
+    expect(computeSessionModePickerControl({ agentId, metadata })).toMatchObject({
+      requestedModeId: 'plan', requestedModeName: 'plan', effectiveModeId: 'plan', isPending: true,
+    });
+  });
+
   it('offers clear separately from a provider native Default mode', () => {
     const control = computeSessionModePickerControl({ agentId: 'codebuddy', metadata: createMetadata({
       sessionModesV1: { v: 1, provider: 'codebuddy', updatedAt: 1, currentModeId: 'plan', availableModes: [

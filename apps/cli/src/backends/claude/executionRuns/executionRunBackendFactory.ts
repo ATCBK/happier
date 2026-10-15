@@ -3,8 +3,8 @@ import type { ExecutionRunBackendFactory } from '@/agent/executionRuns/registry/
 import type { BackendIsolationBundle, BackendIsolationRequest } from '@/runtime/isolation/types';
 import { configuration } from '@/configuration';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
 import { resolveClaudeSessionEnvOverlay } from '../spawn/resolveClaudeSessionEnvOverlay';
 
 export const executionRunBackendFactory: ExecutionRunBackendFactory = (opts) => {
@@ -31,20 +31,15 @@ export function resolveIsolation(request: BackendIsolationRequest, baseBundle: B
     // Best-effort: isolation should not fail backend creation.
   }
 
-  const xdgEnv = resolveClaudeCodeXdgIsolation({
-    backendId: request.backendId,
-    scope: 'execution_run',
-    isolationId: request.isolationId,
-  });
   return {
     ...baseBundle,
-    env: {
-      ...(baseBundle.env ?? {}),
-      // IMPORTANT: Do not override HOME/USERPROFILE for Claude Code. Auth tokens and other
-      // OS integrations can depend on stable HOME. We only isolate XDG dirs to prevent
-      // cross-process locking issues (e.g. versions download/lock under ~/.local/share/claude).
-      ...xdgEnv,
-    },
     settingsPath,
+    cleanup: async () => {
+      try {
+        await rm(settingsDir, { recursive: true, force: true });
+      } finally {
+        await baseBundle.cleanup?.();
+      }
+    },
   };
 }

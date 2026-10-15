@@ -712,6 +712,8 @@ function classifyCacheOnlySessionUpdateProjectionPatch(params: Readonly<{
         runtimeIssue: hasPatchField(patch, 'lastRuntimeIssue')
             && !areSessionRuntimeIssuesEqual(renderable.lastRuntimeIssue ?? null, patch.lastRuntimeIssue ?? null),
         runtimeActivityCount: patchNumberFieldChanged(renderable, patch, 'runtimeActivityActiveCount'),
+        runtimeActivityState: patchNullableFieldChanged(renderable, patch, 'runtimeActivityState'),
+        turnStatus: patchNullableFieldChanged(renderable, patch, 'latestTurnStatus'),
         unread: patchBooleanFieldChanged(renderable, patch, 'hasUnreadMessages'),
         pendingPermission: patchBooleanFieldChanged(renderable, patch, 'hasPendingPermissionRequests'),
         pendingUserAction: patchBooleanFieldChanged(renderable, patch, 'hasPendingUserActionRequests'),
@@ -724,6 +726,8 @@ function classifyCacheOnlySessionUpdateProjectionPatch(params: Readonly<{
             || reasons.archived
             || reasons.runtimeIssue
             || reasons.runtimeActivityCount
+            || reasons.runtimeActivityState
+            || reasons.turnStatus
             || reasons.unread
             || reasons.pendingPermission
             || reasons.pendingUserAction,
@@ -751,6 +755,8 @@ function applyCacheOnlySessionUpdateProjectionPatch(params: Readonly<{
         archived: classification.archived ? 1 : 0,
         runtimeIssue: classification.runtimeIssue ? 1 : 0,
         runtimeActivityCount: classification.runtimeActivityCount ? 1 : 0,
+        runtimeActivityState: classification.runtimeActivityState ? 1 : 0,
+        turnStatus: classification.turnStatus ? 1 : 0,
         unread: classification.unread ? 1 : 0,
         pendingPermission: classification.pendingPermission ? 1 : 0,
         pendingUserAction: classification.pendingUserAction ? 1 : 0,

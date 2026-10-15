@@ -20,9 +20,11 @@ import {
 } from '@/utils/sessions/sessionUtils';
 import {
     resolveNextSessionRuntimePresentationFreshnessAtMs,
+    readSessionRuntimeLostSinceMs,
 } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 import { countSessionAgentActivityFromMetadata } from '@/sync/domains/session/agentActivity/countSessionAgentActivityFromMetadata';
-import type { AgentActivityCounts } from '@/sync/domains/session/agentActivity/deriveAgentActivityCounts';
+import { reconcileAgentActivityEntryObservation, toAgentActivityCountable } from '@/sync/domains/session/agentActivity/deriveAgentActivityEntries';
+import { EMPTY_AGENT_ACTIVITY_COUNTS, deriveAgentActivityCounts, type AgentActivityCounts } from '@/sync/domains/session/agentActivity/deriveAgentActivityCounts';
 import {
     formatSessionAgentActivityLabel,
     resolveSessionActivityComposerTranslate,
@@ -209,14 +211,18 @@ function resolveHasUnreadMessages(
  * fallback when no renderable exists — computes it from real metadata through the same owner, so the
  * two paths cannot produce different numbers.
  */
-function readSessionAgentActivityCounts(session: SessionStatusSource): AgentActivityCounts {
+function readSessionAgentActivityCounts(session: SessionStatusSource, nowMs: number): AgentActivityCounts {
+    const runtimeLostSinceMs = readSessionRuntimeLostSinceMs(session, nowMs);
+    const metadata = (session as SessionListRenderableSession).metadata;
+    if (runtimeLostSinceMs !== null && metadata?.agentActivityEntries) {
+        return deriveAgentActivityCounts(metadata.agentActivityEntries.map((entry) => toAgentActivityCountable(reconcileAgentActivityEntryObservation(entry, runtimeLostSinceMs))));
+    }
     const projected = (session as SessionListRenderableSession).metadata?.agentActivityCounts;
-    if (projected) return projected;
-    return countSessionAgentActivityFromMetadata((session as Session).metadata);
+    if (projected) return runtimeLostSinceMs === null ? projected : EMPTY_AGENT_ACTIVITY_COUNTS;
+    return countSessionAgentActivityFromMetadata((session as Session).metadata, runtimeLostSinceMs);
 }
 
 function resolveNextRuntimeFreshnessAtMs(session: SessionStatusSource, nowMs: number): number | null {
-    if (session.active !== true || session.presence !== 'online') return null;
     return resolveNextSessionRuntimePresentationFreshnessAtMs({
         active: session.active,
         activeAt: session.activeAt,
@@ -370,7 +376,7 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
     // describe the same workflow differently.
     const agentActivityLabel = settings.agentActivityCountEnabled
         ? formatSessionAgentActivityLabel(
-            readSessionAgentActivityCounts(resolvedSession),
+            readSessionAgentActivityCounts(resolvedSession, settings.runtimeNowMs),
             resolveSessionActivityComposerTranslate(),
         )
         : null;

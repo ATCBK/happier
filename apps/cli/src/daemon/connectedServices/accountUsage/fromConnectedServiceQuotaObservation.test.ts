@@ -41,6 +41,21 @@ function createSnapshot(
 }
 
 describe('buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation', () => {
+  it('preserves recovery-credit presentation alongside the independent action fields', () => {
+    const recoveryCreditDetails: NonNullable<ConnectedServiceQuotaSnapshotV1['recoveryCreditDetails']> = {
+      grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' },
+    };
+    const recoveryCredits: NonNullable<ConnectedServiceQuotaSnapshotV1['recoveryCredits']> = {
+      kind: 'usage_limit_resets', availableCount: 0,
+      credits: [{ providerCreditId: 'grant', kind: 'usage_limit_reset', status: 'unknown' }],
+    };
+    const snapshot = buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation({
+      snapshot: createSnapshot({ recoveryCredits, recoveryCreditDetails }),
+    });
+    expect(snapshot.recoveryCreditDetails).toEqual(recoveryCreditDetails);
+    expect(snapshot.recoveryCredits).toEqual(recoveryCredits);
+  });
+
   it('preserves subscription observation freshness separately from runtime usage evidence', () => {
     const subscription = { status: 'subscribed', renewal: 'off', observedAtMs: 500, staleAfterMs: 60_000,
       currentPeriodEndAtMs: 50_000 } as const;

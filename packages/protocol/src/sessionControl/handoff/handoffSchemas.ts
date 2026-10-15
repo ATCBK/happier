@@ -30,6 +30,16 @@ const MAX_INCLUDE_GLOBS = 128;
 const MAX_SOURCE_CONTROLLER_METADATA_KEYS = 50;
 const MAX_SOURCE_CONTROLLER_METADATA_JSON_BYTES = 32 * 1024;
 
+// Capability replies are forward-extensible; only explicit true flags authorize a mode.
+export const SessionHandoffCapabilityV2Schema = z.object({
+  protocolVersion: z.literal(2),
+  atomicTargetResume: z.literal(true),
+  targetCleanup: z.literal(true),
+  sameMachineHandoff: z.unknown().transform((value) => value === true),
+  existingState: z.unknown().transform((value) => value === true),
+});
+export type SessionHandoffCapabilityV2 = z.infer<typeof SessionHandoffCapabilityV2Schema>;
+
 export const SessionHandoffWorkspaceTransferSchema = z
   .object({
     enabled: z.boolean(),
@@ -128,6 +138,15 @@ const SessionHandoffResumePlanSchema = z
   .strict();
 export type SessionHandoffResumePlan = z.infer<typeof SessionHandoffResumePlanSchema>;
 
+function validateExistingStateWorkspaceTransfer(
+  value: Readonly<{ stateTransfer?: 'transfer' | 'existing'; workspaceTransfer?: SessionHandoffWorkspaceTransfer }>,
+  context: z.RefinementCtx,
+): void {
+  if (value.stateTransfer === 'existing' && value.workspaceTransfer?.enabled === true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['workspaceTransfer'], message: 'Existing session state requires workspace copying to be disabled' });
+  }
+}
+
 export const SessionHandoffStartRequestSchema = z
   .object({
     requestId: z.string().min(1).max(2000).optional(),
@@ -136,6 +155,7 @@ export const SessionHandoffStartRequestSchema = z
     targetMachineId: z.string().min(1).max(MAX_MACHINE_ID_LENGTH),
     sessionStorageMode: SessionHandoffStorageModeSchema,
     targetSessionStorageMode: SessionHandoffStorageModeSchema.optional(),
+    stateTransfer: z.enum(['transfer', 'existing']).optional(),
     targetPath: z.string().min(1).max(MAX_PATH_LENGTH).optional(),
     preferredTransportStrategies: z
       .array(SessionHandoffTransportStrategySchema)
@@ -145,7 +165,8 @@ export const SessionHandoffStartRequestSchema = z
     negotiatedTransportStrategy: SessionHandoffTransportStrategySchema.optional(),
     workspaceTransfer: SessionHandoffWorkspaceTransferSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(validateExistingStateWorkspaceTransfer);
 export type SessionHandoffStartRequest = z.infer<typeof SessionHandoffStartRequestSchema>;
 
 export const SessionHandoffPrepareTargetRequestSchema = z
@@ -157,6 +178,7 @@ export const SessionHandoffPrepareTargetRequestSchema = z
     allowServerRoutedFallback: z.boolean().optional(),
     sourceSessionStorageMode: SessionHandoffStorageModeSchema,
     targetSessionStorageMode: SessionHandoffStorageModeSchema.optional(),
+    stateTransfer: z.enum(['transfer', 'existing']).optional(),
     targetPath: z.string().min(1).max(MAX_PATH_LENGTH),
     endpointCandidates: z
       .array(TransferEndpointCandidateSchema)
@@ -165,10 +187,11 @@ export const SessionHandoffPrepareTargetRequestSchema = z
     handoffMetadataV2: SessionHandoffMetadataV2Schema.optional(),
     workspaceTransfer: SessionHandoffWorkspaceTransferSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(validateExistingStateWorkspaceTransfer);
 export type SessionHandoffPrepareTargetRequest = z.infer<typeof SessionHandoffPrepareTargetRequestSchema>;
 
-export const SessionHandoffPrepareTargetRequestV2Schema = SessionHandoffPrepareTargetRequestSchema.extend({
+export const SessionHandoffPrepareTargetRequestV2Schema = SessionHandoffPrepareTargetRequestSchema.safeExtend({
   sessionId: z.string().min(1).max(MAX_HANDOFF_ID_LENGTH),
 }).strict();
 export type SessionHandoffPrepareTargetRequestV2 = z.infer<typeof SessionHandoffPrepareTargetRequestV2Schema>;

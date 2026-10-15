@@ -2,6 +2,9 @@ import * as React from 'react';
 
 import {
     buildAcpConfigOptionOverridesV1FromConfigOptions,
+    BackendTargetKeySchema,
+    buildBackendTargetKey,
+    parseBackendTargetKey,
     type AccountProfile,
     type FeatureDecision,
     type SessionAgentTransitionSelectionV1,
@@ -211,6 +214,7 @@ function buildTargetSelection(
     return {
         v: 1,
         agentId: entry.providerAgentId,
+        ...(entry.target.kind === 'configuredAcpBackend' ? { backendTarget: entry.target } : {}),
         ...(selection.modelId !== 'default' ? { modelId: selection.modelId } : {}),
         ...(selection.sessionModeId !== null ? { acpSessionModeId: selection.sessionModeId } : {}),
         ...(overrides ? { sessionConfigOptionOverrides: overrides } : {}),
@@ -238,7 +242,11 @@ function buildArmedContinuation(
     entry: ResolvedBackendCatalogEntry,
     sourceAgentId: string,
     selection: SessionAgentPickerSelection,
+    sourceBackendTargetKey: string | null,
 ): ArmedAgentContinuation {
+    const sourceBackendTarget = sourceBackendTargetKey && BackendTargetKeySchema.safeParse(sourceBackendTargetKey).success
+        ? parseBackendTargetKey(sourceBackendTargetKey)
+        : null;
     return {
         backendTargetKey: entry.targetKey,
         modelLabel: selection.modelId !== 'default' ? selection.modelLabel ?? null : null,
@@ -246,6 +254,7 @@ function buildArmedContinuation(
             v: 1,
             mode: 'same_session',
             sourceAgentId,
+            ...(sourceBackendTarget?.kind === 'configuredAcpBackend' ? { sourceBackendTarget } : {}),
             selection: buildTargetSelection(entry, selection, Date.now()),
         },
     };
@@ -348,8 +357,6 @@ function resolveTargetRowUnavailableText(
         }
     }
     switch (eligibility.reason) {
-        case 'target_not_proven':
-            return t('session.agentContinuation.unavailable.targetNotProven', { agent: agentLabel });
         // Facts about this Session, decided before any target is considered.
         case 'read_only':
         case 'external_session':
@@ -457,13 +464,11 @@ export function useInSessionAgentPickerControls(
     ), [readTargetSelection, targetEntries]);
 
     // A Session that cannot continue with any Agent asks its machine nothing, and
-    // everything else the local rules already reject — an unproven configured ACP
-    // target — is decided here for free.
+    // target-specific support comes only from its exact machine inspection.
     const sessionReason = resolveSessionAgentContinuationSessionReason(source);
     const inspectableTargetSelections = React.useMemo(() => (
         sessionReason === null && featureEnabled
             ? targetEntries
-                .filter((entry) => entry.family === 'builtInAgent')
                 .map((entry) => targetSelectionByTargetKey.get(entry.targetKey))
                 .filter((selection): selection is SessionAgentTransitionSelectionV1 => selection !== undefined)
             : []
@@ -720,7 +725,13 @@ export function useInSessionAgentPickerControls(
         const stillHonourable = row !== undefined
             && row.eligibility.status === 'eligible'
             && row.entry.providerAgentId === persisted.intent.selection.agentId
-            && persisted.intent.sourceAgentId === currentAgentId;
+            && persisted.intent.sourceAgentId === currentAgentId
+            && (persisted.intent.selection.backendTarget === undefined
+                ? row.entry.target.kind === 'builtInAgent'
+                : buildBackendTargetKey(persisted.intent.selection.backendTarget) === row.entry.targetKey)
+            && (persisted.intent.sourceBackendTarget === undefined
+                ? !source.currentBackendTargetKey?.startsWith('acpBackend:')
+                : buildBackendTargetKey(persisted.intent.sourceBackendTarget) === source.currentBackendTargetKey);
         if (stillHonourable) {
             if (persisted.submission) {
                 armedLocalIdRef.current = {
@@ -749,6 +760,7 @@ export function useInSessionAgentPickerControls(
         targetEntries,
         targetRows,
         targetSelectionByTargetKey,
+        source.currentBackendTargetKey,
     ]);
 
     const armedTargetKey = featureEnabled ? armed?.backendTargetKey ?? null : null;
@@ -759,6 +771,7 @@ export function useInSessionAgentPickerControls(
     const pendingArmRef = React.useRef<Readonly<{
         targetKey: string;
         sourceAgentId: string;
+        sourceBackendTargetKey: string | null;
         selection: SessionAgentPickerSelection;
     }> | null>(null);
 
@@ -774,7 +787,7 @@ export function useInSessionAgentPickerControls(
         });
         if (eligibility.status === 'eligible') {
             pendingArmRef.current = null;
-            persistArmedContinuation(buildArmedContinuation(entry, sourceAgentId, selection));
+            persistArmedContinuation(buildArmedContinuation(entry, sourceAgentId, selection, source.currentBackendTargetKey));
             return;
         }
         // A changed target selection must not leave an arm for the prior one.
@@ -782,14 +795,14 @@ export function useInSessionAgentPickerControls(
         // is re-read when it answers; an answered refusal stays unarmed.
         persistArmedContinuation(null);
         pendingArmRef.current = eligibility.status === 'checking'
-            ? { targetKey: entry.targetKey, sourceAgentId, selection }
+            ? { targetKey: entry.targetKey, sourceAgentId, sourceBackendTargetKey: source.currentBackendTargetKey, selection }
             : null;
     }, [persistArmedContinuation, readInspection, source]);
 
     React.useEffect(() => {
         const pending = pendingArmRef.current;
         if (pending === null) return;
-        if (!featureEnabled || currentAgentId !== pending.sourceAgentId) {
+        if (!featureEnabled || currentAgentId !== pending.sourceAgentId || source.currentBackendTargetKey !== pending.sourceBackendTargetKey) {
             pendingArmRef.current = null;
             return;
         }
@@ -806,7 +819,7 @@ export function useInSessionAgentPickerControls(
         if (eligibility.status === 'checking') return;
         pendingArmRef.current = null;
         if (eligibility.status === 'eligible') {
-            persistArmedContinuation(buildArmedContinuation(entry, pending.sourceAgentId, pending.selection));
+            persistArmedContinuation(buildArmedContinuation(entry, pending.sourceAgentId, pending.selection, pending.sourceBackendTargetKey));
         }
     }, [currentAgentId, featureEnabled, persistArmedContinuation, readInspection, readTargetSelection, source, targetEntries]);
 
@@ -1003,8 +1016,8 @@ export function useInSessionAgentPickerControls(
         armedContinuationModelLabel: featureEnabled ? armed?.modelLabel ?? null : null,
         armedContinuationSubmission: submissionArm?.submission ?? null,
         armedContinuationSubmissionIntent: submissionArm?.intent ?? null,
-        clearArmedContinuation,
         clearArmedContinuationSubmissionIfCurrent,
+        clearArmedContinuation,
         recordArmedContinuationSubmission,
         onAgentPickerIntent: signalAgentPickerIntent,
         onAgentPickerVisibilityChange,
