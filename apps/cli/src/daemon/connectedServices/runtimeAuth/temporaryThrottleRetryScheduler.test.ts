@@ -25,6 +25,25 @@ function createMemoryStore() {
 }
 
 describe('ConnectedServiceTemporaryThrottleRetryScheduler', () => {
+  it('does not publish a recovery change when Stop cancels an absent durable intent', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'throttle-stop-'));
+    const changes: unknown[] = [];
+    const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({
+      nowMs: () => 1_000,
+      store: createRecoveryIntentFileStore(join(directory, 'intents.json')),
+      onStateChange: (_sessionId, intent, previous) => { changes.push({ intent, previous }); },
+      resume: async () => ({ status: 'continued' }),
+    });
+    try {
+      await expect(scheduler.cancel({ sessionId: 'never-throttled' })).resolves.toBeNull();
+      expect(changes).toEqual([]);
+      expect(scheduler.read('never-throttled')).toBeNull();
+    } finally {
+      scheduler.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('waits and cancels a Run independently of its parent Session through the same recovery owner', async () => {
     vi.useFakeTimers();
     const { store, persisted } = createMemoryStore();
@@ -74,16 +93,21 @@ describe('ConnectedServiceTemporaryThrottleRetryScheduler', () => {
   });
   it('rejects cancellation of a replaced occurrence inside the durable owner transaction', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'capacity-recovery-'));
-    const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => 1_000, store: createRecoveryIntentFileStore(join(directory, 'intents.json')), random: () => 0.5, resume: async () => ({ status: 'continued' }) });
+    const changes: unknown[] = [];
+    const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => 1_000, store: createRecoveryIntentFileStore(join(directory, 'intents.json')), random: () => 0.5, resume: async () => ({ status: 'continued' }),
+      onStateChange: (_sessionId, intent) => { changes.push(intent); } });
     try {
       const input = { sessionId: 'sess-1', serviceId: 'openai-codex', profileId: 'primary', groupId: null, issueFingerprint: 'overload', continuation: { interruptedOriginId: 'turn-1', resumePromptMode: 'standard' as const, customResumePrompt: null, recoveryKind: 'capacity' as const } };
       await scheduler.enable(input);
       const previous = scheduler.read('sess-1')!;
       await scheduler.enable({ ...input, continuation: { ...input.continuation, interruptedOriginId: 'turn-2' } });
+      changes.length = 0;
       await expect(scheduler.cancel({ sessionId: 'sess-1', issueFingerprint: previous.issueFingerprint, armedAtMs: previous.armedAtMs })).resolves.toBeNull();
+      expect(changes).toEqual([]);
       expect(scheduler.read('sess-1')).toMatchObject({ status: 'waiting', continuation: { interruptedOriginId: 'turn-2' } });
       const current = scheduler.read('sess-1')!;
       await expect(scheduler.cancel({ sessionId: 'sess-1', issueFingerprint: current.issueFingerprint, armedAtMs: current.armedAtMs })).resolves.toMatchObject({ status: 'cancelled' });
+      expect(changes).toEqual([expect.objectContaining({ status: 'cancelled' })]);
     } finally {
       scheduler.dispose();
       await rm(directory, { recursive: true, force: true });

@@ -250,10 +250,16 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
       } } : {}),
       ...(sourceStore.transact ? { transact: async <TResult>(sessionId: string, transaction: Parameters<NonNullable<typeof sourceStore.transact>>[1]): Promise<TResult> => {
         let previous: ConnectedServiceTemporaryThrottleRetryIntent | null = null;
+        let intentChanged = false;
         const result = await sourceStore.transact!(sessionId, (current) => {
           previous = current.intent;
-          return transaction(current);
+          const next = transaction(current);
+          intentChanged = next.intent !== current.intent;
+          return next;
         });
+        // No-op cancellation and rejected stale occurrences have no presentation
+        // change. In particular, Stop must not fetch Home state for null → null.
+        if (!intentChanged) return result as TResult;
         const current = normalizeIntent(sourceStore.readAuthoritative?.(sessionId) ?? sourceStore.read(sessionId));
         await deps.onStateChange?.(sessionId, current, previous);
         settleRunWaiter(sessionId, current);
