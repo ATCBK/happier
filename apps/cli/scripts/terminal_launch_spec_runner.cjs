@@ -406,8 +406,12 @@ function runLaunchSpec(spec, controllerSignal) {
             reportNativeSpawnResult('failed');
             settle(() => reject(error));
         });
-        child.on('close', async (code, signal) => {
-            if (controllerChannel) await reportNativeProcessExited(process, code, signal);
+        // The Windows invocation owner sets verbatim arguments when it inserts ComSpec.
+        // That shell's exit cannot prove provider shutdown or await inherited provider pipes.
+        const providerIsChild = spec.windowsVerbatimArguments !== true;
+        child.on(providerIsChild ? 'close' : 'exit', async (code, signal) => {
+            if (!providerIsChild) child.stderr?.destroy();
+            if (controllerChannel && providerIsChild) await reportNativeProcessExited(process, code, signal);
             if (typeof code === 'number') {
                 settle(async () => {
                     if (code !== 0) {

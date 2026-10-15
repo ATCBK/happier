@@ -217,7 +217,7 @@ describe('terminal_launch_spec_runner.cjs', () => {
       expect.any(Array),
       expect.objectContaining({ windowsVerbatimArguments: true }),
     );
-    child.emit('close', 0, null);
+    child.emit('exit', 0, null);
     await expect(result).resolves.toBe(0);
   });
 

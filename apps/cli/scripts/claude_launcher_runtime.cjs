@@ -81,11 +81,12 @@ function buildClaudeBinarySpawnInvocation(params) {
             return {
                 command: comspec,
                 args: ['/d', '/s', '/c', cliPath, ...args],
+                providerIsChild: false,
             };
         }
     }
 
-    return { command: cliPath, args };
+    return { command: cliPath, args, providerIsChild: true };
 }
 
 function attachChildSignalForwarding(child, proc = process) {
@@ -127,7 +128,7 @@ function runClaudeCli(cliPath) {
 
     attachChildSignalForwarding(child);
     child.on('exit', async (code, signal) => {
-        await reportNativeProcessExited(process, code, signal);
+        if (invocation.providerIsChild) await reportNativeProcessExited(process, code, signal);
         process.exit(code || 0);
     });
 }
