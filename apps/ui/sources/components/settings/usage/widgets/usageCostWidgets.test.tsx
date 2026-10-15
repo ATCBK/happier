@@ -47,6 +47,23 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it.each([0, 100, 20_000])('compares Period totals honestly against a prior base of %s', async previousTokens => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, period: { startMs: day, endMs: 2 * day }, metric: 'tokens' });
+    const accounting = { ...props.slice.accounting!, totals: { ...props.slice.accounting!.totals,
+      tokens: { ...tokens, total: 22_804, input: 22_804 } } };
+    const priorQuery = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: day } });
+    const previous = { ...accounting, totals: { ...accounting.totals,
+      tokens: { ...tokens, total: previousTokens, input: previousTokens } } };
+    const slice = resolveUsagePageAggregation({ queries: [query], accounting: [
+      { query, status: 'available', value: accounting }, { query: priorQuery, status: 'available', value: previous },
+    ] }).results[0]!;
+    const screen = await renderScreen(<UsagePeriodSummaryWidget {...props} query={query} slice={slice}
+      id="usage_period_summary" testID="summary" />);
+    const comparison = screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'summary.hero')?.props.comparison;
+    if (previousTokens === 0) expect(comparison).toBeUndefined();
+    else expect(comparison).toMatchObject({ value: previousTokens === 100 ? '▲ 228×' : '▲ 14%' });
+  });
   it('keeps the Agent time slot stable and publishes only complete interval figures', async () => {
     const props = mountedCosts();
     const query = normalizeUsageQuery({ ...props.query, includeSessionEvidence: true });
@@ -162,6 +179,21 @@ describe('one selected money basis across Usage bodies', () => {
     const screen = await renderScreen(<UsageEfficiencyWidget {...props} id="usage_efficiency" testID="efficiency" />);
     expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'efficiency.perMtok')?.props.value)
       .toBe(150_000);
+  });
+  it.each([23, 5_701])('uses the same comparison presentation for Efficiency with %s preceding tokens', async previousTokens => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, period: { startMs: day, endMs: 2 * day } });
+    const accounting = { ...props.slice.accounting!, totals: { ...props.slice.accounting!.totals,
+      tokens: { ...tokens, input: 25, total: 25 } } };
+    const previous = { ...accounting, totals: { ...accounting.totals,
+      tokens: { ...tokens, input: previousTokens, total: previousTokens } } };
+    const priorQuery = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: day } });
+    const slice = resolveUsagePageAggregation({ queries: [query], accounting: [
+      { query, status: 'available', value: accounting }, { query: priorQuery, status: 'available', value: previous },
+    ] }).results[0]!;
+    const screen = await renderScreen(<UsageEfficiencyWidget {...props} query={query} slice={slice} id="usage_efficiency" testID="efficiency" />);
+    expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'efficiency.perMtok')?.props.comparison)
+      .toMatchObject({ value: previousTokens === 23 ? '▼ 8%' : '▲ 228×', meaning: previousTokens === 23 ? 'good' : 'bad' });
   });
   it('keeps all four efficiency figures in their slots, an unknown one as a dash with its reason', async () => {
     const props = mountedCosts();

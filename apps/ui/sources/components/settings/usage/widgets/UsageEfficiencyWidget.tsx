@@ -21,6 +21,7 @@ import {
 import { t } from '@/text';
 import { usageSeriesColor } from '../usageAccent';
 import { usageCostKindPhrase } from '../usageCostPresentation';
+import { usageComparison } from '../usageComparisonPresentation';
 import {
   usageCompositionSegments,
   usageCompositionShareLabel,
@@ -78,12 +79,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
           previous.totals.tokens.total) *
         1e6
       : null;
-  const perMtokDelta =
-    efficiency.costPerMtokUsd !== null &&
-    previousPerMtok !== null &&
-    previousPerMtok > 0
-      ? (efficiency.costPerMtokUsd - previousPerMtok) / previousPerMtok
-      : null;
+  const perMtokComparison = usageComparison(efficiency.costPerMtokUsd, previousPerMtok);
   const hasRatios =
     efficiency.cacheHitRatePct !== null || efficiency.costPerMtokUsd !== null;
   // Work evidence is not part of this widget's own read: the figure names a merged PR only when the slice carries it.
@@ -143,12 +139,12 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
                   : undefined
             }
             valueFormatter={(value) => formatUsageCost(value, efficiency.currency)}
-            {...(perMtokDelta !== null
+            {...(perMtokComparison !== null
               ? {
                   comparison: {
-                    value: `${perMtokDelta >= 0 ? '▲' : '▼'} ${Math.round(Math.abs(perMtokDelta) * 100)}%`,
+                    value: perMtokComparison.value,
                     label: t('usage.board.page.vsBefore'),
-                    meaning: perMtokDelta <= 0 ? ('good' as const) : ('bad' as const),
+                    meaning: perMtokComparison.delta <= 0 ? ('good' as const) : ('bad' as const),
                   },
                 }
               : {})}

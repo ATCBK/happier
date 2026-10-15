@@ -18,6 +18,7 @@ import {
 } from './usageBodyKit';
 import { usageCostKindPhrase } from '../usageCostPresentation';
 import { formatUsageDurationCompact } from './usageHowYouWorkPresentation';
+import { usageComparison } from '../usageComparisonPresentation';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -41,8 +42,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
       ? projectUsagePageCost(previousAccounting, props.query.costBasis, selectedCost.selection).amountUsd
       : previousAccounting.totals.tokens.total
     : null;
-  const delta =
-    current !== null && previous !== null && previous > 0 ? (current - previous) / previous : null;
+  const comparison = usageComparison(current, previous);
   const apiEquivalent = props.slice.costFactTotals?.find(fact => fact.kind === 'api_equivalent' && fact.currency === currency);
   const invoice = props.slice.costFactTotals?.find(fact => fact.kind === 'invoice' && fact.currency === currency);
   const merged =
@@ -52,7 +52,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const measuredIntervals = props.slice.howYouWork?.intervals;
   const intervals = measuredIntervals?.coverage === 'complete_for_supplied_facts' ? measuredIntervals : null;
   const subline = [
-    delta !== null ? t('usage.board.page.vsPrevious') : null,
+    comparison !== null ? t('usage.board.page.vsPrevious') : null,
     t('usage.board.page.sessionsCount', {
       count: view.hero.sessions.toLocaleString(),
     }),
@@ -163,17 +163,17 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
               ? (value) => formatUsageCost(value, currency)
               : formatTokenCount
           }
-          {...(delta !== null
+          {...(comparison !== null
             ? {
                 comparison: {
-                  value: `${delta >= 0 ? '▲' : '▼'} ${Math.round(Math.abs(delta) * 100)}%`,
+                  value: comparison.value,
                   label: subline,
                   meaning: 'neutral' as const,
                 },
               }
             : {})}
         />
-        {delta === null ? <Text style={styles.subline}>{subline}</Text> : null}
+        {comparison === null ? <Text style={styles.subline}>{subline}</Text> : null}
       </View>
       <View style={styles.stats}>
         {stats.map((stat) => (
