@@ -185,6 +185,7 @@ describe('memoryWorker', () => {
     const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
     const { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
     const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+    const { buildSessionMetadataEnvelopeFields } = await import('@/session/metadata/buildSessionMetadataEnvelopeCreateFields');
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`, encryption: null };
     const entry = (id: string) => ({ id, ref: { kind: 'doc' as const, artifactId: id }, enabled: true, placement: 'system_append' as const, maxChars: 1 });
     let attached = ['memory', 'instructions'];
@@ -207,8 +208,27 @@ describe('memoryWorker', () => {
     const accountSnapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
       scopeKey: resolveAccountSettingsScopeKey(credentials), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] };
     setActiveAccountSettingsSnapshot(accountSnapshot);
+    const session = () => {
+      const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain', storedContentMode: 'plain',
+        agentState: null, metadata: createTestMetadata({ machineId: 'machine_1',
+          work: { memoryEnabled: true, promptStack: attached.map(entry) } }) });
+      return { id: 's1', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 0, encryptionMode: 'plain' as const,
+        metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext,
+        metadataVersion: 1, ownerMetadata: fields.ownerMetadata, agentState: fields.agentState, agentStateVersion: 0,
+        dataEncryptionKey: null, share: null };
+    };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
+      if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
+        data: { sessions: path.endsWith('/archived') ? [] : [session()], nextCursor: null, hasNext: false } };
+      if (path === '/v2/sessions/s1') {
+        if (replaceAccountDuringSessionRead) {
+          replaceAccountDuringSessionRead = false;
+          setActiveAccountSettingsSnapshot({ ...accountSnapshot, scopeKey: 'another-account' });
+          setActiveAccountSettingsSnapshot(accountSnapshot);
+        }
+        return { status: 200, data: { session: session() } };
+      }
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (path === '/v2/account/settings') {
@@ -222,20 +242,8 @@ describe('memoryWorker', () => {
       if (path.startsWith('/v1/artifacts/')) return readable ? { status: 200, data: artifact(path.split('/').at(-1)!) } : { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected document indexing HTTP path: ${path}`);
     });
-    // HTTP is the boundary; selection, metadata opening, content adapters and SQLite stay real.
-    vi.doMock('@/session/transport/http/sessionsHttp', async () => ({
-      ...(await vi.importActual<typeof import('@/session/transport/http/sessionsHttp')>('@/session/transport/http/sessionsHttp')),
-      fetchSessionById: async () => {
-        if (replaceAccountDuringSessionRead) {
-          replaceAccountDuringSessionRead = false;
-          setActiveAccountSettingsSnapshot({ ...accountSnapshot, scopeKey: 'another-account' });
-          setActiveAccountSettingsSnapshot(accountSnapshot);
-        }
-        return { id: 's1', seq: 1, createdAt: 1, updatedAt: 1, activeAt: 0, encryptionMode: 'plain',
-          metadata: JSON.stringify(createTestMetadata({ work: { memoryEnabled: true, promptStack: attached.map(entry) } })) };
-      },
-      fetchSessionsPage: async () => ({ sessions: [{ id: 's1', machineId: 'machine_1', seq: 1, createdAt: 1, updatedAt: 1, activeAt: 0 }], nextCursor: null, hasNext: false }),
-    }));
+    // Real Session HTTP/schema parsing consumes the canonical producer's tuple.
+    // Selection, metadata opening, content adapters and SQLite remain real.
     vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
       fetchEncryptedTranscriptMessagesPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }),
     }));

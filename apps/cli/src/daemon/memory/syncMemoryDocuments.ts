@@ -1,5 +1,6 @@
 import type { MemorySearchQueryV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
+import { projectSessionOwnerCompatibilityViewV1, SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { MemoryDocBodyV1StoredSchema, MEMORY_ARCHIVE_TOPIC_TITLE_V1, projectMemoryDocIndexV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { PromptDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -10,7 +11,7 @@ import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessio
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
-import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
 import type { StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -41,6 +42,7 @@ export async function syncMemoryDocuments(params: Readonly<{
   const startedAtMs = Date.now();
   let phaseStartedAtMs = startedAtMs;
   let phase = 'account_currentness';
+  let currentSessionId = params.scope.type === 'session' ? params.scope.sessionId : undefined;
   logger.infoFile('[memoryDocuments] Admission started', {
     scopeType: params.scope.type,
     ...(params.scope.type === 'session' ? { sessionId: params.scope.sessionId } : {}),
@@ -111,15 +113,29 @@ export async function syncMemoryDocuments(params: Readonly<{
       const admit = async (session?: RawSessionRecord) => {
         const sessionId = session?.id;
         nextPhase('session_metadata');
+        currentSessionId = sessionId;
         let metadata: Record<string, unknown> | null = null;
         let machineId = params.machineId;
         if (session) {
           if (!params.includeArchivedSessions && session.archivedAt != null) return;
-          metadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials, accountEncryptionMode: accountMode, rawSession: session });
-          if (!metadata) throw new Error('context_source_unavailable');
+          const input = { credentials: params.credentials, accountEncryptionMode: accountMode, rawSession: session };
+          if (session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1) {
+            // Context and locality are Account-owned. A historical Session's
+            // shared-content key is independent and need not be available here.
+            const ownerMetadata = tryDecryptSessionOwnerMetadata(input);
+            metadata = ownerMetadata ? projectSessionOwnerCompatibilityViewV1({ ownerMetadata, sharedMetadata: { v: 1 } }) : null;
+          } else {
+            metadata = tryDecryptSessionOwnerMetadataView(input);
+          }
+          if (!metadata) throw Object.assign(new Error('context_source_unavailable'), {
+            code: session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
+              ? 'session_owner_metadata_unavailable' : 'session_metadata_unavailable',
+          });
           const locality = readSessionOwnerLocality({ metadata, rawSession: session });
           if (locality?.machineId) machineId = locality.machineId;
-          else if (metadata.workspaceId !== undefined || metadata.projectId !== undefined) throw new Error('context_source_unavailable');
+          else if (metadata.workspaceId !== undefined || metadata.projectId !== undefined) {
+            throw Object.assign(new Error('context_source_unavailable'), { code: 'session_locality_unavailable' });
+          }
         }
         nextPhase('prompt_inputs');
         const prepared = await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
@@ -194,10 +210,11 @@ export async function syncMemoryDocuments(params: Readonly<{
     const abortReason: unknown = params.signal?.reason;
     const abortCode = abortReason && typeof abortReason === 'object' && 'code' in abortReason ? abortReason.code : undefined;
     const knownCodes = new Set(['RPC_REQUEST_TIMEOUT', 'ERR_CANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
-      'ETIMEDOUT', 'account_encryption_currentness_unavailable', 'account_storage_currentness_unavailable', 'context_source_unavailable']);
+      'ETIMEDOUT', 'account_encryption_currentness_unavailable', 'account_storage_currentness_unavailable', 'context_source_unavailable',
+      'session_owner_metadata_unavailable', 'session_metadata_unavailable', 'session_locality_unavailable']);
     logger.infoFile('[memoryDocuments] Admission failed', {
       scopeType: params.scope.type,
-      ...(params.scope.type === 'session' ? { sessionId: params.scope.sessionId } : {}),
+      ...(currentSessionId ? { sessionId: currentSessionId } : {}),
       phase, durationMs: Date.now() - phaseStartedAtMs, elapsedMs: Date.now() - startedAtMs,
       cancelled: params.signal?.aborted === true,
       errorCode: typeof code === 'string' && knownCodes.has(code) ? code : 'unclassified',
