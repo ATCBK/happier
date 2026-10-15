@@ -141,7 +141,9 @@ describe('setNewSessionPickerReturnParams', () => {
             prompt: 'Keep my prompt', executionTarget: null, managedMachineSelection: selection,
         }));
         expect(peekTempData<NewSessionData>(returnedDataId)?.machineId).toBeUndefined();
-        const temporaryTarget = { kind: 'temporary_computer', serverId: 'home', artifactTarget: 'darwin-arm64', workspace: null } as const;
+        const temporaryTarget = SessionAuthoringExecutionTargetV2Schema.parse({
+            kind: 'temporary_computer', serverId: 'home', artifactTarget: 'darwin-arm64', workspace: { kind: 'choose_on_endpoint' },
+        });
         setNewSessionPickerReturnParams({ navigation: { dispatch, getState: () => ({ index: 1, routes: [
             { key: 'composer', name: '(app)/new/index' }, { key: 'picker', name: '(app)/new/pick/machine' },
         ] }) }, router: { replace: vi.fn() }, currentParams: { dataId: returnedDataId }, routeParams: { machineId: undefined },

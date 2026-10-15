@@ -8,6 +8,7 @@ import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, rec
 import { buildMachineDestinationModel as buildScopedMachineDestinationModel, resolveMachineDestinationPurposeEligibility } from './buildMachineDestinationModel';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ServerScopedMachine, ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
+import type { ManagedMachineSelectionOffer } from './managedMachineSelection';
 
 import { installNewSessionComponentsCommonModuleMocks } from '../newSessionComponentsTestHelpers';
 import type {
@@ -319,7 +320,7 @@ describe('useMachineSelectionListModel', () => {
         const fixture = createFixture();
         const handlers = makeHandlers();
         const onSelect = vi.fn();
-        const offer = { id: 'managed-machine:server-a:one-off', homeId: 'server-a', title: 'One-off', onSelect };
+        const offer: ManagedMachineSelectionOffer = { id: 'managed-machine:server-a:one-off', homeId: 'server-a', title: 'One-off', onSelect };
         const base = buildParams(fixture, handlers);
         const rendered = await renderHook(
             (props: BuildMachineSelectionListModelParams) => useMachineSelectionListModel(props),
@@ -385,8 +386,8 @@ describe('useMachineSelectionListModel', () => {
         const shared = { ...createMachine('shared-without-owner'), isShared: true };
         const group = { serverId: 'server-a', serverName: 'Server A', loading: false, signedOut: false, machines: [createScopedMachine(shared)] };
         const model = await renderHook(() => useMachineSelectionListModel({ groups: singleHome ? [group] : [group, { ...group, serverId: 'server-b', machines: [] }],
-            selectedMachine: null, recentMachines: [], favoriteMachines: [], showFavorites: false, showRecent: false,
-            showSearch: false, showCliGlyphs: false, autoDetectCliGlyphs: false, onSelectMachine: vi.fn() }));
+            selectedMachine: null, selectedServerId: 'server-a', recentMachines: [], favoriteMachines: [], showFavorites: false, showRecent: false,
+            showSearch: false, showCliGlyphs: false, autoDetectCliGlyphs: false, onSelectMachine: vi.fn(), onSelectScopedMachine: vi.fn() }));
         const section = model.getCurrent().rootStep.sections.find(section => section.id === (singleHome ? 'shared:' : 'server:server-a:shared:'));
         expect(section?.title).toBe(`${singleHome ? '' : 'Server A · '}machines.destinations.sharedWithoutOwner`);
         await model.unmount();

@@ -300,7 +300,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         props.footer.composerDocument?.onComposerFocusChange?.(focused);
         atmosphereBoundary?.onFocusChange(focused);
     }, [atmosphereBoundary, props.footer.composerDocument]);
-    const materialColor = useHappierMaterialColorResolver('content');
+    const materialColor = useHappierMaterialColorResolver();
     const {
         theme,
         styles,

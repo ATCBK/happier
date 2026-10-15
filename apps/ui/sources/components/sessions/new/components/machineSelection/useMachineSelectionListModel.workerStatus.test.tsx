@@ -2,6 +2,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { BuildMachineSelectionListModelParams } from './useMachineSelectionListModel';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -79,7 +80,7 @@ describe('worker destination list demand', () => {
             observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' } });
         homes.answer(homeProfileId, '/v1/machines/managed/actions/list', { body: { machines: [managed] } });
         storage.setState({ machineListByServerId: { [serverId]: [controller, guest] } });
-        const hook = await renderHook(() => useMachineSelectionListModel({
+        const hook = await renderHook(() => useMachineSelectionListModel<Machine>({
             purpose: 'finite', workerPlacement: { workspace: { serverId, refId: 'checkout' } },
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
                 machines: [{ ...guest, serverId, serverName: 'Worker picker' }] }],
@@ -109,7 +110,7 @@ describe('worker destination list demand', () => {
             observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' } });
         homes.answer(homeProfileId, '/v1/machines/managed/actions/list', { body: { machines: [managed] } });
         expect(getServerProfileById(serverId)).toMatchObject({ serverIdentityId: managed.homeId });
-        const hook = await renderHook(() => useMachineSelectionListModel({
+        const hook = await renderHook(() => useMachineSelectionListModel<Machine>({
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
                 machines: [{ ...machine, serverId, serverName: 'Worker picker' }] }],
             selectedMachine: null, selectedServerId: null, recentMachines: [], favoriteMachines: [],
@@ -128,7 +129,7 @@ describe('worker destination list demand', () => {
         await hook.unmount();
     });
     describe('offline-only classification', () => {
-        const paramsFor = (machines: Machine[]) => ({
+        const paramsFor = (machines: Machine[]): BuildMachineSelectionListModelParams => ({
             purpose: 'finite' as const, workerPlacement: { workspace: { serverId, refId: 'checkout' } },
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
                 machines: machines.map(machine => ({ ...machine, serverId, serverName: 'Worker picker' })) }],
@@ -162,7 +163,7 @@ describe('worker destination list demand', () => {
             try {
                 await waitForHomeGovernance(() => expect(optionFor(hook, 'worker')?.disabled).toBe(false));
                 expect(hook.getCurrent().offlineOnlyMachineIdsByServerId[serverId]).toEqual([]);
-                await act(async () => recordMachineRequestFailed({ serverId, machineId: machine.id }));
+                await act(async () => recordMachineRequestFailed({ serverId, accountId: 'owner', machineId: machine.id }));
                 expect(hook.getCurrent().offlineOnlyMachineIdsByServerId[serverId]).toEqual(['worker']);
             } finally { clearMachineRequestReachabilityForTest(); await hook.unmount(); }
         });
@@ -172,7 +173,7 @@ describe('worker destination list demand', () => {
         const worker = { eligible: true, candidate: { serverId, machineId: machine.id },
             load: { kind: 'known', running: 2, queued: 7, accepting: true, runAtMost: 2 }, explanation: 'eligible' };
         rpc.machine.mockResolvedValue(worker);
-        const params = {
+        const params: BuildMachineSelectionListModelParams = {
             purpose,
             workerPlacement: { workspace: { serverId, refId: 'checkout' } },
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
@@ -200,7 +201,7 @@ describe('worker destination list demand', () => {
             load: { kind: 'unknown' }, explanation: 'load_unknown' };
         rpc.machine.mockImplementationOnce(async () => await new Promise(resolve => { finishOld = resolve; }));
         rpc.machine.mockResolvedValue(unknown);
-        const hook = await renderHook((refId: string) => useMachineSelectionListModel({
+        const hook = await renderHook((refId: string) => useMachineSelectionListModel<Machine>({
             purpose: 'finite', workerPlacement: { workspace: { serverId, refId } },
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
                 machines: [{ ...machine, serverId, serverName: 'Worker picker' }] }],
@@ -229,7 +230,7 @@ describe('worker destination list demand', () => {
             load: { kind: 'unknown' }, explanation: 'load_unknown' });
         rpc.machine.mockResolvedValue({ eligible: false, candidate: null,
             load: { kind: 'known', running: 0, queued: 0, accepting: false, runAtMost: 2 }, explanation: 'not_accepting' });
-        const hook = await renderHook((metadataVersion: number) => useMachineSelectionListModel({
+        const hook = await renderHook((metadataVersion: number) => useMachineSelectionListModel<Machine>({
             purpose: 'finite', workerPlacement: { workspace: { serverId, refId: 'checkout' } },
             groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
                 machines: [{ ...machine, metadataVersion, serverId, serverName: 'Worker picker' }] }],

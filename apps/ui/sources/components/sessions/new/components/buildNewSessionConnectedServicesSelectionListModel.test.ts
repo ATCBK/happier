@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildConnectedServiceAccountGroupOptionsByServiceId } from '../modules/connectedServicesNewSessionBindings';
 
 import {
     buildNewSessionConnectedServicesSelectionListModel,
@@ -57,9 +58,14 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
                     { profileId: 'bot', status: 'connected', providerEmail: 'bot@example.com' },
                 ],
             },
-            groupOptionsByServiceId: {
-                anthropic: [{ groupId: 'pool', label: 'Work pool', status: 'ready', activeProfileId: 'work' }],
-            },
+            groupOptionsByServiceId: buildConnectedServiceAccountGroupOptionsByServiceId({
+                accountGroupsFeatureEnabled: true,
+                supportedConnectedServiceIds: ['anthropic'],
+                accountProfileConnectedServicesV2: [{ serviceId: 'anthropic', groups: [{
+                    groupId: 'pool', label: 'Work pool', status: 'ready', activeProfileId: 'work',
+                    enabledMemberCount: 1, autoSwitch: false,
+                }] }],
+            }),
             bindingsByServiceId: { anthropic: { source: 'connected', selection: 'group', groupId: 'pool' } },
             quotaBadgesByKey: { 'anthropic/work': [{ meterId: 'weekly', text: 'Weekly 18%' }] },
         });

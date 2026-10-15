@@ -872,7 +872,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                     inputPlaceholder,
                     emptyStateLabel: params.emptyStateLabel ?? t('newSession.noMachinesFound'),
                     sections: [managedMachineSection, temporaryComputerSection].filter(
-                        (section): section is SelectionListSectionDescriptor => section !== null,
+                        (section) => section !== null,
                     ),
                 },
             };

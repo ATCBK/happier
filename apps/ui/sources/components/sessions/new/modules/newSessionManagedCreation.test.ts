@@ -15,6 +15,7 @@ import { loadProfileCatalogV1 } from '@happier-dev/protocol/profiles/profileCata
 import { MachinePoolListOutputV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { AutomationTriggerDetailSchema } from '@happier-dev/protocol/automations/automationTriggerProjectionV1';
 import type { AutomationDefinitionDetail } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationStoredWorkflowDefinitionRecipeV2Schema } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
 import { createWorkflowTriggerActions } from '@happier-dev/protocol/actions/executor/workflowTriggerActions';
 import { runManagedMachineCreation } from '@/components/settings/machines/managed/managedMachineCreation';
 import { bindNewManagedMachineCreationScope } from '@/sync/ops/actions/managedCreationScopeBinding';
@@ -45,7 +46,9 @@ function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>;
         resolveWorkflow: async () => { throw new Error('unexpected_workflow_read'); },
         resolveManagedMachine: async () => machine,
         openContext: async row => row.executionRecipe?.v === 2 && row.executionRecipe.workflow.t === 'plain' ? row.executionRecipe.workflow.v : null,
-        sealContext: async ({ context, templateVersion }) => ({ v: 2, templateVersion, workflow: { t: 'plain', v: context }, triggerEvidence: null }),
+        sealContext: async ({ context, templateVersion }) => AutomationStoredWorkflowDefinitionRecipeV2Schema.parse({
+            v: 2, templateVersion, workflow: { t: 'plain', v: context }, triggerEvidence: null,
+        }),
         // These operations are the Account's persistent Automation transport.
         automations: {
             list: async () => ({ automations: [...rows.values()], nextCursor: null }),
@@ -71,7 +74,7 @@ function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>;
                 rows.set(id, updated);
                 return updated;
             },
-            delete: async id => { rows.delete(id); },
+            delete: async id => { rows.delete(id); return { ok: true }; },
         },
     });
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({

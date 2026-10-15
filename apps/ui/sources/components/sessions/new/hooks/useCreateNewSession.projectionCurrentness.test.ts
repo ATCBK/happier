@@ -16,7 +16,8 @@ import { createNewSessionPromptStore } from './screenModel/newSessionPromptStore
 import { AccountProfileSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, SessionSpawnNewInputV2Schema, type SessionSpawnNewInputV2, type SessionSpawnNewResultV1 } from '@happier-dev/protocol';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import type { useCreateNewSession } from './useCreateNewSession';
+import type { HandleCreateSessionOptions, useCreateNewSession } from './useCreateNewSession';
+import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/index';
 import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -296,6 +297,19 @@ async function mount(inputs: DaemonMergedProjectionInputs | null, authoringCommi
     return { ...hook, params };
 }
 
+// Send admits synchronously; its public settlement observer owns completion.
+function startCreation(hook: Awaited<ReturnType<typeof mount>>, options: HandleCreateSessionOptions): Promise<void> {
+    const settled = createDeferred<void>();
+    hook.getCurrent().handleCreateSession({
+        ...options,
+        onAfterCreatedSettled: value => {
+            options.onAfterCreatedSettled?.(value);
+            settled.resolve();
+        },
+    });
+    return settled.promise;
+}
+
 async function createManagedDraft(archiveEffect: 'keep' | 'stop' | 'delete' = 'keep') {
         const { createManagedMachineSelectionDraft } = await import('@/sync/domains/state/newSessionManagedMachineDraft');
         const launch = { provider: { pluginId: 'custom.compute', localId: 'native' }, schemaVersion: 1, name: 'Guest', choices: {} };
@@ -343,7 +357,8 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         // installed Agent identity comes from authored targets, not arbitrary metadata.
         const configuration = buildNewSessionTempDataFromAuthoringDraft({
             draft: buildNewSessionAuthoringDraftFromResolvedInputs({
-                directory: '/tmp', prompt: '', agentTarget, connectedServices: seededBindings,
+                directory: '/tmp', prompt: '', agentTarget,
+                connectedServices: SessionAuthoringValueV1Schema.shape.connectedServices.parse(seededBindings),
             }), machineId: 'm1',
         });
         const draftId = seedNewSessionDraftV1({ scope, createDraftId: () => 'connected-seam',
@@ -399,7 +414,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
                 requireConnectedAccountDefaultsReady: recovered.getCurrent().requireConnectedAccountDefaultsReady,
             });
             let send: Promise<void> | undefined;
-            await act(async () => { send = sendHook!.getCurrent().handleCreateSession({ initialMessage: 'skip' }); });
+            await act(async () => { send = startCreation(sendHook!, { initialMessage: 'skip' }); });
             await vi.waitFor(() => expect(spawnRequests).toHaveLength(1));
             // The transport parses the real Send producer with the daemon's exact strict schema.
             expect(spawnRequests[0]).toMatchObject({ agentTarget, connectedServices: editedBindings,
@@ -610,7 +625,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             onLaunchAttemptChange: attempt => { if (attempt) launchFailures.push(...Object.values(attempt.phaseErrors).map(error => error.message)); } });
         try {
             let send: Promise<void> | undefined;
-            await act(async () => { send = hook.getCurrent().handleCreateSession({ initialMessage: 'skip',
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip',
                 deferAcceptedDraftClearToDocument: true,
                 afterCreated: async created => {
                     expect(scopeRules.size).toBe(bindsRule ? 1 : 0);
@@ -662,7 +677,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         });
         let send: Promise<void> | undefined;
         try {
-            await act(async () => { send = hook.getCurrent().handleCreateSession({ initialMessage: 'skip' }); });
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip' }); });
             await vi.waitFor(() => expect(hook.getCurrent().managedMachineCreationProgress.kind).toBe('acquiring'));
             // The native operation may settle before React commits removal of the local draft.
             await act(async () => {
@@ -700,7 +715,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         });
         let send: Promise<void> | undefined;
         try {
-            await act(async () => { send = hook.getCurrent().handleCreateSession({ initialMessage: 'skip',
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip',
                 deferAcceptedDraftClearToDocument: true,
                 afterCreated: async created => { completedCallbacks.push(created.sessionId); },
                 onAfterCreatedSettled: settlement => { settlements.push(settlement); },
@@ -713,6 +728,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             // focused Home: only the submitted Account's credential watch retires it.
             const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
             const focusedLifetime = captureActiveServerAccountScopeLifetime();
+            if (!focusedLifetime) throw new Error('Expected the original Home Account lifetime');
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
             const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', jti: 'replacement-bearer' })).toString('base64url')}.signature`;
             await act(async () => {
@@ -804,7 +820,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         });
         let send: Promise<void> | undefined;
         try {
-            await act(async () => { send = hook.getCurrent().handleCreateSession({ initialMessage: 'skip' }); });
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip' }); });
             await vi.waitFor(() => expect(hook.getCurrent().managedMachineCreationProgress.kind).toBe('acquiring'));
             const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
             await act(async () => {
@@ -858,7 +874,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             input: '', sessionName: 'Managed helper', initialSessionFacts, memoryEnabled: false, promptStack,
             managedMachineSelection: selection, managedMachineAcquisition: acquisition,
             selectedMachineId: null, selectedPath: '/tmp', targetServerId: runtime.serverId,
-            selectedProfileId: null, selectedSecretId: null, agentType: agentId, backendTarget: agentTarget,
+            selectedProfileId: null, selectedSecretId: null, agentType: agentId, agentTarget,
             permissionMode: 'default', acpSessionModeId: null, updatedAt: 1,
         } });
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
@@ -889,7 +905,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             });
             managedOperationSettled = true;
             let send: Promise<void> | undefined;
-            await act(async () => { send = hook.getCurrent().handleCreateSession({ initialMessage: 'skip' }); });
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip' }); });
             await vi.waitFor(() => expect(spawnRequests).toHaveLength(1));
             expect(spawnRequests[0]).toMatchObject({
                 title: 'Managed helper', identity: initialSessionFacts, memoryEnabled: false, promptStack,
@@ -921,7 +937,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', sessionName: 'Build helper', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true },
             selectedMachineId: 'm1', selectedPath: '/tmp', targetServerId: runtime.serverId,
-            selectedProfileId: null, selectedSecretId: null, agentType: agentId, backendTarget: agentTarget,
+            selectedProfileId: null, selectedSecretId: null, agentType: agentId, agentTarget,
             permissionMode: 'default', acpSessionModeId: null, updatedAt: 1,
         } });
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
@@ -962,7 +978,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', sessionName: 'Build helper', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true }, instructionsDraft,
             selectedMachineId: 'm1', selectedPath: '/tmp', targetServerId: runtime.serverId,
-            selectedProfileId: null, selectedSecretId: null, agentType: agentId, backendTarget: agentTarget,
+            selectedProfileId: null, selectedSecretId: null, agentType: agentId, agentTarget,
             permissionMode: 'default', acpSessionModeId: null, updatedAt: 1,
         } });
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
