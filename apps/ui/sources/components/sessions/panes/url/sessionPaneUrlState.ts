@@ -27,7 +27,9 @@ import {
     SESSION_DETAILS_SCM_STASH_TAB_KEY,
     SESSION_DETAILS_SCM_PULL_REQUEST_TAB_KEY,
 } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { createComputerScreenDetailsTab, readComputerScreenSessionSurfaceResource } from '@/components/computer/computerScreenDetailsTab';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { t } from '@/text';
 import type { DetailsTab, DetailsTabState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { FILE_TARGET_ANCHOR_PARAM_KEYS, parseSessionFileDeepLinkAnchor, readFileTargetAnchorResource, serializeFileTargetAnchor, type FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
@@ -41,14 +43,15 @@ export type SessionPaneUrlDetailsTarget =
     | Readonly<{ kind: 'scmPullRequest' }>
     | Readonly<{ kind: 'terminal'; terminalInstanceId?: string }>
     | Readonly<{ kind: 'discussion'; discussionId: string }>
-    | Readonly<{ kind: 'board'; focusTarget?: SessionBoardDetailsFocusTarget }>;
+    | Readonly<{ kind: 'board'; focusTarget?: SessionBoardDetailsFocusTarget }>
+    | Readonly<{ kind: 'computerScreen'; machineId: string }>;
 
 /**
  * Every param a Session pane link can carry. The pane-link sync, the browser history push and the
  * route all read this one list, so a target's extra params (a review comparison) survive reload/back.
  */
 export const SESSION_PANE_URL_PARAM_KEYS = [
-    'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId',
+    'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId', 'machineId',
     'comparison', 'comparisonId', 'turnId', 'checkpointReceiptId', 'evidence', 'head', 'base', 'commit', 'parent', 'view', 'explain', 'pullRequest', 'evidenceSessionId',
     ...FILE_TARGET_ANCHOR_PARAM_KEYS,
 ] as const;
@@ -185,6 +188,7 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
     const terminalInstanceIdRaw = readSingleStringParam(params, 'terminalInstanceId')?.trim() ?? '';
     const discussionIdRaw = readSingleStringParam(params, 'discussionId')?.trim() ?? '';
     const boardItemIdRaw = readSingleStringParam(params, 'boardItemId')?.trim() ?? '';
+    const machineIdRaw = readSingleStringParam(params, 'machineId')?.trim() ?? '';
 
     let details: SessionPaneUrlDetailsTarget | null = null;
     if (detailsRaw === 'file' && pathRaw && isSafeWorkspaceRelativePath(pathRaw)) {
@@ -216,6 +220,9 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
         details = boardItemIdRaw
             ? { kind: 'board', focusTarget: { kind: 'item', itemId: boardItemIdRaw } }
             : { kind: 'board' };
+    }
+    if (detailsRaw === 'computer' && machineIdRaw) {
+        details = { kind: 'computerScreen', machineId: machineIdRaw };
     }
 
     if (!rightTabId && !bottomTabId && !details) return null;
@@ -266,6 +273,10 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
     if (state.details?.kind === 'board') {
         out.details = 'board';
         if (state.details.focusTarget?.kind === 'item') out.boardItemId = state.details.focusTarget.itemId;
+    }
+    if (state.details?.kind === 'computerScreen') {
+        out.details = 'computer';
+        out.machineId = state.details.machineId;
     }
     return out;
 }
@@ -343,6 +354,11 @@ export function buildActiveDetailsRouteParams(
         return serializeSessionPaneUrlState({ details: { kind: 'board', ...(focusTarget ? { focusTarget } : {}) } });
     }
 
+    const computerScreen = readComputerScreenSessionSurfaceResource(activeTab.resource);
+    if (computerScreen) {
+        return serializeSessionPaneUrlState({ details: { kind: 'computerScreen', machineId: computerScreen.machineId } });
+    }
+
     return {};
 }
 
@@ -406,6 +422,9 @@ export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeSta
                 ? { kind: 'item' as const, itemId: (target as { itemId: string }).itemId }
                 : undefined;
             details = { kind: 'board', ...(focusTarget ? { focusTarget } : {}) };
+        } else {
+            const computerScreen = tab ? readComputerScreenSessionSurfaceResource(tab.resource) : null;
+            if (computerScreen) details = { kind: 'computerScreen', machineId: computerScreen.machineId };
         }
     }
 
@@ -458,6 +477,9 @@ export function createSessionPaneDetailsTab(
             break;
         case 'board':
             tab = createSessionBoardDetailsTab(target.focusTarget);
+            break;
+        case 'computerScreen':
+            tab = createComputerScreenDetailsTab({ machineId: target.machineId, title: t('computerUse.presentation.tabFallback') });
             break;
     }
     return tab ? { ...tab, isPinned: true, isPreview: false } : null;

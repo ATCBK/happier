@@ -64,6 +64,21 @@ describe('sessionPaneUrlState', () => {
         const route = buildActiveDetailsRouteParams([prTab], prTab!.key);
         expect(parseSessionPaneUrlState(route)?.details).toEqual(pr);
     });
+    it('carries the Session Computer through the link, the destination tab and the active-tab URL', () => {
+        const machineId = 'machine-1';
+        const params = { details: 'computer', machineId };
+        const state = parseSessionPaneUrlState(params);
+        expect(state).toEqual({ details: { kind: 'computerScreen', machineId } });
+        expect(serializeSessionPaneUrlState(state!)).toEqual(params);
+        const tab = createSessionPaneDetailsTab(state!.details!);
+        expect(tab).toMatchObject({ key: `computer-screen:${machineId}`, kind: 'computerScreen',
+            resource: { kind: 'computerScreen', machineId }, isPinned: true });
+        expect(buildActiveDetailsRouteParams([tab], tab!.key)).toEqual(params);
+        expect(deriveSessionPaneUrlStateFromScopeState({ right: { isOpen: false, activeTabId: null }, bottom: { isOpen: false, activeTabId: null },
+            details: { isOpen: true, tabs: [tab!], activeTabKey: tab!.key } })).toEqual(state);
+        // A Computer link without its machine names nothing to show.
+        expect(parseSessionPaneUrlState({ details: 'computer' })).toBeNull();
+    });
     it('constructs independent route-selected surfaces without writing shared pane selection', () => {
         const address = { serverId: 'home-a', sessionId: 'same-session' };
         const first = createSessionPaneDetailsTab({ kind: 'file', path: 'src/first.ts' }, address);

@@ -13,6 +13,7 @@ import {
 } from '@/sync/domains/plugins/ui/projection';
 
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
+import { createComputerScreenDetailsTab } from '@/components/computer/computerScreenDetailsTab';
 import { createSessionScmPullRequestDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { buildConnectedAccountSettingsRoute } from '@/sync/domains/connectedServices/connectedAccountSettingsRoute';
@@ -474,6 +475,17 @@ describe('catalog destination instances', () => {
         expect(ref).toEqual({
             kind: 'sessionDetails',
             params: { id: 'sess-a', serverId: 'home-a', details: 'scmPullRequest' },
+        });
+        expect(hrefForDestinationRef(catalog, ref!)).toBe(href);
+    });
+
+    it('addresses the Session Computer as a Details destination a workspace tab can open', () => {
+        const tab = createComputerScreenDetailsTab({ machineId: 'machine-1', title: 'Computer' });
+        const href = `/session/sess-a/details?serverId=home-a&${new URLSearchParams(buildActiveDetailsRouteParams([tab], tab.key))}`;
+        const ref = resolveDestinationRefFromHref(catalog, href);
+        expect(ref).toEqual({
+            kind: 'sessionDetails',
+            params: { id: 'sess-a', serverId: 'home-a', details: 'computer', machineId: 'machine-1' },
         });
         expect(hrefForDestinationRef(catalog, ref!)).toBe(href);
     });
