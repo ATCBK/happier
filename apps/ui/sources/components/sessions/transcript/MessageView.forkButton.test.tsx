@@ -379,7 +379,7 @@ describe('MessageView (fork button)', () => {
     const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
     const actionContainer = getActionContainer(screen, 'm2');
-    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onHoverIn === 'function');
+    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onPointerEnter === 'function' && typeof node.props?.onPointerLeave === 'function');
     expect(rowContainer).toBeTruthy();
     expect(rowContainer?.props.pointerEvents).toBeUndefined();
   });
@@ -662,8 +662,10 @@ describe('MessageView (fork button)', () => {
     const forkStyle = typeof forkButton?.props.style === 'function'
       ? forkButton.props.style({ pressed: false })
       : forkButton?.props.style;
-    expect(flattenStyleProp(forkStyle).width).toBeGreaterThanOrEqual(44);
-    expect(flattenStyleProp(forkStyle).height).toBeGreaterThanOrEqual(44);
+    const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+    const minimumSize = resolveMinimumInteractiveTargetSize('web');
+    expect(flattenStyleProp(forkStyle).width).toBeGreaterThanOrEqual(minimumSize);
+    expect(flattenStyleProp(forkStyle).height).toBeGreaterThanOrEqual(minimumSize);
   });
 
   it('uses a physical 48dp Android target without overlapping hit slop', async () => {
