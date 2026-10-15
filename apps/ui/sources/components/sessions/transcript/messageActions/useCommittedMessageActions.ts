@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import type { UserTextMessage, AgentTextMessage } from '@happier-dev/session-core/messages';
 import { buildMessageRouteId } from '@happier-dev/session-core/messages';
 import type { PersistedSessionMessagePinV1 } from '@happier-dev/session-core/pins';
@@ -89,18 +90,13 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
         ? createDefaultActionExecutor({ resolveServerIdForSessionId: () => rollbackServerId ?? null,
             currentAgentCapabilities: input.rollbackAction.currentAgentCapabilities })
         : null, [input.rollbackAction, rollbackServerId, settings.transcriptMessageRollbackActionEnabled]);
-    const [copiedText, setCopiedText] = React.useState<Readonly<{ messageId: string; text: string }> | null>(null);
-    const copied = copiedText?.messageId === message.id && copiedText.text === input.copyText;
-    const resetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    React.useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, [message.id]);
+    const { copy: copyWithFeedback, isCopied } = useHappierCopyFeedback();
+    const copyKey = React.useMemo(() => JSON.stringify([message.id, input.copyText]), [message.id, input.copyText]);
+    const copied = isCopied(copyKey);
     const copy = async () => {
-        if (!await setClipboardStringSafe(input.copyText)) {
+        if (!await copyWithFeedback(() => setClipboardStringSafe(input.copyText), copyKey)) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
-            return;
         }
-        setCopiedText({ messageId: message.id, text: input.copyText });
-        if (resetTimer.current) clearTimeout(resetTimer.current);
-        resetTimer.current = setTimeout(() => setCopiedText(null), 1200);
     };
     const actions: readonly CommittedMessageAction[] = [
         { id: 'rollback', available: input.rollbackAction != null && settings.transcriptMessageRollbackActionEnabled !== false,

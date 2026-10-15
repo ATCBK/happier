@@ -92,6 +92,37 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
 }
 
 describe('Committed row and native menu availability', () => {
+    it('clears copied feedback after a refused retry and lets the message copy succeed again', async () => {
+        const Clipboard = await import('expo-clipboard');
+        const { Modal } = await import('@/modal');
+        const { Icon } = await import('@/components/ui/icons/Icon');
+        const screen = await renderScreen(element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }));
+        const glyph = () => screen.findHostByTestId('transcript-message-copy:m1-icon')!.findByType(Icon).props.name;
+        const pressCopy = async () => {
+            const button = screen.findHostByTestId('transcript-message-copy:m1');
+            if (!button) throw new Error('Missing message copy action');
+            await act(async () => { await button.props.onPress(); });
+        };
+        expect(glyph()).toBe('copy');
+        await pressCopy();
+        expect(glyph()).toBe('check');
+
+        vi.mocked(Modal.alert).mockClear();
+        vi.mocked(Clipboard.setStringAsync).mockResolvedValueOnce(false);
+        await pressCopy();
+        expect(Modal.alert).toHaveBeenCalledOnce();
+        expect(glyph()).toBe('copy');
+
+        await pressCopy();
+        expect(glyph()).toBe('check');
+        await screen.update(element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }, false, 'm1', false, 'Changed message text'));
+        expect(glyph()).toBe('copy');
+        await pressCopy();
+        expect(glyph()).toBe('check');
+        await screen.update(element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }, false, 'recycled', false, 'Changed message text'));
+        expect(screen.findHostByTestId('transcript-message-copy:recycled-icon')!.findByType(Icon).props.name).toBe('copy');
+    });
+
     it.each(['android', 'ios'] as const)('keeps the %s message passive while native hold and child copy stay usable', async (platform) => {
         platformState.os = platform;
         const Clipboard = await import('expo-clipboard');
