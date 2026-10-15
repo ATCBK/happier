@@ -1109,7 +1109,7 @@ describe('createPiRuntimeOperations', () => {
     expect(capture.specs).toHaveLength(1);
   });
 
-  it('projects raw Pi turn records to canonical runtime events', async () => {
+  it('projects only the admitted Pi foreground output with the exact host turn', async () => {
     const capture: Capture = { specs: [], written: [] };
     const runtime = await createRuntime(capture);
     const events: AgentSessionRuntimeEvent[] = [];
@@ -1117,6 +1117,14 @@ describe('createPiRuntimeOperations', () => {
       events.push(event);
     });
 
+    await emit(capture, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'session replay before admission' },
+    });
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'session replay before admission' }] },
+    });
     const prompt = sendPrompt(runtime, 'hello');
     await waitForWrittenCount(capture, 1);
     await ackLastCommand(capture);
@@ -1155,6 +1163,14 @@ describe('createPiRuntimeOperations', () => {
     });
     await emit(capture, { type: 'turn_end', turnId: 'provider-turn-1' });
     await emit(capture, { type: 'agent_end', willRetry: false });
+    await emit(capture, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'late output after completion' },
+    });
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'late output after completion' }] },
+    });
 
     expect(events.some((event) => (
       event.kind === 'turn-complete' || event.kind === 'turn-failed' || event.kind === 'turn-cancelled'
@@ -1165,12 +1181,16 @@ describe('createPiRuntimeOperations', () => {
     expect(turnStart).toMatchObject({
       kind: 'turn-start',
       sessionId: 'happier-session-1',
+      turnId: 'pi-turn-1',
       startedBy: 'host',
     });
     expect(parsedEvents.filter((event) => event.kind === 'message-delta')).toEqual([
-      expect.objectContaining({ channel: 'assistant', text: 'hel' }),
-      expect.objectContaining({ channel: 'assistant', text: 'lo' }),
-      expect.objectContaining({ channel: 'assistant', text: 'final answer' }),
+      expect.objectContaining({ turnId: 'pi-turn-1', channel: 'assistant', text: 'hel' }),
+      expect.objectContaining({ turnId: 'pi-turn-1', channel: 'assistant', text: 'lo' }),
+      expect.objectContaining({ turnId: 'pi-turn-1', channel: 'assistant', text: 'final answer' }),
+    ]);
+    expect(parsedEvents.filter((event) => event.kind === 'transcript-message-committed')).toEqual([
+      expect.objectContaining({ turnId: 'pi-turn-1', role: 'assistant', text: 'final answer' }),
     ]);
     expect(parsedEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({

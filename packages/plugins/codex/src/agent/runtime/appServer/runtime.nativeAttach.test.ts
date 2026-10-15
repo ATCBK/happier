@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildConnectedServiceCredentialRecord, StrictJsonValueSchema } from '@happier-dev/protocol';
 import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createCodexNativeAppServerSessionRuntime } from './native.js';
 import { startCodexAppServerRuntime } from './runtime.js';
 import { withCodexNativeAttachFixture as withFixture } from './runtime.nativeAttach.test-support.js';
@@ -95,7 +96,7 @@ describe('native Codex attachment preparation', () => {
       await startCodexAppServerRuntime(runtime);
       const session = createCodexNativeAppServerSessionRuntime(runtime, 'session-replacement');
       const events: AgentSessionRuntimeEvent[] = [];
-      session.watch((event) => events.push(event));
+      session.watch((event) => events.push(AgentSessionRuntimeEventSchema.parse(event)));
       const messageIds: string[] = [];
       for (let turn = 1; turn <= 2; turn += 1) {
         const turnId = `host-turn-${turn}`;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentSessionRuntimeEvent, AgentSessionSubagentObservation, AgentSessionSubagentObservationPublisher } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { DisposableCodexAppServerClient } from './client.js';
 import type { CodexAppServerEvent } from './core.js';
 import { createCodexNativeAppServerSessionRuntime } from './native.js';
@@ -33,7 +34,7 @@ function fixture() {
     host: { baseProcessEnv: {}, logger: { debug: vi.fn(), warn: vi.fn() }, createClient: async () => client, subagents },
   });
   runtime.events.subscribe((event) => events.push(event));
-  createCodexNativeAppServerSessionRuntime(runtime, 'session').watch((event) => nativeEvents.push(event));
+  createCodexNativeAppServerSessionRuntime(runtime, 'session').watch((event) => nativeEvents.push(AgentSessionRuntimeEventSchema.parse(event)));
   return { runtime, events, nativeEvents, observations, async notify(method: string, params: unknown) { await handlers.get(method)?.(params); } };
 }
 

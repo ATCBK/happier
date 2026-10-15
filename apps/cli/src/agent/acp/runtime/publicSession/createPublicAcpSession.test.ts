@@ -17,6 +17,7 @@ import type {
   AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createAgentLaunchObserver, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
 import { createCodexAgentRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/engine';
 import { createGeminiAgentRuntime } from '../../../../../../../packages/plugins/gemini/src/agent/runtime/factory';
@@ -4459,7 +4460,7 @@ describe('createPublicAcpSession', () => {
         },
       });
       const events: AgentSessionRuntimeEvent[] = [];
-      const subscription = session.watch((event) => events.push(event));
+      const subscription = session.watch((event) => events.push(AgentSessionRuntimeEventSchema.parse(event)));
       try {
         const sent = await session.send({ inputIds: ['parent-input'], delivery: { kind: 'newTurn', turnId: 'parent-turn' }, input: { text: 'work' } });
         expect(sent.status).toBe('admitted');
@@ -4469,7 +4470,9 @@ describe('createPublicAcpSession', () => {
         expect(imported).toEqual([{ body: { type: 'message', message: childOutput, sidechainId: firstSidechainId }, provenance: { kind: 'non_dependent', source: 'sidechain' } }]);
         expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call', toolCallId: 'child-launch', input: expect.objectContaining({ sidechainId: firstSidechainId }) }));
         expect(events.filter((event) => event.kind === 'turn-complete')).toHaveLength(1);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId: 'parent-turn', text: 'parent output' }));
         expect(events).not.toContainEqual(expect.objectContaining({ kind: 'message-delta', text: 'child replay output' }));
+        expect(events).not.toContainEqual(expect.objectContaining({ kind: 'transcript-message-committed', text: childOutput }));
         expect(session.getProviderSessionId()).toBe('provider-created');
         if (scenario === 'permission') {
           await session.drainPendingPublications();
