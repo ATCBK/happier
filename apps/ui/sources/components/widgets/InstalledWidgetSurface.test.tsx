@@ -6,6 +6,7 @@ import type { PluginProjectionV2 } from '@happier-dev/protocol';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { t } from '@/text';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
@@ -190,6 +191,15 @@ describe('InstalledWidgetSurface', () => {
             expect(screen.findByTestId(`${reasonCode}-connect`)).toBeNull();
         }
         expect(state.mounts).toHaveLength(0);
+    });
+    it('says once that a widget whose plugin is missing is kept, never naming a "type for Widgets"', async () => {
+        const manage = vi.fn();
+        const screen = await renderScreen(<ConfiguredWidgetRefusal resolution={{ status: 'unavailable', reasonCode: 'widget_type_unavailable',
+            repair: { kind: 'type_unavailable' } }} testID="gone" onManagePlugin={manage} />);
+        const card = screen.tree.findByType(SurfaceStateCard);
+        expect(card.props.title).toBe(t('sessionBoard.item.pluginUnavailable.title'));
+        expect(card.props.reason).toBe(t('sessionBoard.item.pluginUnavailable.reason'));
+        expect(screen.getTextContent()).not.toContain('Widgets');
     });
     it('repairs a lost pinned reference without exposing its raw value, and offers that field’s own choice', async () => {
         const instance: WidgetInstanceV1 = { v: 1, id: 'copy', definition: { kind: 'installed', surface: source.surface },

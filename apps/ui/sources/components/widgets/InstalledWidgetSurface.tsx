@@ -379,13 +379,15 @@ export function ConfiguredWidgetRefusal(props: Readonly<{
     const title = repair.kind === 'connect' ? t('widgetAdd.connectionNeeded', { field: field?.label ?? t('settings.connectedServices') })
         : repair.kind === 'session_denied' ? t('widgetAdd.sessionDenied', { session })
         : repair.kind === 'session_unavailable' ? t('widgetAdd.sessionUnavailable', { session })
-        : repair.kind === 'type_unavailable' ? t('widgetAdd.typeUnavailable', { field: field?.label ?? t('widgetFrame.appearanceTitle') })
+        // An input whose type is gone names that input; with no input it is the widget's own plugin that is missing.
+        : repair.kind === 'type_unavailable' ? (field ? t('widgetAdd.typeUnavailable', { field: field.label }) : t('sessionBoard.item.pluginUnavailable.title'))
         : missing && field ? t('widgetAdd.stillNeeded', { field: label })
         : field?.selectedLabel ? t('widgetAdd.valueNotFound', { value: field.selectedLabel })
         : field ? t('widgetAdd.inputUnavailable', { field: label })
         : resolution.status === 'invalid' ? t('widgetAdd.inputsInvalid') : t('widgetAdd.inputsUnavailable');
     // Why a pinned value stopped resolving; a missing input or a type needs no cause line.
-    const reason = repair.kind === 'input' && !missing && field ? t('widgetAdd.invalidReason') : undefined;
+    const reason = repair.kind === 'input' && !missing && field ? t('widgetAdd.invalidReason')
+        : repair.kind === 'type_unavailable' && !field ? t('sessionBoard.item.pluginUnavailable.reason') : undefined;
     const repairLabel = !field ? t('widgetAdd.editInputs')
         : missing ? t('widgetAdd.chooseField', { field: field.label })
         : t('widgetAdd.chooseAnother', { field: field.label });

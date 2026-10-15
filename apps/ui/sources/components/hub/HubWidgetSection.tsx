@@ -85,7 +85,8 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
         ? props.followSource.groupNamesValue
             ? bodyCaption ?? undefined
             : widgetGroupFollowSource(props.followSource.value, props.followSource.wide || phone)
-        : bodyCaption ?? bindingLabel ?? pluginName;
+        // A widget whose plugin is not here says that once, in its body; the source slot does not repeat it.
+        : bodyCaption ?? bindingLabel ?? (descriptor ? pluginName : undefined);
     const savedSize = props.size ?? 'medium';
     // Carried, the card keeps its mark and says its source and the size it keeps (lab wgdnd 1).
     const carried = useWidgetCarriedIdentity({ kind: 'widget', mark: descriptor?.icon ?? 'squares-four',
