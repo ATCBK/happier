@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { EntityDragItemV1, EntityDropAdmissionV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
 import type { EntityDropTarget } from '../entityDragDropTypes';
 import { createEntityDragGestureAdapter } from '../entityDragGestureAdapter';
 import { installEntityDragCancellation } from '../entityDragCancellation';
+import { dispatchEscapeToLayerStack, ESCAPE_LAYER_PRIORITIES, registerEscapeLayer } from '@/keyboard/escape';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 const session: EntityDragItemV1 = { kind: 'session', scope, address: { serverId: scope.serverId, sessionId: 'child' } };
@@ -300,6 +301,25 @@ describe('mounted entity drag owner', () => {
         third.move({ x: 25, y: 25 });
         events.dispatchEvent(new Event('blur'));
         expect(await third.release()).toEqual({ status: 'applied' });
+    });
+    it('Escape cancels a move in flight before the surface around it; the next Escape reaches that surface (H20)', () => {
+        const f = fixture();
+        const events = new EventTarget();
+        const uninstall = installEntityDragCancellation(f.runtime, events);
+        // The enclosing popover or modal listens for Escape on the same window and owns the layer stack.
+        const closeSurface = vi.fn(() => true);
+        const unregister = registerEscapeLayer({ priority: ESCAPE_LAYER_PRIORITIES.modal, onEscape: closeSurface });
+        events.addEventListener('keydown', event => { dispatchEscapeToLayerStack(event); }, true);
+        const escape = () => events.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+        try {
+            const carry = f.runtime.begin('source', 'keyboard')!;
+            carry.choose('target');
+            escape();
+            expect(f.runtime.getSnapshot().phase).toBe('idle');
+            expect(closeSurface).not.toHaveBeenCalled();
+            escape();
+            expect(closeSurface).toHaveBeenCalledTimes(1);
+        } finally { unregister(); uninstall(); }
     });
     it('the native adapter commits successful end once and never commits unsuccessful end or finalize', async () => {
         const f = fixture();

@@ -21,6 +21,11 @@ export const ESCAPE_LAYER_PRIORITIES = {
     popover: 400,
     commandPalette: 500,
     modal: 600,
+    /**
+     * A drag or staged keyboard move in flight. Its Escape cancels the move first, whatever popover, modal or pane
+     * the list sits in; the next Escape then closes that surface.
+     */
+    entityCarry: 700,
 } as const;
 
 export const ESCAPE_KEY_BLOCKER_PRIORITIES = {

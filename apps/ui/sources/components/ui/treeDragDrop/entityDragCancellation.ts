@@ -1,3 +1,4 @@
+import { dispatchEscapeToLayerStack, ESCAPE_LAYER_PRIORITIES, registerEscapeLayer } from '@/keyboard/escape';
 import type { EntityDragDropRuntime } from './entityDragDropTypes';
 
 /** One realm-owned event boundary, installed by the shared feedback host. */
@@ -33,13 +34,24 @@ export function installEntityDragCancellation(runtime: EntityDragDropRuntime, ev
         finishDrag();
         runtime.cancel(event.type);
     };
-    const keydown = (event: Event) => {
-        if ('key' in event && event.key === 'Escape' && runtime.getSnapshot().phase === 'carrying') {
-            event.preventDefault();
-            finishDrag();
-            runtime.cancel('escape');
-        }
+    // Escape belongs to the carry only while one is in flight, and ahead of every surface the list sits in: the
+    // first Escape cancels the move, the next one closes the popover or modal around it.
+    let releaseEscape: (() => void) | null = null;
+    const syncEscape = () => {
+        const carrying = runtime.getSnapshot().phase === 'carrying';
+        if (carrying === (releaseEscape !== null)) return;
+        if (!carrying) { releaseEscape?.(); releaseEscape = null; return; }
+        const unregister = registerEscapeLayer({
+            priority: ESCAPE_LAYER_PRIORITIES.entityCarry,
+            allowEditableTarget: true,
+            onEscape: () => { finishDrag(); runtime.cancel('escape'); return true; },
+        });
+        const dispatch = (event: Event) => { dispatchEscapeToLayerStack(event); };
+        events.addEventListener('keydown', dispatch, true);
+        releaseEscape = () => { events.removeEventListener('keydown', dispatch, true); unregister(); };
     };
+    const stopEscape = runtime.subscribe(syncEscape);
+    syncEscape();
     const leave = (event: Event) => {
         if ('relatedTarget' in event && event.relatedTarget == null) {
             finishDrag();
@@ -51,18 +63,19 @@ export function installEntityDragCancellation(runtime: EntityDragDropRuntime, ev
     events.addEventListener('dragstart', startDrag, true);
     events.addEventListener('drop', finishDrag, true);
     events.addEventListener('dragend', finishDrag, true);
-    events.addEventListener('keydown', keydown);
     events.addEventListener('pointerleave', leave);
     return () => {
         stopPointer();
         stopCarry();
+        stopEscape();
+        releaseEscape?.();
+        releaseEscape = null;
         events.removeEventListener('pointerdown', pointerDown, true);
         events.removeEventListener('click', click, true);
         for (const name of cancellationEvents) events.removeEventListener(name, cancel);
         events.removeEventListener('dragstart', startDrag, true);
         events.removeEventListener('drop', finishDrag, true);
         events.removeEventListener('dragend', finishDrag, true);
-        events.removeEventListener('keydown', keydown);
         events.removeEventListener('pointerleave', leave);
         runtime.cancel('realm-unmount');
     };
