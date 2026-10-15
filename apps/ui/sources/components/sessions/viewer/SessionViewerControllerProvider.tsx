@@ -21,6 +21,11 @@ import {
   type SessionViewerSource,
 } from './sessionViewerPresentation';
 
+/** A floating desktop view occupies the phone's existing sticky slot during reflow. */
+function projectViewportPresentation(state: SessionViewerPresentationState, phone: boolean): SessionViewerPresentationState {
+  return phone && state.mode === 'floating' ? { ...state, mode: 'docked' } : state;
+}
+
 /**
  * The one mounted viewer presentation owner for a Session: which source is presented and how
  * (floating, expanded, docked, closed), plus the local geometry. It lives for the mounted Session
@@ -41,6 +46,8 @@ export function SessionViewerControllerProvider(
   const [state, setState] = React.useState<SessionViewerPresentationState>(
     CLOSED_SESSION_VIEWER,
   );
+  // Keep the desktop placement while a narrow viewport presents the same source in reading flow.
+  const presentedState = React.useMemo(() => projectViewportPresentation(state, props.phone), [props.phone, state]);
   const [facts, setFacts] = React.useState<SessionViewerController['facts']>(
     {},
   );
@@ -61,7 +68,7 @@ export function SessionViewerControllerProvider(
   }, [semanticScope]);
   const applyPresentation = React.useCallback((intent: SessionViewerLocalIntent) => {
     const { phone, canPresentSource, openDocked } = inputRef.current;
-    const next = resolveSessionViewerPresentation(stateRef.current, intent, {
+    const next = resolveSessionViewerPresentation(projectViewportPresentation(stateRef.current, phone), intent, {
       phone,
       canPresentSource,
     });
@@ -168,7 +175,7 @@ export function SessionViewerControllerProvider(
   const canPresentSource = props.canPresentSource;
   const value = React.useMemo<SessionViewerController>(
     () => ({
-      state,
+      state: presentedState,
       phone: props.phone,
       serverId: props.serverId,
       apply,
@@ -193,10 +200,10 @@ export function SessionViewerControllerProvider(
       publishFacts,
       setReadingInset,
       setRect,
-      state,
+      presentedState,
     ],
   );
-  const effectiveInset = state.mode === 'floating' ? readingInset : NO_SESSION_VIEWER_INSET;
+  const effectiveInset = presentedState.mode === 'floating' ? readingInset : NO_SESSION_VIEWER_INSET;
   return (
     <SessionViewerControllerContext.Provider value={value}>
       <SessionViewerReadingInsetContext.Provider value={effectiveInset}>

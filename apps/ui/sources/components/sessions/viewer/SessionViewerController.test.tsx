@@ -137,6 +137,37 @@ describe('SessionViewerController', () => {
     await hook.unmount();
   });
 
+  it('keeps an open viewer presented across desktop and phone reflow without losing its desktop geometry', async () => {
+    const input = { phone: false };
+    const { render, openDocked } = mountController(input);
+    const hook = await render();
+    const rect = { x: 600, y: 200, width: 320, height: 200 };
+    try {
+      await act(async () => {
+        hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+        hook.getCurrent().controller.setRect(rect);
+      });
+      input.phone = true;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state).toMatchObject({ source: 'computer', mode: 'docked' });
+      expect(isSessionViewerPresenting(hook.getCurrent().controller, 'computer')).toBe(true);
+      input.phone = false;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state).toMatchObject({ source: 'computer', mode: 'floating', rect });
+      await act(async () => { hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' }); });
+      input.phone = true;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state.mode).toBe('expanded');
+      await act(async () => { hook.getCurrent().controller.port.apply({ kind: 'viewer.close' }); });
+      input.phone = false;
+      await hook.rerender();
+      input.phone = true;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state.mode).toBe('closed');
+      expect(openDocked).not.toHaveBeenCalled();
+    } finally { await hook.unmount(); }
+  });
+
   it('refuses a source the Session cannot present without changing what is shown', async () => {
     const { render } = mountController({ phone: false, computer: false });
     const hook = await render();
