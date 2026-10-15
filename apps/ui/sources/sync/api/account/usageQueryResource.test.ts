@@ -79,11 +79,13 @@ const ownerSessionAccess = {
   responsibleAccountId: null, responsibleAccount: null,
 };
 
-async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) {
+async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
+  profile?: Parameters<typeof serveAccountHomes>[0]['homes'][number]['profile'],
+  settings?: Parameters<typeof serveAccountHomes>[0]['homes'][number]['settings']) {
   // HTTP persistence boundary; the real B producer, protection, Resource and
   // Plans projection remain in-process. Server admission has its SQLite suite.
   const projections = new Map<string, ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>>();
-  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch.test', accountId: 'account-a' }],
+  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch.test', accountId: 'account-a', profile, settings }],
     route: async request => {
       if (request.path === '/v4/connect/qualified/provider-account-usage/history' && request.method === 'PUT') {
         const projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body);
@@ -114,7 +116,7 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) 
   // The HTTP harness admits a Home/Account; its UI Profile projection must
   // carry that same scope before an Account-owned Usage read can use it.
   storage.setState({ profileScope: captured.accountLifetime.scope,
-    profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
+    profile: AccountProfileSchema.parse({ ...profile, id: captured.accountLifetime.scope.accountId }) });
   return captured;
 }
 
