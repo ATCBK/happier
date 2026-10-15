@@ -345,3 +345,44 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     await screen.unmount();
 });
+
+it('presents a Computer window tab on the phone Details surface through the Session viewer source authority', async () => {
+    fixture = await createSessionFilesViewFixture({ serverUrl: 'https://phone-computer-tab.test', rootPath: '/tmp/repo', rpc: () => undefined,
+        request: async url => new URL(String(url)).pathname === '/v1/kv/bulk'
+            ? Response.json({ values: [] }) : Response.json({}, { status: 404 }),
+    });
+    fixture.storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
+    const { createComputerScreenDetailsTab } = await import('@/components/computer/computerScreenDetailsTab');
+    const { buildActiveDetailsRouteParams } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+    const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+    const { createRetainedPresentationSlotsStore, RetainedPresentationSlotsProvider } = await import('@/components/ui/presentation/retainedPresentationSlots');
+    const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+    const { SessionCockpitShell } = await import('./SessionCockpitShell');
+    const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const tab = createComputerScreenDetailsTab({ machineId: 'machine-1', title: 'Computer' });
+    route.params = { ...buildActiveDetailsRouteParams([tab], tab.key), serverId: fixture.home.id };
+    route.href = '/session/s1/details';
+    const slots = createRetainedPresentationSlotsStore();
+    let pane!: ReturnType<typeof useAppPaneScope>;
+    function Probe() { pane = useAppPaneScope('session:s1'); return null; }
+    const screen = await fixture.render(<RetainedPresentationSlotsProvider store={slots}><MainAppTabStateProvider>
+        <SessionCockpitChromeRegistryProvider><Probe />
+            <SessionCockpitShell sessionId="s1" scopeId="session:s1" surface="tabs" routeServerId={fixture.home.id}
+                terminalTabAvailable={false} /><MobileBottomChromeHost />
+        </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider></RetainedPresentationSlotsProvider>);
+    const measure = async () => act(async () => {
+        for (const host of screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')) {
+            invokeTestInstanceHandler(host, 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 844 } } });
+        }
+    });
+    await measure();
+    await act(async () => pane.openDetailsTab(tab, { intent: 'pinned' }));
+    await flushHookEffects({ cycles: 20 });
+    await measure();
+    await flushHookEffects({ cycles: 20 });
+    // The tab's body is the retained Computer source: without the Session's account authority the
+    // surface binds nothing and the phone shows a blank page.
+    expect(slots.getPortalSnapshot().some(entry => entry.slotId.endsWith(':viewer:computer') && entry.visible)).toBe(true);
+    await screen.unmount();
+});

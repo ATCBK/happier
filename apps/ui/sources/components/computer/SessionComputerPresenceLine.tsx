@@ -11,6 +11,7 @@ import { useSessionComputerMachine } from '@/sync/domains/computer/sessionComput
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
+import { isSessionViewerPresenting, useOptionalSessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
 
 import { useComputerSessionControl } from './useComputerSessionControl';
 import { useOpenSessionComputerScreen } from './useOpenSessionComputerScreen';
@@ -93,9 +94,11 @@ export function SessionComputerPresenceLine(props: Readonly<{
     const accountLifetime = useSessionViewerSourceAccountLifetime();
     const serverId = props.serverId ?? accountLifetime?.scope.serverId ?? null;
     const seenComputerUse = useSessionComputerMachine(props.sessionId);
+    // While the viewer presents the window, its own footer says who is acting: one fact, one line.
+    const viewerPresenting = isSessionViewerPresenting(useOptionalSessionViewerController(), 'computer');
     // The share lives on the Session's own machine (computer use never targets another one).
     const sessionMachineId = useSessionMachineTarget(seenComputerUse && accountLifetime ? props.sessionId : null, serverId)?.machineId ?? null;
-    if (!seenComputerUse || !sessionMachineId || seenComputerUse.machineId !== sessionMachineId) return null;
+    if (viewerPresenting || !seenComputerUse || !sessionMachineId || seenComputerUse.machineId !== sessionMachineId) return null;
     return (
         <MountedSessionComputerPresenceLine
             sessionId={props.sessionId}

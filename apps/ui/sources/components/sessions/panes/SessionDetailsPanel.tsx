@@ -62,6 +62,10 @@ import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/sessi
 import { useSessionBrowserRecordingRuntime } from '@/components/sessions/browser/sessionBrowserRecordingRuntime';
 import { useSessionBrowserContextProductModel } from '@/components/sessions/browser/useSessionBrowserContextProductModel';
 import { Icon } from '@/components/ui/icons/Icon';
+import {
+    SessionViewerSourceAccountScopeProvider,
+    useSessionViewerSourceAccountLifetime,
+} from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSessionBoardFeatureEnabled';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/board';
@@ -117,6 +121,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const panelPaddingTop = closeButtonAtStart ? 0 : insets.top;
     const rightPaneOpen = pane.scopeState?.right?.isOpen === true;
     const showRightPaneToggle = showHeaderActions && props.presentation !== 'screen';
+    const inheritedViewerAccountLifetime = useSessionViewerSourceAccountLifetime();
     const pluginRuntime = useSessionDetailsPanelPluginRuntime({
         sessionId: props.sessionId,
         routeServerId: props.routeServerId,
@@ -630,7 +635,15 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         />
     );
     // The pushed phone route recomposes every tab's header and state for the phone (details lab 2).
-    return props.presentation === 'screen' && deviceType === 'phone'
+    const presented = props.presentation === 'screen' && deviceType === 'phone'
         ? <SurfaceStateSizeProvider size="phone">{workspace}</SurfaceStateSizeProvider>
         : workspace;
+    // A retained viewer source (a Computer or Browser tab) binds nothing without the Session's
+    // admitted Home/Account authority. Inside the Session shell it is inherited; a Details route or
+    // phone scene rendered outside it takes this panel's own runtime authority.
+    return (
+        <SessionViewerSourceAccountScopeProvider accountLifetime={inheritedViewerAccountLifetime ?? pluginRuntime.accountLifetime}>
+            {presented}
+        </SessionViewerSourceAccountScopeProvider>
+    );
 });
