@@ -248,6 +248,49 @@ describe('session prompt-plan producer', () => {
     expect(resolve.readStartupInstructions?.()).toBeNull();
   });
 
+  it.each([false, true])('keeps coding preparation current across unrelated Account preferences (captured: %s)', async captured => {
+    const credentials = { token: 'preference-context-token', encryption: null };
+    const scopeKey = resolveAccountSettingsScopeKey(credentials);
+    const snapshot = { source: 'network' as const, settings: accountSettingsParse({ memoryUseInNewSessions: false }), rawSettings: {}, scopeKey,
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      promptLibraryCatalog: { status: 'ready' as const, rows: [], tombstones: [], diagnostics: [] } };
+    setActiveAccountSettingsSnapshot(snapshot);
+    const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl: 'http://localhost:3005',
+      isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey });
+    let changedDuringRead = false;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v1/artifacts/current' && !changedDuringRead) {
+        changedDuringRead = true;
+        const settings = accountSettingsParse({ memoryUseInNewSessions: true });
+        expect(settings).not.toEqual(snapshot.settings);
+        setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settings, settingsVersion: 2 });
+      }
+      const document = plainPromptDocument('current', 'Prepared current instructions');
+      return { status: 200, data: path === '/v1/artifacts' ? [document] : document };
+    });
+    const resolve = createSessionPromptPlanResolver({
+      opts: { credentials, accountSettingsContext: { ...snapshot, whenRefreshed: null } },
+      session: { ...createApiSessionClientFixture(), sessionId: 'preference-context-session', getMetadataSnapshot: () => createTestMetadata({
+        work: { promptStack: [{ id: 'instructions', ref: { kind: 'doc', artifactId: 'current' },
+          enabled: true, required: true, placement: 'system_append' }] },
+      }) },
+      agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
+      readNativeSessionId: () => 'native', daemonBridge,
+      ...(captured ? { readOperationContext: () => operation } : {}),
+    });
+    expect(await resolve()).toContain('Prepared current instructions');
+    expect(changedDuringRead).toBe(true);
+    setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!,
+      settings: accountSettingsParse({ memoryUseInNewSessions: false }), settingsVersion: 3 });
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()?.instructions).toContain('Prepared current instructions');
+    setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settingsVersion: 4,
+      settings: accountSettingsParse({ codingPromptBehaviorV1: { v: 1, sessionTitleUpdates: 'disabled' } }) });
+    expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-settings-changed' }));
+  });
+
   it('refuses a captured Account context when its credentials belong to another Account scope', async () => {
     const credentials = { token: 'other-account-token', encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey({ token: 'captured-account-token', encryption: null });

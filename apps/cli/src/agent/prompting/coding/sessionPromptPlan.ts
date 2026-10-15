@@ -28,6 +28,19 @@ export type SessionPromptPlanWithdrawalReason = 'plan-unprepared' | 'account-lif
   | `active-${PromptPreparationAccountChange}` | `captured-${PromptPreparationAccountChange}`
   | 'prepared-settings-changed' | 'profile-selection-changed';
 
+function readPromptPreparationSettingsBasis(settings: Record<string, unknown> | null | undefined, profileId: string | null) {
+  // These preferences feed the coding composer and its selected Profile. UI,
+  // Voice and creation-only defaults cannot withdraw an existing Session's plan.
+  const enabledById = settings?.profileEnabledById;
+  return {
+    codingPromptBehaviorV1: settings?.codingPromptBehaviorV1,
+    actionsSettingsV1: settings?.actionsSettingsV1,
+    profiles: profileId ? settings?.profiles : undefined,
+    profileEnabled: profileId && enabledById && typeof enabledById === 'object'
+      ? Reflect.get(enabledById, profileId) : undefined,
+  };
+}
+
 function readPromptPreparationProfileBasis(snapshot: NonNullable<PromptPreparationAccountSnapshot>, profileId: string | null) {
   if (!profileId) return null;
   const catalog = snapshot.profileCatalog;
@@ -52,7 +65,8 @@ function readPromptPreparationAccountChange(prepared: PromptPreparationAccountSn
   // First network confirmation of equal Settings is hydration, not retirement.
   // Losing previously admitted availability still withdraws the plan.
   if (prepared.source !== 'none' && current.source === 'none') return 'account-availability-changed';
-  if (!isDeepStrictEqual(prepared.settings, current.settings)) return 'account-settings-changed';
+  if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(prepared.settings, profileId),
+    readPromptPreparationSettingsBasis(current.settings, profileId))) return 'account-settings-changed';
   if (!isDeepStrictEqual(prepared.settingsSecretsReadKeys, current.settingsSecretsReadKeys)) return 'account-keys-changed';
   if (!isDeepStrictEqual(readPromptPreparationProfileBasis(prepared, profileId),
     readPromptPreparationProfileBasis(current, profileId))) return 'account-profile-changed';
@@ -106,7 +120,7 @@ export function createSessionPromptPlanResolver(params: Readonly<{
   let startupInstructions: AgentSessionStartupInstructionsV1 | null = null;
   const compositionScope = createPromptCompositionScope();
   let composition: PromptPlanComposition | null = null;
-  let preparedBehavior: Readonly<{ accountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot>; settings: unknown;
+  let preparedBehavior: Readonly<{ accountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot>; settings: Record<string, unknown> | null;
     profileId: string | null; behavior: CodingPromptBehaviorV1; operationContext?: SavedSecretOperationContextV1;
     activeAccountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot> }> | null = null;
   const accountScopeKey = params.opts.accountSettingsContext?.scopeKey;
@@ -235,7 +249,8 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     }
     const currentSettings = preparedBehavior.operationContext ? capturedAccount?.settings
       : accountScopeKey ? activeAccount?.settings : params.opts.accountSettingsContext?.settings ?? null;
-    if (!isDeepStrictEqual(preparedBehavior.settings, currentSettings)) return 'prepared-settings-changed';
+    if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(preparedBehavior.settings, preparedBehavior.profileId),
+      readPromptPreparationSettingsBasis(currentSettings, preparedBehavior.profileId))) return 'prepared-settings-changed';
     if (preparedBehavior.profileId !== (params.session.getMetadataSnapshot()?.profileId ?? null)) return 'profile-selection-changed';
     return null;
   };
@@ -243,6 +258,7 @@ export function createSessionPromptPlanResolver(params: Readonly<{
   const assertPreparedPlanCurrent = () => {
     const reason = readPreparedPlanWithdrawalReason();
     if (reason) {
+      logger.infoFile('[prompts] Prepared coding plan withdrawn', { reason });
       throw Object.assign(new Error('context_source_unavailable'), {
         code: 'context_source_unavailable', status: 'preparation_pending', reason,
       });
