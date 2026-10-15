@@ -869,6 +869,11 @@ it.each(['stacked', 'phone'] as const)(
             projectName="Project"
           />
         </AppShellPluginUiProjectionValueProvider>,
+        {
+          // The real Popover stays inert until its browser anchor can be measured.
+          // Supply DOM geometry at the renderer boundary, as a mounted Add control does.
+          createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 40, top: 80, width: 560, height: 40 }) }),
+        },
       );
       await flushHookEffects({ cycles: 4 });
       if (composition === 'stacked')
@@ -936,13 +941,22 @@ it.each(['stacked', 'phone'] as const)(
         addEventListener: () => {}, removeEventListener: () => {}, innerWidth: 1024, innerHeight: 768,
         setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
       }));
-      await act(async () => screen.findByTestId('project-overview-main.add')!.props.onPress());
+      await screen.pressByTestIdAsync('project-overview-main.add');
       await flushHookEffects({ cycles: 3 });
-      await act(async () => screen.findByTestId('project-overview-main.addPopover.area:aside')!.props.onPress());
+      const { WidgetAddPanel, WIDGET_ADD_SURFACE_PX } = await import('@/components/widgets/add/WidgetAddSurface');
+      let content = screen.root.findByType(WidgetAddPanel).parent;
+      while (content && typeof content.props.onLayout !== 'function') content = content.parent;
+      expect(content).not.toBeNull();
+      // A browser emits the portal content's layout before it becomes visible.
+      // react-test-renderer emits no layout events, so report that host fact explicitly.
+      await act(async () => content!.props.onLayout({ nativeEvent: { layout: {
+        x: 0, y: 0, width: WIDGET_ADD_SURFACE_PX.width, height: WIDGET_ADD_SURFACE_PX.height,
+      } } }));
+      await screen.pressByTestIdAsync('project-overview-main.addPopover.area:aside');
       const readmeEntry = screen.root.findAll((node) => typeof node.props.testID === 'string'
         && /addPopover\.entry\.[^.]*project_readme$/.test(node.props.testID) && typeof node.props.onPress === 'function')[0];
       expect(readmeEntry).toBeDefined();
-      await act(async () => readmeEntry!.props.onPress());
+      await screen.pressByTestIdAsync(readmeEntry!.props.testID);
       await flushHookEffects({ cycles: 4 });
       const { WidgetSetupStep } = await import('@/components/widgets/add/WidgetSetupStep');
       const step = screen.root.findAllByType(WidgetSetupStep)[0];
