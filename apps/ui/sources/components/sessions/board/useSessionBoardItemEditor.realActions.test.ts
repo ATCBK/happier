@@ -69,17 +69,17 @@ describe('shared Board item editor through the real Board Actions', () => {
         let saving!: Promise<boolean>;
         act(() => { saving = editor.save(); });
         for (let attempt = 0; attempt < 20 && !settle; attempt += 1) {
-            await act(async () => { screen.tree.update(render(true)); });
+            await screen.update(render(true));
         }
         expect(settle).toBeTypeOf('function');
-        await act(async () => { screen.tree.update(render(false)); });
+        await screen.update(render(false));
         await act(async () => {
             settle!(mode === 'unknown' ? new Response('acknowledgement lost') : new Response(JSON.stringify({
                 error: 'session_board_revision_conflict', currentItemRevision: null, currentLayoutRevision: revision,
             }), { status: 409 }));
             expect(await saving).toBe(false);
         });
-        await act(async () => { screen.tree.update(render(true)); });
+        await screen.update(render(true));
         expect(editor.body).toBe('Keep this draft');
         if (mode === 'layout-conflict') {
             expect(editor.canReviewLatest).toBe(true);
@@ -134,10 +134,10 @@ describe('shared Board item editor through the real Board Actions', () => {
         let saving!: Promise<boolean>;
         act(() => { saving = editor.save(); });
         for (let attempt = 0; attempt < 20 && !settle; attempt += 1) {
-            await act(async () => { screen.tree.update(render(session.sessionId)); });
+            await screen.update(render(session.sessionId));
         }
         expect(settle).toBeTypeOf('function');
-        await act(async () => { screen.tree.update(render('session-two')); });
+        await screen.update(render('session-two'));
         expect(editor.body).toBe('session-two');
         expect(editor.status.kind).toBe('editing');
         settle!(createdAck('shared-item-id'));
@@ -264,7 +264,7 @@ describe('shared Board item editor through the real Board Actions', () => {
         let saving!: Promise<boolean>;
         act(() => { saving = editor.save(); });
         for (let attempt = 0; attempt < 20 && !(settle || continuation); attempt += 1) {
-            await act(async () => { screen.tree.update(render('details')); });
+            await screen.update(render('details'));
         }
         expect(Boolean(settle || continuation)).toBe(true);
         const itemId = controller.noteDraft!.itemId;
@@ -275,7 +275,7 @@ describe('shared Board item editor through the real Board Actions', () => {
             });
         }
         await act(async () => { await editor.flushToContinuity(); });
-        await act(async () => { screen.tree.update(render('expanded')); });
+        await screen.update(render('expanded'));
         expect(editor.status.kind).toBe(mode === 'approval' ? 'approvalPending' : mode === 'unknown' ? 'outcomeUnknown' : 'saving');
         expect(editor.canSave).toBe(false);
         surfaceText.expanded = 'Save A plus pending B in expanded';
@@ -292,7 +292,7 @@ describe('shared Board item editor through the real Board Actions', () => {
             } else if (mode === 'unknown') {
                 if (editor.status.kind !== 'outcomeUnknown') throw new Error('missing unknown intent');
                 observation = { state: 'settled', revision, item: editor.status.intent.item };
-                screen.tree.update(render('expanded'));
+                await screen.update(render('expanded'));
             } else settle!(createdAck(itemId));
             expect(await saving).toBe(false);
         });
@@ -300,7 +300,7 @@ describe('shared Board item editor through the real Board Actions', () => {
         expect(editor.body).toBe(surfaceText.expanded);
         expect(editor.dirty).toBe(true);
         expect(editor.expectedRevision).toBe(revision);
-        await act(async () => { screen.tree.update(render('mobile')); });
+        await screen.update(render('mobile'));
         expect(editor.expectedRevision).toBe(revision);
         expect(editor.body).toBe(surfaceText.mobile);
         expect(editor.dirty).toBe(true);

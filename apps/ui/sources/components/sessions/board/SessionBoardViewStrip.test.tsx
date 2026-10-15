@@ -194,7 +194,7 @@ describe('SessionBoardViewStrip', () => {
 
         screen.findByTestId('session-board-views-view-research')?.props.onFocus?.();
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionBoardViewStrip
                     views={[VIEWS[0]!, VIEWS[2]!]}
                     activeViewId="ship"
@@ -264,7 +264,7 @@ describe('SessionBoardViewStrip', () => {
         );
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionBoardViewStrip
                     views={[VIEWS[0]!, VIEWS[2]!]}
                     activeViewId="ship"
