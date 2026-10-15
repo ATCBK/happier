@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, createMachineFixture } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createSessionFixture } from '@/dev/testkit';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -24,6 +24,8 @@ await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { sync } = await import('@/sync/sync');
 const { createDefaultLocalVoiceTtsProviderControllers } = await import('./localVoiceTtsProviderControllers');
+const { createLocalVoiceTtsController } = await import('./localVoiceTtsController');
+const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
 const { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
 const { previewLocalNeuralTts } = await import('@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts');
 const { voiceSettingsParse, readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
@@ -32,6 +34,7 @@ const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settin
 const initialSettings = storage.getState().settings;
 const initialMachines = storage.getState().machines;
 const initialMachineLists = storage.getState().machineListByServerId;
+const initialSessions = storage.getState().sessions;
 const statusReply = DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [{
   kind: 'tts_sherpa', packId: 'kokoro-82m-v1.0-onnx-q8-wasm', model: 'kokoro', version: '1',
   executionSupport: ['daemon'], runtimeFamily: 'sherpa_kokoro_offline', runtimeSupported: true,
@@ -81,7 +84,8 @@ describe('local model Session voice consumption', () => {
     disconnect = undefined;
     await account?.dispose();
     speechBoundary.disposeNativeSdkBridge();
-    storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialMachineLists });
+    voiceSessionBindingStore.getState().unbind('speech-carrier');
+    storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialMachineLists, sessions: initialSessions });
     resetServerFeaturesClientForTests();
   });
   function beginSpeak(value: string, current: () => boolean = () => true, speed: number | null = 1.2) {
@@ -110,6 +114,67 @@ describe('local model Session voice consumption', () => {
     await result.pending;
     return result;
   }
+
+  it.each(['direct', 'bound', 'global', 'inherit'] as const)(
+    'resolves %s Session selection through the real TTS entry point before its first synthesis', async mode => {
+      const homeId = account.homes.voice!.id;
+      const target = createSessionFixture({ id: 'speech-target', serverId: homeId, metadata: {
+        path: '/speech-target', host: 'voice.test', work: { voicePreference: {
+          providerContributionId: 'happier.voice.builtin/local-neural', settingFieldPath: 'voiceId', value: 'am_adam',
+        } },
+      } });
+      const carrier = createSessionFixture({ id: 'speech-carrier', serverId: homeId, metadata: target.metadata });
+      storage.setState({ sessions: { ...initialSessions, [target.id]: target, [carrier.id]: carrier } });
+      if (mode === 'bound' || mode === 'global') voiceSessionBindingStore.getState().bind({
+        adapterId: 'local_conversation', controlSessionId: carrier.id, conversationSessionId: carrier.id,
+        conversationSessionAddress: { serverId: homeId, sessionId: carrier.id }, transcriptMode: 'synthetic',
+        targetSessionAddress: mode === 'bound' ? { serverId: homeId, sessionId: target.id } : null, updatedAt: 1,
+      });
+      if (mode === 'inherit') storage.setState({ sessions: { ...storage.getState().sessions,
+        [target.id]: createSessionFixture({ ...target, metadata: { path: '/speech-target', host: 'voice.test' } }),
+      } });
+      const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
+      const failed = vi.fn();
+      await createLocalVoiceTtsController().speak({
+        sessionId: mode === 'bound' || mode === 'global' ? carrier.id : target.id,
+        text: 'first spoken reply', settings: storage.getState().settings,
+        tts: { ...cfg.tts, provider: 'local_neural', localNeural: { ...cfg.tts.localNeural,
+          assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart', speed: 1.2 } },
+        networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {}, onTtsFailed: failed,
+      });
+      expect(failed).not.toHaveBeenCalled();
+      expect(daemonStreamStartRpc).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        voiceId: mode === 'direct' || mode === 'bound' ? 'am_adam' : 'af_heart', speed: 1.2,
+      }));
+      expect(encodedAudio.start).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retires direct Session speech if its qualified metadata disappears during the catalog read', async () => {
+    const target = createSessionFixture({ id: 'speech-target', serverId: account.homes.voice!.id, metadata: {
+      path: '/speech-target', host: 'voice.test', work: { voicePreference: {
+        providerContributionId: 'happier.voice.builtin/local-neural', settingFieldPath: 'voiceId', value: 'am_adam',
+      } },
+    } });
+    storage.setState({ sessions: { ...initialSessions, [target.id]: target } });
+    const catalog = createDeferred<unknown>();
+    answerStatus = () => catalog.promise;
+    const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
+    const failed = vi.fn();
+    const pending = createLocalVoiceTtsController().speak({
+      sessionId: target.id, text: 'retired reply', settings: storage.getState().settings,
+      tts: { ...cfg.tts, provider: 'local_neural', localNeural: { ...cfg.tts.localNeural,
+        assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart' } },
+      networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {}, onTtsFailed: failed,
+    });
+    await vi.waitFor(() => expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' })));
+    storage.setState({ sessions: initialSessions });
+    catalog.resolve(statusReply);
+    await pending;
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+    expect(encodedAudio.start).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+  });
 
   it('uses the chosen installed voice without changing model/speed and publishes it only after audio starts', async () => {
     let startPhysicalAudio!: () => void;

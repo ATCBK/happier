@@ -18,6 +18,7 @@ import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/app
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { areSessionAddressesEqual } from '@/sync/domains/session/sessionAddress';
+import { resolveSessionAddressFromLocalState } from '@/sync/domains/session/resolveSessionAddressFromLocalState';
 import { voiceConversationBindingResolver } from '@/voice/binding/VoiceConversationBindingResolver';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION, BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, readSessionVoicePreferenceV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
@@ -230,7 +231,14 @@ export function prepareLocalVoiceTtsRequest(ctx: LocalVoiceTtsRequest): BundledS
             ?? voiceConversationBindingResolver.resolveByConversationSessionId({ conversationSessionId: ctx.sessionId })
         : null;
     const binding = resolveBinding();
-    const target = binding?.targetSessionAddress ?? null;
+    // Direct Session speech has no hidden conversation binding. An explicit
+    // global binding still owns its null target and must not borrow its carrier.
+    const resolveTarget = () => {
+        const currentBinding = resolveBinding();
+        return currentBinding ? currentBinding.targetSessionAddress
+            : ctx.sessionId ? resolveSessionAddressFromLocalState(storage.getState(), ctx.sessionId) : null;
+    };
+    const target = resolveTarget();
     const metadata = target ? readVoiceSessionOwnerMetadataFromState(storage.getState(), target, { activeServerId: serverId }) : null;
     const work = metadata?.work;
     const preference = readSessionVoicePreferenceV1(work && typeof work === 'object' && 'voicePreference' in work
@@ -239,7 +247,9 @@ export function prepareLocalVoiceTtsRequest(ctx: LocalVoiceTtsRequest): BundledS
         if (!accountLifetime.isCurrent() || getVoiceSessionAttemptId() !== attemptId
             || !areServerProfileIdentifiersEquivalent(serverId, getAppliedActiveServerSnapshot().serverId)) return false;
         const current = resolveBinding();
-        if (!binding) return current === null;
+        if (!binding) return current === null && (target === null ? resolveTarget() === null
+            : areSessionAddressesEqual(resolveTarget(), target)
+                && readVoiceSessionOwnerMetadataFromState(storage.getState(), target, { activeServerId: serverId }) !== null);
         return current?.controlSessionId === binding.controlSessionId
             && current.conversationSessionId === binding.conversationSessionId
             && current.updatedAt === binding.updatedAt
