@@ -17,6 +17,11 @@ describe('Claude provider task lifecycle', () => {
     expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
     ledger.noteSourceBaselineComplete(baseline);
     expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    // Completed observation does not release the query's physical shutdown obligation.
+    expect(ledger.getRegisteredQueryOwners()).toContain(query);
+    expect(ledger.apply({ type: 'started', admission: 'launch', sessionId: 's1', taskId: 'late' }, query)).toBe(false);
+    ledger.noteProviderStopped(query);
+    expect(ledger.getRegisteredQueryOwners()).not.toContain(query);
 
     const lost = {};
     ledger.registerOwner(lost);

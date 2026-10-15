@@ -111,6 +111,11 @@ The SDK execution adapter preserves the same launch builder's
 resolution. It emits `providerStopped: true` only with an actual exit or signal
 from that exact resolved invocation. Shell-wrapper exit and missing qualification
 retain unknown Activity; a numeric root exit code is not provider-stop proof.
+A completed query observation can report idle without releasing its physical
+query owner. The same activity ledger retains that owner for Session disposal
+until confirmed provider stop, so failed cleanup is retried and reported even
+after all of that query's tasks completed. Delayed activity from the completed
+observer remains ignored.
 Completing a pending source-history baseline releases only its own observation
 gap. Lost query observation, unresolved unattributed tasks, and a genuine
 source-history observation loss still keep Activity unknown. Historical terminal

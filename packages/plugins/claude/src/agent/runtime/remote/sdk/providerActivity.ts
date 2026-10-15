@@ -326,6 +326,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
   type ToolCall = Readonly<{ target?: ClaudeProviderTaskIdentity; targetOwner?: object }>;
   type OwnerObservation =
     | { kind: 'query'; observed: boolean; toolCalls: Map<string, ToolCall> }
+    | { kind: 'completed-query' }
     | { kind: 'terminal'; observed: boolean }
     | { kind: 'source-baseline'; observed: false };
   const ownerObservations = new Map<object, OwnerObservation>();
@@ -337,7 +338,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
   const getSnapshot = (): ClaudeProviderActivitySnapshot => {
     const activeCount = activeEntries().filter((entry) => entry.observed).length;
     if (activeCount > 0) return { state: 'active', activeCount };
-    return observationPhase !== 'lost' && ![...ownerObservations.values()].some((owner) => !owner.observed) && activeEntries().length === 0
+    return observationPhase !== 'lost' && ![...ownerObservations.values()].some((owner) => owner.kind !== 'completed-query' && !owner.observed) && activeEntries().length === 0
       ? { state: 'idle', activeCount: 0 }
       : { state: 'unknown', activeCount: 0 };
   };
@@ -353,11 +354,11 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
       ownerObservations.set(ownerScope, { kind: 'query', observed: true, toolCalls: new Map() });
     },
     completeQueryObservation(ownerScope: object): void {
-      // A final native result closes this empty observer, without claiming process exit.
+      // A final native result closes observation, but physical custody remains until process exit.
       const owner = ownerObservations.get(ownerScope);
       if (owner?.kind !== 'query' || !owner.observed || activeEntries(ownerScope).length > 0) return;
       const previous = getSnapshot();
-      ownerObservations.delete(ownerScope);
+      ownerObservations.set(ownerScope, { kind: 'completed-query' });
       notifyIfChanged(previous);
     },
     registerTerminalOwner(ownerScope: object): void {
@@ -400,7 +401,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     },
     getRegisteredQueryOwners(): object[] {
       return [...ownerObservations].flatMap(([ownerScope, owner]) =>
-        owner.kind === 'query' ? [ownerScope] : []);
+        owner.kind === 'query' || owner.kind === 'completed-query' ? [ownerScope] : []);
     },
     getProviderTaskOwner(identity: ClaudeProviderTaskIdentity): object | undefined {
       const entry = entries.get(keyOf(identity));
@@ -410,7 +411,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
       if (ownerScope === undefined && observationPhase === 'stopped') return false;
       if (ownerScope !== undefined) {
         const owner = ownerObservations.get(ownerScope);
-        if (!owner || owner.kind === 'source-baseline') return false;
+        if (!owner || (owner.kind !== 'query' && owner.kind !== 'terminal')) return false;
       }
       const previous = getSnapshot();
       const key = keyOf(activity);
@@ -492,12 +493,13 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     noteObservationLost(ownerScope?: object): void {
       // An ended whole provider cannot be made live or unknown by its delayed observer callbacks.
       if (ownerScope === undefined && observationPhase === 'stopped') return;
-      if (ownerScope !== undefined && !ownerObservations.has(ownerScope)) return;
+      const scopedOwner = ownerScope === undefined ? undefined : ownerObservations.get(ownerScope);
+      if (ownerScope !== undefined && (!scopedOwner || scopedOwner.kind === 'completed-query')) return;
       const previous = getSnapshot();
       if (ownerScope === undefined) observationPhase = 'lost';
       else {
         const owner = ownerObservations.get(ownerScope);
-        if (owner) owner.observed = false;
+        if (owner && owner.kind !== 'completed-query') owner.observed = false;
       }
       // Unresolved identities remain available for exact task operations. Only fresh native
       // evidence about an individual task can restore its current activity after observer loss.
