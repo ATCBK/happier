@@ -121,7 +121,7 @@ export function composeMachinePageHeaderFacts(input: Readonly<{
     const cliVersion = machine.daemonState?.cliVersion;
     if (cliVersion) facts.push({ key: 'cli', text: t('machineDetailPage.cliVersionFact', { version: cliVersion }) });
     if (input.replacedByMachineLabel) {
-        facts.push({ key: 'replaced', text: `${t('machineDetailPage.replacedByFact', { machine: input.replacedByMachineLabel })} ${t('machine.replacementRepair.undoConfirmBody')}` });
+        facts.push({ key: 'replaced', text: t('machineDetailPage.replacedByFact', { machine: input.replacedByMachineLabel }) });
     }
     return facts;
 }

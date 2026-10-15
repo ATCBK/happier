@@ -19,6 +19,8 @@ import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { CODEX_ACP_DEP_ID } from '@happier-dev/protocol/installables';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -26,7 +28,7 @@ import type { MachineUpdateMetadataRequest, MachineUpdateMetadataResponse } from
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineReplacementPickerModalProps } from '@/components/machines/MachineReplacementPickerModal';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
 
 const testGlobal = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -154,6 +156,19 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
     if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(createPlainProjectAccountRowListFixture());
     const artifactResponse = artifactStore.handle(path, init);
     if (artifactResponse) return artifactResponse;
+    if (path === '/v1/actions/approval.request.decide' && method === 'POST') {
+        // This is the Home/daemon transport boundary; keep the real approval
+        // claim, Artifact settlement and Machine effect beneath it.
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+        if (envelope.target?.kind !== 'machine' || envelope.target.machineId !== 'machine-1') throw new Error('Wrong approval Machine');
+        const decision = getActionSpec('approval.request.decide').inputSchema.parse(envelope.input);
+        if (typeof decision !== 'object' || decision === null || !('artifactId' in decision)
+            || typeof decision.artifactId !== 'string') throw new Error('Missing approval Artifact');
+        const execution = await replayApprovedAsDaemon({ serverId: machineState.serverId, machineId: 'machine-1',
+            artifactId: decision.artifactId, decision: 'approve' });
+        return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1,
+            actionId: 'approval.request.decide', requestId: envelope.requestId, execution }));
+    }
     if (path === '/v2/account/settings') {
         if (method === 'GET') return Response.json({ content: { t: 'plain', v: machineState.settings }, version: machineState.settingsVersion });
         if (machineState.settingsWriteFailure) return Response.json({ error: 'unavailable' }, { status: 503 });
@@ -349,27 +364,27 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         artifactStore.clear();
         machineState.capabilityInvocations = [];
         machineState.daemonStops = [];
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
         accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://machine-home.example.test', serverIdentityId: 'srv_machine_home',
+            credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
             accountId: 'account-a', request: serveMachineHome });
         machineState.serverId = accountConnection.home.id;
     });
 
     afterEach(async () => { await act(async () => { await accountConnection?.dispose(); }); accountConnection = undefined; });
 
-    it('stops the daemon from the Doctor page through the front-door Action and the machine\'s own RPC', async () => {
+    it('stops the daemon directly from the Doctor page through the front-door Action and the machine\'s own RPC', async () => {
         routeParams.page = 'doctor';
         const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineSubPageScreen));
         const stop = screen.findAll(node => node.props?.testID === 'machine-detail-stop-daemon-button' && typeof node.props?.onPress === 'function')[0];
         expect(stop).toBeTruthy();
         await act(async () => { await stop!.props.onPress(); });
-        const buttons = alertSpy.mock.calls.find(call => call[0] === 'machine.stopDaemonConfirmTitle')?.[2] as
-            | Array<{ onPress?: () => Promise<void> | void }> | undefined;
-        expect(Array.isArray(buttons)).toBe(true);
-        await act(async () => { await buttons![1]!.onPress?.(); });
         await vi.waitFor(() => expect(machineState.daemonStops).toEqual([expect.objectContaining({
             method: expect.stringMatching(new RegExp(`machine-1.*${RPC_METHODS.STOP_DAEMON}`)),
         })]));
+        expect(alertSpy.mock.calls.some(call => Array.isArray(call[2]))).toBe(false);
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect(alertSpy).toHaveBeenCalledWith('machine.daemonStoppedTitle', 'Daemon stopped');
     });
 
@@ -386,10 +401,9 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         }));
         const installRow = screen.findAll(node => node.props?.title === 'Install now' && typeof node.props?.onPress === 'function')[0];
         expect(installRow).toBeTruthy();
+        confirmSpy.mockResolvedValueOnce(true);
         await act(async () => { await installRow!.props.onPress(); });
-        const confirm = alertSpy.mock.calls.find(call => call[0] === 'Install dependency')?.[2];
-        expect(Array.isArray(confirm)).toBe(true);
-        await act(async () => { await confirm![1].onPress(); });
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
         expect(machineState.capabilityInvocations).toEqual([expect.objectContaining({
             method: expect.stringContaining(RPC_METHODS.CAPABILITIES_INVOKE),
             params: { id: CODEX_ACP_DEP_ID, method: 'install' },
@@ -808,24 +822,26 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect((await readVisibleMachine())?.replacedByMachineId ?? null).toBe(actionId.endsWith('clear') ? 'machine-2' : null);
     });
 
-    it.each(['machines.replacement.set', 'machines.replacement.clear', 'machines.remove'] as const)(
+    it.each(['machines.replacement.set', 'machines.replacement.clear', 'machines.remove', 'machines.daemon.stop'] as const)(
         'routes explicit Require Ask, rejection and approval for %s through the mounted continuation', async actionId => {
         machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] },
             actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } };
         if (actionId === 'machines.replacement.clear') machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: 'machine-2' };
-        routeParams.page = actionId === 'machines.remove' ? 'details' : undefined;
+        routeParams.page = actionId === 'machines.remove' ? 'details' : actionId === 'machines.daemon.stop' ? 'doctor' : undefined;
         const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
         const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderMachineSection(React.createElement(actionId === 'machines.remove' ? MachineSubPageScreen : MachinePageScreen));
+        const screen = await renderMachineSection(React.createElement(routeParams.page ? MachineSubPageScreen : MachinePageScreen));
         const invoke = () => {
             if (actionId === 'machines.remove') findRemoveMachineButton(screen).onPress();
+            else if (actionId === 'machines.daemon.stop') screen.findAll(node => node.props?.testID === 'machine-detail-stop-daemon-button'
+                && typeof node.props?.onPress === 'function')[0]!.props.onPress();
             else {
                 findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.onSelect();
                 if (actionId.endsWith('set')) readReplacementPickerProps()?.onSelectCandidate('machine-2', 'Replacement Machine');
             }
         };
-        const effects = () => machineState.requests.filter(request => request.method !== 'GET'
-            && (request.path.endsWith('/replacement') || request.path.endsWith('/revoke')));
+        const effects = () => [...machineState.daemonStops, ...machineState.requests.filter(request => request.method !== 'GET'
+            && (request.path.endsWith('/replacement') || request.path.endsWith('/revoke')))];
         await act(async () => invoke());
         await vi.waitFor(async () => {
             await act(async () => {});
@@ -842,28 +858,46 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         await vi.waitFor(() => expect(artifactStore.list()).toHaveLength(2));
         expect(effects()).toEqual([]);
         const approvedId = artifactStore.list()[1]!.id;
-        await expect(decideApprovalAsInbox(machineState.serverId, approvedId, 'approve')).resolves.toMatchObject({ ok: true });
+        const approved = await decideApprovalAsInbox(machineState.serverId, approvedId, 'approve');
+        expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true });
         await vi.waitFor(() => expect(effects()).toHaveLength(1));
         if (actionId === 'machines.remove') await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/settings/machines'));
-        else await vi.waitFor(async () => expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null));
+        else if (actionId !== 'machines.daemon.stop') await vi.waitFor(async () => expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null));
     });
 
-    it.each(['machines.replacement.set', 'machines.replacement.clear', 'machines.remove'] as const)(
-        'honors default Ask and reset for %s at the canonical confirmation owner', async actionId => {
+    it.each(['machines.replacement.set', 'machines.replacement.clear'] as const)(
+        'applies default and reset %s directly for the present user', async actionId => {
         if (actionId === 'machines.replacement.clear') machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: 'machine-2' };
-        routeParams.page = actionId === 'machines.remove' ? 'details' : undefined;
         const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
-        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderMachineSection(React.createElement(actionId === 'machines.remove' ? MachineSubPageScreen : MachinePageScreen));
+        const screen = await renderMachineSection(React.createElement(MachinePageScreen));
         const invoke = () => {
-            if (actionId === 'machines.remove') findRemoveMachineButton(screen).onPress();
-            else {
-                findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.onSelect();
-                if (actionId.endsWith('set')) readReplacementPickerProps()?.onSelectCandidate('machine-2', 'Replacement Machine');
-            }
+            findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.onSelect();
+            if (actionId.endsWith('set')) readReplacementPickerProps()?.onSelectCandidate('machine-2', 'Replacement Machine');
         };
-        const effects = () => machineState.requests.filter(request => request.method !== 'GET'
-            && (request.path.endsWith('/replacement') || request.path.endsWith('/revoke')));
+        const effects = () => machineState.requests.filter(request => request.method !== 'GET' && request.path.endsWith('/replacement'));
+        confirmSpy.mockResolvedValue(false);
+        await act(async () => invoke());
+        await vi.waitFor(() => expect(effects()).toHaveLength(1));
+        expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null);
+        machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: actionId.endsWith('set') ? null : 'machine-2' };
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } };
+        await publishMachineFixture();
+        machineState.settings.actionsSettingsV1 = { v: 1 };
+        await publishMachineFixture();
+        await act(async () => invoke());
+        await vi.waitFor(() => expect(effects()).toHaveLength(2));
+        expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null);
+        expect(confirmSpy).not.toHaveBeenCalled();
+        expect(artifactStore.list()).toEqual([]);
+    });
+
+    it('honors default Ask and reset for machines.remove at the canonical confirmation owner', async () => {
+        const actionId = 'machines.remove';
+        routeParams.page = 'details';
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const screen = await renderMachineSection(React.createElement(MachineSubPageScreen));
+        const invoke = () => findRemoveMachineButton(screen).onPress();
+        const effects = () => machineState.requests.filter(request => request.method === 'POST' && request.path.endsWith('/revoke'));
         confirmSpy.mockResolvedValueOnce(false);
         await act(async () => invoke());
         await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());

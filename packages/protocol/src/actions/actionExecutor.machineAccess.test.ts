@@ -102,7 +102,7 @@ describe('Machine access Action front door', () => {
     expect(getActionSpec(ActionIdSchema.parse('machines.access.leave')).inputSchema.safeParse({ ...target, principal }).success).toBe(false);
   });
 
-  it('requires the configured danger approval and honors the same explicit waiver', () => {
+  it('keeps exposure confirmation while reversible UI access removals apply directly, and honors explicit waivers', () => {
     const settings = ActionsSettingsV1Schema.parse({ v: 1 });
     const dangerActions = cases.filter(([id]) => id !== 'machines.access.grants.list').map(([id]) => id);
     const waived = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: Object.fromEntries(
@@ -110,7 +110,8 @@ describe('Machine access Action front door', () => {
     ) });
     for (const surface of ['ui', 'cli', 'agent', 'mcp', 'voice'] as const) {
       for (const id of dangerActions) {
-        expect(isApprovalRequiredByActionsSettings(id, settings, { surface, authority: 'present_user' })).toBe(true);
+        const direct = surface === 'ui' && (id === 'machines.access.grant.remove' || id === 'machines.access.leave');
+        expect(isApprovalRequiredByActionsSettings(id, settings, { surface, authority: 'present_user' })).toBe(!direct);
         expect(isApprovalRequiredByActionsSettings(id, waived, { surface, authority: 'present_user' })).toBe(false);
       }
     }

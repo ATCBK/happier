@@ -33,7 +33,7 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
     const machineId = machine.id;
     const machineServerId = props.serverId;
     const shouldContinue = useMountedShouldContinue();
-    const stopExecution = useMountedActionExecution(machineServerId);
+    const stopExecution = useMountedActionExecution(machineServerId, { openOnRequest: true });
     const [isStoppingDaemon, setIsStoppingDaemon] = React.useState(false);
     const presence = useMachinePresenceSummary(machineServerId, machineId);
 
@@ -47,8 +47,7 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
         const runStopDaemon = async () => {
             setIsStoppingDaemon(true);
             try {
-                const execution = await stopExecution.execute('machines.daemon.stop', { serverId: machineServerId, machineId },
-                    { presentUserConfirmation: { actionId: 'machines.daemon.stop' } });
+                const execution = await stopExecution.execute('machines.daemon.stop', { serverId: machineServerId, machineId });
                 if (!execution.ok) throw new Error(execution.error);
                 const result = MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS['machines.daemon.stop'].parse(execution.result);
                 Modal.alert(t('machine.daemonStoppedTitle'), result.message);
@@ -71,14 +70,7 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
             }
         };
 
-        Modal.alert(
-            t('machine.stopDaemonConfirmTitle'),
-            t('machine.stopDaemonConfirmBody'),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                { text: t('machine.stopDaemon'), style: 'destructive', onPress: async () => { await runStopDaemon(); } },
-            ],
-        );
+        await runStopDaemon();
     };
 
     return (

@@ -74,7 +74,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
       { path: 'level', title: 'Access', widget: 'select', required: true, options: [{ value: 'view', label: 'Can use' }, { value: 'admin', label: 'Can manage' }] }] },
   },
   {
-    id: 'machines.access.grant.remove', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Remove machine access',
+    id: 'machines.access.grant.remove', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Remove machine access',
     description: 'Remove or cancel this exact audience grant. Running and queued work loses access only when no independent grant remains.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_grant_remove', voiceClientToolName: 'removeMachineAccessGrant' },
@@ -83,7 +83,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: [...targetFields, { path: 'principal', title: 'Person, Team or group', widget: 'json', required: true }] },
   },
   {
-    id: 'machines.access.leave', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Leave a machine share',
+    id: 'machines.access.leave', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Leave a machine share',
     description: 'Remove your own direct Machine grant. Inherited Team or group access remains; this does not leave a Team.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_leave', voiceClientToolName: 'leaveMachineShare' },

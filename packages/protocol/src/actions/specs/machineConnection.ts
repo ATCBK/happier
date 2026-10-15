@@ -137,7 +137,7 @@ export const MACHINE_CONNECTION_ACTION_SPECS = [
     ] },
   },
   {
-    id: 'machines.daemon.stop', approval: {result: 'required'}, title: 'Stop machine daemon',
+    id: 'machines.daemon.stop', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Stop machine daemon',
     description: 'Stop the daemon on this machine through its existing stop RPC.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'machine', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: false },
@@ -175,7 +175,7 @@ export const MACHINE_CONNECTION_ACTION_SPECS = [
     ] },
   },
   {
-    id: 'machines.replacement.set', approval: {result: 'required'}, title: 'Replace a machine',
+    id: 'machines.replacement.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Replace a machine',
     description: 'Mark a machine as replaced by another machine through its existing Home enrollment owner.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: false },
@@ -191,7 +191,7 @@ export const MACHINE_CONNECTION_ACTION_SPECS = [
     ] },
   },
   {
-    id: 'machines.replacement.clear', approval: {result: 'required'}, title: 'Undo machine replacement',
+    id: 'machines.replacement.clear', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Undo machine replacement',
     description: 'Clear a machine replacement through the same Home enrollment owner.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: false },

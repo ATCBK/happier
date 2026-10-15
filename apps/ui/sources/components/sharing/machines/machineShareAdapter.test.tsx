@@ -38,13 +38,18 @@ const initial: MachineAccessGrantsListResponseV1 = {
 };
 
 describe('Machine sharing through the canonical controller and sheet', () => {
-    it.each(['machines.access.grant.remove', 'machines.access.leave'] as const)('honors the %s UI waiver without another local confirmation', async actionId => {
+    it.each([
+        ['machines.access.grant.remove', false], ['machines.access.grant.remove', true],
+        ['machines.access.leave', false], ['machines.access.leave', true],
+    ] as const)('applies %s directly with waiver=%s without another local confirmation', async (actionId, waived) => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         const leaving = actionId === 'machines.access.leave';
         let snapshot: MachineAccessGrantsListResponseV1 = leaving ? { ...initial, canManage: false, grants: [], ownDirectGrant: true,
             access: { ...initial.access, role: 'use' }, ownAccessSources: [{ principal: bob, displayName: 'Bob' }] } : initial;
         const accountId = leaving ? 'bob' : 'alice';
         const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-removal-waiver.test', accountId, settings: {
-            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: ['ui'] } },
+            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: waived ? { [actionId]: ['ui'] } : {} },
         } }], route: request => {
             if (request.path !== '/v1/machines/machine/access') return undefined;
             if (request.method === 'GET') return Response.json(snapshot);
@@ -70,6 +75,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-remove:account:bob');
             await vi.waitFor(() => expect(home.requests.filter(request => request.method === 'DELETE')).toHaveLength(1));
             expect(home.requests.find(request => request.method === 'DELETE')?.body).toEqual(leaving ? {} : { principal: bob });
+            expect(Modal.confirm).not.toHaveBeenCalled();
         } finally { await home.dispose(); }
     });
     it('retains dated census for transport loss, then clears it on denial and discards an older read', async () => {
