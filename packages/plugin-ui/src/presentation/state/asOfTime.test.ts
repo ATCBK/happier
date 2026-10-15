@@ -7,11 +7,11 @@ describe('resolveHappierFreshnessText: one text policy for host and plugin fresh
   const now = new Date(2026, 8, 29, 11, 0).getTime();
   const asOf = new Date(2026, 8, 29, 10, 42).getTime();
 
-  it('keeps a compact 24-hour clock even in locales that default to a day period', () => {
+  it('tells the time in the viewer\'s own locale clock, the way every other time on the page does', () => {
     const afternoon = new Date(2026, 8, 29, 15, 30).getTime();
-    expect(formatHappierAsOfTime(afternoon, now, 'en-US')).toBe('15:30');
-    expect(formatHappierAsOfTime(new Date(2026, 8, 29, 0, 5).getTime(), now, 'en-US')).toBe('00:05');
-    expect(formatHappierAsOfTime(afternoon, new Date(2026, 8, 30).getTime(), 'en-US')).toBe('Sep 29, 15:30');
+    expect(formatHappierAsOfTime(afternoon, now, 'en-US')).toBe('03:30 PM');
+    expect(formatHappierAsOfTime(afternoon, now, 'de')).toBe('15:30');
+    expect(formatHappierAsOfTime(afternoon, new Date(2026, 8, 30).getTime(), 'en-US')).toBe('Sep 29, 03:30 PM');
   });
 
   it('says when the retained content was read, then why it may be behind', () => {

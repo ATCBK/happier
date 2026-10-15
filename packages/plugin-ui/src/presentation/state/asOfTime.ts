@@ -1,6 +1,7 @@
 /**
  * When cached facts were read, as a person says it: the time for a read made today ("10:42"), the
- * day and time for an older one ("26 Sep, 18:44"). Never seconds or the year.
+ * day and time for an older one ("26 Sep, 18:44"), in the viewer's own locale clock like every other time
+ * on the page. Never seconds or the year.
  *
  * The one "as of" formatter: Happier core's freshness line and the public plugin `FreshnessLine`
  * both say it through here, so a stale pane reads the same whoever drew it.
@@ -9,7 +10,7 @@ export function formatHappierAsOfTime(at: number, now: number = Date.now(), loca
   const locales = locale === undefined ? [] : [locale];
   const read = new Date(at);
   const today = new Date(now);
-  const time = read.toLocaleTimeString(locales, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const time = read.toLocaleTimeString(locales, { hour: '2-digit', minute: '2-digit' });
   const sameDay = read.getFullYear() === today.getFullYear()
     && read.getMonth() === today.getMonth()
     && read.getDate() === today.getDate();
@@ -28,8 +29,10 @@ export function resolveHappierFreshnessText(input: Readonly<{
   reason: string;
   formatAsOf: (time: string) => string;
   now?: number;
+  /** The locale the host shows its other times in; the runtime's own when absent. */
+  locale?: string;
 }>): string {
   if (typeof input.asOf !== 'number') return input.reason;
-  const asOf = input.formatAsOf(formatHappierAsOfTime(input.asOf, input.now));
+  const asOf = input.formatAsOf(formatHappierAsOfTime(input.asOf, input.now, input.locale));
   return input.reason ? `${asOf} · ${input.reason}` : asOf;
 }

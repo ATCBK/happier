@@ -10,7 +10,7 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
 
 import type { SurfaceStateAction } from './SurfaceStateCard';
 
@@ -61,6 +61,7 @@ export function SurfaceFreshnessLine(props: Readonly<{
         asOf: props.asOf,
         reason: props.reason,
         formatAsOf: (time) => t('surfaceState.asOf', { time }),
+        locale: getPreferredLanguage(),
     });
     return (
         <HappierFreshnessLine
