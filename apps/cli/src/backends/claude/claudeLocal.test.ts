@@ -20,7 +20,6 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>)
 }
 
 it.each([
-    { title: 'Windows command shim', platform: 'win32', executable: 'C:\\tools\\claude.cmd', javascript: false },
     { title: 'JavaScript launcher without native import evidence', platform: 'linux', executable: '/tmp/claude.js', javascript: true },
 ] as const)('keeps a $title exit unqualified as provider stop', async ({ platform, executable, javascript }) => {
     mockResolveClaudeCliPath.mockReturnValue(executable);
@@ -102,6 +101,7 @@ describe('claudeLocal --continue handling', () => {
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
                 // Immediately call the 'exit' callback
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(0));
                 }
@@ -166,7 +166,8 @@ describe('claudeLocal --continue handling', () => {
             pid: 4242,
             killed: false,
             stdio: [null, null, null, fd3],
-            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+            on: vi.fn((event: string, callback: (value: unknown, signal?: NodeJS.Signals | null) => void) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitHandlers.push(callback);
                 }
@@ -238,7 +239,8 @@ describe('claudeLocal --continue handling', () => {
             pid: 4242,
             killed: false,
             stdio: [null, null, null, fd3],
-            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+            on: vi.fn((event: string, callback: (value: unknown, signal?: NodeJS.Signals | null) => void) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitHandlers.push(callback);
                 }
@@ -952,6 +954,7 @@ describe('claudeLocal --continue handling', () => {
         mockSpawn.mockReturnValueOnce({
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(143, null));
                 }
@@ -985,6 +988,7 @@ describe('claudeLocal --continue handling', () => {
             killed: false,
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(1, null));
                 }
@@ -1027,6 +1031,7 @@ describe('claudeLocal --continue handling', () => {
             killed: false,
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitCallback = callback;
                 }
@@ -1145,6 +1150,7 @@ describe('claudeLocal launcher selection', () => {
         mockSpawn.mockReturnValue({
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(0));
                 }

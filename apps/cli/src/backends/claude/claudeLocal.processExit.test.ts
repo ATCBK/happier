@@ -32,3 +32,30 @@ it.each([
         rmSync(directory, { recursive: true, force: true });
     }
 });
+
+it('reports an actual command-wrapper exit without claiming native provider stop', async () => {
+    if (process.platform === 'win32') return; // POSIX OS executable models the Windows shell boundary.
+    vi.resetModules();
+    const directory = mkdtempSync(join(tmpdir(), 'happier-claude-local-wrapper-'));
+    const executable = join(directory, 'claude.cmd');
+    const shell = join(directory, 'cmd.exe');
+    const env = createEnvKeyScope(['HAPPIER_CLAUDE_PATH', 'CLAUDE_CONFIG_DIR', 'COMSPEC']);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const stdinWasPaused = process.stdin.isPaused();
+    writeFileSync(executable, '@echo off\r\n');
+    writeFileSync(shell, `#!${process.execPath}\nprocess.exit(0);\n`, { mode: 0o700 });
+    env.patch({ HAPPIER_CLAUDE_PATH: executable, CLAUDE_CONFIG_DIR: join(directory, 'config'), COMSPEC: shell });
+    const exits: Array<Readonly<{ providerStopped: boolean }>> = [];
+    try {
+        const { claudeLocal } = await import('./claudeLocal');
+        Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+        await claudeLocal({ abort: new AbortController().signal, sessionId: null, path: directory,
+            onSessionFound: () => {}, onProcessExit: result => { exits.push(result); } });
+        expect(exits).toEqual([{ providerStopped: false }]);
+    } finally {
+        Object.defineProperty(process, 'platform', platform);
+        env.restore();
+        if (stdinWasPaused) process.stdin.pause();
+        rmSync(directory, { recursive: true, force: true });
+    }
+});

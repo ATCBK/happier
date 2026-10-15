@@ -244,6 +244,31 @@ describe('claudeLocalLauncher', () => {
     }
   });
 
+  it.each(['normal', 'retry', 'switch'] as const)('does not replace an unverified local invocation (%s)', async mode => {
+    const { session, sendSessionEvent, abortHandlerReady } = createLocalHarness();
+    const started = createDeferred<void>();
+    session.sessionId = 'retained-native-session';
+    session.transcriptPath = '/tmp/retained-native-session.jsonl';
+    mockClaudeLocal.mockImplementationOnce(async opts => {
+      started.resolve(undefined);
+      if (mode === 'switch') await waitForAbort(opts.abort);
+      opts.onProcessExit?.({ providerStopped: false });
+      if (mode === 'retry') throw new Error('Local wrapper observation failed');
+    });
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launch = claudeLocalLauncher(session);
+    await started.promise;
+    if (mode === 'switch') await (await abortHandlerReady)();
+    await expect(launch).resolves.toEqual({ type: 'exit', code: mode === 'normal' ? 0 : 1 });
+    expect(mockClaudeLocal).toHaveBeenCalledOnce();
+    if (mode !== 'normal') {
+      expect(session.sessionId).toBe('retained-native-session');
+      expect(session.transcriptPath).toBe('/tmp/retained-native-session.jsonl');
+      expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'message',
+        message: expect.stringContaining('termination') }));
+    }
+  });
+
   it('projects authenticated local hooks through the real source without injecting visible messages', async () => {
     const { session, client } = createLocalHarness();
     session.onSessionFound('claude-session-1');

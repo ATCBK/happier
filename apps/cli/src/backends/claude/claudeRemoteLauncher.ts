@@ -60,7 +60,7 @@ import {
 } from '@/agent/runtime/session/pendingDelivery/undeliverableProviderPrompt';
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
-import { AbortError, ClaudeNativeProviderExitUnverifiedError, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
+import { AbortError, hasUnverifiedProviderTermination, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
 import { formatClaudeMessageForInk } from "@/ui/messageFormatterInk";
 import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
@@ -354,14 +354,6 @@ export { createClaudeReadyHandler as createClaudeRemoteReadyHandler };
 
 const MAX_CONSECUTIVE_REMOTE_UNIFIED_PARK_RELAUNCHES = 3;
 type ClaudeUnifiedTerminalRuntimeIssueSurfaceResult = ClaudeUnifiedTerminalRuntimeIssueHandlingResult;
-
-function hasUnverifiedProviderTermination(error: unknown): boolean {
-    if (error instanceof ClaudeNativeProviderExitUnverifiedError) return true;
-    if (error && typeof error === 'object' && 'code' in error
-        && error.code === 'process_tree_termination_incomplete') return true;
-    return error instanceof AggregateError
-        && error.errors.some(hasUnverifiedProviderTermination);
-}
 
 export function resolveClaudeRemoteLaunchErrorDisposition(params: Readonly<{
     exitReason: 'switch' | 'exit' | null;
