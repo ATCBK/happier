@@ -311,10 +311,11 @@ function MountedSessionViewerHost(
     [apply, requestSemantic],
   );
 
-  // Back on a phone or Android leaves the deliberate expanded overlay for where the viewer was.
+  // Android's hardware Back leaves the deliberate expanded overlay for where the viewer was.
+  // Only Android has that event; React Native Web reports BackHandler as unsupported.
   const expanded = mode === 'expanded';
   React.useEffect(() => {
-    if (!expanded) return undefined;
+    if (Platform.OS !== 'android' || !expanded) return undefined;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       void requestSemantic({ kind: 'viewer.restore' });
       return true;

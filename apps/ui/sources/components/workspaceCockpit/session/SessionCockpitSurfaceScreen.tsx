@@ -249,7 +249,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         setFocusedBoardItemId?.(itemId);
     }, [setFocusedBoardItemId]);
     React.useEffect(() => {
-        if (props.surface !== 'board' || !focusedBoardItemId) return;
+        if (Platform.OS !== 'android' || props.surface !== 'board' || !focusedBoardItemId) return;
         const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
             setFocusedBoardItemId?.(null);
             return true;

@@ -24,6 +24,7 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import type { BrowserCopresence } from '@/sync/domains/browser/automation/copresence';
 import type { LiveStreamInputGesture } from '@/sync/domains/machines/peer/mediation/stream/inputGesture';
 import { t } from '@/text';
@@ -221,6 +222,9 @@ function ViewerStreamInput(props: Readonly<{
  */
 export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.ReactElement {
     const { theme } = useUnistyles();
+    // The Details pane sits under the phone cockpit's floating tab bar, so its stage (and the presence
+    // capsule on it) ends above that bar like every other cockpit pane; the floating frame needs none.
+    const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const testID = props.testID ?? 'computer-screen-viewer';
     const playerState = props.stream?.playerState ?? null;
     const surfaceState = props.shared ? resolveBrowserStreamedSurfaceState(playerState) : 'unavailable';
@@ -383,7 +387,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     );
 
     return (
-        <View style={stylesheet.root} testID={testID}>
+        <View style={[stylesheet.root, props.chrome === 'none' ? null : { paddingBottom: bottomChromeHeight }]} testID={testID}>
             {props.chrome === 'none' ? null : <View style={stylesheet.bar}>
                 <Icon
                     name={props.targetKind === 'display' ? 'desktop' : 'browsers'}

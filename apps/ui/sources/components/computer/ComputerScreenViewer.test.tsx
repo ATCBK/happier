@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { StyleSheet } from 'react-native';
 
 import { renderScreen } from '@/dev/testkit';
+import { SessionCockpitBottomChromeHeightContext } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
 import {
   ComputerScreenViewer,
@@ -72,7 +74,7 @@ describe('ComputerScreenViewer', () => {
     const onCheckAgain = vi.fn();
     const screen = await renderScreen(<ComputerScreenViewer {...props({
       onCheckAgain,
-      presence: { kind: 'human', controlEpoch: 1 },
+      presence: { kind: 'human', controlEpoch: 1, interruptedCompletion: null },
       stream: { machineName: 'mac-vm-1', input: { sourceId: 'computer-window-a', streamId: 'stream-a', send: vi.fn() }, playerState: {
         phase: 'playing', selectedCodec: 'image.mjpeg', activeRenderer: 'mjpeg',
         lastFrameUrl: 'data:image/jpeg;base64,AQID', decodedFrames: 1, droppedFrames: 0, bufferedBytes: 0,
@@ -178,5 +180,18 @@ describe('ComputerScreenViewer', () => {
     expect(framed.findByTestId('v-more')).toBeNull();
     const pane = await renderScreen(<ComputerScreenViewer {...props()} />);
     expect(pane.findByTestId('v-title')).toBeTruthy();
+  });
+
+  it('keeps its presence capsule above the phone cockpit tab bar, and leaves the floating frame to itself', async () => {
+    const reservedBy = async (chrome: 'bar' | 'none') => {
+      const screen = await renderScreen(
+        <SessionCockpitBottomChromeHeightContext.Provider value={84}>
+          <ComputerScreenViewer {...props({ chrome })} />
+        </SessionCockpitBottomChromeHeightContext.Provider>,
+      );
+      return StyleSheet.flatten(screen.findByTestId('v')!.props.style)?.paddingBottom ?? 0;
+    };
+    expect(await reservedBy('bar')).toBe(84);
+    expect(await reservedBy('none')).toBe(0);
   });
 });

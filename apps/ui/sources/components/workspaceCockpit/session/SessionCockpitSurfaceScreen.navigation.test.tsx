@@ -20,6 +20,8 @@ const cockpitNavigatorState = vi.hoisted(() => ({
     activeSurface: 'chat',
     goBack: null as null | (() => void),
     hardwareBackHandlers: [] as Array<() => boolean>,
+    /** Hardware Back exists only on Android; React Native Web reports BackHandler as unsupported. */
+    platformOS: 'web' as 'web' | 'android',
 }));
 
 vi.mock('react-native-mmkv', () => {
@@ -63,6 +65,7 @@ const cockpitDeviceType = vi.hoisted(() => ({ value: 'phone' as 'phone' | 'table
 vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
+            Platform: { get OS() { return cockpitNavigatorState.platformOS; } },
             // Boundary stub for the RN list host: `any` mirrors the untyped mock-module shape.
             FlatList: ({ data, renderItem, keyExtractor, ...rest }: any) => React.createElement(
                 'FlatList',
@@ -525,6 +528,7 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         cockpitNavigatorState.activeSurface = 'chat';
         cockpitNavigatorState.goBack = null;
         cockpitNavigatorState.hardwareBackHandlers = [];
+        cockpitNavigatorState.platformOS = 'web';
         const { transcriptNavigationPaneStore } = await import('@/components/sessions/transcript/navigation/transcriptNavigationPaneStore');
         transcriptNavigationPaneStore.set('session-1', null);
     });
@@ -779,6 +783,7 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
     });
 
     it('shares focused-item continuity across the production multi-scene navigator and clears it before Board Back', async () => {
+        cockpitNavigatorState.platformOS = 'android';
         const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
         const { tryWriteServerEnabledBitInPlace } = await import('@happier-dev/protocol');
