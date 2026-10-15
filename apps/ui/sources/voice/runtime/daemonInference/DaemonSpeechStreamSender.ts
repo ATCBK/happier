@@ -172,7 +172,8 @@ export class DaemonSpeechStreamSender {
     // spending another slot on each 20ms capture frame. Never mutate sent PCM.
     const tail = [...this.pendingChunks.values()].at(-1);
     const packetBudget = Math.min(this.transport.maxPcm16ChunkBytes ?? 0, this.maxInFlightBytes);
-    if (tail && tail.scheduledGeneration === null && !tail.acknowledged
+    if (tail && pcm16Bytes.byteLength > 0 && tail.pcm16Bytes.byteLength > 0
+      && tail.scheduledGeneration === null && !tail.acknowledged
       && tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength <= packetBudget) {
       const combined = new Uint8Array(tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength);
       combined.set(tail.pcm16Bytes);

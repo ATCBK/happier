@@ -312,20 +312,27 @@ async function runTenMinuteImpairmentProfile(profile: ImpairmentProfile): Promis
 }
 
 describe('DaemonSpeechStreamSender', () => {
-  it('retains byte pressure and rejects every coalesced capture callback on cancellation', async () => {
+  it.each([0, 640])('retains admission bounds and rejects every %i-byte capture callback on cancellation', async chunkBytes => {
     const response = deferred<import('@happier-dev/protocol').DaemonVoiceInferenceSttStreamChunkResponse>();
-    const sender = createDaemonSpeechStreamSender({ requestId: 'coalesced-cancel', maxInFlightChunks: 1, maxBufferedBytes: 2560,
+    const sender = createDaemonSpeechStreamSender({ requestId: 'coalesced-cancel', maxInFlightChunks: 1, maxBufferedChunks: 4, maxBufferedBytes: 2560,
       transport: { maxPcm16ChunkBytes: 1280,
         start: async () => startResponse({ streamId: 'stream', generation: 0 }), chunk: () => response.promise,
         finish: vi.fn(), cancel: async () => ({ ok: true, streamId: 'stream', generation: 0 }),
       },
     });
     await sender.start();
-    const settled = Promise.allSettled(Array.from({ length: 4 }, () => sender.pushChunk(new Uint8Array(640))));
-    await expect(sender.pushChunk(new Uint8Array(640))).rejects.toMatchObject({ code: 'daemon_speech_stream_backpressure' });
-    await sender.cancel();
+    const settled = Promise.allSettled(Array.from({ length: 4 }, () => sender.pushChunk(new Uint8Array(chunkBytes))));
+    let pressure: unknown;
+    const extra = sender.pushChunk(new Uint8Array(chunkBytes)).catch(error => { pressure = error; });
+    try {
+      await Promise.resolve();
+      expect(pressure).toMatchObject({ code: 'daemon_speech_stream_backpressure' });
+    } finally {
+      await sender.cancel();
+      await extra;
+      response.resolve({ ok: true, streamId: 'stream', generation: 0, ackSeq: 0, events: [] });
+    }
     expect(await settled).toEqual(Array.from({ length: 4 }, () => ({ status: 'rejected', reason: expect.objectContaining({ code: 'daemon_speech_stream_closed' }) })));
-    response.resolve({ ok: true, streamId: 'stream', generation: 0, ackSeq: 0, events: [] });
     await sender.waitForDrain();
   });
 
