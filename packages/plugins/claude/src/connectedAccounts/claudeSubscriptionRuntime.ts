@@ -642,15 +642,22 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     }
     const files: Record<string, Uint8Array> = {};
     if (!request.fileIds.includes(CLAUDE_CREDENTIAL_FILE_ID)) return { kind: 'files', files };
-    const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
+    // These fields belong to the same admitted credential revision. Each read
+    // keeps the host's currentness checks; none depends on another field.
+    const [accessToken, expiresAtValue, planMetadata, scopes] = await Promise.all([
+      readCredential(context.credentials, ACCESS_TOKEN_KEY, options),
+      readCredential(context.credentials, EXPIRES_AT_MS_KEY, options),
+      readPlanMetadata(context.credentials, options),
+      readScopes(context.credentials, options),
+    ]);
     if (!accessToken) throw new Error('Claude OAuth credentials are unavailable');
-    const expiresAt = Number(await readCredential(context.credentials, EXPIRES_AT_MS_KEY, options));
+    const expiresAt = Number(expiresAtValue);
     const payload = {
       claudeAiOauth: {
         accessToken,
-        ...await readPlanMetadata(context.credentials, options),
+        ...planMetadata,
         ...(Number.isFinite(expiresAt) && expiresAt > 0 ? { expiresAt } : {}),
-        scopes: await readScopes(context.credentials, options),
+        scopes,
       },
     };
     files[CLAUDE_CREDENTIAL_FILE_ID] = new TextEncoder().encode(JSON.stringify(payload));

@@ -74,6 +74,56 @@ function readContext(
 }
 
 describe('Claude Subscription Connected Account', () => {
+  it.each(['oauth', 'native-import'] as const)('materializes %s files within one round of independent credential reads', async mode => {
+    const values = new Map([
+      ['accessToken', 'claude-access'], ['expiresAtMs', '2000000000000'],
+      ['scopes', JSON.stringify(['user:inference'])], ['subscriptionType', 'pro'], ['rateLimitTier', 'default'],
+    ]);
+    const context = readContext(mode, values);
+    vi.useFakeTimers();
+    const materialization = activateConnectedAccountRuntime().materialize({ kind: 'files', fileIds: ['.credentials.json'] }, {
+      ...context,
+      // The remote credential boundary has equal independent round-trip latency.
+      credentials: { async get(key, options) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        options?.signal?.throwIfAborted();
+        return values.get(key) ?? null;
+      } },
+    }, { signal: context.signal });
+    try {
+      await vi.advanceTimersByTimeAsync(50);
+      const ready = await Promise.race([materialization, Promise.resolve(null)]);
+      expect(ready).toEqual({ kind: 'files', files: { '.credentials.json': expect.any(Uint8Array) } });
+      if (ready?.kind !== 'files') throw new Error('Expected credential files');
+      expect(JSON.parse(new TextDecoder().decode(ready.files['.credentials.json']))).toEqual({ claudeAiOauth: {
+        accessToken: 'claude-access', expiresAt: 2000000000000, scopes: ['user:inference'], subscriptionType: 'pro', rateLimitTier: 'default',
+      } });
+    } finally {
+      await vi.runAllTimersAsync();
+      await materialization;
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses missing or cancelled OAuth credentials without returning a native file', async () => {
+    const runtime = activateConnectedAccountRuntime();
+    const request = { kind: 'files' as const, fileIds: ['.credentials.json'] };
+    const context = readContext('oauth', new Map());
+    await expect(runtime.materialize(request, context, { signal: context.signal }))
+      .rejects.toThrow('Claude OAuth credentials are unavailable');
+    const controller = new AbortController();
+    const reason = new Error('Credential admission retired');
+    const cancelled = runtime.materialize(request, { ...context, signal: controller.signal,
+      credentials: { async get(_key, options) {
+        await Promise.resolve();
+        options?.signal?.throwIfAborted();
+        return 'never-published';
+      } },
+    }, { signal: controller.signal });
+    controller.abort(reason);
+    await expect(cancelled).rejects.toBe(reason);
+  });
+
   it.each([
     { status: 401, headers: {}, code: 'auth_failure', retryAfterMs: null, resetAtMs: null },
     { status: 403, headers: {}, code: 'auth_failure', retryAfterMs: null, resetAtMs: null },
