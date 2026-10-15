@@ -223,6 +223,26 @@ describe('shared flat reorder UI binding', () => {
         } finally { unsubscribe(); acknowledgement.resolve(); await move; }
     });
 
+    it('draws the staged-move dock for a keyboard carry only, never over the rows after a chooser commit', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise, true);
+        const screen = await mount(f);
+        try {
+            await key(screen, 'a', ' ');
+            expect(runtime.getSnapshot().phase).toBe('carrying');
+            expect(screen.findByTestId('list.staged')).not.toBeNull();
+            const sourceId = runtime.getSnapshot().sourceId!;
+            await act(async () => { runtime.cancel(); });
+            const destination = runtime.getDestinations(sourceId).find(entry =>
+                AnchoredListPositionV1Schema.safeParse(entry.destination).data?.anchorId === 'c'
+                && AnchoredListPositionV1Schema.safeParse(entry.destination).data?.placement === 'before')!;
+            await act(async () => { void runtime.perform(sourceId, destination.targetId, destination.destination, 'chooser'); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            // The row itself waits half-dimmed at its landing slot; a key-hint card there would sit over its neighbours.
+            expect(screen.findByTestId('list.staged')).toBeNull();
+        } finally { acknowledgement.resolve(); }
+    });
+
     it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {
         const f = fixture();
         const screen = await mount(f);

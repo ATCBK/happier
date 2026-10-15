@@ -451,7 +451,11 @@ function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targ
     return edge ? <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, ...(edge === 'before' ? { top: 0 } : { bottom: 0 }) }}><TreeDropIndicatorLine visual={{ kind: 'line', targetId: props.targetId, depth: 0, edge: edge === 'before' ? 'top' : 'bottom' }} indentPx={0} /></View> : null;
 }
 
-/** The staged keyboard preview, docked over the list's foot so the list never grows when a move starts. */
+/**
+ * The staged keyboard preview, docked over the list's foot so the list never grows when a move starts. It
+ * belongs to the carry: once the move is released (a chooser commit or a keyboard drop) the row itself waits
+ * half-dimmed at its landing slot and the live region says so, so no key-hint card is drawn over its neighbours.
+ */
 function FlatFeedback(props: Readonly<{ context: FlatContext; testID: string }>) {
     const snapshot = useEntityDragDropSnapshot(props.context.runtime);
     const hints = useEntityStagedMoveHints();
@@ -460,7 +464,7 @@ function FlatFeedback(props: Readonly<{ context: FlatContext; testID: string }>)
     const outcome = useEntityDropOutcome(staged ? snapshot : null);
     const keyboard = props.context.runtime.getPointer() === null;
     return <>
-        {outcome && keyboard ? <View pointerEvents="none" style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT}>
+        {outcome && keyboard && snapshot.phase === 'carrying' ? <View pointerEvents="none" style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT}>
             <EntityStagedMoveDock testID={`${props.testID}.staged`} outcome={outcome} hints={hints} />
         </View> : null}
         <PoliteAccessibilityStatus statusTestID={`${props.testID}.status`} transitionKey={JSON.stringify([snapshot.phase, snapshot.targetId, outcome])} announcement={describeHappierDropAnnouncement(outcome)} />
