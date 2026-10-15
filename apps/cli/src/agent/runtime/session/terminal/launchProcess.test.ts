@@ -97,14 +97,11 @@ describe('createTerminalRuntimeProcessService', () => {
                 await expect(handle.stop()).rejects.toBe(failure);
             } else {
                 child.emit('error', new Error('post-spawn observation failed'));
-                await expect(handle.waitForTermination()).resolves.toMatchObject({ type: 'spawn_error' });
             }
             expect(alive).toBe(true);
             controller.abort();
             await vi.waitFor(() => expect(alive).toBe(false));
-            if (boundary === 'failed_stop') {
-                await expect(handle.waitForTermination()).resolves.toEqual({ type: 'signaled', signal: 'SIGTERM' });
-            }
+            await expect(handle.waitForTermination()).resolves.toEqual({ type: 'signaled', signal: 'SIGTERM' });
         } finally { child.emit('exit', 0, null); }
     });
 
