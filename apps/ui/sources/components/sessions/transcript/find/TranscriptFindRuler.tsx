@@ -3,7 +3,7 @@ import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import type { TranscriptFindModel } from './useTranscriptFind';
-import { resolveTranscriptFindRulerTicks } from './transcriptFindRulerTicks';
+import { resolveTranscriptFindRulerTicks, type TranscriptFindRulerTick } from './transcriptFindRulerTicks';
 
 export type TranscriptFindMessageLayout = (messageId: string) => Readonly<{ y: number; height: number }> | null;
 
@@ -22,10 +22,14 @@ export const TranscriptFindRuler = React.memo(function TranscriptFindRuler(props
     const overview = React.useSyncExternalStore(props.model.subscribe, props.model.getOverview, props.model.getOverview);
     const [trackHeight, setTrackHeight] = React.useState(0);
     const onLayout = React.useCallback((event: LayoutChangeEvent) => setTrackHeight(event.nativeEvent.layout.height), []);
-    const ticks = React.useMemo(() => resolveTranscriptFindRulerTicks({
-        messageIds: overview.messageIds, currentMessageId: overview.currentMessageId,
-        contentHeight: props.contentHeight, trackHeight, measure: props.measureMessage,
-    }), [overview, props.contentHeight, trackHeight, props.measureMessage]);
+    const [ticks, setTicks] = React.useState<readonly TranscriptFindRulerTick[]>([]);
+    React.useLayoutEffect(() => {
+        // Native list geometry reads may publish layout updates; read after commit, before paint.
+        setTicks(resolveTranscriptFindRulerTicks({
+            messageIds: overview.messageIds, currentMessageId: overview.currentMessageId,
+            contentHeight: props.contentHeight, trackHeight, measure: props.measureMessage,
+        }));
+    }, [overview, props.contentHeight, trackHeight, props.measureMessage]);
     return <View testID="transcript-find-ruler" pointerEvents="none" aria-hidden style={styles.ruler} onLayout={onLayout}>
         {props.olderRemaining ? <View testID="transcript-find-ruler-older" style={styles.older}>
             <View style={styles.dot} /><View style={styles.dot} />

@@ -83,8 +83,9 @@ describe('transcript Find surface registration', () => {
             { op: 'set', target: 'transcript:home:session', query: 'hidden query' },
             { op: 'step', target: 'transcript:home:session', direction: -1 },
         ];
+        let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         try {
-            const screen = await renderScreen(render(true));
+            screen = await renderScreen(render(true));
             await screen.update(render(false));
             for (const operation of hiddenOperations) {
                 await expect(execute(operation)).resolves.toEqual(unavailable);
@@ -126,6 +127,7 @@ describe('transcript Find surface registration', () => {
             expect(loadOlder).toHaveBeenCalled();
             expect(jump).toHaveBeenCalledWith(expect.objectContaining({ routeMessageId: 'older' }), expect.anything());
         } finally {
+            await screen?.unmount();
             release();
             model.dispose();
         }
