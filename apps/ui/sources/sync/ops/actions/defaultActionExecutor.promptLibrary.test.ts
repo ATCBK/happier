@@ -1366,6 +1366,32 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         });
     });
 
+    it('opens a managed Browser on the captured Machine before any Browser surface mounts', async () => {
+        await admitBrowserAutomation();
+        const { BrowserCommandDispatchResultV1Schema } = await import('@happier-dev/protocol/browser/control/v1');
+        const input = { kind: 'openView' as const, commandId: 'managed-cold-open', browserSessionId: 'session_1',
+            viewId: 'managed-view', target: { kind: 'externalUrl' as const, targetId: 'owned-page',
+                url: 'http://127.0.0.1:35967/' }, platform: 'web' as const, focus: true };
+        const output = BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: input.commandId,
+            status: 'dispatched', adapterKind: 'chromiumSidecar', events: [] });
+        const machineRow = { ...createPlainMachineRowFixture({ id: 'browser-machine', accountId: 'account-a' }), runnerContentKeyBinding: null };
+        homes.answer(serverId, '/v1/machines', { body: [machineRow] });
+        homes.answer(serverId, '/v1/machines/browser-machine', { body: { machine: machineRow } });
+        homes.answer(serverId, 'POST /v1/actions/browser.view.open', { select: request => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request);
+            expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: 'browser-machine' }, input });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'browser.view.open',
+                requestId: envelope.requestId, execution: { ok: true, result: output } }) };
+        } });
+        const executor = createDefaultActionExecutor();
+        expect(await executor.execute('browser.view.open', input, { surface: 'ui', authority: 'present_user',
+            actionCaller: { kind: 'host' }, presentUserConfirmation: { actionId: 'browser.view.open' },
+            serverId, expectedAccountId: 'account-a', defaultSessionId: 'session_1',
+            externalActionTarget: { kind: 'machine', machineId: 'browser-machine' },
+        })).toEqual({ ok: true, result: output });
+        expect(homes.requestsFor('/v1/actions/browser.view.open')).toHaveLength(1);
+    });
+
     it('dispatches a daemon Browser observation to the captured Account and exact mounted Machine', async () => {
         await admitBrowserAutomation();
         const { applyBrowserControlEvent, createBrowserControlState } = await import('@/sync/domains/browser/control');
