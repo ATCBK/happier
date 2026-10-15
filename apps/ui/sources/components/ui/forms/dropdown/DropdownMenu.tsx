@@ -476,7 +476,15 @@ export function DropdownMenu(props: DropdownMenuProps) {
     }, [closeMenu, fieldColors, openMenu, pageSelectedItem, pageTrigger, props.itemTrigger, props.open, props.trigger, resolvedTriggerDensity, selectedItemForTrigger, theme.colors.input.placeholder, theme.colors.text.secondary, theme.colors.text.tertiary, toggle]);
 
     const resultsRef = React.useRef<SelectableMenuResultsHandle>(null);
-    const focusKeyboardSelection = React.useCallback((index: number) => resultsRef.current?.focusItem(index), []);
+    // The highlighted row scrolls into view only once the user moves it (or when it is the menu's current choice):
+    // a menu that opens on its first row stays at its top, so its first heading is never scrolled under the fade.
+    const [highlightMoved, setHighlightMoved] = React.useState(false);
+    React.useEffect(() => { if (!props.open) setHighlightMoved(false); }, [props.open]);
+    const searchable = props.search === true;
+    const followKeyboardSelection = React.useCallback((index: number) => {
+        setHighlightMoved(true);
+        if (!searchable) resultsRef.current?.focusItem(index);
+    }, [searchable]);
     const {
         searchQuery,
         selectedIndex,
@@ -493,7 +501,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
         onCreateItem: props.onCreateItem ?? null,
         allowEmptySelection: props.allowEmptySelection ?? false,
         enableTypeahead: props.search !== true,
-        onKeyboardSelectionChange: props.search === true ? undefined : focusKeyboardSelection,
+        onKeyboardSelectionChange: followKeyboardSelection,
         createItemFactory: createItemDisplay
             ? ((query) => {
                 const display = createItemDisplay(query);
@@ -515,8 +523,9 @@ export function DropdownMenu(props: DropdownMenuProps) {
             : null,
     });
 
+    const highlightedId = filteredCategories.flatMap((category) => category.items)[selectedIndex]?.id ?? null;
     const resultScroll = useScrollRectIntoViewRegistry({
-        activeKey: filteredCategories.flatMap((category) => category.items)[selectedIndex]?.id ?? null,
+        activeKey: highlightMoved || (highlightedId !== null && highlightedId === props.selectedId) ? highlightedId : null,
         padding: theme.space.s8,
         animated: !reducedMotion,
     });
