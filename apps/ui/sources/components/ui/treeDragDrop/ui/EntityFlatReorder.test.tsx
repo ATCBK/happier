@@ -458,6 +458,19 @@ describe('shared flat reorder UI binding', () => {
         expect(f.model.writes).toEqual([{ scope, sourceId: 'a', position: { anchorId: 'b', placement: 'after' } }]);
     });
 
+    it('draws the same insertion line for a keyboard carry at the staged place that a drag draws', async () => {
+        const f = fixture();
+        const screen = await mount(f);
+        await key(screen, 'a', ' ');
+        expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
+        await key(screen, 'a', 'ArrowDown');
+        const lines = screen.root.findAllByType(TreeDropIndicatorLine);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]!.props.visual).toMatchObject({ edge: 'bottom' });
+        await key(screen, 'a', 'Escape');
+        expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
+    });
+
     it('uses current chooser destinations and performs the same semantic effect', async () => {
         vi.useFakeTimers();
         const f = fixture();

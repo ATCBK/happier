@@ -79,3 +79,17 @@ export function homeHubSectionTitle(section: HomeHubSection<WidgetCandidate>): s
     if (section.kind === 'group') return readWidgetGroupTitle(section.group) ?? section.children.map(homeHubSectionTitle).join(' · ');
     return findHomeHubBuiltinSection(section.id)?.title() ?? section.id;
 }
+
+/** What a widget or group is called on Home, for group names and menus. */
+export function homeChildTitle(sections: readonly HomeHubSection<WidgetCandidate>[]) {
+    return (instanceId: string): string => {
+        for (const section of sections) {
+            if (section.kind === 'widget' && section.id === instanceId) return homeHubSectionTitle(section);
+            if (section.kind === 'group') {
+                const child = section.children.find(entry => entry.id === instanceId);
+                if (child) return homeHubSectionTitle(child);
+            }
+        }
+        return instanceId;
+    };
+}

@@ -13,7 +13,8 @@ import { t } from '@/text';
 /**
  * The bar that says Home is being customized (lab `widget-groups` wgmenu E): what state the page is
  * in and what dragging does, then the three things that are not on a card — the section list, Add
- * widget and the one primary action, Done. On a phone the hint leaves and the actions wrap beneath.
+ * widget and the one primary action, Done. On a phone the hint leaves: the title and Done share one
+ * line, and Look, Sections and Add widget take the full line beneath.
  */
 export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
   props: Readonly<{
@@ -34,6 +35,14 @@ export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
   }>,
 ) {
   const { theme } = useUnistyles();
+  const done = (
+    <RoundButton
+      testID="home-hub.customizing.done"
+      size="small"
+      title={t('common.done')}
+      onPress={props.onDone}
+    />
+  );
   return (
     <View ref={props.barRef} collapsable={false} testID="home-hub.customizing" style={styles.bar}>
       <View style={styles.words}>
@@ -51,7 +60,8 @@ export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
           </Text>
         )}
       </View>
-      <View style={styles.actions}>
+      {props.phone ? done : null}
+      <View style={[styles.actions, props.phone ? styles.actionsPhone : null]}>
         {props.onToggleLook ? (
           <View ref={props.lookAnchorRef} collapsable={false}>
             <SectionActionButton
@@ -89,12 +99,7 @@ export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
             onPress={props.onToggleAdd}
           />
         </View>
-        <RoundButton
-          testID="home-hub.customizing.done"
-          size="small"
-          title={t('common.done')}
-          onPress={props.onDone}
-        />
+        {props.phone ? null : done}
       </View>
     </View>
   );
@@ -140,6 +145,11 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
     flexShrink: 1,
     minWidth: 0,
+  },
+  // A phone: the title and Done share the first line; Look, Sections and Add widget take the whole line beneath.
+  actionsPhone: {
+    flexBasis: '100%',
+    justifyContent: 'space-between',
   },
   actions: {
     flexDirection: 'row',

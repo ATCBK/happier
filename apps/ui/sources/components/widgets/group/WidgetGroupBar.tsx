@@ -14,8 +14,8 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 import { WidgetGroupMenuButton } from './WidgetGroupMenuButton';
-import { readWidgetGroupTitle } from './widgetGroupTitle';
 import {
+  describeWidgetGroup,
   resolveWidgetGroupWidthChoices,
   isWidgetGroupWidthAvailable,
   type WidgetGroupMenuInput,
@@ -40,7 +40,8 @@ export function WidgetGroupBar(
   }>,
 ) {
   const { group, operations } = props.input;
-  const title = readWidgetGroupTitle(group);
+  // An unnamed group reads as the names of its widgets, as Sections names it; typing sets a real name.
+  const title = describeWidgetGroup(group, props.input.childTitle);
   const widths = isWidgetGroupWidthAvailable(props.input)
     ? resolveWidgetGroupWidthChoices(group.children, props.input.childTitle)
     : [];
@@ -74,7 +75,7 @@ export function WidgetGroupBar(
       {props.onRename ? (
         <WidgetFrameNameField
           testID={`${props.testID}.name`}
-          value={title ?? ''}
+          value={title}
           placeholder={t('widgetFrame.groupUntitled')}
           accessibilityLabel={t('widgetFrame.groupName')}
           onRename={props.onRename}
@@ -82,7 +83,7 @@ export function WidgetGroupBar(
         />
       ) : (
         <Text style={styles.name} numberOfLines={1}>
-          {title ?? t('widgetFrame.groupUntitled')}
+          {title || t('widgetFrame.groupUntitled')}
         </Text>
       )}
       <View style={styles.rest}>

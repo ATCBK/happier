@@ -21,10 +21,10 @@ import { normalizeWidgetSizeForSurfaceV1, resolveWidgetSizeChoicesV1 } from '@ha
 import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
 import { t } from '@/text';
 
-import { findHomeHubBuiltinSection, homeHubSectionTitle } from '../homeHubSections';
+import { findHomeHubBuiltinSection, homeChildTitle, homeHubSectionTitle } from '../homeHubSections';
 import type { HomeHubSection } from './homeHubLayout';
 import { useHomeHubLayout, type HomeHubLayout } from './useHomeHubLayout';
-import { WIDGET_GROUP_ICON, widgetGroupCopyPosition } from '@/components/widgets/group/widgetGroupMenu';
+import { WIDGET_GROUP_ICON, describeWidgetGroupAmong, widgetGroupCopyPosition } from '@/components/widgets/group/widgetGroupMenu';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { useHomeHubLayoutWritePending } from './useHomeHubArtifactLayout';
@@ -48,10 +48,14 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
     const layout = useHomeHubLayout();
     const isWriting = useHomeHubLayoutWritePending();
     const scope = useActiveServerAccountScope();
-    const placed = React.useMemo(
-        () => layout.sections.map((section) => ({ id: section.id, title: homeHubSectionTitle(section) })),
-        [layout.sections],
-    );
+    // A group's name among the groups that share it, the label its rows, chooser and dock all use.
+    const placed = React.useMemo(() => {
+        const childTitle = homeChildTitle(layout.sections);
+        return layout.sections.map((section) => ({
+            id: section.id,
+            title: section.kind === 'group' ? describeWidgetGroupAmong(layout.items, section.group, childTitle) : homeHubSectionTitle(section),
+        }));
+    }, [layout.sections, layout.items]);
     const projectMove: NonNullable<EntityFlatReorderBinding['projectMove']> = (sectionId, position) => {
         try { return layout.projectMove(sectionId, position); }
         catch { return null; }

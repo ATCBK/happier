@@ -46,7 +46,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { HubStatusLine } from './header/HubStatusLine';
 import { useHomeGreeting } from './header/homeGreeting';
-import { findHomeHubBuiltinSection, homeHubSectionTitle } from './homeHubSections';
+import { findHomeHubBuiltinSection, homeChildTitle, homeHubSectionTitle } from './homeHubSections';
 import { HOME_HUB_COMPOSER_SECTION_ID, HomeHubSectionList } from './HomeHubSectionList';
 import { HubWidgetSection } from './HubWidgetSection';
 import type { HomeHubSection } from './layout/homeHubLayout';
@@ -171,20 +171,6 @@ function homeCardTarget(input: Readonly<{ surface: WidgetSurfaceRefV1; items: re
     };
 }
 
-/** What a widget or group is called on Home, for group names and menus. */
-function homeChildTitle(layout: HomeHubLayout) {
-    return (instanceId: string): string => {
-        for (const section of layout.sections) {
-            if (section.kind === 'widget' && section.id === instanceId) return homeHubSectionTitle(section);
-            if (section.kind === 'group') {
-                const child = section.children.find(entry => entry.id === instanceId);
-                if (child) return homeHubSectionTitle(child);
-            }
-        }
-        return instanceId;
-    };
-}
-
 /**
  * One widget group on Home (lab widget-groups wgpres): the group frame with its widgets packed
  * inside. A titled group carries its ⋯; an untitled one has no header and its options live in
@@ -197,7 +183,7 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
     const { section, layout } = props;
     const group = section.group;
     const testID = `home-hub.section.${section.id}`;
-    const childTitle = React.useMemo(() => homeChildTitle(layout), [layout]);
+    const childTitle = React.useMemo(() => homeChildTitle(layout.sections), [layout]);
     const name = describeWidgetGroupAmong(layout.items, group, childTitle);
     const candidates = React.useMemo(() => section.children.map(child => child.widget ?? null), [section.children]);
     const cells = React.useMemo(() => resolveWidgetGroupCells('home', section.children.map(child => ({ id: child.id, size: child.size }))),
@@ -291,7 +277,7 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
     const context = React.useMemo(() => widgetGroupSurfaceContext(HOME_CONTEXT, groupContext, groupLabels), [groupContext, groupLabels]);
     const edit = useWidgetInputsEditor({ instance, candidate: widget, scope, context, audience: 'personal', setInputs: saveInputs, testID });
     const followed = readWidgetGroupFollowedValue(instance, groupContext, groupLabels);
-    const childTitle = React.useMemo(() => homeChildTitle(props.layout), [props.layout]);
+    const childTitle = React.useMemo(() => homeChildTitle(props.layout.sections), [props.layout]);
     const groupActions = buildWidgetGroupMembershipActions({ instanceId: instance.id, size: props.section.size, items: props.layout.items, topLevelIds: props.topLevelIds,
         childTitle, operations: props.groupOperations });
     const parent = props.parent;

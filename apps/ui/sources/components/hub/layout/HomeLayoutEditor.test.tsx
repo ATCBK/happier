@@ -271,6 +271,12 @@ describe('Home Customize entity reorder binding', () => {
         expect(subtitle('g1')).toBe('widgetFrame.groupCopyOf(count=1,index=1,total=2)');
         expect(subtitle('g2')).toBe('widgetFrame.groupCopyOf(count=1,index=2,total=2)');
         expect(subtitle('g3')).toBe('widgetFrame.groupCount(count=1)');
+        // The staged dock, chooser and grip labels name the target by the same copy-aware label (H25).
+        const titles = new Map<string, string>(screen.root.findByType(EntityFlatReorderList).props.binding.items
+            .map((item: { id: string; title: string }) => [item.id, item.title]));
+        expect(titles.get('g1')).toMatch(/groupNameCopyOf.*index=1/);
+        expect(titles.get('g2')).toMatch(/groupNameCopyOf.*index=2/);
+        expect(titles.get('g3')).toBe('Release room');
     });
     it('shows a pressed Sections switch at once, waits for the Account, and ignores a second press meanwhile (H18)', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');

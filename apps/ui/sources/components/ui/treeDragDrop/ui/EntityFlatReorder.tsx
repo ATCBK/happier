@@ -446,9 +446,9 @@ function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targ
         // The insertion line belongs to the carry; once released the row itself shows where it landed.
         if (snapshot.phase !== 'carrying') return null;
         if (snapshot.targetId !== props.targetId || snapshot.admission?.status !== 'allowed') return null;
-        const pointer = props.runtime.getPointer();
-        // Semantic admission changes only; this leaf never subscribes to pointer frames.
-        return pointer ? props.admittedMoves.get(snapshot.admission.effect)?.position.placement ?? null : null;
+        // A drag and a keyboard carry draw the one line at the staged place. Semantic admission changes only; this
+        // leaf never subscribes to pointer frames.
+        return props.admittedMoves.get(snapshot.admission.effect)?.position.placement ?? null;
     }, () => null);
     return edge ? <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, ...(edge === 'before' ? { top: 0 } : { bottom: 0 }) }}><TreeDropIndicatorLine visual={{ kind: 'line', targetId: props.targetId, depth: 0, edge: edge === 'before' ? 'top' : 'bottom' }} indentPx={0} /></View> : null;
 }

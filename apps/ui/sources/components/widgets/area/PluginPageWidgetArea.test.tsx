@@ -391,7 +391,8 @@ describe('a plugin page widget area', () => {
         expect(menu.props.actions.map((action: { id: string }) => action.id)).toEqual(expect.arrayContaining(['groupInputs', 'saveGroup', 'addTo']));
         // Its name is a field on the bar, so the menu offers no second Rename.
         expect(menu.props.actions.map((action: { id: string }) => action.id)).not.toContain('rename');
-        expect(screen.findByTestId('group-area.group.untitled.bar.name')!.props.value).toBe('');
+        // An unnamed group's field shows the name its widgets give it (as Sections does); typing sets a real one.
+        expect(screen.findByTestId('group-area.group.untitled.bar.name')!.props.value).toBe('Checks');
         await screen.pressByTestIdAsync('group-area.organize');
         expect(screen.findByTestId('group-area.group.untitled.bar')).toBeNull();
         expect(await fixture.store.read()).toEqual(saved);

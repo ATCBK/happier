@@ -172,6 +172,21 @@ function unreadText(
   return t('usage.board.plans.usedFirstReadFailed');
 }
 
+/**
+ * One cause stated once: when two or more pools could not be read for the same reason (the machine is
+ * offline for every pool), each pool keeps its heading and the cause is said once beneath them all.
+ */
+function readSharedUnreadCause(
+  pools: readonly UsagePlanPool[],
+  selections: ReadonlyMap<string, UsagePoolSelectionState>,
+): string | null {
+  const causes = pools.flatMap((pool) => {
+    const state = selections.get(pool.key) ?? 'loading';
+    return typeof state === 'string' || 'status' in state ? [unreadText(state)] : [];
+  });
+  return causes.length > 1 && causes.every((cause) => cause === causes[0]) ? causes[0]! : null;
+}
+
 type PoolOrderProps = Readonly<{
   serverId: string;
   pools: readonly UsagePlanPool[];
@@ -187,7 +202,9 @@ type PoolOrderProps = Readonly<{
  * strategy named in words, and the "Why this account?" detail one press away.
  */
 export function UsagePoolQueue(props: PoolOrderProps) {
+  const text = usePlanText();
   if (props.pools.length === 0) return null;
+  const sharedCause = readSharedUnreadCause(props.pools, props.selections);
   return (
     <View testID={props.testID} style={styles.pools}>
       {props.pools.map((pool) => (
@@ -195,14 +212,22 @@ export function UsagePoolQueue(props: PoolOrderProps) {
           key={pool.key}
           {...props}
           pool={pool}
+          causeBelow={sharedCause !== null}
           testID={`${props.testID}.${pool.groupId}`}
         />
       ))}
+      {sharedCause ? (
+        <Text testID={`${props.testID}.cause`} style={[styles.quiet, text.detail]}>
+          {sharedCause}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
-function PoolQueue(props: PoolOrderProps & Readonly<{ pool: UsagePlanPool }>) {
+function PoolQueue(
+  props: PoolOrderProps & Readonly<{ pool: UsagePlanPool; causeBelow: boolean }>,
+) {
   const text = usePlanText();
   const label = poolLabel(props.pool, props.accounts, props.nameOf);
   const state = props.selections.get(props.pool.key) ?? 'loading';
@@ -211,7 +236,10 @@ function PoolQueue(props: PoolOrderProps & Readonly<{ pool: UsagePlanPool }>) {
   if (typeof state === 'string' || 'status' in state) {
     return (
       <View testID={props.testID} style={styles.pool}>
-        <UsagePlanSectionHead title={title} meta={unreadText(state)} />
+        <UsagePlanSectionHead
+          title={title}
+          meta={props.causeBelow ? null : unreadText(state)}
+        />
       </View>
     );
   }
@@ -353,6 +381,7 @@ function QueueRow(
 export function UsagePoolSteps(props: PoolOrderProps) {
   const text = usePlanText();
   if (props.pools.length === 0) return null;
+  const sharedCause = readSharedUnreadCause(props.pools, props.selections);
   return (
     <View testID={props.testID} style={styles.pools}>
       {props.pools.map((pool) => {
@@ -364,7 +393,7 @@ export function UsagePoolSteps(props: PoolOrderProps) {
             <UsagePlanSectionHead
               key={pool.key}
               title={label}
-              meta={unreadText(state)}
+              meta={sharedCause ? null : unreadText(state)}
             />
           );
         }
@@ -458,6 +487,11 @@ export function UsagePoolSteps(props: PoolOrderProps) {
           </View>
         );
       })}
+      {sharedCause ? (
+        <Text testID={`${props.testID}.cause`} style={[styles.quiet, text.detail]}>
+          {sharedCause}
+        </Text>
+      ) : null}
     </View>
   );
 }

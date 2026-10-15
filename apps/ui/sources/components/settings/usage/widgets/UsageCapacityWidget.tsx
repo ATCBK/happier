@@ -121,6 +121,23 @@ function buildRuns(
   return runs;
 }
 
+/**
+ * The runs that sit alone in a two-up row: an account that no pool holds, with no second account after it
+ * before a pool (which takes the whole row) or the end.
+ */
+function readLoneHalfRuns(runs: readonly Run[]): ReadonlySet<Run> {
+  const lone = new Set<Run>();
+  let first: Run | null = null;
+  const closeRow = () => { if (first) lone.add(first); first = null; };
+  for (const run of runs) {
+    if (run.pool) { closeRow(); continue; }
+    if (first) first = null;
+    else first = run;
+  }
+  closeRow();
+  return lone;
+}
+
 export function UsageCapacityWidget(props: UsageBodyProps) {
   const chartTheme = useUsagePluginTheme();
   const presentation = useWidgetPresentation();
@@ -171,6 +188,8 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
   // Equal cells while they fit; a narrow frame (a phone) wraps them two-up rather than shrinking them.
   const cellBasis =
     width !== null && width / cellCount < CELL_MIN_WIDTH_PX ? ('46%' as const) : undefined;
+  // In the two-up grid an odd account keeps its half: an empty half beside it, never a full-width track.
+  const loneRuns = cellBasis ? readLoneHalfRuns(runs) : null;
   return (
     <View style={styles.body} testID={`${props.testID}.capacity`}>
       <UsageResetCelebration
@@ -215,27 +234,29 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
       ) : null}
       <View style={styles.bar} accessibilityRole="list">
         {runs.map((run) => (
-          <View
-            key={run.pool?.key ?? run.cells[0]!.account.key}
-            style={[
-              styles.run,
-              run.pool ? styles.pool : null,
-              cellBasis
-                ? { flexBasis: run.pool ? '100%' : '47%', flexGrow: 1 }
-                : { flexGrow: run.cells.length, flexBasis: 0 },
-            ]}
-          >
-            {run.cells.map((cell) => (
-              <CapacityCell
-                key={cell.account.key}
-                cell={cell}
-                name={nameOf(cell.account)}
-                nowMs={nowMs}
-                basis={run.pool ? cellBasis : undefined}
-                testID={`${props.testID}.cell.${cell.account.accountId}`}
-              />
-            ))}
-          </View>
+          <React.Fragment key={run.pool?.key ?? run.cells[0]!.account.key}>
+            <View
+              style={[
+                styles.run,
+                run.pool ? styles.pool : null,
+                cellBasis
+                  ? { flexBasis: run.pool ? '100%' : '47%', flexGrow: 1 }
+                  : { flexGrow: run.cells.length, flexBasis: 0 },
+              ]}
+            >
+              {run.cells.map((cell) => (
+                <CapacityCell
+                  key={cell.account.key}
+                  cell={cell}
+                  name={nameOf(cell.account)}
+                  nowMs={nowMs}
+                  basis={run.pool ? cellBasis : undefined}
+                  testID={`${props.testID}.cell.${cell.account.accountId}`}
+                />
+              ))}
+            </View>
+            {loneRuns?.has(run) ? <View style={styles.halfSpacer} /> : null}
+          </React.Fragment>
         ))}
       </View>
       {tile ? (
@@ -433,6 +454,7 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border.default,
     padding: theme.space.s4,
   },
+  halfSpacer: { flexBasis: '47%', flexGrow: 1 },
   cell: { flex: 1, minWidth: 0, gap: theme.space.s6 },
   cellHead: {
     flexDirection: 'row',

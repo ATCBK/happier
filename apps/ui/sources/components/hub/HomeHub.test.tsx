@@ -729,8 +729,9 @@ describe('HomeHub plugin widgets', () => {
         expect(screen.findByTestId('home-hub.customize.popover')).toBeNull();
         expect(screen.findAllByType('BaseModal')).toHaveLength(0);
 
-        // The name is a field on the bar: an untitled group gets its name there, through the Home layout.
-        expect(screen.findByTestId('home-hub.section.g.bar.name')!.props.value).toBe('');
+        // The name is a field on the bar: an untitled group shows the name Sections gives it (its widgets'
+        // names), and typing there sets a real one through the Home layout.
+        expect(screen.findByTestId('home-hub.section.g.bar.name')!.props.value).toBe('Checks · Checks');
         await act(async () => { screen.findByTestId('home-hub.section.g.bar.name')!.props.onChangeText('Release checks'); });
         await act(async () => { screen.findByTestId('home-hub.section.g.bar.name')!.props.onSubmitEditing(); });
         await vi.waitFor(() => expect(group()).toMatchObject({ title: 'Release checks' }));

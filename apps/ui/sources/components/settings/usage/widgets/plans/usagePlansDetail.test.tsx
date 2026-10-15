@@ -609,6 +609,24 @@ it("lists a pool in the selector's own order and builds the why detail from its 
   expect(execute).not.toHaveBeenCalled();
 });
 
+it('states one unreadable-order cause once under every pool that shares it (H30)', async () => {
+  const now = Date.now();
+  const weekly: Meter = { meterId: 'weekly', label: 'Weekly', usedPct: 20, resetAtMs: now + 2 * DAY, windowDurationMs: 7 * DAY };
+  const pool = (groupId: string, memberAccountIds: string[]) => ({
+    group: { service, groupId }, memberAccountIds, activeAccountId: memberAccountIds[0]!,
+    selection: { status: 'unsupported' as const, errorCode: 'no_machine' as const },
+  });
+  const props = bodyProps(['a', 'b', 'c', 'd'].map((id) => quotaRead(id, now, [weekly])),
+    [{ query, value: [pool('first', ['a', 'b']), pool('second', ['c', 'd'])] }]);
+  const { UsageCapacityWidget } = await import('../UsageCapacityWidget');
+  const screen = await renderScreen(wrap(<UsageCapacityWidget {...props} serverId="home" id="usage_capacity" testID="cap" />));
+  const cause = t('usage.board.plans.usedFirstNoMachine');
+  expect(screen.getTextContent().split(cause).length - 1).toBe(1);
+  expect(screen.findHostByTestId('cap.usedFirst.cause')).toBeTruthy();
+  expect(screen.findHostByTestId('cap.usedFirst.first')).toBeTruthy();
+  expect(screen.findHostByTestId('cap.usedFirst.second')).toBeTruthy();
+});
+
 /** One earlier week of the same record and meter in accepted history: two readings, one and three days in. */
 function withEarlierWeek(read: ConnectedServiceQuotaGetResultV1, weekly: Meter): ConnectedServiceQuotaGetResultV1 {
   const current = read.current!;
