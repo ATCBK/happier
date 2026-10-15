@@ -289,7 +289,8 @@ describe('HubSetupSection on Home (tiles)', () => {
             features: FeaturesResponseSchema.parse({ features: { auth: { pairing: { boundQrV2: { enabled: true } } } }, capabilities: { serverIdentity: { serverIdentityId: descriptor.homeServerIdentityId } }, homeConnectionDescriptor: descriptor }),
         });
         state.dismissed = true;
-        state.layout = { order: ['setup', 'future-section'], hidden: ['usage'], sections: { setup: { frameStyle: 'plain' } } };
+        state.layout = { order: ['setup', 'future-section'], hidden: ['usage-copy'], sections: { setup: { frameStyle: 'plain' } },
+            items: [{ kind: 'widget', instance: { v: 1, id: 'usage-copy', definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: {} } }] };
         const expiresAt = new Date(Date.now() + 60_000).toISOString();
         let requested: Record<string, unknown> | null = null;
         state.request.mockImplementation(async (path) => {
@@ -302,6 +303,11 @@ describe('HubSetupSection on Home (tiles)', () => {
         try {
             await setActiveServerId(home.id);
             let screen = await renderSection(presentation);
+            // Observe the static QR payload; the moment canvas owns animated painting.
+            await act(async () => storage.setState(current => ({ settings: { ...current.settings, homeAtmosphere: {
+                ...current.settings.homeAtmosphere,
+                moments: { ...current.settings.homeAtmosphere.moments, qr: false, pairing: false },
+            } } })));
             state.push = (href) => {
                 state.params = { setupStep: new URL(String(href), 'https://app.test').searchParams.get('setupStep') ?? undefined };
             };
@@ -314,7 +320,7 @@ describe('HubSetupSection on Home (tiles)', () => {
             const code = screen.tree.root.find((node) => typeof node.props.data === 'string' && parseHomeQrInviteDeepLink(node.props.data) !== null);
             const parsed = parseHomeQrInviteDeepLink(code.props.data);
             if (!parsed) throw new Error('Expected the real pairing invite');
-            expect(artifact.layout().hidden).toEqual(['usage']);
+            expect(artifact.layout().hidden).toEqual(['usage-copy']);
             // An Account layout update while pairing is pending must not be overwritten by success.
             await act(async () => {
                 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -337,7 +343,7 @@ describe('HubSetupSection on Home (tiles)', () => {
             await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
             await flushHookEffects({ cycles: 3 });
             expect(state.request.mock.calls.some(([path]) => path === '/v1/auth/account/response')).toBe(true);
-            expect([...artifact.layout().hidden].sort()).toEqual(['automations', 'setup:addPhone', 'usage']);
+            expect([...artifact.layout().hidden].sort()).toEqual(['automations', 'setup:addPhone', 'usage-copy']);
             expect(artifact.layout().order.slice(0, 2)).toEqual(['setup', 'future-section']);
             expect(artifact.layout().sections).toEqual({ setup: { frameStyle: 'plain' } });
             expect(screen.findByTestId('settings-add-your-phone-shortcut')).toBeNull();
