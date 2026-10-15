@@ -115,7 +115,7 @@ describe('widget semantic Actions through production UI composition', () => {
         } finally { account.dispose(); }
     });
 
-    it.each(['private', 'shared-approved', 'shared-canceled', 'shared-aborted', 'shared-policy-changed', 'required', 'waived'] as const)(
+    it.each(['private', 'shared', 'required', 'shared-required', 'waived'] as const)(
         'uses admitted widget sharing and the canonical UI approval decision (%s)', async mode => {
             const surface = scope({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: USAGE_WIDGET_PRESET_IDS[0] });
             const executor = createDefaultActionExecutor();
@@ -123,32 +123,21 @@ describe('widget semantic Actions through production UI composition', () => {
             expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
             const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
             if (mode !== 'private') homes.artifacts(serverId).seedAccountGrant(artifactId, 'recipient', 'view');
-            setActionPolicy(mode === 'required' ? { v: 1, actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } } }
+            const required = mode === 'required' || mode === 'shared-required';
+            setActionPolicy(required ? { v: 1, actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } } }
                 : mode === 'waived' ? { v: 1, approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'] } } : { v: 1 });
             const before = storedBody(artifactId);
-            const controller = new AbortController();
-            vi.mocked(Modal.confirm).mockImplementation(async () => {
-                expect(storedBody(artifactId)).toEqual(before);
-                if (mode === 'shared-aborted') controller.abort();
-                if (mode === 'shared-policy-changed') setActionPolicy({ v: 1,
-                    actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } },
-                });
-                return mode !== 'shared-canceled';
-            });
             const result = await executor.execute('widgets.item.rename', { ref: { surface, instanceId: 'one' }, displayName: 'Updated' },
-                { ...context(), signal: controller.signal });
-            if (mode === 'required') {
+                context());
+            if (required) {
                 expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'widgets.item.rename' } });
-                expect(storedBody(artifactId)).toEqual(before);
-            } else if (mode === 'shared-canceled' || mode === 'shared-aborted' || mode === 'shared-policy-changed') {
-                expect(result).toMatchObject({ ok: false, errorCode: mode === 'shared-aborted' ? 'cancelled'
-                    : mode === 'shared-policy-changed' ? 'approval_stale' : 'approval_canceled' });
                 expect(storedBody(artifactId)).toEqual(before);
             } else {
                 expect(result).toMatchObject({ ok: true, result: { instance: { id: 'one', displayName: 'Updated' } } });
-                expect(flattenWidgetLayoutWidgetsV1(WidgetAreaLayoutV1Schema.parse(storedBody(artifactId)).items)[0]?.instance.displayName).toBe('Updated');
+                expect(flattenWidgetLayoutWidgetsV1(WidgetAreaLayoutV1Schema.parse(storedBody(artifactId)).items)
+                    .find(item => item.instance.id === 'one')?.instance.displayName).toBe('Updated');
             }
-            expect(Modal.confirm).toHaveBeenCalledTimes(mode.startsWith('shared-') ? 1 : 0);
+            expect(Modal.confirm).not.toHaveBeenCalled();
         },
     );
 
