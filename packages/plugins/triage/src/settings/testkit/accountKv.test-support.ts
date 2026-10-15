@@ -75,6 +75,10 @@ export function createTestkitAccountKv(
             key: string,
             options: Readonly<{ expectedVersion: number }>,
         ): Promise<Readonly<{ version: number; deleted: true }>> {
+            if (armed !== null) {
+                seed(armed.key, armed.value);
+                armed = null;
+            }
             const current = entries.get(key);
             if (current === undefined || current.version !== options.expectedVersion) {
                 rejected.push(options.expectedVersion);

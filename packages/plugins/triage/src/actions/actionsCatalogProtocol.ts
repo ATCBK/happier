@@ -96,6 +96,11 @@ const TriageActionDraftV1WireSchema = TRIAGE_ACTION_DRAFT_MEMBERS_V1;
 export const TriageAdministerActionInputV1Schema = defineProtocolUnion([
     defineProtocolObject({
         v: defineProtocolLiteral(1),
+        kind: defineProtocolLiteral('reset'),
+        expectedRevision: TriageAccountKvRevisionV1Schema,
+    }, { policy: 'closed' }),
+    defineProtocolObject({
+        v: defineProtocolLiteral(1),
         kind: defineProtocolLiteral('create'),
         expectedRevision: TriageAccountKvRevisionV1Schema,
         ...TriageActionDraftV1WireSchema,

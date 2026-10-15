@@ -23,6 +23,32 @@ import { administerTriageAction, readTriageActionsForSurface } from './actionsCa
  */
 
 describe('the configured-action Actions', () => {
+    it('resets stored opt-outs to absent through the administer contract and preserves a newer catalog', async () => {
+        const testkit = createTestkitAccountKv();
+        const deps = { catalog: testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused' };
+        const read = () => readTriageActionsForSurface({ v: 1 }, deps).then(value => TriageReadActionsResultV1Schema.parse(value));
+        const off = await administerTriageAction(TriageAdministerActionInputV1Schema.parse({
+            v: 1, kind: 'delete', actionId: 'fix', expectedRevision: (await read()).revision,
+        }), deps);
+        expect(off.status).toBe('applied');
+        const resetInput = { v: 1, kind: 'reset', expectedRevision: (await read()).revision };
+        expect(TriageAdministerActionInputV1Schema.safeParse(resetInput).success).toBe(true);
+        const reset = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(
+            TriageAdministerActionInputV1Schema.parse(resetInput), deps));
+        expect(reset).toMatchObject({ status: 'applied', actions: TRIAGE_DEFAULT_ACTIONS_V1 });
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+        expect(await read()).toMatchObject({ availability: 'absent', actions: TRIAGE_DEFAULT_ACTIONS_V1, revision: reset.revision });
+        testkit.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, { v: 1, actions: [] });
+        expect(await administerTriageAction(TriageAdministerActionInputV1Schema.parse({
+            v: 1, kind: 'reset', expectedRevision: reset.revision,
+        }), deps)).toEqual({ v: 1, status: 'conflict' });
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual({ v: 1, actions: [] });
+        testkit.armConcurrentWrite(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, { v: 1, actions: [], other: 'newer writer' });
+        expect(await administerTriageAction(TriageAdministerActionInputV1Schema.parse({
+            v: 1, kind: 'reset', expectedRevision: (await read()).revision,
+        }), deps)).toEqual({ v: 1, status: 'conflict' });
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual({ v: 1, actions: [], other: 'newer writer' });
+    });
     it('upgrades stored defaults and keeps built-in opt-outs across catalog Actions', async () => {
         const testkit = createTestkitAccountKv();
         testkit.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, {

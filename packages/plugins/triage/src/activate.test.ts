@@ -93,6 +93,24 @@ describe('Triage activation', () => {
       expect(ui).toEqual(after);
       expect(planTriageOfferedActionsV1(readTriageActionsProjectionV1(ui).value.actions, 'pullRequest')
         .some(action => action.actionId === 'explain-pr')).toBe(false);
+      const original = initial.actions.find(action => action.actionId === 'explain-pr');
+      if (!original || original.target.kind !== 'agent') throw new Error('Missing built-in explanation Action');
+      const enabled = TriageAdministerActionResultV1Schema.parse(await plugin.invokeAction(
+        TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1, { v: 1, kind: 'update', actionId: original.actionId,
+          expectedRevision: after.revision, label: original.label, enabled: true, appliesTo: original.appliesTo,
+          profileId: original.profileId, workspaceMode: original.workspaceMode,
+          target: { kind: 'agent', promptInvocationId: original.target.promptInvocationId, delivery: original.target.delivery },
+        }, { surface }));
+      expect(enabled.status).toBe('applied');
+      expect((await read()).actions).toEqual(initial.actions);
+      const reset = TriageAdministerActionResultV1Schema.parse(await plugin.invokeAction(
+        TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1,
+        { v: 1, kind: 'reset', expectedRevision: (await read()).revision }, { surface }));
+      expect(reset.status).toBe('applied');
+      expect(kv.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+      const absent = await read();
+      expect(absent).toMatchObject({ availability: 'absent', actions: initial.actions, revision: reset.revision });
+      expect(await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).read()).toEqual(absent);
     });
   });
 

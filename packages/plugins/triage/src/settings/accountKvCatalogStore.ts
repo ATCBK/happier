@@ -12,6 +12,7 @@ export type TriageCatalogStoreV1 = Readonly<{
         value: JsonValue,
         options: Readonly<{ expectedRevision: string; signal?: AbortSignal }>,
     ): Promise<Readonly<{ revision: string }>>;
+    remove(options: Readonly<{ expectedRevision: string; signal?: AbortSignal }>): Promise<Readonly<{ revision: string }>>;
 }>;
 
 /**
@@ -41,6 +42,15 @@ export function createTriageAccountKvCatalogStore(
                 expectedVersion,
                 ...(options.signal ? { signal: options.signal } : {}),
             });
+            return { revision: String(result.version) };
+        },
+        async remove(options) {
+            const expectedVersion = Number(options.expectedRevision);
+            if (!Number.isSafeInteger(expectedVersion) || options.expectedRevision === 'absent') {
+                throw new Error('triage_catalog_revision_invalid');
+            }
+            const result = await kv.delete(key, { expectedVersion,
+                ...(options.signal ? { signal: options.signal } : {}) });
             return { revision: String(result.version) };
         },
     });

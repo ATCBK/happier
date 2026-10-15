@@ -633,6 +633,7 @@ export type TriageActionDraftV1 = Readonly<{
 type TriageActionCommandBaseV1 = Readonly<{ expectedRevision: string }>;
 
 export type TriageActionCommandV1 = TriageActionCommandBaseV1 & (
+    | Readonly<{ kind: 'reset' }>
     | (TriageActionDraftV1 & Readonly<{ kind: 'create' }>)
     | (TriageActionDraftV1 & Readonly<{ kind: 'update'; actionId: string }>)
     | Readonly<{ kind: 'delete'; actionId: string }>
@@ -1010,7 +1011,7 @@ type TriageActionsAppliedPlanV1 =
 
 function applyCommand(
     current: TriageActionsCatalogV1,
-    command: TriageActionCommandV1,
+    command: Exclude<TriageActionCommandV1, Readonly<{ kind: 'reset' }>>,
     mintActionId: () => string,
 ): TriageActionsAppliedPlanV1 {
     if (command.kind === 'delete') {
@@ -1118,6 +1119,17 @@ export async function mutateTriageAction(
     // replacing it with its own idea of the set.
     if (read.kind === 'unreadable') return { status: 'unreadable' };
 
+    if (command.kind === 'reset') {
+        try {
+            const mutation = snapshot.value === undefined ? snapshot : await deps.catalog.remove({
+                expectedRevision: snapshot.revision, ...(deps.signal ? { signal: deps.signal } : {}),
+            });
+            return { status: 'applied', actionId: null, value: parseTriageActions(undefined).value, revision: mutation.revision };
+        } catch (error) {
+            if (isPluginError(error) && error.code === 'plugin_account_kv_conflict') return { status: 'conflict' };
+            throw error;
+        }
+    }
     const applied = applyCommand(read.value, command, deps.mintActionId);
     if (applied.status !== 'applied') return applied;
 

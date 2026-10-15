@@ -178,6 +178,14 @@ rows and explicit disabled choices. Deleting a built-in stores that row with
 therefore means no custom actions. The catalog Actions and direct UI transport
 use this same reader and writer.
 
+The existing `actions/administer-v1` Action also accepts `kind: 'reset'` with
+the catalog's `expectedRevision`. It removes the stored catalog through Account
+KV's conditional delete, so subsequent reads report `availability: 'absent'`
+and use the built-ins. The KV tombstone retains its revision for later CAS;
+reset does not fabricate the never-written revision `absent`. A stale revision
+or unreadable catalog refuses the reset. Direct App transport and daemon Actions
+use the same catalog owner.
+
 The client-targeted `happier.triage/actions/sessions/run-configured-v1` Action runs a catalog `actionId` through the same configured action/profile/prompt and Session owners as a mounted press. Its exact input and result declarations are [`configuredActionRunProtocol.ts`](../packages/plugins/triage/src/actions/configuredActionRunProtocol.ts), not a second agent-only workflow. Callers supply exact `entries` (`entryRef` and `sourceInstanceId`) and a declared `destination`; optional settled `drafts` retain the host's canonical launch-input admission.
 
 An incomplete start returns `recovery` when the existing single/bulk controller

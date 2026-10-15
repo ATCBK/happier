@@ -95,6 +95,7 @@ export async function readTriageActionsForSurface(
 
 function commandFrom(input: TriageAdministerActionInputV1): TriageActionCommandV1 {
     const expectedRevision = input.expectedRevision;
+    if (input.kind === 'reset') return { kind: 'reset', expectedRevision };
     if (input.kind === 'delete') {
         return { kind: 'delete', actionId: input.actionId, expectedRevision };
     }

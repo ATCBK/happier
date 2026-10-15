@@ -163,7 +163,7 @@ export type CorpusSavedViewCommandV1 = CorpusSavedViewCommandBaseV1 & (
 );
 
 export type CorpusSavedViewsDepsV1 = Readonly<{
-    catalog: TriageCatalogStoreV1;
+    catalog: Pick<TriageCatalogStoreV1, 'read' | 'write'>;
     /** The opaque view id is minted only here, and only for a create. */
     mintViewId: () => string;
     signal?: AbortSignal;
