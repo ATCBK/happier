@@ -39,7 +39,7 @@ export const ManagedMachineStateRow = React.memo(
       /** The provider's name, for "Open Hetzner". */
       provider?: string;
       handlers: ManagedLifecycleHandlers;
-      /** A resource that ended reads dimmed: it is history, not something to act on. */
+      /** Mute an ended resource's facts while keeping its recovery actions available. */
       ended?: boolean;
       testID: string;
     }>,
@@ -84,6 +84,7 @@ export const ManagedMachineStateRow = React.memo(
       <Item
         testID={props.testID}
         title={props.name}
+        titleStyle={props.ended ? styles.ended : undefined}
         subtitle={
           tint && presentation.cause ? (
             <Text style={styles.line}>
@@ -95,6 +96,7 @@ export const ManagedMachineStateRow = React.memo(
           )
         }
         subtitleLines={0}
+        subtitleStyle={props.ended ? styles.ended : undefined}
         subtitleLeading={
           presentation.tone === 'pending' ? (
             <ActivitySpinner
@@ -104,8 +106,7 @@ export const ManagedMachineStateRow = React.memo(
             />
           ) : undefined
         }
-        icon={props.mark}
-        disabled={props.ended}
+        icon={props.ended && props.mark ? <View style={styles.ended}>{props.mark}</View> : props.mark}
         mode="info"
         showChevron={false}
         rightElement={
@@ -160,6 +161,7 @@ export const ManagedCreationDisabledBanner = React.memo(
 const CREATION_DISABLED: ManagedLifecycleState = { kind: 'creationDisabled' };
 
 const styles = StyleSheet.create((theme) => ({
+  ended: { opacity: 0.5 },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',

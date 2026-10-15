@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
+import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createExpoRouterMock, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -14,10 +14,38 @@ const routerBoundary = createExpoRouterMock();
 installSettingsViewCommonModuleMocks({
   text: async () => vi.importActual<typeof import('@/text')>('@/text'),
   router: async () => routerBoundary.module,
+  storage: 'real',
 });
 afterEach(() => standardCleanup());
 
 describe('managed lifecycle presentation', () => {
+  it('keeps confirmed-absent recovery enabled inside a noninteractive historical resource row', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const { ManagedMachineV1Schema } = await import('@happier-dev/protocol/machines/managed/managedMachineV1');
+    const machine = ManagedMachineV1Schema.parse({ id: 'ended-resource', homeId: 'home', custodianAccountId: 'owner',
+      launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Ended resource', choices: {} },
+      controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'confirmed-absent', creationState: 'active',
+      desired: 'stop', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+    const remove = vi.fn();
+    const screen = await renderScreen(<ManagedCreationProgress machine={machine} handlers={{ remove }} />);
+    const action = screen.tree.findAll(node => typeof node.type === 'string'
+      && node.props.testID === 'managed-machine.progress:remove');
+    expect(action).toHaveLength(1);
+    // aria-disabled on any emitted ancestor disables the descendant too, even when the button itself is enabled.
+    for (let node: ReactTestInstance | null = action[0] ?? null; node; node = node.parent) {
+      if (typeof node.type !== 'string') continue;
+      expect(node.props['aria-disabled']).not.toBe(true);
+      expect(node.props.accessibilityState?.disabled).not.toBe(true);
+    }
+    const row = screen.tree.findAll(node => typeof node.type === 'string'
+      && node.props.testID === 'managed-machine.progress');
+    expect(row).toHaveLength(1);
+    expect(row[0]!.props.onPress).toBeUndefined();
+    expect(row[0]!.props.role).not.toBe('button');
+    expect(remove).not.toHaveBeenCalled();
+    await screen.pressByTestIdAsync('managed-machine.progress:remove');
+    expect(remove).toHaveBeenCalledOnce();
+  });
   it('never words an accepted or unknown outcome as done', async () => {
     const { describeManagedLifecycleState } =
       await import('./managedLifecyclePresentation');
