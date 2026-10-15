@@ -413,21 +413,21 @@ describe('usage query captured Resource adapter', () => {
       refs.forEach(ref => expect(cold.findHostByTestId(`timeline.cell.${ref.accountId}`)).not.toBeNull());
       gates[0]!.resolve();
       await expect.poll(() => projectionOf(homeEntry).accounts[0]?.observedAtMs).toBe(now);
-      expect(projectionOf(homeEntry).tightest).toBeNull();
+      expect(projectionOf(homeEntry).tightest).toMatchObject({ provisional: true, window: { remainingFraction: 0.6 } });
       expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(2);
-      expect((await renderBody(homeEntry)).findHostByTestId('timeline.reading')).not.toBeNull();
+      expect((await renderBody(homeEntry)).findHostByTestId('timeline.tightest')).not.toBeNull();
       gates[1]!.resolve();
       await expect.poll(() => projectionOf(homeEntry).accounts[1]?.observedAtMs).toBe(now);
       expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(1);
       // Live L22: current facts arrive before history; a Home rebind aborts
       // that read, then opens an unhydrated-cache revision before new HTTP
       // current/history pages. The unanswered Email source must not disappear
-      // and briefly fabricate a settled headline between those revisions.
+      // and briefly fabricate a settled comparison between those revisions.
       holdHistory = true;
       gates[2]!.resolve(); // The host answers with an addressable placeholder; the vendor never observed this account.
       await expect.poll(() => historyHeld).toBe(1);
       await expect.poll(() => sliceOf(homeEntry).quota?.length).toBe(3);
-      expect(projectionOf(homeEntry).tightest).toBeNull();
+      expect(projectionOf(homeEntry).tightest).toMatchObject({ provisional: true, window: { remainingFraction: 0.5 } });
       releaseHome();
       const resumedProjections: ReturnType<typeof projectionOf>[] = [];
       const releaseResumedHome = homeEntry.subscribe(() => {
@@ -436,7 +436,8 @@ describe('usage query captured Resource adapter', () => {
       await expect.poll(() => historyHeld).toBeGreaterThan(1);
       expect(resumedProjections.length).toBeGreaterThan(0);
       for (const revision of resumedProjections) {
-        expect.soft(revision.tightest, 'an unanswered source cannot vanish during a Home rebind').toBeNull();
+        expect.soft(revision.tightest, 'an unanswered source keeps the observed headline provisional during a Home rebind')
+          .toMatchObject({ provisional: true, window: { remainingFraction: 0.5 } });
         expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
       }
       releaseResumedHome();
@@ -462,7 +463,8 @@ describe('usage query captured Resource adapter', () => {
       await expect.poll(() => historyHeld).toBeGreaterThan(heldBeforePlaceholder);
       expect(placeholderProjections.length).toBeGreaterThan(0);
       for (const revision of placeholderProjections) {
-        expect.soft(revision.tightest, 'an unobserved cache row cannot settle a pending Action read').toBeNull();
+        expect.soft(revision.tightest, 'an unobserved cache row cannot settle a pending Action read')
+          .toMatchObject({ provisional: true, window: { remainingFraction: 0.5 } });
         expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
       }
       holdHistory = false; historyGate.resolve();
