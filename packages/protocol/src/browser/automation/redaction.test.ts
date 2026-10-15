@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BrowserFocusedCredentialTargetV1Schema } from '../context/v1.js';
+import { BrowserAutomationSecretFillRequestV1Schema } from './v1.js';
 
 import {
   redactBrowserAutomationActionResultDetails,
@@ -105,6 +107,23 @@ describe('redactBrowserAutomationTimelineDetails — URL value-shape redaction',
 });
 
 describe('redactBrowserAutomationActionResultDetails — locator preservation stays intact', () => {
+  it('preserves an exact focused credential origin through result redaction and confidential admission', () => {
+    const target = BrowserFocusedCredentialTargetV1Schema.parse({
+      browserSessionId: 'owned-session', viewId: 'dummy-login', tabId: 'tab', frameId: 'frame',
+      documentId: 'document', navigationGeneration: 0, origin: 'http://127.0.0.1:41589',
+      field: { fieldId: '2', focusId: '2', locator: '#dummy-password' },
+    });
+    const result = redactBrowserAutomationActionResultDetails({ focusedCredentialTarget: target });
+    expect(result).toEqual({ focusedCredentialTarget: target });
+    const projected = BrowserFocusedCredentialTargetV1Schema.parse(
+      result !== null && typeof result === 'object' && 'focusedCredentialTarget' in result
+        ? result.focusedCredentialTarget : undefined,
+    );
+    expect(BrowserAutomationSecretFillRequestV1Schema.parse({
+      ...projected, serverId: 'home', sessionId: 'owned-session', machineId: 'machine',
+      purpose: 'Fill the dummy login without submitting',
+    }).origin).toBe(target.origin);
+  });
   it('reports timeline compaction even when the source result was complete', () => {
     const details = { note: 'visible '.repeat(100), truncated: false };
     expect(redactBrowserAutomationActionResultDetails(details)).toEqual(details);

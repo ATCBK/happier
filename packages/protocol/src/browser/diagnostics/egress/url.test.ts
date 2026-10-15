@@ -20,7 +20,7 @@ function collectSourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) return collectSourceFiles(path);
-    if (!entry.isFile() || !path.endsWith('.ts') || path.endsWith('.test.ts')) return [];
+    if (!entry.isFile() || !path.endsWith('.ts') || path.endsWith('.test.ts') || path.endsWith('.d.ts')) return [];
     return [path];
   });
 }
@@ -65,6 +65,13 @@ describe('redactSensitiveUrlPathSegments', () => {
 });
 
 describe('stripBrowserDiagnosticUrlValues', () => {
+  it('preserves exact origins without turning them into root document URLs', () => {
+    for (const origin of ['http://127.0.0.1:41589', 'https://app.test', 'wss://app.test:8443']) {
+      expect(stripBrowserDiagnosticUrlValues(origin)).toBe(origin);
+      expect(stripUrlValuesInString(origin)).toBe(origin);
+    }
+    expect(stripBrowserDiagnosticUrlValues('https://app.test/')).toBe('https://app.test/');
+  });
   it('strips query, fragment, and token path segments from web URLs', () => {
     const out = stripBrowserDiagnosticUrlValues(`https://app.test/reset/${PATH_TOKEN}?token=${QUERY_TOKEN}#f`);
     expect(out).toBe('https://app.test/reset/:redacted');

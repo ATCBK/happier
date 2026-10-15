@@ -64,6 +64,7 @@ export const INJECTED_SANITIZE_RUNTIME = `
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
           return parsed.protocol;
         }
+        if (url === parsed.origin) return url;
         return parsed.origin + redactSensitivePathSegments(parsed.pathname);
       }
       if (url.charAt(0) === '/') {

@@ -108,6 +108,9 @@ export function stripBrowserDiagnosticUrlValues(value: string): string {
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
         return parsed.protocol;
       }
+      // An exact origin carries no path/query values and is an executable
+      // credential-proof identity, not the root document URL produced by URL.href.
+      if (value === parsed.origin) return value;
       return `${parsed.origin}${redactSensitiveUrlPathSegments(parsed.pathname)}`;
     }
     if (value.startsWith('/')) {
@@ -160,6 +163,9 @@ export function stripUrlValuesInString(value: string): string {
  * hand-mirrored vanilla copy cannot drift (RU2 capstone L2-5).
  */
 export const SANITIZE_URL_PARITY_VECTORS: readonly string[] = [
+  'http://127.0.0.1:41589',
+  'https://app.example.test',
+  'wss://relay.example.test:8443',
   'https://app.example.test/reset/tok9f8e7d6c5b4a3210ffeeddcc?token=sk_live_secret&page=2',
   'https%3A%2F%2Fapp.example.test%2Freset%2Ftok9f8e7d6c5b4a3210ffeeddcc%3Ftoken%3Dsk_live_secret%26page%3D2',
   'https://app.example.test/settings/profile',
