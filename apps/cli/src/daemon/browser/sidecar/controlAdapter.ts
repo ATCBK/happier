@@ -530,6 +530,22 @@ export function createBrowserSidecarCdpControlAdapter(
                                 const tree = recordValue(await input.transport.dispatchPageCommand({ ...scope, ...page, method: 'Page.getFrameTree' }));
                                 const frame = recordValue(recordValue(tree?.frameTree)?.frame);
                                 if (frame) updateFrame(bound, frame, true);
+                                // Target.createTarget navigates before Page.enable. A loopback page
+                                // can finish before we subscribe; recover readiness from that exact
+                                // document without letting a late reply ready a subsequent commit.
+                                if (bound.frameId && bound.state.loadingState === 'loading') {
+                                    const generation = bound.state.navigationGeneration;
+                                    const readiness = recordValue(await input.transport.dispatchPageCommand({
+                                        ...scope, ...page, method: 'Runtime.evaluate',
+                                        params: { expression: 'document.readyState', returnByValue: true, awaitPromise: false },
+                                    }));
+                                    if (!disposed && boundViews.get(browserViewKey(command)) === bound
+                                        && bound.state.navigationGeneration === generation
+                                        && recordValue(readiness?.result)?.value === 'complete') {
+                                        bound.state = { ...bound.state, loadingState: 'ready' };
+                                        publishState(bound);
+                                    }
+                                }
                                 await refreshHistory(bound, scope);
                             } catch {
                                 if (boundViews.get(browserViewKey(command)) === bound) {

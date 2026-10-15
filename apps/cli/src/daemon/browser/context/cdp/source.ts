@@ -489,11 +489,17 @@ export function createCdpBrowserContextSource(input: CdpBrowserContextSourceInpu
             }
         },
 
-        async captureSnapshot(view) {
+        async captureSnapshot(view, options) {
             const handle = resolve(view);
             if (!handle) return ADAPTER_UNAVAILABLE;
 
             try {
+                if (options?.focusedCredentialTargetOnly) {
+                    const focusedCredentialTarget = await input.readFocusedCredentialTarget?.(view);
+                    return focusedCredentialTarget
+                        ? { ok: true, visibleText: '', axNodes: [], interactiveElements: [], focusedCredentialTarget }
+                        : CAPTURE_FAILED;
+                }
                 // URL/title from navigation history (metadata).
                 const entry = readCurrentHistoryEntry(await dispatch(handle, 'Page.getNavigationHistory', undefined, view));
                 const url = stringField(entry, 'url');
@@ -581,7 +587,7 @@ export function createCdpBrowserContextSource(input: CdpBrowserContextSourceInpu
         captureScreenshot: view => observe(view, () => source.captureScreenshot(view)),
         captureSummary: view => observe(view, () => source.captureSummary(view)),
         captureSelectedElement: view => observe(view, () => source.captureSelectedElement(view)),
-        captureSnapshot: view => observe(view, () => source.captureSnapshot!(view)),
+        captureSnapshot: (view, options) => observe(view, () => source.captureSnapshot!(view, options)),
         captureRegion: view => observe(view, () => source.captureRegion!(view)),
         captureElement: view => observe(view, () => source.captureElement!(view)),
     };

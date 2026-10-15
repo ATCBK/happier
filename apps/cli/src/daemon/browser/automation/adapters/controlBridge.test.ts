@@ -21,6 +21,8 @@ import type { LoopbackWebSocketJsonClientV1 } from '@/plugins/runtime/exec/priva
 import { createBrowserContextRoutes } from '../../context/routes';
 import { createCdpBrowserContextSource } from '../../context/cdp/source';
 import { SNAPSHOT_MAX_INTERACTIVE_ELEMENTS, SNAPSHOT_MAX_NAME_CHARS } from '../../context/cdp/snapshotEvaluators';
+import { BrowserContextSnapshotV1Schema } from '@happier-dev/protocol/browser/context/v1';
+import { createSurfaceInputControl } from '../../../surfaces/inputControl';
 
 function controlAdapter(overrides: Partial<BrowserDaemonControlAdapter> = {}): BrowserDaemonControlAdapter {
   return {
@@ -161,7 +163,10 @@ function confidentialBoundary(nativeObservation?: 'not_observable' | 'unknown') 
     state.beforeCommand(method, params);
     if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'frame', loaderId: state.documentId, securityOrigin: state.origin } } };
     if (method === 'Page.createIsolatedWorld') return { executionContextId: 7 };
-    if (method === 'Runtime.evaluate') return { result: { type: 'object', subtype: 'node', objectId: String(params?.expression).includes('#submit') ? 'control' : String(params?.expression).includes('document.activeElement') ? 'active' : 'field' } };
+    if (method === 'Runtime.evaluate') {
+      if (String(params?.expression).includes('input[type="password"]')) return cdpEvaluateValue(true);
+      return { result: { type: 'object', subtype: 'node', objectId: String(params?.expression).includes('#submit') ? 'control' : String(params?.expression).includes('document.activeElement') ? 'active' : 'field' } };
+    }
     if (method === 'DOM.describeNode') return { node: { backendNodeId: params?.objectId === 'control' ? state.controlId : state.fieldId, nodeName: 'INPUT', nodeType: 1 } };
     if (method === 'Runtime.callFunctionOn') {
       try { return cdpEvaluateValue(executeFunction(params)); }
@@ -322,6 +327,49 @@ function createAggregateTextDocument(): Readonly<{
 }
 
 describe('control adapter automation transport bridge', () => {
+  it('observes only the verified credential descriptor on a password page through the real context routes', async () => {
+    const boundary = confidentialBoundary();
+    const control = createSurfaceInputControl();
+    let policyAllowed = true;
+    const routes = createBrowserContextRoutes({
+      ownerAccountId: 'owner',
+      resolveGate: () => ({ featureEnabled: true, policyAllowed, runtimeAvailable: true }),
+      resolveInputControl: () => control,
+      source: createCdpBrowserContextSource({
+        transport: boundary.contextCapture.transport,
+        resolveView: boundary.contextCapture.resolvePageHandle,
+        resolveInputControl: () => control,
+        readFocusedCredentialTarget: view => boundary.bridge.readFocusedCredentialTarget!(view),
+        screenshotMediaWriter: { write: async () => { throw new Error('Password pixels must not be persisted'); } },
+      }),
+    });
+    const bridge = createControlAdapterAutomationTransport({ adapter: controlAdapter(),
+      contextCapture: boundary.contextCapture, browserContext: routes });
+    const query = () => bridge.dispatchPageQuery({ ...view, actionKind: 'semanticSnapshot', navigationGeneration: 3, payload: {} });
+    const observed = await query();
+    expect(observed).toMatchObject({ ok: true, data: {
+      focusedCredentialTarget: { ...view, tabId: HANDLE.targetId, frameId: 'frame', documentId: 'document',
+        navigationGeneration: 3, origin: 'https://example.test', field: { fieldId: '41', focusId: '41', locator: '#password' } },
+      visibleText: '', axNodes: [], interactiveElements: [], elements: [],
+    } });
+    if (!observed.ok) throw new Error('Missing credential observation');
+    const { elements: _elements, ...snapshot } = observed.data ?? {};
+    expect(BrowserContextSnapshotV1Schema.safeParse(snapshot).success).toBe(true);
+    expect(snapshot).not.toHaveProperty('media');
+    expect(snapshot).not.toHaveProperty('title');
+    expect(snapshot).not.toHaveProperty('url');
+    expect(boundary.calls.some(call => call.method === 'Page.captureScreenshot' || call.method.startsWith('Accessibility.'))).toBe(false);
+    expect(boundary.calls.filter(call => call.method === 'Runtime.evaluate' &&
+      /innerText|\.value\b|getBoundingClientRect/u.test(String(call.params?.expression)))).toEqual([]);
+    policyAllowed = false;
+    const count = boundary.calls.length;
+    expect(await query()).toMatchObject({ ok: false });
+    expect(boundary.calls).toHaveLength(count);
+    policyAllowed = true;
+    await control.beginConfidentialityHold();
+    expect(await query()).toMatchObject({ ok: false });
+    expect(boundary.calls).toHaveLength(count);
+  });
   it('returns complete daemon query Action results while context snapshots and timelines stay bounded', async () => {
     const name = 'Accessible label '.repeat(30).trim();
     const nodes = Array.from({ length: SNAPSHOT_MAX_INTERACTIVE_ELEMENTS + 1 }, (_, index) => ({

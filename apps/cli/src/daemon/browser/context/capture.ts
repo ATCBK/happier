@@ -149,6 +149,7 @@ export type BrowserContextSource = Readonly<{
    */
   captureSnapshot?(
     target: BrowserContextSourceTargetRef,
+    options?: Readonly<{ focusedCredentialTargetOnly: true }>,
   ): Promise<BrowserContextSourceSnapshotResult>;
 }>;
 
@@ -324,8 +325,8 @@ export function createBrowserContextCaptureService(input: Readonly<{
 }>): BrowserContextCaptureService {
   const now = input.now ?? (() => Date.now());
   const resolveOwnerGate = input.resolveGate ?? (() => DEFAULT_GATE_STATE);
-  async function resolveGate(request: BrowserContextCaptureRequest): Promise<BrowserContextCaptureGateState> {
-    const gate = await resolveOwnerGate(targetRef(request));
+  async function resolveGate(request: BrowserContextCaptureRequest, ownerGate?: BrowserContextCaptureGateState): Promise<BrowserContextCaptureGateState> {
+    const gate = ownerGate ?? await resolveOwnerGate(targetRef(request));
     if (resolveSidecarContextGateDenial(gate) || !input.source.readPrivacyState) return gate;
     const facts = await input.source.readPrivacyState(targetRef(request));
     return { ...gate, policyAllowed: facts.ok && resolveBrowserContextPrivacyDenial(facts.privacyState) === null,
@@ -556,20 +557,35 @@ export function createBrowserContextCaptureService(input: Readonly<{
 
     async captureSnapshot(request) {
       if (!isOwner(request)) return { status: 'denied' };
-      const gate = await resolveGate(request);
+      const ownerGate = await resolveOwnerGate(targetRef(request));
+      if (resolveSidecarContextGateDenial(ownerGate)) return { status: 'denied' };
+      const gate = await resolveGate(request, ownerGate);
+      // Password presence blocks content, not the value-free proof needed to request
+      // confidential input. Owner policy and every other privacy denial still apply.
+      const focusedCredentialTargetOnly = gate.privacyState === 'sensitiveFieldsPresent';
       // The combined snapshot bundles a screenshot, so it is gated like the other sensitive
       // pixel-bearing captures (screenshot/annotation): fail-closed unless the feature is enabled,
       // policy-allowed, and the runtime is available.
-      if (resolveSidecarContextGateDenial(gate)) {
+      if (resolveSidecarContextGateDenial(gate) && !focusedCredentialTargetOnly) {
         return { status: 'denied' };
       }
       if (!input.source.captureSnapshot) {
         return { status: 'unavailable', disabledReason: 'browser snapshot producer unavailable' };
       }
-      const capture = await input.source.captureSnapshot(targetRef(request));
-      if (!capture.ok) {
-        return { status: 'unavailable', disabledReason: disabledReasonFor(capture) };
+      const captured = focusedCredentialTargetOnly
+        ? await input.source.captureSnapshot(targetRef(request), { focusedCredentialTargetOnly: true })
+        : await input.source.captureSnapshot(targetRef(request));
+      if (!captured.ok) {
+        return { status: 'unavailable', disabledReason: disabledReasonFor(captured) };
       }
+      if (focusedCredentialTargetOnly && !captured.focusedCredentialTarget) {
+        return { status: 'unavailable', disabledReason: 'browser focused credential target unavailable' };
+      }
+      // Enforce the restricted projection here as well as at the producer: no source
+      // content, URL/title, screenshot, or accessibility name can accompany this proof.
+      const capture: Extract<BrowserContextSourceSnapshotResult, { ok: true }> = focusedCredentialTargetOnly
+        ? { ok: true, visibleText: '', axNodes: [], interactiveElements: [], focusedCredentialTarget: captured.focusedCredentialTarget }
+        : captured;
       // LANE-B egress model: the daemon route owner returns FULL fidelity to the local owner; the
       // agent/cloud egress chokepoint redacts before the payload leaves the device. `none` records
       // that no redaction was applied to the owner-facing payload.

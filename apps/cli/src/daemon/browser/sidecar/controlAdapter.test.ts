@@ -194,6 +194,48 @@ describe('browser sidecar CDP control adapter', () => {
         listener?.({ method: 'Page.frameNavigated', sessionId: 'cdp_session_secret', params: { frame: { id: 'main', loaderId: 'late', url: 'https://late.test/' } } });
         expect(events).toHaveLength(count);
     });
+    it.each(['complete', 'loading'])('bootstraps a page whose initial load preceded event admission (%s)', async readyState => {
+        const adapter = createBrowserSidecarCdpControlAdapter({ browserSessionId: 'browser_session_1', sidecarId: 'sidecar_1',
+            transport: { ...createTransport(), subscribeCdpEvents: () => () => undefined,
+                dispatchPageCommand: async command => {
+                    if (command.method === 'Page.getFrameTree') return { frameTree: { frame: {
+                        id: 'main', loaderId: 'initial', url: 'https://browser.example.test/start',
+                    } } };
+                    if (command.method === 'Runtime.evaluate') return { result: { type: 'string', value: readyState } };
+                    return {};
+                },
+            },
+        });
+        const opened = BrowserCommandDispatchResultV1Schema.parse(await adapter.dispatchCommand(externalOpenViewCommand()));
+        expect(opened).toMatchObject({ status: 'dispatched', events: [expect.objectContaining({
+            loadingState: readyState === 'complete' ? 'ready' : 'loading', navigationGeneration: 0,
+        })] });
+        adapter.dispose();
+    });
+
+    it('does not mark a newly navigated document ready from an earlier readiness reply', async () => {
+        let listener!: BrowserSidecarCdpEventSubscriber;
+        const adapter = createBrowserSidecarCdpControlAdapter({ browserSessionId: 'browser_session_1', sidecarId: 'sidecar_1',
+            transport: { ...createTransport(), subscribeCdpEvents: callback => { listener = callback; return () => undefined; },
+                dispatchPageCommand: async command => {
+                    if (command.method === 'Page.getFrameTree') return { frameTree: { frame: {
+                        id: 'main', loaderId: 'initial', url: 'https://browser.example.test/start',
+                    } } };
+                    if (command.method === 'Runtime.evaluate') {
+                        listener({ method: 'Page.frameNavigated', sessionId: 'cdp_session_secret', params: { frame: {
+                            id: 'main', loaderId: 'redirect', url: 'https://redirect.test/',
+                        } } });
+                        return { result: { type: 'string', value: 'complete' } };
+                    }
+                    return {};
+                },
+            },
+        });
+        await adapter.dispatchCommand(externalOpenViewCommand());
+        expect(adapter.getNavigationState({ browserSessionId: 'browser_session_1', viewId: 'view_1' }))
+            .toMatchObject({ loadingState: 'loading', currentUrl: 'https://redirect.test/', navigationGeneration: 1 });
+        adapter.dispose();
+    });
     it('does not regress a committed redirect when the bootstrap frame tree replies late', async () => {
         let listener!: BrowserSidecarCdpEventSubscriber;
         let releaseTree!: (tree: unknown) => void;
