@@ -179,6 +179,7 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
                     meta: bodyMeta,
                 })}
                 grouped={props.grouped === true || props.sectionHost === true}
+                fill
                 {...(props.sectionHost ? { bodyHeight: 'content' as const } : {})}
                 {...(props.entityDrag && props.showGrip ? { leading: <SessionSurfaceEntityDragHandle drag={drag} title={props.entityDrag.title} testID={`${props.testID}.move`} /> } : {})}
                 menu={props.menu}

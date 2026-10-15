@@ -397,8 +397,9 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             } : undefined}
             renderText={renderText}
             footer={footerNode}
-            // A card with a footprint keeps its rows' height; inside a group its cell is the band's, so it fills it.
-            fill={props.widgetPresentation && !props.grouped ? false : props.fill ?? props.grouped}
+            // A card with a footprint keeps its rows' height unless its host asks it to fill its grid cell (so
+            // cards sharing a row share its height); inside a group its cell is the band's, so it fills it.
+            fill={props.fill ?? (props.widgetPresentation && !props.grouped ? false : props.grouped)}
             bodyStyle={props.bodyStyle}
             accessibilityLabel={props.accessibilityLabel
                 ?? (typeof props.source === 'string' && typeof props.title === 'string' ? `${props.title}, ${props.source}` : undefined)}
