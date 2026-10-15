@@ -80,6 +80,8 @@ export type UsagePlanAccount = Readonly<{
 
 export type UsagePlanPool = Readonly<{
   key: string;
+  /** The Account group's own presented name, independent of selector-read arrival. */
+  name?: string;
   service: UsagePlanAccount['service'];
   groupId: string;
   accountKeys: readonly string[];

@@ -146,21 +146,6 @@ function memberReason(
     .join(' · ');
 }
 
-function poolLabel(
-  pool: UsagePlanPool,
-  accounts: readonly UsagePlanAccount[],
-  nameOf: NameOf,
-): string | null {
-  const first = accounts.find((account) =>
-    pool.accountKeys.includes(account.key),
-  );
-  return first
-    ? t('usage.board.plans.usedFirstPool', {
-        service: nameOf(first).serviceLabel,
-      })
-    : null;
-}
-
 /** A pool whose order could not be read says so in one held line; it never falls back to a guess. */
 function unreadText(
   state: Exclude<UsagePoolSelectionState, Readonly<{ selection: Selection }>>,
@@ -229,7 +214,7 @@ function PoolQueue(
   props: PoolOrderProps & Readonly<{ pool: UsagePlanPool; causeBelow: boolean }>,
 ) {
   const text = usePlanText();
-  const label = poolLabel(props.pool, props.accounts, props.nameOf);
+  const label = props.pool.name ?? null;
   const state = props.selections.get(props.pool.key) ?? 'loading';
   if (!label) return null;
   const title = `${t('usage.board.plans.queueTitle')} · ${label}`;
@@ -385,7 +370,7 @@ export function UsagePoolSteps(props: PoolOrderProps) {
   return (
     <View testID={props.testID} style={styles.pools}>
       {props.pools.map((pool) => {
-        const label = poolLabel(pool, props.accounts, props.nameOf);
+        const label = pool.name ?? null;
         const state = props.selections.get(pool.key) ?? 'loading';
         if (!label) return null;
         if (typeof state === 'string' || 'status' in state) {

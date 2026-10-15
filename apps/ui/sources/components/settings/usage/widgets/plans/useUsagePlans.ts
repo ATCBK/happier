@@ -4,13 +4,18 @@ import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected
 import type { ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { useConnectedServiceQuotaSummaries } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
-import { presentConnectedAccountNames } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
-import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { presentConnectedAccountNames, presentQualifiedConnectedAccountTarget } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
+import { storage, useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useProjectedConnectedServicesRegistry, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { resolveQualifiedConnectedServiceRegistryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import { resolveConnectedServiceRegistryEntryDisplayName, resolveQualifiedConnectedServiceRegistryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { t } from '@/text';
 import {
   projectUsagePlans,
@@ -31,6 +36,11 @@ const accountKeyOf = (
   service: Readonly<{ pluginId: string; localId: string }>,
   accountId: string,
 ) => `${service.pluginId}/${service.localId}:${accountId}`;
+
+// Presentation of an answered Account read survives route-owned hook mounts,
+// including services whose answer contains no allowance observation.
+const observedServiceNames = new WeakMap<ServerAccountScopeLifetime, Map<string, ConnectedServiceRegistryEntry>>();
+const NO_GROUPS: readonly QualifiedConnectedAccountGroupV4[] = [];
 
 /**
  * The Plans bodies' shared read of one slice. B facts come from the slice only; the incumbent
@@ -54,15 +64,41 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
   // A fresh `now` per render would rebuild the projection on every parent render; minute precision
   // is what the reset/stale wording shows.
   const minute = Math.floor(nowMs / 60_000);
-  const projection = React.useMemo(
+  const baseProjection = React.useMemo(
     () => projectUsagePlans(quota, minute * 60_000, slice.pools, slice.sources),
     [quota, minute, slice.pools, slice.sources],
   );
   const summaries = useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' });
   const registry = useProjectedConnectedServicesRegistry();
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
+  const scope = useActiveServerAccountScope();
+  const groups = storage(state => areServerAccountScopesEqual(state.profileScope, scope)
+    ? state.profile.connectedAccountGroupsV4 : NO_GROUPS);
+  const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
+  const projection = React.useMemo(() => ({ ...baseProjection, pools: baseProjection.pools.map(pool => ({
+    ...pool,
+    name: presentQualifiedConnectedAccountTarget({ target: { kind: 'group', service: pool.service, groupId: pool.groupId },
+      groups, accounts: [], labelsByKey,
+      serviceTitle: resolveQualifiedConnectedServiceRegistryDisplayName(registry, pool.service, t, localizePluginText),
+    }).primaryLabel,
+  })) }), [baseProjection, groups, labelsByKey, registry, localizePluginText]);
+  const lifetime = captureActiveServerAccountScopeLifetime();
+  const retainedNames = React.useMemo(() => {
+    if (!lifetime) return new Map<string, ConnectedServiceRegistryEntry>();
+    let names = observedServiceNames.get(lifetime);
+    if (!names) { names = new Map(); observedServiceNames.set(lifetime, names); }
+    return names;
+  }, [lifetime]);
   const serviceEntryOf = React.useCallback((account: UsagePlanAccount) =>
     resolveQualifiedConnectedServiceRegistryEntry(registry, account.service), [registry]);
+  React.useEffect(() => {
+    if (!lifetime?.isCurrent()) return;
+    for (const account of projection.accounts) {
+      const entry = serviceEntryOf(account);
+      if (entry && (account.observedAtMs !== null || !['pending', 'not_loaded'].includes(account.state.status)))
+        retainedNames.set(account.key, entry);
+    }
+  }, [lifetime, projection.accounts, retainedNames, serviceEntryOf]);
   const { present } = useConnectedAccountIdentityPrivacy();
   const summaryByKey = React.useMemo(
     () =>
@@ -79,9 +115,15 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
     // Released built-in names are already available synchronously; other
     // services keep the generic label until their own first read answers.
     if (account.observedAtMs === null && ['pending', 'not_loaded'].includes(account.state.status)
-      && !serviceEntryOf(account)?.legacyServiceId) return t('connectedServices.fallbackName');
-    return resolveQualifiedConnectedServiceRegistryDisplayName(registry, account.service, t, localizePluginText);
-  }, [registry, localizePluginText, serviceEntryOf]);
+      && !serviceEntryOf(account)?.legacyServiceId) {
+      const retained = lifetime?.isCurrent() ? retainedNames.get(account.key) : undefined;
+      return retained ? resolveConnectedServiceRegistryEntryDisplayName(retained, t, localizePluginText)
+        : t('connectedServices.fallbackName');
+    }
+    const entry = serviceEntryOf(account) ?? (lifetime?.isCurrent() ? retainedNames.get(account.key) : undefined);
+    return entry ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, localizePluginText)
+      : t('connectedServices.fallbackName');
+  }, [registry, localizePluginText, serviceEntryOf, lifetime, retainedNames]);
   const names = React.useMemo(
     () =>
       presentConnectedAccountNames(
