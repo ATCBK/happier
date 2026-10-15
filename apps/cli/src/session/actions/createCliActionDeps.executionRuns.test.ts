@@ -78,16 +78,40 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
 describe('detached exact Run output observation transport', () => {
-  it('uses the installed exact Machine transport for ordinary detached Run calls', async () => {
-    const response = { runs: [] };
+  it.each(['list', 'start'] as const)('uses the installed exact Machine transport for ordinary detached Run %s', async (operation) => {
+    const response = operation === 'list' ? { runs: [] } : { runId: 'detached-run', callId: 'call', sidechainId: 'sidechain' };
     const invoke = vi.fn(async () => response);
     callMachineRpc.mockClear();
     const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
       sessionId: 'cli-global', mode: 'plain', ctx: null,
       machineActionDirectTargetTransport: { machineId: 'machine-1', invoke } });
-    expect(await deps.executionRunList(null, {}, { targetMachineId: 'machine-1' })).toEqual(response);
-    expect(invoke).toHaveBeenCalledWith(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {}, expect.any(Object));
+    const request = operation === 'list' ? {} : { kind: 'delegate', intent: 'delegate', instructions: 'Read the fixture',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only',
+      retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' };
+    const result = operation === 'list'
+      ? await deps.executionRunList(null, request, { targetMachineId: 'machine-1' })
+      : await deps.executionRunStart(null, request, { targetMachineId: 'machine-1' });
+    expect(result).toEqual(response);
+    expect(invoke).toHaveBeenCalledWith(operation === 'list' ? SESSION_RPC_METHODS.EXECUTION_RUN_LIST
+      : SESSION_RPC_METHODS.EXECUTION_RUN_START, request, expect.any(Object));
     expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
+  it('routes an ordinary detached call to a different Machine and refuses private-context dispatch there', async () => {
+    const response = { runs: [] };
+    const invoke = vi.fn();
+    callMachineRpc.mockReset().mockResolvedValue(response);
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke } });
+    expect(await deps.executionRunList(null, {}, { targetMachineId: 'machine-2' })).toEqual(response);
+    expect(callMachineRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-2',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_LIST }));
+    callMachineRpc.mockClear();
+    expect(await deps.executionRunList(null, {}, { targetMachineId: 'machine-2', workDepth: 1 }))
+      .toMatchObject({ ok: false, code: 'execution_run_target_unavailable' });
+    expect(callMachineRpc).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('ends a local passive observation at its authored deadline despite blocked output', async () => {

@@ -1406,8 +1406,10 @@ export function createCliActionDeps(params: Readonly<{
           if (!transport.ok || readExecutionRunTransportMachineId(transport) !== source.machineId) {
             throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
           }
-          raw = await getExecutionRun({ ...transport, token: params.token, sessionId: transport.sessionId,
+          const observed = await getExecutionRun({ ...transport, token: params.token, sessionId: transport.sessionId,
             request: { runId: source.runId }, ...(caller?.signal ? { signal: caller.signal } : {}) });
+          if (!observed.ok) throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+          raw = observed.data;
         } else {
           raw = await callDetachedExecutionRunRpc(null, SESSION_RPC_METHODS.EXECUTION_RUN_GET,
             { runId: source.runId }, { targetMachineId: source.machineId, ...(caller?.signal ? { signal: caller.signal } : {}) });
@@ -2209,16 +2211,16 @@ export function createCliActionDeps(params: Readonly<{
     const target = await resolveExecutionRunMachineTarget(sessionId, opts);
     if (!target.ok) return failure(target.errorCode, 'noRunCreated');
     try {
-      if (opts && requiresDirectExecutionRunTransport(opts)) {
-        const direct = params.machineActionDirectTargetTransport;
-        if (!direct || direct.machineId !== target.machineId) {
-          return failure('execution_run_target_unavailable', 'noRunCreated');
-        }
+      const direct = params.machineActionDirectTargetTransport;
+      if (requiresDirectExecutionRunTransport(opts) && direct?.machineId !== target.machineId) {
+        return failure('execution_run_target_unavailable', 'noRunCreated');
+      }
+      if (direct?.machineId === target.machineId) {
         return await direct.invoke(method, request, {
-          ...(opts.signal ? { signal: opts.signal } : {}),
+          ...(opts?.signal ? { signal: opts.signal } : {}),
           localActionContext: {
-            ...(opts.authority ? { authority: opts.authority } : {}),
-            ...(opts.workDepth === undefined ? {} : {
+            ...(opts?.authority ? { authority: opts.authority } : {}),
+            ...(opts?.workDepth === undefined ? {} : {
               surface: 'agent' as const,
               authority: 'account_automation' as const,
               agentStartWorkDepth: opts.workDepth,
@@ -2227,19 +2229,19 @@ export function createCliActionDeps(params: Readonly<{
               callerPermissionMode: opts.agentStartContext?.callerPermissionCeiling,
               causalPermissionAuthority: opts.causalPermissionAuthority,
             }),
-            ...(opts.workspaceWrites === undefined ? {} : { agentStartWorkspaceWrites: opts.workspaceWrites }),
-            ...(opts.permissionRequestStore === undefined ? {} : { executionRunPermissionRequestStore: opts.permissionRequestStore }),
-            ...(opts.workflowObservationSink === undefined ? {} : { executionRunWorkflowObservationSink: opts.workflowObservationSink }),
-            ...(opts.workflowRunId ? { executionRunWorkflowRunId: opts.workflowRunId } : {}),
-            ...(opts.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: opts.requesterWorkAttributionV1 } : {}),
+            ...(opts?.workspaceWrites === undefined ? {} : { agentStartWorkspaceWrites: opts.workspaceWrites }),
+            ...(opts?.permissionRequestStore === undefined ? {} : { executionRunPermissionRequestStore: opts.permissionRequestStore }),
+            ...(opts?.workflowObservationSink === undefined ? {} : { executionRunWorkflowObservationSink: opts.workflowObservationSink }),
+            ...(opts?.workflowRunId ? { executionRunWorkflowRunId: opts.workflowRunId } : {}),
+            ...(opts?.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: opts.requesterWorkAttributionV1 } : {}),
           },
-          ...(opts.permissionRequestStore === undefined
+          ...(opts?.permissionRequestStore === undefined
             ? {}
             : { executionRunPermissionRequestStore: opts.permissionRequestStore }),
-          ...(opts.workflowObservationSink === undefined
+          ...(opts?.workflowObservationSink === undefined
             ? {}
             : { executionRunWorkflowObservationSink: opts.workflowObservationSink }),
-          ...(opts.workflowRunId ? { executionRunWorkflowRunId: opts.workflowRunId } : {}),
+          ...(opts?.workflowRunId ? { executionRunWorkflowRunId: opts.workflowRunId } : {}),
         });
       }
       const getRequest = method === SESSION_RPC_METHODS.EXECUTION_RUN_GET
