@@ -27,6 +27,21 @@ function fixture(protocolVersion = 4) {
 }
 
 describe('CLI reset start admission', () => {
+  it.each(['session.pending.markHandled', 'session.pending.dismiss', 'session.pending.sendAsNew'] as const)(
+    'delivers %s through the registered Action and existing pending HTTP owner', async actionId => {
+      const { deps } = fixture();
+      const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true, newLocalId: 'replacement' } });
+      const targetExecutionRunId = actionId === 'session.pending.markHandled' ? undefined : 'run/one';
+      const input = { sessionId: 'session/one', localId: 'input/one', ...(targetExecutionRunId ? { targetExecutionRunId } : {}) };
+      expect(await createActionExecutor(deps).execute(actionId, input, { surface: 'ui', authority: 'present_user',
+        presentUserConfirmation: { actionId } })).toEqual({ ok: true,
+          result: actionId === 'session.pending.sendAsNew' ? { newLocalId: 'replacement' } : { ok: true } });
+      const action = actionId === 'session.pending.markHandled' ? 'handled' : actionId === 'session.pending.dismiss' ? 'dismiss' : 'send-as-new';
+      const owner = targetExecutionRunId ? '/execution-runs/run%2Fone' : '';
+      expect(post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/session%2Fone${owner}/pending/input%2Fone/delivery/${action}`), {},
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer account-token' }) }));
+    });
+
   it.each([false, true])('admits the exact witnessed future window through one pending mutation (initial %s)', async initial => {
     const { source, snapshot, reset, requestedAction, record, deps } = fixture();
     vi.spyOn(Date, 'now').mockReturnValue(500);
@@ -55,7 +70,8 @@ describe('CLI reset start admission', () => {
     const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true, didWrite: true } });
     const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: { ok: true, didUpdate: true, requestedAction } });
     expect(await createActionExecutor(deps).execute('session.pending.resetStart.set', { sessionId: 'session', localId: 'one-input', reset,
-      initialInput: { content: { t: 'plain', v: {} } } }, { surface: 'ui', authority: 'present_user' }))
+      initialInput: { content: { t: 'plain', v: {} } } }, { surface: 'ui', authority: 'present_user',
+        presentUserConfirmation: { actionId: 'session.pending.resetStart.set' } }))
       .toMatchObject({ ok: false, errorCode: 'reset_start_unsupported' });
     expect(post).not.toHaveBeenCalled();
     expect(patch).not.toHaveBeenCalled();
@@ -78,7 +94,8 @@ describe('CLI reset start admission', () => {
     const input = { sessionId: 'session', localId: 'one-input', reset, initialInput: { content: { t: 'plain' as const, v: {} } } };
     if (scenario === 'stale') {
       expect(await createActionExecutor(deps).execute('session.pending.resetStart.set', input,
-        { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'reset_start_unavailable', details: { reason: 'quota_stale' } });
+        { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'session.pending.resetStart.set' } }))
+        .toMatchObject({ ok: false, errorCode: 'reset_start_unavailable', details: { reason: 'quota_stale' } });
     } else if (scenario === 'cancelled') {
       await expect(deps.sessionPendingResetStartSet!({ ...input, context: { surface: 'cli', signal: controller.signal } })).rejects.toThrow();
     } else {

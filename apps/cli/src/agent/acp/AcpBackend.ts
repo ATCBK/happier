@@ -454,7 +454,7 @@ export class AcpBackend implements CatalogAcpBackend {
 
   private settlePendingPromptSubmissionEffect(
     turnGeneration: number,
-    evidence: 'provider-effect' | 'completion' = 'provider-effect',
+    evidence: 'provider-effect' | 'completion' | 'custody-unknown' = 'provider-effect',
   ): boolean {
     if (
       !this.pendingPromptSubmissionEffectResolver
@@ -1902,7 +1902,7 @@ export class AcpBackend implements CatalogAcpBackend {
   private sawPromptTurnEffectSincePrompt = false;
   private sawAssistantMessageSincePrompt = false;
   private pendingPromptSubmissionTurnGeneration: number | null = null;
-  private pendingPromptSubmissionEffectResolver: ((evidence: 'provider-effect' | 'completion') => void) | null = null;
+  private pendingPromptSubmissionEffectResolver: ((evidence: 'provider-effect' | 'completion' | 'custody-unknown') => void) | null = null;
   private promptTransportWriteWaiters: Array<{
     sessionId: string;
     resolve: () => void;
@@ -1963,12 +1963,10 @@ export class AcpBackend implements CatalogAcpBackend {
         status: 'error',
         detail: `ACP turn timed out after ${capMs}ms`,
       });
-      if (this.sawSessionUpdateSincePrompt) {
-        // Same-turn provider traffic proves the prompt reached provider custody. Release the
-        // submission waiter before closing the turn so the hard-cap outcome remains observable
-        // instead of being replaced later by the prompt-RPC liveness timeout.
-        this.settlePendingPromptSubmissionEffect(turnGeneration);
-      }
+      // Metadata traffic does not prove consumption. The existing cap still owns
+      // settlement when neither output nor a prompt response has been observed.
+      this.settlePendingPromptSubmissionEffect(turnGeneration,
+        this.sawPromptTurnEffectSincePrompt ? 'provider-effect' : 'custody-unknown');
       this.finalizeTurnOutcome({ kind: 'timed_out', capMs });
     }, capMs);
     this.turnHardCapTimeout.unref?.();
@@ -2351,15 +2349,18 @@ export class AcpBackend implements CatalogAcpBackend {
 
       const correlatedProviderEffectSentinel = Symbol('acp-correlated-provider-effect');
       const correlatedProviderCompletionSentinel = Symbol('acp-correlated-provider-completion');
+      const unknownProviderCustodySentinel = Symbol('acp-unknown-provider-custody');
       const promptLivenessTimeoutSentinel = Symbol('acp-prompt-liveness-timeout');
       const correlatedProviderEffect = new Promise<
-        typeof correlatedProviderEffectSentinel | typeof correlatedProviderCompletionSentinel
+        typeof correlatedProviderEffectSentinel | typeof correlatedProviderCompletionSentinel | typeof unknownProviderCustodySentinel
       >((resolve) => {
         this.pendingPromptSubmissionTurnGeneration = turnGeneration;
         this.pendingPromptSubmissionEffectResolver = (evidence) => resolve(
           evidence === 'completion'
             ? correlatedProviderCompletionSentinel
-            : correlatedProviderEffectSentinel,
+            : evidence === 'custody-unknown'
+              ? unknownProviderCustodySentinel
+              : correlatedProviderEffectSentinel,
         );
       });
       const promptLivenessTimeoutMs = resolvePromptLivenessTimeoutMs(this.transport);
@@ -2437,6 +2438,13 @@ export class AcpBackend implements CatalogAcpBackend {
         throw new Error(
           `Timeout waiting for the ACP prompt response or correlated provider-effect evidence after ${promptLivenessTimeoutMs}ms`,
         );
+      }
+
+      if (promptSubmissionEvidence === unknownProviderCustodySentinel) {
+        return {
+          kind: 'effect_may_have_occurred',
+          error: new Error('ACP turn hard cap elapsed before prompt-turn effect was observed'),
+        };
       }
 
       if (promptSubmissionEvidence === correlatedProviderEffectSentinel) {

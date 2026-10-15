@@ -1,56 +1,112 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentSessionRuntimeEventV1Schema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
+import Fastify from 'fastify';
+import tweetnacl from 'tweetnacl';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
+import { auth } from '@/app/auth/auth';
+import type { Fastify as AppFastify } from '@/app/api/types';
+import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
+import { enableSchemaValidation } from '@/app/api/utils/enableSchemaValidation';
+import { enableErrorHandlers } from '@/app/api/utils/enableErrorHandlers';
+import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
+import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
+import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
+import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
+import { featuresRoutes } from '@/app/api/routes/features/featuresRoutes';
+import { startSocket } from '@/app/api/socket';
 import { db } from '@/storage/db';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
-import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
-import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
-import { blockPendingDelivery, deletePendingMessage, enqueuePendingMessage, markPendingDeliveryHandled, materializeNextPendingMessage,
-    resolveAcceptedPendingDelivery } from './pendingMessageService';
+import { blockPendingDelivery, deletePendingMessage, enqueuePendingMessage, markPendingDeliveryHandled } from './pendingMessageService';
 import { createPublicAcpSession } from '../../../../../cli/src/agent/acp/runtime/publicSession/createPublicAcpSession';
 import { createNativeAgentSessionPublications } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import { createSessionTurnLifecycle } from '../../../../../cli/src/agent/runtime/session/turn/lifecycle';
-import { createAgentSessionTurnInvariant } from '../../../../../cli/src/agent/runtime/session/turn/agentSessionTurnInvariant';
-import { createSessionProviderInputOutcomeNormalizer } from '../../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
+import { createNativeAgentSessionOperations } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createPluginSessionMediaHostAdapter } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSessionMedia';
+import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeNormalizer } from '../../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
+import { ApiSessionClient } from '../../../../../cli/src/api/session/sessionClient';
+import { createSessionSocketTransport } from '../../../../../cli/src/api/session/connection/createSessionSocketTransport';
+import { createInitialHostRuntimeActivityMutation } from '../../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
+import { createTestMetadata } from '../../../../../cli/src/testkit/backends/sessionMetadata';
+import { encodeBase64, encrypt } from '../../../../../cli/src/api/encryption';
+import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 import { writeAcpTestAgentScript } from '../../../../../cli/src/agent/acp/testkit/subprocessHarness';
 import { waitForCondition } from '../../../../../cli/src/testkit/async/waitFor';
-import { SessionMessageAcceptedDeliveryFactsV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 import { MessageQueue2 } from '../../../../../cli/src/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '../../../../../cli/src/agent/runtime/session/input/sessionProviderInputConsumer';
+import { createSessionProviderInputConsumerSessionAdapter } from '../../../../../cli/src/agent/runtime/waitForNextPermissionModeMessage';
 import { createWorkflowOriginContextInputPort } from '../../../../../cli/src/agent/runtime/session/contextOnly/workflowOriginInput';
 import { publishSessionFollowWakeInvalidation } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowWakeSignal';
 
 describe('consumed ACP input → host turn → Pending', () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-consumed-input-', initAuth: true }); }, 120_000);
-    afterAll(async () => { await harness.close(); });
+    let app: AppFastify;
+    let origin: string;
+    const clients = new Set<ApiSessionClient>();
+    beforeAll(async () => {
+        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-consumed-input-', initAuth: true, initEncrypt: true });
+        app = Fastify().withTypeProvider<ZodTypeProvider>();
+        enableSchemaValidation(app);
+        enableErrorHandlers(app);
+        enableAuthentication(app);
+        registerAccountEncryptionRoutes(app);
+        registerSessionListingRoutes(app);
+        registerSessionMessageRoutes(app);
+        sessionPendingRoutes(app);
+        featuresRoutes(app);
+        startSocket(app);
+        origin = await app.listen({ host: '127.0.0.1', port: 0 });
+    }, 120_000);
+    afterAll(async () => { await app?.close(); await harness?.close(); });
+    afterEach(async () => {
+        await Promise.all([...clients].map(client => client.close()));
+        clients.clear();
+        vi.unstubAllEnvs();
+    });
 
-    it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost', 'rejected'] as const)('settles only witnessed consumption (%s)', async scenario => {
+    it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost', 'rejected', 'metadata-only-hard-cap'] as const)('settles only witnessed consumption (%s)', async scenario => {
         harness.resetEnv();
+        if (scenario === 'metadata-only-hard-cap') vi.stubEnv('HAPPIER_ACP_TURN_HARD_CAP_TIMEOUT_MS', '250');
         const authentication = createPresentUserSessionAccessAuthentication();
-        const owner = await db.account.create({ data: createSignedAccountContentBinding() });
-        const session = await db.session.create({ data: { tag: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const accountSecret = new Uint8Array(32).fill(7);
+        const sessionKey = new Uint8Array(32).fill(11);
+        const metadata = createTestMetadata({ path: harness.baseDir });
+        const sealInput = (text: string) => encodeBase64(encrypt(sessionKey, 'dataKey', { role: 'user', content: { type: 'text', text } }));
+        const owner = await db.account.create({ data: createSignedAccountContentBinding(tweetnacl.box.keyPair.fromSecretKey(accountSecret).publicKey) });
+        const session = await db.session.create({ data: { tag: randomUUID(), accountId: owner.id,
+            metadata: encodeBase64(encrypt(sessionKey, 'dataKey', metadata)) } });
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
         await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
-        const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
-        const presence = createSessionPublisherPresence();
-        const socket = {};
-        const registered = await presence.registerPublisher({ socket, binding, completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
-        if (registered.status !== 'registered') throw new Error(`publisher ${registered.status}`);
-        const publisherAuthority = { ...binding, socket, presence, committedFence: registered.committedFence };
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const credentials = { token, encryption: { type: 'legacy' as const, secret: accountSecret } };
+        const client = new ApiSessionClient(token, {
+            id: session.id, seq: 0, encryptionMode: 'e2ee', encryptionKey: sessionKey, encryptionVariant: 'dataKey',
+            metadata, metadataVersion: 0, agentState: null, agentStateVersion: 0,
+        }, {
+            metadataAuthority: { kind: 'owner', credentials, readCurrentCredentials: async () => credentials },
+            localMachineId: machine.id,
+            initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({
+                sessionId: session.id, agentRuntimeApplicability: 'supported',
+            })],
+            transport: { serverId: 'consumed-input-home', serverUrl: origin, resolveToken: async () => token,
+                createSessionSocketTransport: binding => createSessionSocketTransport({ ...binding, token, serverUrl: origin,
+                    accessKeyBinding: 'preestablished' }) },
+        });
+        clients.add(client);
+        expect(await client.claimCurrentSessionPublisherAuthorityForStartup()).toMatchObject({ status: 'claimed' });
+        await client.updateRuntimeActivityProjection({ runtimeActivityState: 'idle', runtimeActivityActiveCount: 0 });
         const localId = `consumed-${randomUUID()}`;
         const retryLocalId = `${localId}-retry`;
         const responseReleasePath = join(harness.baseDir, `recovery-response-${session.id}`);
         const request = { actorUserId: owner.id, sessionId: session.id, localId, authentication };
-        expect(await enqueuePendingMessage({ ...request, ciphertext: 'original-input', requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true });
-        expect(await materializeNextPendingMessage({ ...request, publisherAuthority, deliveryState: 'provider',
-            deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
-            expectedRuntimeActivityRevision: registered.activity.projection.runtimeActivityRevision })).toMatchObject({ ok: true });
+        expect(await enqueuePendingMessage({ ...request, ciphertext: sealInput('original-input'), requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true });
+        expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force',
+            deliveryTiming: 'after_foreground_ready' })).toMatchObject({ type: 'materialized', localId });
         if (scenario === 'blocked' || scenario === 'historical') {
             // Existing rows retain original input custody; later exact acceptance must
             // upgrade the same row, without copying input or changing its schema.
@@ -68,7 +124,7 @@ describe('consumed ACP input → host turn → Pending', () => {
             expect(await markPendingDeliveryHandled(request)).toMatchObject({ ok: true, didResolve: true, pendingCount: 0, pendingBlockedCount: 0 });
             expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'already_delivered', pendingCount: 0 });
             expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
-            expect(await enqueuePendingMessage({ ...request, localId: `${localId}-retry`, ciphertext: 'new-user-retry',
+            expect(await enqueuePendingMessage({ ...request, localId: `${localId}-retry`, ciphertext: sealInput('new-user-retry'),
                 requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true, pendingCount: 1, pendingBlockedCount: 0 });
             return;
         }
@@ -86,6 +142,19 @@ describe('consumed ACP input → host turn → Pending', () => {
                 else if (request.method === 'session/new') send({ id: request.id, result: { sessionId: 'provider-consumed' } });
                 else if (request.method === 'session/prompt') {
                     promptCount += 1;
+                    if (${JSON.stringify(scenario)} === 'metadata-only-hard-cap') {
+                        const metadata = () => {
+                            for (const update of [{ sessionUpdate: 'current_mode_update', currentModeId: 'metadata-only-mode' },
+                                { sessionUpdate: 'config_option_update', configOptions: [] }]) {
+                                send({ method: 'session/update', params: { sessionId: request.params.sessionId, update } });
+                            }
+                        };
+                        metadata();
+                        setInterval(metadata, 20);
+                        // Neither session/prompt nor session/cancel gets a reply.
+                        // The existing hard cap must settle unknown custody itself.
+                        continue;
+                    }
                     if (${JSON.stringify(scenario)} === 'lost') process.exit(17);
                     if (promptCount > 1) {
                         if (${JSON.stringify(scenario)} === 'recovery-lost') process.exit(17);
@@ -107,61 +176,54 @@ describe('consumed ACP input → host turn → Pending', () => {
             }
         ` });
         const signal = new AbortController().signal;
-        const publications = createNativeAgentSessionPublications({ agentId: 'custom-acp', session: null, signal,
+        const publications = createNativeAgentSessionPublications({ agentId: 'custom-acp', session: client, signal,
             isCurrent: () => true, supportsInFlightSteer: false });
-        const runtime = await createPublicAcpSession({ kind: 'create', sessionId: session.id, cwd: harness.baseDir }, {
+        const media = createPluginSessionMediaHostAdapter({ agentId: 'custom-acp', readActiveScope: () => ({
+            sessionId: session.id, rootPath: harness.baseDir,
+            sendAgentSessionMediaCommitted: (provider, request) => client.sendAgentSessionMediaCommitted(provider, request),
+        }) });
+        const providerSession = await createPublicAcpSession({ kind: 'create', sessionId: session.id, cwd: harness.baseDir }, {
             transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture-acp' } },
         }, {
             pluginId: 'fixture.acp', agentId: 'custom-acp', signal, isCurrent: () => true,
             systemTools: { resolve: async () => ({ toolId: 'fixture-acp', launch: { kind: 'binary', executablePath: process.execPath, args: [script] } }) },
             models: publications.services.models, modes: publications.services.modes,
             interactions: { request: async () => { throw new Error('No ACP permission request expected'); } },
-            media: { registerSourceRoot: async () => ({ publishGenerated: async () => ({ status: 'published' }), dispose() {} }) },
+            media: media.forAuthorizedSession(session.id, root => root === harness.baseDir),
         });
         const events: AgentSessionRuntimeEvent[] = [];
-        const invariant = createAgentSessionTurnInvariant({ sessionId: session.id });
-        const writes: Promise<unknown>[] = [];
-        const turn = createSessionTurnLifecycle({ agentId: 'custom-acp', onAcceptedTurnLifecycle: async () => {}, session: {
-            sessionId: session.id, enqueueSessionTurnMutation: async mutation => {
-                const result = await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation });
-                expect(result).toMatchObject({ ok: true });
-            },
-        } });
-        const observe = createSessionProviderInputOutcomeNormalizer({ getTarget: () => ({
-            sessionId: session.id, hasPendingProviderInput: inputId => inputId === localId || inputId === retryLocalId,
-            observeProviderInputSettlement: outcome => {
-                if (outcome.kind === 'accepted') {
-                    SessionMessageAcceptedDeliveryFactsV1Schema.parse({ v: 1, acceptedAtMs: outcome.acceptedAtMs,
-                        delivery: { kind: outcome.providerDeliveryKind, turnId: outcome.providerTurnId } });
-                    // E2EE sealing is a transport boundary; Server cannot decrypt it.
-                    writes.push(resolveAcceptedPendingDelivery({ ...request, localId: outcome.localId, publisherAuthority,
-                        acceptedDelivery: { t: 'encrypted', c: 'sealed-exact-acceptance' } }).then(result => {
-                        expect(result).toMatchObject({ ok: true, didResolve: true });
-                    }));
-                } else if (outcome.kind === 'effect_may_have_occurred') {
-                    writes.push(blockPendingDelivery({ ...request, localId: outcome.localId, reason: 'delivery_outcome_uncertain' }));
-                } else if (outcome.kind === 'rejected_before_effect') {
-                    writes.push(blockPendingDelivery({ ...request, localId: outcome.localId, reason: outcome.reason }));
-                }
-            },
-        }) });
-        const subscription = runtime.watch(raw => {
+        const turn = createSessionTurnLifecycle({ agentId: 'custom-acp', onAcceptedTurnLifecycle: async () => {}, session: client });
+        // This newTurn-only fixture selects no direct-control capabilities. The
+        // runtime's direct-control context consumes only its real cancellation signal.
+        const context = { signal } as AgentSessionRuntimeContext;
+        const runtime = createNativeAgentSessionOperations(providerSession, session.id, undefined, undefined, undefined,
+            undefined, undefined, {
+                context, cwd: harness.baseDir, connectedAccounts: [],
+                capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+                cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+            }, publications, [], {
+                onTurnTerminal: () => undefined,
+                getCommittedUserMessageSeq: localId => client.getCommittedUserMessageSeq(localId),
+                subscribeCommittedUserMessageSeq: listener => client.subscribeCommittedUserMessageSeq(listener),
+                subscribePendingProviderInputRetirement: listener => client.subscribePendingProviderInputRetirement(listener),
+            });
+        const unbindOutcome = bindSessionProviderInputOutcome({
+            runtime,
+            observe: createSessionProviderInputOutcomeNormalizer({ getTarget: () => client }),
+            wakePendingMaterialization: () => client.wakePendingMaterialization(),
+        });
+        const unsubscribe = runtime.subscribeRuntimeEvents(raw => {
             const event = AgentSessionRuntimeEventV1Schema.parse(raw);
-            expect(invariant.observe(event).status).not.toBe('rejected');
             events.push(event);
-            if (event.kind === 'input-accepted') observe({ type: event.kind, localId: event.inputIds[0], userMessageSeq: null,
-                delivery: event.delivery, acceptedAtMs: event.emittedAtMs });
-            else if (event.kind === 'input-custody-unknown') observe({ type: event.kind, localId: event.inputIds[0],
-                userMessageSeq: null, issue: event.issue });
-            else if (event.kind === 'input-rejected') observe({ type: event.kind, localId: event.inputIds[0],
-                userMessageSeq: null, diagnostic: event.diagnostic, retryable: event.retryable });
             turn.observeRuntimeEvent(event);
         });
         try {
-            await runtime.send({ inputIds: [localId], input: { text: 'reply' }, delivery: { kind: 'newTurn', turnId: `turn-${localId}` } });
-            await waitForCondition(() => events.some(event => event.kind === (scenario === 'lost' ? 'runtime-ended' : scenario === 'rejected' ? 'input-rejected' : 'turn-failed')),
+            await runtime.sendTurnPrompt('reply', { localId, turnId: `turn-${localId}` });
+            await waitForCondition(() => events.some(event => scenario === 'metadata-only-hard-cap'
+                ? event.kind === 'input-custody-unknown' || event.kind === 'turn-failed'
+                : event.kind === (scenario === 'lost' ? 'runtime-ended' : scenario === 'rejected' ? 'input-rejected' : 'turn-failed')),
                 { timeoutMs: 5_000, intervalMs: 10, label: `ACP ${scenario}` });
-            await Promise.all(writes);
+            await client.flush();
             await turn.drainAcceptedLifecycle();
             const stored = await db.session.findUniqueOrThrow({ where: { id: session.id } });
             if (scenario === 'rejected') {
@@ -180,13 +242,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                 let sourceReads = 0;
                 const consumer = createSessionProviderInputConsumer({
                     messageQueue: queue,
-                    session: {
-                        hasPendingProviderInput: () => true,
-                        waitForMetadataUpdate: signal => new Promise<boolean>(resolve => {
-                            if (signal?.aborted) resolve(false);
-                            else signal?.addEventListener('abort', () => resolve(false), { once: true });
-                        }),
-                    },
+                    session: createSessionProviderInputConsumerSessionAdapter(client),
                     beforePendingMaterialize: () => false,
                     waitForContextOnlyInputChange: signal => { sourceReads += 1; return source.waitForChange(signal); },
                     takeContextOnlyInput: async signal => { await source.take(signal); return null; },
@@ -196,19 +252,21 @@ describe('consumed ACP input → host turn → Pending', () => {
                     for (let step = 0; step < 100; step += 1) await Promise.resolve();
                     expect(sourceReads).toBe(0);
                     expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'removed', pendingCount: 0 });
-                    expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: 'new-user-retry',
+                    expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: sealInput('new-user-retry'),
                         requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true, pendingCount: 1, pendingBlockedCount: 0 });
-                    expect(await materializeNextPendingMessage({ ...request, localId: retryLocalId, publisherAuthority, deliveryState: 'provider',
-                        deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
-                        expectedRuntimeActivityRevision: registered.activity.projection.runtimeActivityRevision })).toMatchObject({ ok: true });
+                    // Direct owner fixture writes bypass route publication; refresh
+                    // the real client before asking its observed drain gate.
+                    await client.reconcilePendingQueueState({ force: true });
+                    expect(client.getPendingQueueState()).toMatchObject({ pendingCount: 1, pendingBlockedCount: 0 });
+                    expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force',
+                        deliveryTiming: 'after_foreground_ready' })).toMatchObject({ type: 'materialized', localId: retryLocalId });
                     queue.pushImmediate(retryLocalId, 'mode');
                     const input = await successor;
                     expect(input?.message).toBe(retryLocalId);
-                    await runtime.send({ inputIds: [input!.message], input: { text: 'resend' },
-                        delivery: { kind: 'newTurn', turnId: `turn-${retryLocalId}` } });
+                    await runtime.sendTurnPrompt('resend', { localId: input!.message, turnId: `turn-${retryLocalId}` });
                     await waitForCondition(() => events.some(event => event.kind === 'message-delta' && event.turnId === `turn-${retryLocalId}`),
                         { timeoutMs: 5_000, intervalMs: 10, label: 'rejected input successor reply' });
-                    await Promise.all(writes);
+                    await client.flush();
                     expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingCount: 0, pendingBlockedCount: 0 });
                     await writeFile(responseReleasePath, 'release');
                     await waitForCondition(() => events.some(event => event.kind === 'turn-complete' && event.turnId === `turn-${retryLocalId}`),
@@ -219,8 +277,9 @@ describe('consumed ACP input → host turn → Pending', () => {
                     waiting.abort();
                     await successor;
                 }
-            } else if (scenario === 'lost') {
+            } else if (scenario === 'lost' || scenario === 'metadata-only-hard-cap') {
                 expect(stored).toMatchObject({ pendingCount: 1, pendingBlockedCount: 1 });
+                expect(events).toContainEqual(expect.objectContaining({ kind: 'input-custody-unknown', inputIds: [localId] }));
                 expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'turn-start')).toBe(false);
                 expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'delivery_unknown' });
             } else {
@@ -230,19 +289,17 @@ describe('consumed ACP input → host turn → Pending', () => {
                 expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'already_delivered', pendingCount: 0 });
                 expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
                 expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(0);
-                expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: 'new-user-retry',
+                expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: sealInput('new-user-retry'),
                     requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true, pendingCount: 1, pendingBlockedCount: 0 });
                 if (scenario === 'recovered' || scenario === 'recovery-lost') {
                     const retryRequest = { ...request, localId: retryLocalId };
-                    expect(await materializeNextPendingMessage({ ...retryRequest, publisherAuthority, deliveryState: 'provider',
-                        deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
-                        expectedRuntimeActivityRevision: registered.activity.projection.runtimeActivityRevision })).toMatchObject({ ok: true });
-                    await runtime.send({ inputIds: [retryLocalId], input: { text: 'resend' },
-                        delivery: { kind: 'newTurn', turnId: `turn-${retryLocalId}` } });
+                    expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force',
+                        deliveryTiming: 'after_foreground_ready' })).toMatchObject({ type: 'materialized', localId: retryLocalId });
+                    await runtime.sendTurnPrompt('resend', { localId: retryLocalId, turnId: `turn-${retryLocalId}` });
                     if (scenario === 'recovered') {
                         await waitForCondition(() => events.some(event => event.kind === 'message-delta' && event.turnId === `turn-${retryLocalId}`),
                             { timeoutMs: 5_000, intervalMs: 10, label: 'successor reply before prompt response' });
-                        await Promise.all(writes);
+                        await client.flush();
                         await turn.drainAcceptedLifecycle();
                         expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingCount: 0, pendingBlockedCount: 0 });
                         expect(events.some(event => event.kind === 'turn-complete' && event.turnId === `turn-${retryLocalId}`)).toBe(false);
@@ -250,7 +307,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                     }
                     await waitForCondition(() => events.some(event => event.kind === (scenario === 'recovered' ? 'turn-complete' : 'runtime-ended')),
                         { timeoutMs: 5_000, intervalMs: 10, label: `ACP ${scenario} successor` });
-                    await Promise.all(writes);
+                    await client.flush();
                     await turn.drainAcceptedLifecycle();
                     const recovered = await db.session.findUniqueOrThrow({ where: { id: session.id } });
                     if (scenario === 'recovered') {
@@ -269,8 +326,10 @@ describe('consumed ACP input → host turn → Pending', () => {
                 }
             }
         } finally {
-            subscription.dispose();
-            await runtime.dispose();
+            unsubscribe();
+            unbindOutcome();
+            await runtime.resetOrDisposeRuntime('session_closed');
+            media.dispose();
             publications.dispose();
         }
     });

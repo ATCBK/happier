@@ -29,6 +29,7 @@ import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfi
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
+import { z } from 'zod/mini';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import { admitApiTokenSessionOperation } from "@/app/api/utils/apiTokenRouteAdmission";
@@ -128,9 +129,9 @@ function scheduleTrackedSessionBadgeRefresh(params: Parameters<typeof refreshTra
 
 const RELEASED_UI_V0_2_0_DIRECT_USER_MESSAGE_SENT_FROM = new Set(["web", "ios", "android", "mac", "pending_send_now", "retry"]);
 const PENDING_MATERIALIZATION_RETRY_AFTER_MS = 1_000;
-const ExecutionRunPublicStateSocketSchema = ExecutionRunPublicStateSchema.strip();
-const TranscriptStreamSegmentEphemeralSocketMessageSchema = TranscriptStreamSegmentEphemeralMessageSchema.strip();
-const TranscriptStreamSegmentDeltaEphemeralSocketMessageSchema = TranscriptStreamSegmentDeltaEphemeralMessageSchema.strip();
+const ExecutionRunPublicStateSocketSchema = z.object(ExecutionRunPublicStateSchema.shape);
+const TranscriptStreamSegmentEphemeralSocketMessageSchema = z.object(TranscriptStreamSegmentEphemeralMessageSchema.shape);
+const TranscriptStreamSegmentDeltaEphemeralSocketMessageSchema = z.object(TranscriptStreamSegmentDeltaEphemeralMessageSchema.shape);
 
 function isReleasedUiV020DirectUserMessagePayload(data: unknown): boolean {
     if (!data || typeof data !== "object" || Array.isArray(data)) return false;

@@ -406,7 +406,7 @@ export function artifactsRoutes(app: Fastify) {
                 header: z.string(),
                 body: z.string(),
                 dataEncryptionKey: z.string(),
-                blob: ArtifactBlobWriteV1Schema.optional(),
+                blob: z.optional(ArtifactBlobWriteV1Schema),
                 provenance: z.string().nullable().optional(),
                 provenanceDataEncryptionKey: z.string().nullable().optional(),
             }).strict().refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined),
@@ -461,7 +461,7 @@ export function artifactsRoutes(app: Fastify) {
                 expectedBodyVersion: z.number().int().min(0).optional(),
                 provenance: z.string().nullable().optional(),
                 provenanceDataEncryptionKey: z.string().nullable().optional(),
-                blob: ArtifactBlobWriteV1Schema.nullable().optional(),
+                blob: z.optional(z.nullable(ArtifactBlobWriteV1Schema)),
             }).strict().refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined),
             response: {
                 200: z.union([

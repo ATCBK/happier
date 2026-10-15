@@ -175,6 +175,41 @@ export type HostProviderInputOutcomeEvidence =
     | HostExactProviderInputOutcome
     | HostLocalProviderInputOutcome;
 
+export type SessionProviderInputOutcomePort = Readonly<{
+    setOnPromptDeliveryOutcome(handler: ((outcome: HostProviderInputOutcomeEvidence) => void) | null): void;
+    setOnPromptTerminallyRejectedBeforeProvider?(handler: ((info: Readonly<{
+        localIds?: readonly string[];
+        userMessageSeq: number | null;
+        userMessageSeqs?: readonly number[];
+        deliveryBlockedReason?: string;
+    }>) => void) | null): void;
+    setOnPromptDeliveryBlockerCleared?(handler: ((info: Readonly<{
+        deliveryBlockedReason?: string;
+    }>) => void) | null): void;
+}>;
+
+/** Bind the admitted runtime's evidence to the host's existing Pending normalizer. */
+export function bindSessionProviderInputOutcome(params: Readonly<{
+    runtime: SessionProviderInputOutcomePort;
+    observe(outcome: HostProviderInputOutcomeEvidence): void;
+    wakePendingMaterialization(): void;
+}>): () => void {
+    params.runtime.setOnPromptDeliveryOutcome(params.observe);
+    params.runtime.setOnPromptTerminallyRejectedBeforeProvider?.((info) => {
+        params.observe({
+            type: 'rejected_before_write',
+            ...info,
+            ...(info.deliveryBlockedReason ? { reason: info.deliveryBlockedReason } : {}),
+        });
+    });
+    params.runtime.setOnPromptDeliveryBlockerCleared?.(() => params.wakePendingMaterialization());
+    return () => {
+        params.runtime.setOnPromptDeliveryOutcome(null);
+        params.runtime.setOnPromptTerminallyRejectedBeforeProvider?.(null);
+        params.runtime.setOnPromptDeliveryBlockerCleared?.(null);
+    };
+}
+
 /**
  * The durable, restart-surviving answer to "did the provider durably accept this exact Pending
  * input?". It is derived from the Pending owner's existing durable delivery state, not from a

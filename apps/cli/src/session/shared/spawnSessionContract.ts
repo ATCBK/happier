@@ -284,7 +284,7 @@ export const SpawnSessionNonceControlResponseSchema = z.object({
   status: z.enum(['success', 'error', 'pending', 'not_found']),
   sessionId: z.string().optional(),
   sessionCreationOutcome: SessionCreationOutcomeSchema.optional(),
-  errorCode: SpawnSessionErrorCodeSchema.optional(),
+  errorCode: z.optional(SpawnSessionErrorCodeSchema),
   errorMessage: z.string().optional(),
   agentId: z.string().optional(),
   errorDetail: z.unknown().optional(),
