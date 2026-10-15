@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectedServiceIdSchema } from "@happier-dev/protocol";
 
 import { createEnvReset } from "../../testkit/env";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
@@ -489,6 +490,7 @@ describe("featuresRoutes", () => {
         it("defaults connectedServices.enabled to true", async () => {
             const payload = await getFeaturesPayload();
             expect(payload.features.connectedServices.enabled).toBe(true);
+            expect(payload.capabilities.connectedServices.supportedServiceIds).toEqual(ConnectedServiceIdSchema.options);
         });
 
         it("returns connectedServices.enabled=false when HAPPIER_FEATURE_CONNECTED_SERVICES__ENABLED is off", async () => {

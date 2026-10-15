@@ -67,6 +67,7 @@ function resolveSessionItemTestListAttentionState(status: SessionStatus): Sessio
         case 'background_active':
         case 'permission_required':
         case 'action_required':
+        case 'failed':
             return status.state === 'waiting' || status.state === 'background_active'
                 ? 'quiet'
                 : status.state;

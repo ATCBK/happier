@@ -1,4 +1,3 @@
-import type { AgentBackend } from '@/agent/core/AgentBackend';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
@@ -7,7 +6,7 @@ import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTran
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
 import { resetExecutionRunBackendOutput, type ExecutionRunBackendController, type ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import type { FinishExecutionRun } from '@/agent/executionRuns/runtime/executionRunFinishRun';
-import { resumeBackendControllerForResumableRun } from '@/agent/executionRuns/runtime/resumeBackendController';
+import { resumeBackendControllerForResumableRun, type ResumedExecutionRunBackend } from '@/agent/executionRuns/runtime/resumeBackendController';
 import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDeliveryAction } from '@/agent/executionRuns/runtime/turnDelivery';
 import {
   EXECUTION_RUN_SEND_OUTCOME_UNKNOWN_CODE,
@@ -20,14 +19,14 @@ type BackendLongLivedRunSendArgs = Readonly<{
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
   budgetRegistry: ExecutionBudgetRegistry | null;
-  createBackend: () => Promise<AgentBackend>;
+  createBackend: () => Promise<ResumedExecutionRunBackend>;
   maxTurns: number | null;
   getNowMs: () => number;
   finishRun: FinishExecutionRun;
   sendAcp: AcpSendFn;
   parentProvider: ACPProvider;
   streamedTranscriptSession: StreamedTranscriptWriterSession | null;
-  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
+  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   admitRuntimeActivity: (runId: string) => Promise<void>;
   rollbackRuntimeActivityAfterFailedAdmission: (reason: string) => Promise<void>;
   terminalRuntimeActivityAfterFailedAdmission: (runId: string, reason: string) => Promise<void>;
@@ -192,6 +191,7 @@ export async function sendPreparedBackendLongLivedRun(
   const thisEpoch = ctrl2.turnEpoch + 1;
   ctrl2.turnEpoch = thisEpoch;
   ctrl2.turnInFlight = true;
+  args.onPublicStateUpdated?.(args.runId);
   resetExecutionRunBackendOutput(ctrl2);
 
   ctrl2.turnCount += 1;
@@ -304,6 +304,7 @@ export async function sendPreparedBackendLongLivedRun(
       if (isCurrentController()) args.controllers.delete(args.runId);
     } finally {
       if (isCurrentController()) {
+        args.onPublicStateUpdated?.(args.runId);
         await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true }).catch(() => {});
       }
     }

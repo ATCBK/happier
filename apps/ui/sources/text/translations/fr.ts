@@ -2276,6 +2276,19 @@ export const fr: TranslationStructure = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "Le résultat de l’import est inconnu. Actualise la liste des comptes et vérifie ce profil avant de réessayer.",
+            title: "Importer une connexion existante",
+            failed: "Impossible d’importer cette connexion. Vérifiez votre connexion sur la machine sélectionnée, puis réessayez.",
+            actionDescription: "Copier une connexion depuis une de tes machines",
+            description: "Copie la connexion sélectionnée dans ce profil chiffré. Les jetons de renouvellement partagés peuvent changer et l’application locale peut demander une nouvelle connexion.",
+            unsupported: "L’import est indisponible ici. Choisis une autre machine ou mets son CLI à jour.",
+            credentialsUnavailable: "Aucune connexion utilisable. Connecte-toi à l’application locale, puis réessaie.",
+            profileConflict: "Ce profil appartient à un autre compte ou a changé pendant l’import. Choisis un nouveau nom.",
+            reauthorizationRequired: "Reconnecte-toi à l’application locale, puis réessaie.",
+            imported: "Connexion importée",
+            refreshFailed: "La connexion est importée, mais la liste des comptes ne s’est pas actualisée. Rouvre les services connectés.",
+        },
         subscription: {
             title: "Abonnement",
             currentPeriod: "Période en cours",
@@ -2305,6 +2318,7 @@ export const fr: TranslationStructure = {
             openai: 'Clé API OpenAI',
             anthropic: 'Clé API Anthropic',
             gemini: 'Google Gemini',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: 'Services connectés',
@@ -2540,6 +2554,21 @@ export const fr: TranslationStructure = {
             resets: {
                 use: 'Utiliser',
                 available: 'Réinitialisation disponible',
+                remainingCount: ({ count }: { count: number }) => `Réinitialisations conservées : ${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `S’applique à : ${limits}`,
+                fiveHourLimit: "Limite de 5 heures",
+                weeklyLimit: "Limite hebdomadaire",
+                unavailableReasons: {
+                    paused: "En pause",
+                    cooldown: "Délai d’attente en cours",
+                    ineligible: "Non éligible",
+                    not_selected: "Non sélectionné",
+                    provider_unavailable: "Provider indisponible",
+                    not_started: "Pas encore commencé",
+                    expired: "Expiré",
+                    consumed: "Déjà utilisé",
+                    unknown: "Indisponible pour le moment",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Expire ${date} · ${countdown}`,
                 now: 'maintenant',
                 inDays: ({ days }: { days: number }) => `dans ${days}j`,
@@ -2561,6 +2590,12 @@ export const fr: TranslationStructure = {
             pasteRedirectUrlPromptBody:
                 '1) Connecte-toi sur la page qui s’ouvre. 2) Copie l’URL finale depuis la barre d’adresse de ton navigateur. 3) Colle-la dans le champ ci-dessous.',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "Étape suivante : connectez-vous avec Google. Antigravity affiche un code d’autorisation à copier.",
+                    pasteRedirectUrlPromptBody: "1) Connectez-vous avec Google. 2) Copiez le code d’autorisation affiché sur antigravity.google. 3) Collez-le ci-dessous en gardant cette connexion ouverte.",
+                    pasteRedirectUrlPlaceholder: "Collez le code d’autorisation Antigravity",
+                    pasteRedirectUrlTitle: "Coller le code d’autorisation",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         'Étape suivante : connecte-toi sur la page qui s’ouvre. Claude peut afficher une chaîne de code au lieu de rediriger automatiquement.',
@@ -2642,6 +2677,7 @@ export const fr: TranslationStructure = {
             addOauthProfileDeviceTitle: 'Ajouter via l’auth par appareil',
             addOauthProfileDeviceSubtitle: 'Recommandé pour les flux web/headless',
             addOauthProfilePasteTitle: 'Ajouter via collage de redirection',
+            signInWithGoogle: 'Se connecter avec Google',
             addOauthProfilePasteSubtitle: 'Flux manuel de copier-coller de l’URL de redirection',
             addOauthProfileBrowserTitle: 'Ajouter via le navigateur intégré',
             addOauthProfileBrowserSubtitle: 'Utilise un navigateur intégré là où c’est pris en charge',
@@ -2685,6 +2721,7 @@ export const fr: TranslationStructure = {
             errors: {
                 credentialReferencedByGroup: 'Ce compte est encore utilisé par un pool de comptes. Retire-le du pool, puis réessaie.',
                 credentialNotFound: 'Ce compte connecté a déjà été retiré.',
+                serviceUnsupportedServer: 'Ce relais ne prend pas en charge ce service connecté. Mettez le relais à jour pour le connecter.',
                 credentialRequestFailed: 'La requête de compte connecté a échoué. Actualise les services connectés et réessaie.',
                 groupRequestFailed: 'La requête de pool de comptes a échoué. Actualise les services connectés et réessaie.',
                 generationConflict: 'Ce pool de comptes a changé avant la fin de l’action. Actualise les services connectés et réessaie.',
@@ -4838,6 +4875,15 @@ export const fr: TranslationStructure = {
     },
 
     sessionHandoff: {
+        transferSessionData: {
+          title: "Transférer les données de la session",
+          subtitle: "Copie l’historique de cette conversation sur l’autre machine. Désactive si cet historique y est déjà.",
+          checking: "Vérification de la prise en charge sur les deux machines…",
+          agentRequiresTransfer: "Cet Agent nécessite le transfert des données de session entre les machines.",
+          updateRequired: "Mets à jour Happier sur les deux machines pour désactiver ce transfert.",
+          sessionMissing: "L’historique de cette session est absent de la machine cible. Active « Transférer les données de la session » et réessaie.",
+          workspaceRequiresTransfer: "Active « Transférer les données de la session » pour copier ou synchroniser les fichiers de l’espace de travail.",
+        },
         activeWarning: {
             title: 'Cette session tourne encore ici',
             message: 'Le transfert arrêtera cette session sur cette machine avant de la déplacer vers la machine sélectionnée.',
@@ -7414,7 +7460,7 @@ export const fr: TranslationStructure = {
         invalidActionSubtitle: 'Cette action n’est plus disponible dans ce build.',
         configureActionAccessibilityLabel: 'Configurer l’action',
         approvalHelpTitle: 'Modes d’approbation',
-        approvalHelpBody: '« Demander d’abord » crée une demande d’approbation avant que cette action ne s’exécute depuis cette surface. Pour les sessions IA, cette demande est mise en file dans la surface d’approbations existante et n’attend pas dans une fenêtre modale. « Autorisé » laisse l’action s’exécuter depuis cette surface sans demande d’approbation.',
+        approvalHelpBody: "« Demander d’abord » exige votre approbation avant l’exécution de cette action depuis cette surface. Les commandes de l’application peuvent afficher une boîte de confirmation. Pour les sessions IA, une demande est mise en file dans la surface d’approbations existante et n’attend pas dans une fenêtre modale. « Autorisé » permet l’exécution sans demande d’approbation.",
         toolExposure: {
             title: 'Exposition des outils',
             footer: 'Détermine si les actions éligibles apparaissent comme des outils directs ou restent accessibles uniquement via la découverte d’actions.',
@@ -10030,6 +10076,7 @@ settingsSession: {
         providerStateSharingDegraded: 'Partage d’état du provider partiellement appliqué',
         connectedServiceRuntimeAuthRecoveryRecovered: 'Authentification du provider rétablie',
         connectedServiceRuntimeAuthRecoveryCancelled: 'Récupération de l’authentification du provider annulée',
+        connectedServiceRuntimeAuthRecoveryStopped: "La récupération du fournisseur est arrêtée ; aucune nouvelle tentative automatique",
         runtimeConfigOutcomeAppliesBeforeNextMessage: 'S’applique avant ton prochain message',
         runtimeConfigOutcomeQueuedUntilReady: 'En file d’attente jusqu’à disponibilité',
         runtimeConfigOutcomeAlreadySet: 'Déjà défini',

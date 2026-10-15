@@ -49,6 +49,12 @@ In current development source, automatic server readiness and request dialect de
 | Provider baseline / contract tests | `supported` | `apps/cli/src/backends/opencode/e2e/providerSpec.json`, `apps/cli/src/backends/opencode/e2e/providerScenarios.json`, `packages/tests/src/testkit/providers/scenarios/scenarios.opencode.ts`, `packages/tests/suites/providers/opencode.server.sharedSession.realProbe.test.ts` | Provider baseline coverage is still ACP-heavy; server-native real probe exists separately. | Add server-native scenario coverage to the same provider contract harness so OpenCode does not look like two unrelated providers. |
 | UI e2e and manual QA surfaces | `partial` | `packages/tests/suites/ui-e2e/session.direct.opencode.browse.openTail.feat.sessions.direct.spec.ts`, `apps/docs/content/docs/providers/opencode.mdx`, `apps/docs/content/docs/features/direct-sessions.mdx`, `apps/docs/content/docs/features/session-forking.mdx`, `apps/docs/content/docs/features/attach-to-session.mdx` | UI e2e currently covers direct-session browse/tail; there is no dedicated OpenCode manual-QA tracker doc comparable to some other features. | Add unified architecture QA scripts that exercise server-native spawn, attach/detach, fork, resume, and direct takeover from one checklist. |
 
+## Native child lifecycle (development source)
+
+Server-mode child sessions keep their exact parent ownership across foreground turn completion and cancellation. Child transcript output and permission/question requests remain routed independently from the foreground turn. A background Task/SubAgent launch acknowledgement leaves the child running; terminal provider evidence closes the child tool result without completing another parent turn.
+
+The released OpenCode V2 2.0.20 contract distinguishes execution success, failure and interruption. Shutdown interruption preserves the execution for resume and is not child completion. Reconnect reconciliation uses settled child message/outcome evidence; text availability alone does not establish that a child has finished. These corrections describe current development source, not an already published Happier release. Native-provider live validation still requires an identified runtime and an authorized OpenCode account.
+
 ## Cross-cutting migration themes
 
 1. OpenCode still has two materially different runtime paths: server-native and ACP. The unified architecture should make transport an implementation detail, not a user-visible metadata split.

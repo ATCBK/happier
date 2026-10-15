@@ -126,7 +126,7 @@ function bashCurlPipe(url: string): ProviderCliInstallCommand {
 
 function powershellInstall(command: string): ProviderCliInstallCommand {
   return {
-    cmd: 'powershell',
+    cmd: 'powershell.exe',
     args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
   };
 }
@@ -448,7 +448,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     manualInstallRecipes: {
       darwin: [bashCurlPipe('https://cursor.com/install')],
       linux: [bashCurlPipe('https://cursor.com/install')],
-      win32: [powershellInstall('iwr https://cursor.com/install.ps1 -useb | iex')],
+      win32: [powershellInstall("irm 'https://cursor.com/install?win32=true' | iex")],
     },
     acceptsJavaScriptFileOverride: false,
     installGuideUrl: 'https://cursor.com/docs/cli/installation',

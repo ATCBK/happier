@@ -142,6 +142,33 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
   // Incident Jun-11 H-C / FIX-2: one failed turn is observed by THREE independent triggers
   // (StopFailure hook, SDK inbound loop, bridge observeTranscript), each calling this report
   // path. Dedupe lives HERE — inside the single shared owner — keyed on stable identity only
+  it('reports successive credential revisions to the daemon within the existing dedupe window', async () => {
+    const outboxDir = await createTempDir('runtime-auth-revision-report-');
+    try {
+      const revisions = ['csr_aaaaaaaaaaaaaaaaaaaaaa', 'csr_bbbbbbbbbbbbbbbbbbbbbb'];
+      type NotifyBody = Parameters<NonNullable<Parameters<typeof reportConnectedServiceRuntimeAuthFailureToDaemon>[0]['notify']>>[0];
+      const notify = vi.fn(async (body: NotifyBody) => {
+        const observed = body.classification as Readonly<{ credentialRevision?: string }>;
+        return { ok: true, result: observed.credentialRevision === revisions[0]
+          ? { status: 'recovery_superseded', reason: 'source_tuple_mismatch' }
+          : { status: 'session_not_found' } };
+      });
+      const reports = [];
+      for (const credentialRevision of revisions) {
+        reports.push(await reportConnectedServiceRuntimeAuthFailureToDaemon({
+          sessionId: 'revision-guarded-session',
+          classification: { ...classifiedFailure, groupGeneration: 7, credentialRevision },
+          notify, reportOutboxDir: outboxDir, nowMs: () => 1_000,
+        }));
+      }
+      expect(notify.mock.calls.map(([body]) => body.classification)).toEqual(revisions.map(credentialRevision =>
+        expect.objectContaining({ credentialRevision, groupGeneration: 7 })));
+      expect(reports[0]!.report).toMatchObject({ result: { status: 'recovery_superseded' } });
+      expect(reports[1]!.report).toMatchObject({ result: { status: 'session_not_found' } });
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally { await removeTempDir(outboxDir); }
+  });
+
   // (no Date.now-derived retryAfterMs), so all triggers are covered without per-call-site dedupers.
   describe('stable report dedupe', () => {
     const limitClassification = {

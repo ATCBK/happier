@@ -11,7 +11,7 @@ export function isClaudeTranscriptTaskNotification(message: RawJSONLines): boole
 
 export function readClaudeTranscriptProviderActivity(message: RawJSONLines): ClaudeTranscriptProviderActivity | null {
   const envelope = readClaudeTaskLifecycleEnvelope(message);
-  if (envelope?.subtype !== 'task_notification') return null;
+  if (!envelope || envelope.subtype === 'task_started' || envelope.subtype === 'async-launch' || envelope.subtype === 'agent-resume') return null;
   const { taskId, toolUseId, status } = envelope;
   if (status === 'unknown') return { type: 'task_notification_unknown', taskId, toolUseId };
   return { type: 'task_notification', taskId, toolUseId,

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AGENT_IDS } from '@happier-dev/agents';
+import { AGY_ACP_SERVER_VERSION } from '@happier-dev/protocol/installables';
 import type { DetectCliSnapshot } from '@/capabilities/snapshots/cliSnapshot';
 import { agent as agyEntry } from '@/backends/agy';
 import { resolveAgyAcpReleaseAsset } from '@/runtime/managedTools/providers/agyAcpRelease';
@@ -32,7 +33,9 @@ describe('ACP catalog prerequisite readiness', () => {
       const discovery = entryPoint === 'catalog'
         ? probeAcpCatalogs({ agentId: 'agy', cwd: home, timeoutMs: 10_000, processEnv: {} })
         : createCatalogAcpBackend('agy', { cwd: home, env: {}, ...(entryPoint === 'session' ? {} : { readinessOnly: true }) });
-      await expect(discovery).rejects.toThrow();
+      await expect(discovery).rejects.toThrow(entryPoint === 'session'
+        ? 'Unexpected catalog installation download'
+        : 'Agy ACP server is unavailable:');
       expect(downloadRequest).toHaveBeenCalledTimes(entryPoint === 'session' ? 1 : 0);
       if (entryPoint !== 'session') {
         await expect(readdir(join(home, 'tools', 'agy-acp-server'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -100,6 +103,7 @@ describe('Antigravity ACP capability launch', () => {
           await chmod(managedPath, 0o755);
           const metadata = await stat(managedPath);
           await writeFile(join(installDir, 'install-state.json'), JSON.stringify({
+            installedVersion: AGY_ACP_SERVER_VERSION,
             executableSha256: createHash('sha256').update(source).digest('hex'),
             executableSize: metadata.size,
             executableMtimeMs: metadata.mtimeMs,

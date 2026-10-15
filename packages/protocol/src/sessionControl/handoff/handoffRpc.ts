@@ -1,4 +1,6 @@
 export {
+  SessionHandoffCapabilityV2Schema,
+  type SessionHandoffCapabilityV2,
   SessionHandoffAbortRequestSchema,
   SessionHandoffAbortRequestV2Schema,
   SessionHandoffAbortResponseSchema,

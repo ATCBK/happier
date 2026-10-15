@@ -112,6 +112,9 @@ const { callSessionRpc } = vi.hoisted(() => ({
   callSessionRpc: vi.fn(),
 }));
 
+const { callMachineRpc } = vi.hoisted(() => ({ callMachineRpc: vi.fn() }));
+vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc }));
+
 vi.mock('@/session/transport/rpc/sessionRpc', () => ({
   callSessionRpc,
 }));
@@ -211,6 +214,7 @@ function expectSingleSpawnWithPendingFirstInput(text: string): void {
 
 describe('createCliActionExecutor', () => {
   beforeEach(() => {
+    callMachineRpc.mockReset();
     spawnDaemonSession.mockReset();
     resolveDaemonSpawnSessionByNonce.mockReset();
     fetchSessionById.mockReset();
@@ -241,6 +245,30 @@ describe('createCliActionExecutor', () => {
     mockAxiosPost.mockReset();
     process.env = { ...env };
     delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+  });
+
+  it('completes public existing-state handoff only after the canonical tracked operation succeeds', async () => {
+    const sessionId = 'session_handoff_cli_1';
+    fetchSessionById.mockResolvedValue({ id: sessionId, encryptionMode: 'plain', metadata: { machineId: 'source-machine', flavor: 'claude', claudeSessionId: 'native-1', path: '/repo' } });
+    const status = { handoffId: 'handoff-1', status: 'completed', phase: 'finalizing', recoveryActions: [] };
+    const operation = { version: 1, operationId: 'operation-1', requestId: 'request-1', revision: 1, actionId: 'session.handoff', state: 'running', scope: { accountId: 'account-1', machineId: 'source-machine', sessionId }, title: 'Hand off session', createdAt: 1, startedAt: 2, cancellation: 'supported' };
+    callMachineRpc
+      .mockResolvedValueOnce({ handoffId: 'handoff-1', status: { ...status, status: 'ready_for_cutover' }, targetPath: '/repo', endpointCandidates: [] })
+      .mockResolvedValueOnce({ items: [{ ...operation, operationId: 'other-operation', requestId: 'other-request' }], nextCursor: 'next-page' })
+      .mockResolvedValueOnce({ items: [operation], nextCursor: null })
+      .mockResolvedValueOnce({ kind: 'found', operation })
+      .mockResolvedValueOnce({ kind: 'found', operation: { ...operation, revision: 2, state: 'succeeded', settledAt: 3, result: { handoffId: 'handoff-1', status } } });
+    const result = await createPlainExecutor().execute('session.handoff', { sessionId, targetMachineId: 'target-machine', stateTransfer: 'existing' }, { surface: 'cli', actionRequestId: 'request-1' });
+    expect(result).toMatchObject({ ok: true, result: { handoffId: 'handoff-1', status: { status: 'completed' } } });
+    expect(callMachineRpc.mock.calls[0]?.[0]).toMatchObject({ machineId: 'source-machine', method: 'daemon.sessionHandoff.start', request: { sessionId, sourceMachineId: 'source-machine', targetMachineId: 'target-machine', stateTransfer: 'existing', requestId: 'request-1' } });
+  });
+
+  it('refuses handoff when canonical source binding is missing without contacting a daemon', async () => {
+    const sessionId = 'session_handoff_cli_missing';
+    fetchSessionById.mockResolvedValue({ id: sessionId, encryptionMode: 'plain', metadata: { flavor: 'claude', claudeSessionId: 'native-1' } });
+    const result = await createPlainExecutor().execute('session.handoff', { sessionId, targetMachineId: 'target-machine', stateTransfer: 'existing' }, { surface: 'cli' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'source_machine_missing' });
+    expect(callMachineRpc).not.toHaveBeenCalled();
   });
 
   it('resolves execution backend options on the MCP surface', async () => {

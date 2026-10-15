@@ -8,6 +8,7 @@ import {
 
 import type { Metadata } from '@/api/types';
 import type { SessionEventMessage } from '@/api/session/sessionMessageTypes';
+import type { FailTurnInput } from '@/agent/runtime/session/turn/types';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import {
@@ -41,7 +42,7 @@ type RuntimeIssueSession = Readonly<{
         sendSessionEvent?: (event: SessionEventMessage) => void;
         updateMetadata?: (updater: (metadata: Metadata) => Metadata) => Promise<void> | void;
         sessionTurnLifecycle?: {
-            failTurn?: (params: { provider: 'claude'; issue: SessionRuntimeIssueV1 }) => Promise<void> | void;
+            failTurn?: (params: FailTurnInput) => Promise<void> | void;
         };
     };
 }>;
@@ -109,6 +110,7 @@ function beginConnectedClaudeTurnFailure(
         const settlement = session.client.sessionTurnLifecycle?.failTurn?.({
             provider: 'claude',
             issue,
+            allocateWhenIdle: true,
         });
         void Promise.resolve(settlement).catch((error) => {
             logger.debug(`${logPrefix} Failed to persist Claude terminal turn failure`, error);
@@ -523,6 +525,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
             await session.client.sessionTurnLifecycle?.failTurn?.({
                 provider: 'claude',
                 issue,
+                allocateWhenIdle: true,
             });
         }
     }
@@ -662,6 +665,7 @@ export async function surfaceClaudeRuntimeAuthFailure(
         await session.client.sessionTurnLifecycle?.failTurn?.({
             provider: 'claude',
             issue,
+            allocateWhenIdle: true,
         });
         return true;
     }

@@ -27,6 +27,7 @@ import {
 } from './createClaudeUnifiedHookLifecycleBridge';
 import { createReplayableHookSubscription } from './createReplayableHookSubscription';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
+import type { ClaudeWorkflowActivityObservationContext } from '../workflows/claudeWorkflowActivitySource';
 import { isClaudeMainChainCompactBoundary } from '../localControl/readClaudeTranscriptTurnSignal';
 import type { ClaudeRemoteSubagentFileCollector } from '../remote/sidechains/claudeRemoteSubagentFileCollector';
 import {
@@ -330,7 +331,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
    */
   onRawTranscriptValue?: ((
     value: unknown,
-    observation: Readonly<{ historicalReplay: boolean }>,
+    observation: ClaudeWorkflowActivityObservationContext,
   ) => void) | undefined;
   /**
    * Invoked for every transcript row the runner suppresses from `onMessage` (controller-typed
@@ -2548,6 +2549,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             transcriptMissingWarningMs: configuration.claudeTranscriptMissingWarningMs,
             subscribeClaudeSessionHooks: activeHookSubscription.subscribe,
             // Discover identity without settling Pending ahead of the ordered importer.
+            onStartupReplayComplete: () => activeHookSubscription.finishStartup(),
             classifyDiscoveredSession: ({ messages }) => (
               acceptedPromptTranscriptDiscovery.findMatchingTranscript(messages) ? 'main' : null
             ),

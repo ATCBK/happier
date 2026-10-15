@@ -38,6 +38,19 @@ describe('quota reset admission', () => {
     expect(resolve({ ...exhausted, credentialHealthStatus: 'needs_reauth' }).map((candidate) => candidate.profileId)).toEqual(['primary']);
   });
 
+  it('carries only proven exhausted usage limits to automatic reset admission', () => {
+    const backup: ConnectedServiceAuthGroupMemberRuntimeState = { quotaSnapshot: {
+      capturedAtMs: 900, effectiveRemainingPercent: 0, meters: [
+        { meterId: 'display-weekly', providerLimitId: 'seven_day', limitCategory: 'usage_limit', remainingPct: 0, resetAtMs: 100_000 },
+        { meterId: 'display-duplicate', providerLimitId: 'seven_day', limitCategory: 'usage_limit', remainingPct: 0, resetAtMs: 100_000 },
+        { meterId: 'five_hour', providerLimitId: 'five_hour', limitCategory: 'usage_limit', remainingPct: 50, resetAtMs: 100_000 },
+        { meterId: 'unknown-provider-id', providerLimitId: null, limitCategory: 'usage_limit', remainingPct: 0, resetAtMs: 100_000 },
+      ],
+    } };
+    expect(resolve(backup)).toContainEqual(expect.objectContaining({ profileId: 'backup', providerLimitIds: ['seven_day'] }));
+    expect(resolve(backup)).toContainEqual(expect.objectContaining({ profileId: 'primary', providerLimitIds: [] }));
+  });
+
   it('does not turn unknown evidence, transient cooldown, or capacity backoff into quota exhaustion', () => {
     expect(resolve({})).toEqual([]);
     expect(resolve({ cooldownUntilMs: 2_000 })).toEqual([]);

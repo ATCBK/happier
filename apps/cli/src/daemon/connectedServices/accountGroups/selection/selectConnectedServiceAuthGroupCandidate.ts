@@ -334,7 +334,7 @@ function isQuotaExhausted(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boo
 /** A reset is a quota remedy, not a fallback for every reason a pool cannot select. */
 export function resolveConnectedServiceAuthGroupQuotaResetCandidates(
   params: Parameters<typeof selectConnectedServiceAuthGroupCandidate>[0],
-): ReadonlyArray<ConnectedServiceAuthGroupMember> {
+): ReadonlyArray<ConnectedServiceAuthGroupMember & Readonly<{ providerLimitIds: ReadonlyArray<string> }>> {
   const selection = selectConnectedServiceAuthGroupCandidate({ ...params, allowCurrentProfileRetry: true });
   if (selection.selected || selection.reason === 'manual_strategy') return [];
   const resettable = new Set<string>();
@@ -349,7 +349,13 @@ export function resolveConnectedServiceAuthGroupQuotaResetCandidates(
     if ((snapshot.meters ?? []).some((meter) => isRateLimitMeter(meter) && meterIsExhausted(meter))) return [];
     resettable.add(excluded.profileId);
   }
-  return params.members.filter((member) => resettable.has(member.profileId)).sort(comparePriority);
+  return params.members.filter((member) => resettable.has(member.profileId)).sort(comparePriority).map((member) => ({
+    ...member,
+    providerLimitIds: [...new Set((params.memberStatesByProfileId.get(member.profileId)?.quotaSnapshot?.meters ?? [])
+      .filter((meter) => isQuotaMeter(meter) && meterIsExhausted(meter))
+      .map((meter) => meter.providerLimitId?.trim())
+      .filter((id): id is string => Boolean(id)))],
+  }));
 }
 
 function resolveQuotaSnapshotExhaustionRetryAtMs(
