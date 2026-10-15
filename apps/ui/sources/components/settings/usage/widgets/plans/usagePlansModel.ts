@@ -104,6 +104,10 @@ export type UsagePlansProjection = Readonly<{
   tightest: Readonly<{
     account: UsagePlanAccount;
     window: UsagePlanWindow;
+    /** Any older account qualifies the comparison, even when the tightest account is fresh. */
+    stale: boolean;
+    /** An account still on its first read may change which observed allowance is tightest. */
+    provisional: boolean;
   }> | null;
   events: readonly UsagePlanEvent[];
 }>;
@@ -241,7 +245,7 @@ export function projectUsagePlans(
       accountLabel: snapshot?.accountLabel ?? null,
       windows,
       headline: pickHeadline(windows),
-      stale: stale || state.status === 'stale' || state.status === 'error',
+      stale: stale || state.status !== 'available',
       observedAtMs: snapshot && wasConnectedServiceQuotaObserved(snapshot) ? snapshot.observedAtMs : null,
       subscription: snapshot?.subscription ?? null,
       prices: projectProviderAccountSubscriptionMonetaryFacts({ subscription: snapshot?.subscription, nowMs, tier: snapshot?.planLabel }),
@@ -268,16 +272,19 @@ export function projectUsagePlans(
     }
   }
   let tightest: UsagePlansProjection['tightest'] = null;
-  // A partial arrival cannot establish which account has the least capacity.
-  // Keep each account's admitted cells while the outstanding reads settle.
-  for (const account of accounts.some(account => account.state.status === 'pending' || account.state.status === 'not_loaded') ? [] : accounts) {
+  // Compare the facts already observed while first reads continue. Refresh/history
+  // activity does not make an observed allowance provisional or erase its value.
+  const provisional = accounts.some(account => account.observedAtMs === null
+    && (account.state.status === 'pending' || account.state.status === 'not_loaded'));
+  const older = accounts.some(account => account.stale);
+  for (const account of accounts) {
     const window = account.headline;
     if (window?.remainingFraction == null) continue;
     if (
       !tightest ||
       window.remainingFraction < tightest.window.remainingFraction!
     )
-      tightest = { account, window };
+      tightest = { account, window, stale: older, provisional };
   }
   events.sort(
     (left, right) =>

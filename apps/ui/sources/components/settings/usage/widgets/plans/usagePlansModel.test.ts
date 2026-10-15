@@ -98,6 +98,34 @@ function quotaRead(
 }
 
 describe('Plans projection of admitted allowance reads', () => {
+  it('compares every retained observation while refresh and history reads are outstanding', () => {
+    const reads = [
+      quotaRead({ accountId: 'roomy', meters: [{ meterId: 'week', label: 'Weekly', usedPct: 40 }] }),
+      quotaRead({ accountId: 'tight', observedAtMs: NOW - 2 * HOUR, meters: [{ meterId: 'week', label: 'Weekly', usedPct: 91 }] }),
+    ];
+    const states = reads.map(read => ({ source: `quota:${JSON.stringify(read.source)}`, status: 'pending' as const }));
+    const projection = projectUsagePlans(reads, NOW, undefined, states);
+    expect(projection.tightest?.account.accountId).toBe('tight');
+    expect(projection.tightest?.window.remainingFraction).toBe(0.09);
+    expect(projection.tightest?.account.stale).toBe(true);
+    expect(projection.tightest?.stale).toBe(true);
+    const freshTightest = projectUsagePlans(reads.map((read, index) => ({ ...read,
+      current: { ...read.current!, observedAtMs: index === 0 ? NOW - 2 * HOUR : NOW },
+    })), NOW, undefined, states.map(state => ({ ...state, status: 'available' })));
+    expect(freshTightest.tightest?.account.stale).toBe(false);
+    expect(freshTightest.tightest?.stale).toBe(true);
+    expect(projection.tightest?.provisional).toBe(false);
+    // First-read siblings qualify the known minimum; they do not hide it.
+    const partial = projectUsagePlans(reads.slice(0, 1), NOW, undefined, states);
+    expect(partial.tightest).toMatchObject({ account: { accountId: 'roomy' }, provisional: true, stale: true });
+    const freshPartial = projectUsagePlans(reads.slice(0, 1), NOW, undefined, states.map((state, index) => ({
+      ...state, status: index === 0 ? 'available' : 'not_loaded',
+    })));
+    expect(freshPartial.tightest?.provisional).toBe(true);
+    expect(projectUsagePlans([], NOW, undefined, states).tightest).toBeNull();
+    const complete = projectUsagePlans(reads, NOW, undefined, states.map(state => ({ ...state, status: 'available' })));
+    expect(complete.tightest).toMatchObject({ account: { accountId: 'tight' }, provisional: false, stale: true });
+  });
   it('keeps qualified unanswered and failed accounts beside ready facts without inventing readings', () => {
     const read = quotaRead({ accountId: 'ready', meters: [{ meterId: 'week', label: 'Weekly', usedPct: 40 }] });
     const states = [
@@ -112,10 +140,11 @@ describe('Plans projection of admitted allowance reads', () => {
     expect(projection.accounts[1]).toMatchObject({ read: null, source: { ref: { service, accountId: 'held' } },
       state: { status: 'pending' }, windows: [], headline: null });
     expect(projection.accounts[2]).toMatchObject({ read: null, state: { status: 'error', errorCode: 'snapshot_read_failed' } });
-    expect(projection.tightest).toBeNull();
+    expect(projection.tightest).toMatchObject({ account: { accountId: 'ready' }, provisional: true });
     const settled = projectUsagePlans([read], NOW, undefined, states.map(state => state.status === 'pending'
       ? { ...state, status: 'available' as const } : state));
     expect(settled.tightest?.account.accountId).toBe('ready');
+    expect(settled.tightest?.provisional).toBe(false);
     const retained = projectUsagePlans([read], NOW, undefined, [{ ...states[0]!, status: 'stale', errorCode: 'snapshot_read_failed' }]);
     expect(retained.accounts[0]).toMatchObject({ stale: true, state: { status: 'stale', errorCode: 'snapshot_read_failed' } });
     expect(retained.accounts[0]?.headline?.remainingFraction).toBe(0.6);

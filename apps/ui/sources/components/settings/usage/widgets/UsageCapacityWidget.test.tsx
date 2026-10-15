@@ -112,3 +112,49 @@ it('names only pending accounts once in the held headline row, and drops it once
   expect.soft(screen.findAllByType(SurfaceFreshnessLine)).toHaveLength(0);
   expect((await render(settled)).findByTestId('capacity.reading')).toBeNull();
 });
+
+it.each(['pending', 'not_loaded'] as const)('shows an observed headline with first-read progress (%s) and replaces it when a tighter account answers', async status => {
+  const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
+  const query = normalizeUsageQuery({});
+  const reads = ['roomy', 'tight'].map((accountId, index) => {
+    const recordKey = { providerId: 'anthropic', accountSubjectId: accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+    return ConnectedServiceQuotaGetResultV1Schema.parse({
+      source: { ref: { service, accountId }, bindingKind: 'account' },
+      current: { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+        providerId: 'anthropic', accountSubject: { kind: 'providerSubject', id: accountId },
+        observedAtMs: Date.now(), fetchedAtMs: Date.now(), staleAfterMs: 60_000,
+        source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', planLabel: null,
+        meters: [{ meterId: 'week', label: 'Weekly', used: null, limit: null, usedPct: index ? 93 : 40,
+          utilizationPct: index ? 93 : 40, unit: 'count', status: 'ok', resetsAt: null }] },
+      pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+    });
+  });
+  const settled = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: reads } }).results[0]!;
+  const partial = { ...settled, quota: reads.slice(0, 1), sources: [...settled.sources, {
+    source: `quota:${createCanonicalJsonSigningInput(reads[1]!.source)}`, status,
+  }] };
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const body = (slice: typeof settled) => <InjectedAuthProvider credentials={null}>
+    <UsageCapacityWidget id="usage_capacity" slice={slice} query={query} serverId="home" testID="capacity"
+      model={{ requestedQuery: null, shownQuery: null, slice, pending: false, error: null, freshness: 'fresh',
+        updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel} />
+  </InjectedAuthProvider>;
+  const screen = await renderScreen(body(partial));
+  expect(screen.findHostByTestId('capacity.tightest')).not.toBeNull();
+  expect(screen.getTextContent()).toContain('60%');
+  if (status === 'pending') {
+    expect(screen.findByTestId('capacity.reading')).not.toBeNull();
+    expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityReading', { count: 1 }));
+    expect(screen.findAllByType(SurfaceFreshnessLine)).toHaveLength(0);
+  } else {
+    // An unissued read is incomplete coverage, not an active "Reading 0 accounts".
+    expect(screen.findByTestId('capacity.reading')).toBeNull();
+    expect(screen.getTextContent()).not.toContain(t('usage.board.plans.capacityReading', { count: 0 }));
+    expect(screen.getTextContent()).not.toContain(t('usage.board.plans.capacityAccounts', { count: 2 }));
+    expect(screen.findAllByType(SurfaceFreshnessLine)).toHaveLength(1);
+  }
+  await screen.update(body(settled));
+  expect(screen.findHostByTestId('capacity.tightest')).not.toBeNull();
+  expect(screen.getTextContent()).toContain('7%');
+  expect(screen.findByTestId('capacity.reading')).toBeNull();
+});

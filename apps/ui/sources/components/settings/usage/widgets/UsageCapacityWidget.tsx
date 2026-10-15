@@ -185,6 +185,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
   // figure it will be and one quiet line ("Reading 5 accounts…"), so its arrival moves nothing below it.
   const pendingAccounts = readPendingPlanAccountCount(projection.accounts);
   const reading = tightest === null && pendingAccounts > 0;
+  const provisionalReading = tightest?.provisional === true && pendingAccounts > 0;
   // Equal cells while they fit; a narrow frame (a phone) wraps them two-up rather than shrinking them.
   const cellBasis =
     width !== null && width / cellCount < CELL_MIN_WIDTH_PX ? ('46%' as const) : undefined;
@@ -216,14 +217,16 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
               })}
             </Text>
           </View>
-          <Text style={[styles.subline, text.detail]}>
+          <Text style={[styles.subline, text.detail]} testID={provisionalReading ? `${props.testID}.reading` : undefined}>
             {[
               tightest.window.resetAtMs !== null
                 ? t('usage.board.plans.capacityResets', {
                     time: formatPlanMoment(tightest.window.resetAtMs, nowMs),
                   })
                 : null,
-              t('usage.board.plans.capacityAccounts', { count: cellCount }),
+              provisionalReading
+                ? t('usage.board.plans.capacityReading', { count: pendingAccounts })
+                : tightest.provisional ? null : t('usage.board.plans.capacityAccounts', { count: cellCount }),
             ]
               .filter(Boolean)
               .join(' · ')}
@@ -286,7 +289,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         slice={props.slice}
         onRetry={props.model.refresh}
         testID={`${props.testID}.state`}
-        pendingInHeadline={reading}
+        pendingInHeadline={reading || provisionalReading}
       />
     </View>
   );
