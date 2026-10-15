@@ -11,8 +11,10 @@ import { t } from '@/text';
 import { MarkdownSpansView } from './MarkdownSpansView';
 import { parseMarkdownSpans } from './parseMarkdownSpans';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
+import { serializeMarkdownTable } from './serializeMarkdownTable';
 import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { CopyIconButton } from '@/components/ui/copy/CopyIconButton';
 import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { EnrichedMarkdownTextAdapter } from './enriched/EnrichedMarkdownTextAdapter';
 import type { MarkdownRenderingProfile } from './rendering/MarkdownRenderingProfile';
@@ -327,6 +329,11 @@ function RenderTableBlock(props: {
   const isLastRow = (rowIndex: number) => rowIndex === rowCount - 1;
   const resolveColumnAlignment = (columnIndex: number): MarkdownTableAlignment =>
       props.alignments[columnIndex] ?? 'default';
+  const { headers, rows, alignments } = props;
+  const getTableMarkdown = React.useCallback(
+      () => serializeMarkdownTable({ headers, rows, alignments }),
+      [alignments, headers, rows],
+  );
 
   const scrollContents = (
       <View style={style.tableContent}>
@@ -398,6 +405,9 @@ function RenderTableBlock(props: {
           >
               {scrollContents}
           </HorizontalOverflowScrollView>
+          <View style={style.tableFooter}>
+              <CopyIconButton testID="markdown-table-copy" text={getTableMarkdown} />
+          </View>
       </View>
   );
 }
@@ -776,6 +786,14 @@ const style = StyleSheet.create((theme) => ({
         alignSelf: 'flex-start',
         maxWidth: '100%',
         overflow: Platform.OS === 'web' ? 'visible' : 'hidden',
+    },
+    tableFooter: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.border.default,
     },
     tableScrollView: {
         flexGrow: 0,

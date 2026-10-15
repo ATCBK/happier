@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe('CodeBlockView (native)', () => {
-    it.each(['ios', 'android'] as const)('keeps large multiline code in independent selectable text surfaces on %s', async (platform) => {
+    it.each(['ios', 'android'] as const)('preserves large multiline code and copy with platform-appropriate selection on %s', async (platform) => {
         Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
         storage.getState().applySettingsLocal({ filesDiffSyntaxHighlightingMode: 'off' });
         // Mirrors the reproduced Debug shape: many lines plus a very wide serialized message.
@@ -37,7 +37,7 @@ describe('CodeBlockView (native)', () => {
 
         expect(texts).toHaveLength(lines.length);
         expect(texts.map(node => node.props.children).join('\n')).toBe(code);
-        expect(texts.every(node => node.props.selectable === true)).toBe(true);
+        expect(texts.every(node => node.props.selectable === (platform !== 'android'))).toBe(true);
         await act(async () => { await screen.findByProps({ accessibilityLabel: 'Copy' }).props.onPress(); });
         expect(copy).toHaveBeenCalledWith(code);
     });

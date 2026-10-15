@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform, type StyleProp, type TextStyle } from 'react-native';
 import { EnrichedMarkdownText, type EnrichedMarkdownTextProps } from 'react-native-enriched-markdown';
+import { useHappierTextSelectability } from '@happier-dev/plugin-ui/presentation';
 
 import { resolveEnrichedMarkdownMd4cFlags } from './enrichedMarkdownConstants';
 import {
@@ -143,6 +144,7 @@ function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<strin
 }
 
 export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTextAdapterProps) => {
+    const selectable = useHappierTextSelectability(props.selectable);
     const runtimeStatus = useEnrichedMarkdownRuntimeStatus();
     const styleBundle = useEnrichedMarkdownStyle({
         profile: props.profile,
@@ -254,7 +256,7 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             containerStyle={containerStyle}
             md4cFlags={md4cFlags}
             onLinkPress={handleLinkPress}
-            selectable={props.selectable}
+            selectable={selectable}
             allowTrailingMargin={false}
             flavor={flavor}
         />

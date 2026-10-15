@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseMarkdownBlock } from './parseMarkdownBlock';
+import { serializeMarkdownTable } from './serializeMarkdownTable';
 
 describe('parseMarkdownBlock (tables)', () => {
   it('preserves intentionally empty cells inside pipe-delimited rows', () => {
@@ -70,5 +71,25 @@ describe('parseMarkdownBlock (tables)', () => {
       type: 'table',
       alignments: ['left', 'center', 'right', 'default'],
     });
+  });
+
+  it('round-trips copied table cells and alignment at the rendered header width', () => {
+    const original = parseMarkdownBlock([
+      '| Pattern \\| name | Empty | Right | Default |',
+      '| :--- | :---: | ---: | --- |',
+      '| `a \\\\| b` | | C:\\work | value | hidden |',
+      '| short |',
+    ].join('\n')).find((block) => block.type === 'table');
+    expect(original).toBeDefined();
+    if (!original) throw new Error('Expected a parsed table');
+
+    const copied = serializeMarkdownTable(original);
+
+    expect(parseMarkdownBlock(copied)).toEqual([{
+      type: 'table',
+      headers: ['Pattern | name', 'Empty', 'Right', 'Default'],
+      rows: [['`a \\| b`', '', 'C:\\work', 'value'], ['short', '', '', '']],
+      alignments: ['left', 'center', 'right', 'default'],
+    }]);
   });
 });

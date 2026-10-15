@@ -80,4 +80,32 @@ describe('projectMarkdownFindText', () => {
             expect(projectMarkdownFindText(source).text).toBe(readText(ast));
         }
     });
+
+    it('keeps escaped-pipe table text searchable with original offsets across header, formatted, code and repeated cells', () => {
+        const markdown = [
+            '<options>',
+            '<option>Choose</option>',
+            '</options>',
+            '| Name \\| target | Detail |',
+            '|---|---|',
+            '| **same \\| target** | `same \\| target` |',
+            '| same \\| target | 😀 |',
+            '<options>',
+            '<option>target</option>',
+            '</options>',
+        ].join('\r\n');
+        const projected = projectMarkdownFindText(markdown);
+        expect(projected.text).toBe('Choose\nName | target\nDetail\nsame | target\nsame | target\nsame | target\n😀\ntarget');
+        const targets = [...projected.text.matchAll(/target/g)].map((match) => match.index);
+        const sourceTargets = [...markdown.matchAll(/target/g)].map((match) => match.index);
+        expect(targets.map((index) => projected.sourceOffsets[index])).toEqual(sourceTargets);
+        expect(targets.map((index) => projected.sourceEnds[index + 5])).toEqual(sourceTargets.map((index) => index + 6));
+        const pipes = [...projected.text.matchAll(/\|/g)].map((match) => match.index);
+        expect(pipes.map((index) => projected.sourceOffsets[index])).toEqual(
+            [...markdown.matchAll(/\\\|/g)].map((match) => match.index + 1),
+        );
+        const emoji = markdown.indexOf('😀');
+        const displayedEmoji = projected.text.indexOf('😀');
+        expect(projected.sourceOffsets.slice(displayedEmoji, displayedEmoji + 2)).toEqual([emoji, emoji + 1]);
+    });
 });

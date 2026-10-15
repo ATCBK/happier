@@ -1,4 +1,5 @@
 import type { MarkdownSpan } from '@/components/markdown/parseMarkdown';
+import { parseMarkdownTableSources } from '@/components/markdown/parseMarkdownBlock';
 import { parseMarkdownSyntax } from '@/components/markdown/streaming/splitMarkdownIntoBlockSources';
 import { splitMarkdownRenderSegments } from '@/components/markdown/rendering/splitMarkdownRenderSegments';
 import { normalizeLooseListContinuations } from '@/components/markdown/rendering/normalizeLooseListContinuations';
@@ -168,6 +169,9 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
             visit(parseMarkdownSyntax(renderMarkdown).topNode, renderMarkdown, segment.sourceStart - definitionPrefixLength);
             continue;
         }
+        const tableSources = segment.blocks.some((block) => block.type === 'table')
+            ? parseMarkdownTableSources(segment.markdown)
+            : undefined;
         let sourceCursor = 0;
         const appendSpecial = (text: string, styles: MarkdownSpan['styles'] = []) => {
             let found = segment.markdown.indexOf(text, sourceCursor);
@@ -175,7 +179,7 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
             append(text, segment.sourceStart + found, styles);
             sourceCursor = found + text.length;
         };
-        for (const block of segment.blocks) {
+        for (const [blockIndex, block] of segment.blocks.entries()) {
             if (block.type === 'code-block') {
                 sourceCursor = segment.markdown.indexOf('\n') + 1;
                 const lines = block.content.split('\n');
@@ -205,17 +209,25 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
                     for (const span of item.spans) appendSpecial(span.text, span.styles);
                 }
             } else if (block.type === 'table') {
-                for (const row of [block.headers, ...block.rows]) {
+                const table = tableSources!.get(blockIndex)!;
+                for (const row of [table.headers, ...table.rows]) {
                     separator(segment.sourceStart + sourceCursor);
                     for (const cell of row) {
                         separator(segment.sourceStart + sourceCursor);
-                        const start = segment.markdown.indexOf(cell, sourceCursor);
-                        if (start >= 0) {
-                            visit(parseMarkdownSyntax(cell).topNode, cell, segment.sourceStart + start);
-                            sourceCursor = start + cell.length;
+                        const firstSpan = spans.length;
+                        visit(parseMarkdownSyntax(cell.text).topNode, cell.text, 0);
+                        for (let index = firstSpan; index < spans.length; index++) {
+                            const span = spans[index]!;
+                            spans[index] = {
+                                ...span,
+                                sourceOffsets: span.sourceOffsets.map((offset) => segment.sourceStart + cell.sourceOffsets[offset]!),
+                                sourceEnds: span.sourceEnds.map((end) => segment.sourceStart + cell.sourceEnds[end - 1]!),
+                            };
                         }
+                        sourceCursor = cell.sourceEnds[cell.sourceEnds.length - 1] ?? sourceCursor;
                     }
                 }
+                sourceCursor = table.sourceEnd;
             }
         }
     }

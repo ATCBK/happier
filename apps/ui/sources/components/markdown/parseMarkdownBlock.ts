@@ -58,46 +58,51 @@ function removeCodeFenceContentIndent(line: string, indent: number): string {
     return line.slice(removableSpaces);
 }
 
-/**
- * Trims empty strings that result from leading/trailing pipe characters,
- * while preserving intentionally empty cells in the middle of the row.
- *
- * Example: "| A | | C |".split('|') = ['', ' A ', ' ', ' C ', '']
- * After trim: ['A', '', 'C'] - preserves the empty middle cell
- */
-function trimPipeArtifacts(cells: string[]): string[] {
-    let result = cells;
-    // Remove leading empty string from "|..."
-    if (result.length > 0 && result[0] === '') {
-        result = result.slice(1);
-    }
-    // Remove trailing empty string from "...|"
-    if (result.length > 0 && result[result.length - 1] === '') {
-        result = result.slice(0, -1);
-    }
-    return result;
-}
+export type MarkdownTableCellSource = Readonly<{
+    text: string;
+    sourceOffsets: readonly number[];
+    sourceEnds: readonly number[];
+}>;
+
+export type MarkdownTableSource = Readonly<{
+    sourceEnd: number;
+    headers: readonly MarkdownTableCellSource[];
+    rows: readonly (readonly MarkdownTableCellSource[])[];
+}>;
 
 // GFM: `\|` is a literal pipe inside a cell (code spans included); every other `|` delimits a cell.
-function splitTableRowCells(line: string): string[] {
-    const cells: string[] = [];
+function splitTableRowCells(line: string, sourceStart: number): MarkdownTableCellSource[] {
+    const cells: MarkdownTableCellSource[] = [];
     let current = '';
+    let offsets: number[] = [];
+    const appendCell = () => {
+        const text = current.trim();
+        const leading = current.length - current.trimStart().length;
+        const sourceOffsets = offsets.slice(leading, leading + text.length);
+        cells.push({ text, sourceOffsets, sourceEnds: sourceOffsets.map((offset) => offset + 1) });
+        current = '';
+        offsets = [];
+    };
     for (let index = 0; index < line.length; index++) {
         const char = line[index];
         if (char === '\\' && line[index + 1] === '|') {
             current += '|';
+            offsets.push(sourceStart + index + 1);
             index++;
             continue;
         }
         if (char === '|') {
-            cells.push(current.trim());
-            current = '';
+            appendCell();
             continue;
         }
         current += char;
+        offsets.push(sourceStart + index);
     }
-    cells.push(current.trim());
-    return trimPipeArtifacts(cells);
+    appendCell();
+    // Only the leading/trailing delimiter artifacts are removed; interior empty cells remain.
+    if (cells[0]?.text === '') cells.shift();
+    if (cells[cells.length - 1]?.text === '') cells.pop();
+    return cells;
 }
 
 function parseTableAlignment(separatorCell: string): MarkdownTableAlignment {
@@ -111,7 +116,7 @@ function parseTableAlignment(separatorCell: string): MarkdownTableAlignment {
     return 'default';
 }
 
-function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock | null; nextIndex: number } {
+function parseTable(lines: string[], startIndex: number, tableSourceStart: number): { table: MarkdownBlock | null; nextIndex: number; source: MarkdownTableSource | null } {
     let index = startIndex;
     const tableLines: string[] = [];
 
@@ -122,7 +127,7 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
     }
 
     if (tableLines.length < 2) {
-        return { table: null, nextIndex: startIndex };
+        return { table: null, nextIndex: startIndex, source: null };
     }
 
     // Validate that the second line is a separator containing dashes, which distinguishes tables from plain text
@@ -130,37 +135,43 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
     const isSeparator = /^[|\s\-:=]*$/.test(separatorLine) && separatorLine.includes('-');
 
     if (!isSeparator) {
-        return { table: null, nextIndex: startIndex };
+        return { table: null, nextIndex: startIndex, source: null };
     }
 
     // Extract header cells from the first line, trimming only leading/trailing pipe artifacts
-    const headerLine = tableLines[0].trim();
-    const headers = splitTableRowCells(headerLine);
+    const headerSources = splitTableRowCells(tableLines[0], tableSourceStart);
+    const headers = headerSources.map((cell) => cell.text);
 
     if (headers.length === 0) {
-        return { table: null, nextIndex: startIndex };
+        return { table: null, nextIndex: startIndex, source: null };
     }
 
-    const separatorCells = splitTableRowCells(separatorLine);
+    const separatorCells = splitTableRowCells(separatorLine, 0);
     const alignments = headers.map((_, columnIndex) =>
-        parseTableAlignment(separatorCells[columnIndex] ?? '')
+        parseTableAlignment(separatorCells[columnIndex]?.text ?? '')
     );
 
     // Extract data rows from remaining lines (skipping the separator line), preserving empty cells
     const rows: string[][] = [];
+    const rowSources: MarkdownTableCellSource[][] = [];
+    let sourceStart = tableSourceStart + tableLines[0].length + tableLines[1].length + 2;
     for (let i = 2; i < tableLines.length; i++) {
         const rowLine = tableLines[i].trim();
         if (rowLine.startsWith('|')) {
-            let rowCells = splitTableRowCells(rowLine);
+            const cellSources = splitTableRowCells(tableLines[i], sourceStart);
+            const rowCells = cellSources.map((cell) => cell.text);
 
             // Pad row to match header count (handles rows with fewer cells)
             while (rowCells.length < headers.length) {
                 rowCells.push('');
+                cellSources.push({ text: '', sourceOffsets: [], sourceEnds: [] });
             }
 
             // Include rows (even if all cells are empty, as long as they have pipe structure)
             rows.push(rowCells);
+            rowSources.push(cellSources.slice(0, headers.length));
         }
+        sourceStart += tableLines[i].length + 1;
     }
 
     const table: MarkdownBlock = {
@@ -170,12 +181,28 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
         alignments,
     };
 
-    return { table, nextIndex: index };
+    return { table, nextIndex: index, source: { sourceEnd: sourceStart - 1, headers: headerSources, rows: rowSources } };
+}
+
+/** Table cell mappings keyed by their block index in the canonical parser output. */
+export function parseMarkdownTableSources(markdown: string): ReadonlyMap<number, MarkdownTableSource> {
+    return parseMarkdownBlockContent(markdown).tableSources;
 }
 
 export function parseMarkdownBlock(markdown: string) {
+    return parseMarkdownBlockContent(markdown).blocks;
+}
+
+function parseMarkdownBlockContent(markdown: string) {
     const blocks: MarkdownBlock[] = [];
+    const tableSources = new Map<number, MarkdownTableSource>();
     const lines = markdown.split('\n');
+    let sourceOffset = 0;
+    const lineOffsets = lines.map((line) => {
+        const offset = sourceOffset;
+        sourceOffset += line.length + 1;
+        return offset;
+    });
     let index = 0;
     outer: while (index < lines.length) {
         const line = lines[index];
@@ -290,8 +317,9 @@ export function parseMarkdownBlock(markdown: string) {
 
         // Check for table
         if (trimmed.includes('|') && !trimmed.startsWith('```')) {
-            const { table, nextIndex } = parseTable(lines, index - 1);
-            if (table) {
+            const { table, nextIndex, source } = parseTable(lines, index - 1, lineOffsets[index - 1]);
+            if (table && source) {
+                tableSources.set(blocks.length, source);
                 blocks.push(table);
                 index = nextIndex;
                 continue outer;
@@ -303,5 +331,5 @@ export function parseMarkdownBlock(markdown: string) {
             blocks.push({ type: 'text', content: parseMarkdownSpans(trimmed, false) });
         }
     }
-    return blocks;
+    return { blocks, tableSources };
 }

@@ -3,6 +3,8 @@ import type { StyleProp, TextStyle } from 'react-native';
 
 import { MarkdownBlockView, type Option, type OptionLongPressHandler } from '../MarkdownBlockView';
 import type { MarkdownBlock } from '../parseMarkdown';
+import { parseMarkdownTableSources, type MarkdownTableCellSource } from '../parseMarkdownBlock';
+import { projectLeafRanges } from './MarkdownFindDecorationContext';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import { markdownProfileToLegacyVariant, type MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
@@ -29,6 +31,21 @@ type SpecialMarkdownBlockViewProps = Readonly<{
 export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockViewProps) => {
     const variant = markdownProfileToLegacyVariant(props.profile);
     let cursor = 0;
+    const hasTableFindRanges = Boolean(props.findSourceRanges?.length)
+        && props.blocks.some((block) => block.type === 'table');
+    const tableSources = React.useMemo(
+        () => hasTableFindRanges && props.markdown ? parseMarkdownTableSources(props.markdown) : null,
+        [hasTableFindRanges, props.markdown],
+    );
+    const tableRanges = React.useMemo(() => {
+        if (!tableSources || !props.findSourceRanges) return undefined;
+        const projectCell = (cell: MarkdownTableCellSource) =>
+            projectLeafRanges(cell, props.sourceStart ?? 0, props.findSourceRanges!);
+        return new Map([...tableSources].map(([blockIndex, table]) => [blockIndex, {
+            headers: table.headers.map(projectCell),
+            rows: table.rows.map((row) => row.map(projectCell)),
+        }]));
+    }, [props.findSourceRanges, props.sourceStart, tableSources]);
 
     return (
         <>
@@ -41,10 +58,7 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
                     return sliceFindRanges(props.findSourceRanges, (props.sourceStart ?? 0) + start, text.length) ?? [];
                 };
                 const optionRanges = block.type === 'options' && props.findSourceRanges?.length ? block.items.map(locateRanges) : undefined;
-                const tableRanges = block.type === 'table' && props.findSourceRanges?.length ? {
-                    headers: block.headers.map(locateRanges),
-                    rows: block.rows.map((row) => row.map(locateRanges)),
-                } : undefined;
+                if (block.type === 'table') cursor = tableSources?.get(index)?.sourceEnd ?? cursor;
                 if (block.type === 'code-block' && props.markdown && props.findSourceRanges?.length) {
                     cursor = props.markdown.indexOf('\n', cursor) + 1;
                     const start = props.markdown.indexOf(block.content, cursor);
@@ -69,7 +83,7 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
                     agentTexMath={props.agentTexMath}
                     findRanges={ranges}
                     findOptionRanges={optionRanges}
-                    findTableRanges={tableRanges}
+                    findTableRanges={block.type === 'table' ? tableRanges?.get(index) : undefined}
                 />
             ); })}
         </>

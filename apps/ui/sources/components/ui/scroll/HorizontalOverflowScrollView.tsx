@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform, ScrollView, type ScrollViewProps, type StyleProp, type ViewStyle } from 'react-native';
 import { ScrollView as GestureHandlerScrollView } from 'react-native-gesture-handler';
+import { HappierTextSelectabilityScope } from '@happier-dev/plugin-ui/presentation';
 
 type HorizontalOverflowScrollViewProps = Readonly<{
     children: React.ReactNode;
@@ -8,6 +9,8 @@ type HorizontalOverflowScrollViewProps = Readonly<{
     style?: StyleProp<ViewStyle>;
     contentContainerStyle?: StyleProp<ViewStyle>;
     showsHorizontalScrollIndicator?: boolean;
+    /** Preserve selection when the content has no replacement copy control. */
+    keepNativeTextSelection?: boolean;
 }>;
 
 export const HorizontalOverflowScrollView = React.memo<HorizontalOverflowScrollViewProps>((props) => {
@@ -18,10 +21,14 @@ export const HorizontalOverflowScrollView = React.memo<HorizontalOverflowScrollV
         showsHorizontalScrollIndicator: props.showsHorizontalScrollIndicator,
         style: props.style,
         contentContainerStyle: props.contentContainerStyle,
-        children: props.children,
+        // Android selection competes with hesitant horizontal drags and opens the native magnifier.
+        children: <HappierTextSelectabilityScope suppressSelection={Platform.OS === 'android' && props.keepNativeTextSelection !== true}>
+            {props.children}
+        </HappierTextSelectabilityScope>,
     };
 
-    if (Platform.OS === 'web') {
+    // Native nested scrolling lets Android horizontal content cooperate with the transcript list.
+    if (Platform.OS === 'web' || Platform.OS === 'android') {
         return <ScrollView {...sharedProps} />;
     }
 

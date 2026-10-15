@@ -23,15 +23,14 @@ export type CodeBlockViewFrameProps = Readonly<{
     children: React.ReactNode;
 }>;
 
-/** The overlaid copy button's padding, icon and border, as drawn by `CopyIconButton`/`copyButtonOverlay`. */
+/** Placement around the copy button's platform-sized press frame. */
 const COPY_BUTTON_OVERLAY_OFFSET = 8;
-const COPY_BUTTON_BORDER = 1;
 /**
  * How far the code's viewport stops short of the block's right edge while the copy button is overlaid,
  * so a command scrolls or wraps beside the button instead of running under it.
  */
 export const CODE_BLOCK_OVERLAY_COPY_INSET = COPY_BUTTON_OVERLAY_OFFSET
-    + COPY_ICON_BUTTON_WIDTH + COPY_BUTTON_BORDER * 2;
+    + COPY_ICON_BUTTON_WIDTH;
 
 export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     code,
@@ -64,10 +63,8 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     const copyButton = showCopyButton ? (
         <CopyIconButton
             text={code}
-            style={[
-                shouldOverlayCopyButton ? styles.copyButtonOverlay : null,
-                shouldOverlayCopyButton ? { backgroundColor: theme.colors.surface.elevated, borderColor: theme.colors.border.default } : null,
-            ]}
+            variant={shouldOverlayCopyButton ? 'outlined' : 'plain'}
+            style={shouldOverlayCopyButton ? styles.copyButtonOverlay : null}
         />
     ) : null;
 
@@ -95,6 +92,7 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
         <View
             style={[
                 styles.container,
+                showCopyButton && shouldOverlayCopyButton ? styles.containerWithOverlaidCopy : null,
                 { backgroundColor: glassSurfaceBackgroundColor(theme.colors.surface.inset, 'content', true), borderColor: theme.colors.border.default },
                 containerStyle,
             ]}
@@ -107,6 +105,7 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
                 </View>
             ) : (
                 <HorizontalOverflowScrollView
+                    keepNativeTextSelection={!showCopyButton}
                     testID={scrollTestID}
                     showsHorizontalScrollIndicator={false}
                     style={[styles.scroll, besideOverlaidCopy]}
@@ -127,6 +126,10 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         overflow: 'hidden',
         position: 'relative',
+    },
+    containerWithOverlaidCopy: {
+        // Keep the entire physical press target inside the block's clipping boundary.
+        minHeight: COPY_BUTTON_OVERLAY_OFFSET * 2 + COPY_ICON_BUTTON_WIDTH,
     },
     scroll: {
         width: '100%',
@@ -162,7 +165,6 @@ const styles = StyleSheet.create((theme) => ({
         top: COPY_BUTTON_OVERLAY_OFFSET,
         right: COPY_BUTTON_OVERLAY_OFFSET,
         zIndex: 10,
-        borderWidth: COPY_BUTTON_BORDER,
     },
     codePadding: {
         paddingHorizontal: 12,

@@ -34,8 +34,8 @@ describe('Happier diff viewers horizontal overflow', () => {
                     />
                 ));
 
-                expect(screen.tree.root.findAll((node) => node.type === 'GestureHandlerScrollView')).toHaveLength(0);
-                const scrollViews = screen.tree.root.findAll((node) => node.type === 'ScrollView');
+                expect(screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'GestureHandlerScrollView')).toHaveLength(0);
+                const scrollViews = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'ScrollView');
                 expect(scrollViews).toHaveLength(wrapLines ? 0 : 1);
                 if (!wrapLines) {
                     expect(scrollViews[0]!.props.horizontal).toBe(true);
@@ -43,7 +43,7 @@ describe('Happier diff viewers horizontal overflow', () => {
                 }
 
                 for (const text of ['before', 'after']) {
-                    const textNodes = screen.tree.root.findAll((node) => node.type === 'Text' && node.props.children === text);
+                    const textNodes = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'Text' && node.props.children === text);
                     expect(textNodes.length).toBeGreaterThan(0);
                     expect(textNodes.map((node) => node.props.selectable)).toEqual(textNodes.map(() => wrapLines));
                 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createDeferred, findAllHostTestInstances, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
 
 
@@ -38,6 +38,24 @@ function mockPlatform(os: 'android' | 'ios' | 'web') {
             },
         });
     });
+}
+
+function flattenViewStyle(style: unknown): Record<string, unknown> {
+    const resolved = typeof style === 'function'
+        ? style({ pressed: false, hovered: false, focused: false, selected: false, highlighted: false, busy: false, disabled: false })
+        : style;
+    return Object.assign({}, ...(Array.isArray(resolved) ? resolved.flat(Infinity) : [resolved]).filter(Boolean));
+}
+
+function copyPlacementStyle(tree: renderer.ReactTestRenderer): Record<string, unknown> {
+    const button = findAllHostTestInstances(tree.root, (node) => node.props.accessibilityLabel === 'common.copy')[0];
+    for (let parent = button?.parent ?? null; parent; parent = parent.parent) {
+        if (typeof parent.type === 'string') {
+            const style = flattenViewStyle(parent.props.style);
+            if (style.position === 'absolute') return style;
+        }
+    }
+    return {};
 }
 
 describe('CodeBlockViewFrame', () => {
@@ -123,9 +141,7 @@ describe('CodeBlockViewFrame', () => {
                     <React.Fragment>child</React.Fragment>
                 </CodeBlockViewFrame>)).tree;
 
-        const pressable = tree.findByProps({ accessibilityLabel: 'common.copy' });
-        const flattened = Array.isArray(pressable.props.style) ? pressable.props.style.flat() : [pressable.props.style];
-        expect(flattened.some((s: any) => s?.position === 'absolute')).toBe(true);
+        expect(copyPlacementStyle(tree).position === 'absolute').toBe(true);
     });
 
     it.each([false, true])('keeps the code out from under an overlaid copy button (wrap=%s)', async (wrap) => {
@@ -174,9 +190,7 @@ describe('CodeBlockViewFrame', () => {
                     <React.Fragment>child</React.Fragment>
                 </CodeBlockViewFrame>)).tree;
 
-        const pressable = tree.findByProps({ accessibilityLabel: 'common.copy' });
-        const flattened = Array.isArray(pressable.props.style) ? pressable.props.style.flat() : [pressable.props.style];
-        expect(flattened.some((s: any) => s?.position === 'absolute')).toBe(false);
+        expect(copyPlacementStyle(tree).position === 'absolute').toBe(false);
     });
 
     it('keeps copy button in the header when headerLeft is provided', async () => {
@@ -196,9 +210,7 @@ describe('CodeBlockViewFrame', () => {
             </CodeBlockViewFrame>,
         )).tree;
 
-        const pressable = tree.findByProps({ accessibilityLabel: 'common.copy' });
-        const flattened = Array.isArray(pressable.props.style) ? pressable.props.style.flat() : [pressable.props.style];
-        expect(flattened.some((s: any) => s?.position === 'absolute')).toBe(false);
+        expect(copyPlacementStyle(tree).position === 'absolute').toBe(false);
     });
 
     it('can hide the header row even when a language is provided', async () => {
@@ -218,9 +230,7 @@ describe('CodeBlockViewFrame', () => {
             </CodeBlockViewFrame>,
         )).tree;
 
-        const pressable = tree.findByProps({ accessibilityLabel: 'common.copy' });
-        const flattened = Array.isArray(pressable.props.style) ? pressable.props.style.flat() : [pressable.props.style];
-        expect(flattened.some((s: any) => s?.position === 'absolute')).toBe(true);
+        expect(copyPlacementStyle(tree).position === 'absolute').toBe(true);
     });
 
     it('copies without showing a modal and shows a temporary copied state', async () => {
@@ -248,24 +258,59 @@ describe('CodeBlockViewFrame', () => {
         expect(iconAfter.props.name).toBe('check');
     });
 
-    it('falls back cleanly when Typography.mono is missing from a partial module mock', async () => {
-        vi.resetModules();
+    it('announces a pending clipboard write and prevents another press until it settles', async () => {
+        setStringAsyncSpy.mockClear();
+        const write = createDeferred<boolean>();
+        setStringAsyncSpy.mockReturnValueOnce(write.promise);
         mockPlatform('web');
-        vi.doMock('@/constants/Typography', () => ({
-            Typography: {
-                default: () => ({}),
-            },
-        }));
-
         const { CodeBlockViewFrame } = await import('./CodeBlockViewFrame');
-
-        const tree = (await renderScreen(
-            <CodeBlockViewFrame code={'hello'} language={'typescript'} wrap={true} showCopyButton={false}>
+        const screen = await renderScreen(
+            <CodeBlockViewFrame code="hello" wrap showCopyButton>
                 <React.Fragment>child</React.Fragment>
             </CodeBlockViewFrame>,
-        )).tree;
+        );
+        const button = findAllHostTestInstances(screen.tree.root, (node) => (
+            node.props.accessibilityLabel === 'common.copy' && typeof node.props.onPress === 'function'
+        ))[0]!;
 
-        expect(tree.findAllByType('Text' as any).length).toBeGreaterThan(0);
+        await renderer.act(async () => { button.props.onPress(); });
+        expect(button.props.accessibilityState?.busy).toBe(true);
+        await renderer.act(async () => { button.props.onPress(); });
+        expect(setStringAsyncSpy).toHaveBeenCalledTimes(1);
+
+        await renderer.act(async () => {
+            write.resolve(true);
+            await write.promise;
+        });
+        expect(button.props.accessibilityState?.busy).toBe(false);
+        expect(button.props.accessibilityLabel).toBe('common.copy');
+        expect(screen.tree.findByType('Icon').props.name).toBe('check');
+    });
+
+    it.each(['android', 'ios'] as const)('keeps the %s copy target inside a short code block', async (platform) => {
+        mockPlatform(platform);
+        const { CodeBlockViewFrame, CODE_BLOCK_OVERLAY_COPY_INSET } = await import('./CodeBlockViewFrame');
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const screen = await renderScreen(
+            <CodeBlockViewFrame code="x" wrap showCopyButton>
+                <React.Fragment>child</React.Fragment>
+            </CodeBlockViewFrame>,
+        );
+        const button = findAllHostTestInstances(screen.tree.root, (node) => (
+            node.props.accessibilityLabel === 'common.copy' && typeof node.props.onPress === 'function'
+        ))[0]!;
+        const target = flattenViewStyle(button.props.style);
+        const floor = resolveMinimumInteractiveTargetSize(platform);
+        expect(target).toMatchObject({ width: floor, height: floor });
+
+        const containers = findAllHostTestInstances(screen.tree.root, (node) => (
+            flattenViewStyle(node.props.style).overflow === 'hidden'
+        ));
+        expect(containers).toHaveLength(1);
+        const container = flattenViewStyle(containers[0]!.props.style);
+        const placement = copyPlacementStyle(screen.tree);
+        expect(container.minHeight).toBeGreaterThanOrEqual(Number(placement.top) + Number(target.height));
+        expect(CODE_BLOCK_OVERLAY_COPY_INSET).toBeGreaterThanOrEqual(Number(placement.right) + Number(target.width));
     });
 
     it('keeps the copy affordance ready to retry when the platform refuses a write', async () => {

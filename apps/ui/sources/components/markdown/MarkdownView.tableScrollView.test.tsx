@@ -23,7 +23,7 @@ const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn(async (_text: string
 // The platform clipboard is an external boundary.
 vi.mock('expo-clipboard', () => clipboard);
 
-async function mockPlatform(os: 'android' | 'web') {
+async function mockPlatform(os: 'android' | 'ios' | 'web') {
     // The canonical boundary mock is shared by the real renderers. Changing its
     // platform avoids resetting and reloading the entire UI graph for each cell case.
     const { Platform } = await import('react-native');
@@ -58,7 +58,7 @@ describe('MarkdownView (tables)', () => {
         expect(clipboard.setStringAsync).toHaveBeenCalledWith('| Left | Right |\n| :--- | ---: |\n| a \\| b | value |\n| short |  |');
     });
 
-    it('renders tables inside a gesture-handler ScrollView so horizontal scrolling works reliably on Android', async () => {
+    it('renders tables inside the native ScrollView so Android drags share nested scrolling with the transcript', async () => {
         await mockPlatform('android');
 
         const markdown = [
@@ -69,11 +69,11 @@ describe('MarkdownView (tables)', () => {
 
         const screen = await renderScreen(<MarkdownView markdown={markdown} />);
 
-        const scrollViews = screen.findAllByType('GestureHandlerScrollView' as any);
+        expect(screen.findAllByType('GestureHandlerScrollView' as any)).toHaveLength(0);
+        const scrollViews = screen.findAllByType('ScrollView' as any);
         expect(scrollViews).toHaveLength(1);
         expect(scrollViews[0]!.props.horizontal).toBe(true);
         expect(scrollViews[0]!.props.nestedScrollEnabled).toBe(true);
-        expect(scrollViews[0]!.props.disallowInterruption).toBe(true);
     }, 60_000);
 
     it('uses a visible horizontal scrollbar on web and does not clip the scroll shell', async () => {
@@ -102,22 +102,15 @@ describe('MarkdownView (tables)', () => {
         expect(shellStyle.maxWidth).toBe('100%');
     }, 60_000);
 
-    it('renders table header/cell text as selectable so users can copy values from transcripts', async () => {
-        await mockPlatform('android');
-
-        const markdown = [
-            '| A | B |',
-            '|---|---|',
-            '| 1 | 2 |',
-        ].join('\n');
-
-        const screen = await renderScreen(<MarkdownView markdown={markdown} />);
-
-        const findTextNode = (text: string) =>
-            screen.findAllByType('Text' as any).find((n) => n.props?.children === text)!;
-
-        expect(findTextNode('A').props.selectable).toBe(true);
-        expect(findTextNode('1').props.selectable).toBe(true);
+    it('suppresses table selection only on Android, preserving iOS and web selection', async () => {
+        const markdown = '| A | B |\n|---|---|\n| 1 | 2 |';
+        for (const [os, selectable] of [['android', false], ['ios', true], ['web', true]] as const) {
+            await mockPlatform(os);
+            const screen = await renderScreen(<MarkdownView markdown={markdown} />);
+            const text = screen.findAllByType('Text' as any);
+            expect(text.find((node) => node.props.children === 'A')!.props.selectable, os).toBe(selectable);
+            expect(text.find((node) => node.props.children === '1')!.props.selectable, os).toBe(selectable);
+        }
     }, 60_000);
 
     it('applies GitHub table column alignment to header and body cells', async () => {
@@ -159,7 +152,7 @@ describe('MarkdownView (tables)', () => {
         expect(findText('Claude')).toBeDefined();
         expect(findText('git diff')).toBeDefined();
         expect(textNodes.filter((node) => node.props.children === 'ordinary')).toHaveLength(1);
-        expect(findText('ordinary')?.props.selectable).toBe(true);
+        expect(findText('ordinary')?.props.selectable).toBe(os !== 'android');
 
         const docsLink = findText('Docs');
         const fileLink = findText('File');
@@ -186,8 +179,8 @@ describe('MarkdownView (tables)', () => {
         expect(link.props.asChild).toBe(os !== 'web');
     });
 
-    it('routes agent TeX table cells through the enriched parser without changing generic cells', async () => {
-        await mockPlatform('web');
+    it.each(['android', 'web'] as const)('routes agent TeX table cells through the enriched parser without changing generic cells on %s', async (os) => {
+        await mockPlatform(os);
         const markdown = [
             '| Symbol | Meaning |',
             '|---|---|',
@@ -201,6 +194,7 @@ describe('MarkdownView (tables)', () => {
         const enrichedCells = agentScreen.findAllByType('EnrichedMarkdownText');
         expect(enrichedCells).toHaveLength(1);
         expect(enrichedCells[0]!.props.md4cFlags).toMatchObject({ texMathBackslashDelimiters: true });
+        expect(enrichedCells[0]!.props.selectable).toBe(os !== 'android');
     }, 60_000);
 
     it('handles links in math-bearing cells through the enriched renderer', async () => {
