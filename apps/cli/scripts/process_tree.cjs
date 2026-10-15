@@ -71,13 +71,18 @@ async function waitForAllGone(pids, timeoutMs, isAlive) {
 
 async function killProcessTree(proc, opts, enumerate = psList) {
   const pid = proc.pid;
-  if (!pid) return { rootObservedAlive: false };
+  const rootHasExited = () => proc.exitCode != null || proc.signalCode != null;
+  if (!pid || rootHasExited()) return { rootObservedAlive: false };
 
   const graceMs = Math.max(1, opts?.graceMs ?? 1000);
   let signallingFailed = false;
   const onSignalFailure = () => { signallingFailed = true; };
-  const isAlive = (targetPid) => isPidAliveBySignal(targetPid, onSignalFailure);
-  const kill = (targetPid, signal) => bestEffortKillPid(targetPid, signal, onSignalFailure);
+  // An observed child exit revokes authority over its numeric PID, including after a wait.
+  const isAlive = (targetPid) => !(targetPid === pid && rootHasExited())
+    && isPidAliveBySignal(targetPid, onSignalFailure);
+  const kill = (targetPid, signal) => {
+    if (targetPid !== pid || !rootHasExited()) bestEffortKillPid(targetPid, signal, onSignalFailure);
+  };
 
   // Keep child runtimes attached to their owning CLI process tree and explicitly terminate
   // descendants on disposal so provider processes cannot outlive their supervisor.
@@ -85,7 +90,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   // freshly spawned descendant can be reported to its parent before it is visible in the
   // process listing; killing the parent then reparents that descendant and loses the only
   // relationship that lets this owner find it.
-  let rootObservedAlive = proc.exitCode == null && proc.signalCode == null && isAlive(pid);
+  let rootObservedAlive = isAlive(pid);
   const rootStopped = process.platform !== 'win32' && rootObservedAlive;
   if (rootStopped) kill(pid, 'SIGSTOP');
 
@@ -102,9 +107,9 @@ async function killProcessTree(proc, opts, enumerate = psList) {
     descendants = [];
   }
   // Discovery yields to the OS: an externally killed root may have lost its descendants.
-  // Preserve the original stop/resume decision, but do not expose that stale capture as stop proof.
-  if (proc.exitCode != null || proc.signalCode != null) rootObservedAlive = false;
-  const all = [...descendants, pid];
+  // Retain discovered descendants, but never resume or signal an exited root by its stale PID.
+  if (rootHasExited()) rootObservedAlive = false;
+  const all = rootHasExited() ? descendants : [...descendants, pid];
 
   // Try graceful first (children-first).
   for (const targetPid of descendants) kill(targetPid, 'SIGTERM');

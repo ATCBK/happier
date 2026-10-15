@@ -496,18 +496,6 @@ describe('claude sdk query exit handling', () => {
   });
 
   it.runIf(process.platform !== 'win32')('does not treat cleanup started after wrapper exit as proof that its native provider stopped', async () => {
-    const cleanupEnumerated = createDeferred<void>();
-    let wrapperExitObserved = false;
-    // Process enumeration is an OS boundary. Keep its real results while observing this cleanup phase.
-    vi.doMock('ps-list', async () => {
-      const actual = await vi.importActual<typeof import('ps-list')>('ps-list');
-      return { default: async () => {
-        const entries = await actual.default();
-        if (wrapperExitObserved) cleanupEnumerated.resolve();
-        return entries;
-      } };
-    });
-    vi.resetModules();
     const { claudeRemote } = await import('../claudeRemote');
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-legacy-post-exit-cleanup-'));
     const script = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
@@ -540,7 +528,6 @@ describe('claude sdk query exit handling', () => {
         const exited = once(wrapperResult.value, 'exit');
         process.kill(wrapperResult.value.pid, 'SIGKILL');
         await exited;
-        wrapperExitObserved = true;
         throw runtimeError;
       },
       onSessionFound: () => {}, onMessage: (message) => {
@@ -549,11 +536,9 @@ describe('claude sdk query exit handling', () => {
     });
     const settled = result.then(() => undefined, (error: unknown) => error);
     try {
-      await withTimeout(cleanupEnumerated.promise, 5000, 'cleanup after actual wrapper exit');
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      const error = await withTimeout(settled, 5000, 'native wrapper exit observation with pipes open');
       if (nativePid === undefined) throw new Error('Expected actual native provider PID');
       expect(isPidAlive(nativePid)).toBe(true);
-      const error = await withTimeout(settled, 5000, 'native wrapper exit observation with pipes open');
       expect(ledger.getActiveProviderTaskCount()).toBe(1);
       expect(error).toMatchObject({ errors: [runtimeError, { code: 'claude_native_provider_exit_unverified' }] });
     } finally {
