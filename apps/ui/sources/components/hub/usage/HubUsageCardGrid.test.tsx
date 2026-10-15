@@ -8,6 +8,7 @@ import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { storage } from '@/sync/domains/state/storageStore';
 
 import { HubUsageCardGrid } from './HubUsageCardGrid';
+import { ConnectedAccountIdentityText } from '@/components/settings/connectedServices/ConnectedAccountIdentityText';
 import type { UsageSummaryEntry } from './useUsageSummary';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -71,7 +72,10 @@ describe('HubUsageCardGrid identity privacy', () => {
                 localSettings: { ...localSettingsDefaults, hideConnectedAccountIdentities: false },
             }));
             const screen = await renderScreen(<HubUsageCardGrid entries={entries} />);
-            const shown = screen.getTextContent();
+            // Web may split an address into nested Text runs to keep the domain together.
+            // Check the real privacy owner's complete values, independently of testkit run spacing.
+            const identityText = () => screen.findAllByType(ConnectedAccountIdentityText).map(node => node.props.value).join(' ');
+            const shown = identityText();
             expect(shown).toContain('leeroy@company.com');
             expect(shown).toContain('kevin@gmail.com');
             // Without a name or an email the account reads as its service's account, never its raw id.
@@ -86,12 +90,12 @@ describe('HubUsageCardGrid identity privacy', () => {
                     localSettings: { ...state.localSettings, hideConnectedAccountIdentities: true },
                 }));
             });
-            const hidden = screen.getTextContent();
+            const hidden = identityText();
             expect(hidden).toContain('Claude · Work');
             // Enough stays to tell accounts apart (the hidden runs are blurred on the web, `•••` elsewhere).
             expect(hidden).toMatch(/le.*@c.*\.com/);
             expect(hidden).toMatch(/ke.*@g.*\.com/);
-            expect(hidden).toContain('connectedServices.quota.remaining');
+            expect(screen.getTextContent()).toContain('connectedServices.quota.remaining');
             expect(hidden).not.toContain('leeroy@company.com');
             expect(hidden).not.toContain('kevin@gmail.com');
             expect(hidden).not.toContain('acct_9f2c8e71');
@@ -102,8 +106,8 @@ describe('HubUsageCardGrid identity privacy', () => {
                     localSettings: { ...state.localSettings, hideConnectedAccountIdentities: false },
                 }));
             });
-            expect(screen.getTextContent()).toContain('leeroy@company.com');
-            expect(screen.getTextContent()).not.toContain('acct_9f2c8e71');
+            expect(identityText()).toContain('leeroy@company.com');
+            expect(identityText()).not.toContain('acct_9f2c8e71');
         } finally {
             standardCleanup();
             storage.setState(previousState, true);
