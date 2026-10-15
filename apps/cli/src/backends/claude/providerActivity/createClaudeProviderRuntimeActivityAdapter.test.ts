@@ -66,6 +66,20 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(reports).toEqual([{ state: 'active', activeCount: 1 }]);
     });
 
+    it('does not claim prelaunch idle while a lost observer leaves unresolved task evidence', async () => {
+        const { adapter, reports, markUnknown } = harness();
+        await adapter.activateObservation('local-observer-installed');
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'existing-task' }, evidence: 'live',
+        });
+        await adapter.handleRuntimeLoss('claude_process_exit');
+        const reportsBefore = [...reports];
+
+        await adapter.publishBeforeRuntimeStart('remote-provider-not-started');
+        expect(reports).toEqual(reportsBefore);
+        expect(markUnknown).toHaveBeenCalledOnce();
+    });
+
     it('does not clear observation loss before an observer was installed', async () => {
         const { adapter, reports, markUnknown } = harness();
         await adapter.handleRuntimeLoss('observer-lost');

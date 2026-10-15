@@ -109,7 +109,7 @@ In the app:
 
 New sessions with a real terminal surface start in the selected host. Server-backed Codex and OpenCode sessions open their local TUI against the same provider session. ACP and other headless runtimes stay headless. Machine details can override the account-wide choice.
 
-In development builds, a server-backed Codex or OpenCode terminal is an optional
+For Happier CLI 0.2.16 and later, a server-backed Codex or OpenCode terminal is an optional
 local client. Closing that managed terminal leaves the session available in Happier;
 it does not stop the shared controller or automatically reopen the terminal. Use
 **Detach terminal** to release it from the app, or **Stop** to end the session.
@@ -162,7 +162,7 @@ This is a control switch inside the same session, not a new session. The transcr
 
 Remote-to-local control starts from the terminal with `happier attach`. Local-to-remote control can be requested from the app when the session is currently locally controlled. On exclusive-control paths, Happier may wait until the current local turn is done before it takes remote control. Shared-control paths keep the app connected while the TUI is attached.
 
-In current development builds, shared-control sessions offer **Detach terminal**
+For Happier CLI 0.2.16 and later, shared-control sessions offer **Detach terminal**
 only for a TUI managed by the session runner. Detaching that TUI keeps the session
 and app writable. A separate native `happier attach` client is independent: close
 it in its terminal, rather than expecting the app to close it.

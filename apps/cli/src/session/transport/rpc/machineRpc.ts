@@ -6,7 +6,7 @@ import type { Credentials } from '@/persistence';
 import { waitForSocketConnect } from '@/session/transport/socket/waitForSocketConnect';
 import { resolveSessionControlSocketConnectTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import { createRpcCallError, isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { resolveCanonicalMachineId } from '@happier-dev/protocol';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +14,7 @@ import {
   createSocketRpcDisconnectGuard,
   SocketRpcDisconnectBeforeAcknowledgementError,
 } from './socketRpcDisconnectGuard';
-import { markRpcRequestDisposition } from './rpcRequestDisposition';
+import { createRpcAcknowledgementError, markRpcRequestDisposition, readRpcRequestDisposition } from './rpcRequestDisposition';
 
 /**
  * Calls exactly one account-scoped machine RPC against exactly the machine id it
@@ -106,7 +106,7 @@ export async function callExactMachineRpc(params: Readonly<{
     const response = await Promise.race([responsePromise, disconnectGuard.disconnected]);
 
     if (!response.ok) {
-      throw createRpcCallError({
+      throw createRpcAcknowledgementError({
         error: response.error || 'Machine RPC call failed',
         errorCode: response.errorCode,
       });
@@ -119,7 +119,9 @@ export async function callExactMachineRpc(params: Readonly<{
       decodeBase64(encryptedResult, 'base64'),
     );
   } catch (error) {
-    throw markRpcRequestDisposition(error, requestEmitted ? 'outcomeUnknown' : 'notSent');
+    throw readRpcRequestDisposition(error) === null
+      ? markRpcRequestDisposition(error, requestEmitted ? 'outcomeUnknown' : 'notSent')
+      : error;
   } finally {
     if (responseTimer) clearTimeout(responseTimer);
     disconnectGuard.dispose();
