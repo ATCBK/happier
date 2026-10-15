@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema, ComputerCaptureResponseV1Schema } from '@happier-dev/protocol';
 import { z } from 'zod';
+import * as mini from 'zod/mini';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -16,6 +17,24 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 
 describe('registerHappierMcpBuiltInTools', () => {
+  it('presents and validates Mini Action inputs and completed outputs without treating parsers as JSON', () => {
+    const schema = mini.strictObject({ label: mini.string().check(mini.minLength(1)) });
+    const inventory = {
+      tools: [{ name: 'mini_action', title: 'Mini Action', description: 'Read a label', inputSchema: schema, outputSchema: schema }],
+      actionToolNameToId: new Map<string, string>(),
+    };
+    const prepared = prepareHappierMcpToolInventory({ inventory, sessionId: 'sess-1' });
+    const meta = prepared.registrations[0]!.meta as { inputSchema: z.ZodType; outputSchema: z.ZodType };
+    expect(z.toJSONSchema(meta.inputSchema, { target: 'draft-7', io: 'input' })).toMatchObject({
+      type: 'object', properties: { label: { type: 'string', minLength: 1 } }, required: ['label'],
+    });
+    for (const adapter of [meta.inputSchema, meta.outputSchema]) {
+      expect(adapter.safeParse({ label: 'Garden' }).success).toBe(true);
+      expect(adapter.safeParse({ label: '' }).success).toBe(false);
+      expect(adapter.safeParse({ label: 'Garden', undeclared: true }).success).toBe(false);
+    }
+  });
+
   it('keeps tools available when optional output metadata is unrepresentable while refusing unrepresentable inputs', () => {
     const inputSchema = z.object({ value: z.string() }).strict();
     const outputSchema = z.object({ data: z.custom<unknown>() }).strict();
