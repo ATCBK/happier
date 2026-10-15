@@ -83,6 +83,33 @@ const response: PeerTcpTunnelOpenResponseV1 = {
   maxFrameBytes: 1024,
 };
 
+describe('negotiated PCM packet budget', () => {
+  it.each([false, true])('accounts for encrypted=%s framing at the strict consumer boundary', async encrypted => {
+    const { createDaemonSpeechStreamTunnelTransport } = await import('./DaemonSpeechStreamTunnelTransport');
+    const transport = createDaemonSpeechStreamTunnelTransport({
+      tunnelId: 'budget', maxFrameBytes: 1024,
+      stream: { sendFrame: vi.fn(), sendSubstreamDataFrame: vi.fn(), sendSubstreamFrame: vi.fn(), onSubstreamFrame: () => () => {} },
+      controlTransport: { start: vi.fn(), finish: vi.fn(), cancel: vi.fn() },
+      ...(encrypted ? { peerApplicationEncryption: {
+        v: 1, suite: 'aes-256-gcm', flowKind: 'voice_media', routeKind: 'server_relay',
+        authorityDigest: 'sha256:' + 'a'.repeat(64), accountId: 'account', machineId: 'machine', tunnelId: 'budget',
+        applicationKind: 'speech_transcription', applicationAttemptId: 'attempt',
+        applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1('attempt'),
+      } as const } : {}),
+    });
+    const budget = transport.maxPcm16ChunkBytes;
+    expect(budget).toBeGreaterThan(0);
+    if (budget === undefined) throw new Error('missing negotiated PCM budget');
+    const frameLength = (bytes: number) => encrypted ? encodePeerApplicationEncryptedFrameV1({
+      v: 1, kind: 'data', nonceBase64Url: encodeProtocolBase64(new Uint8Array(12), 'base64url'),
+      ciphertextBase64Url: encodeProtocolBase64(new Uint8Array(bytes + 16), 'base64url'),
+    }).byteLength : bytes;
+    expect(budget % 2).toBe(0);
+    expect(frameLength(budget)).toBeLessThanOrEqual(1024);
+    expect(frameLength(budget + 2)).toBeGreaterThan(1024);
+  });
+});
+
 function startResponse(payload: DaemonVoiceInferenceSttStreamStartRequest) {
   return {
     ok: true as const,

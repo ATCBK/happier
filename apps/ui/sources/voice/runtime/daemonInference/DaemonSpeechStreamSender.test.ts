@@ -312,6 +312,71 @@ async function runTenMinuteImpairmentProfile(profile: ImpairmentProfile): Promis
 }
 
 describe('DaemonSpeechStreamSender', () => {
+  it('retains byte pressure and rejects every coalesced capture callback on cancellation', async () => {
+    const response = deferred<import('@happier-dev/protocol').DaemonVoiceInferenceSttStreamChunkResponse>();
+    const sender = createDaemonSpeechStreamSender({ requestId: 'coalesced-cancel', maxInFlightChunks: 1, maxBufferedBytes: 2560,
+      transport: { maxPcm16ChunkBytes: 1280,
+        start: async () => startResponse({ streamId: 'stream', generation: 0 }), chunk: () => response.promise,
+        finish: vi.fn(), cancel: async () => ({ ok: true, streamId: 'stream', generation: 0 }),
+      },
+    });
+    await sender.start();
+    const settled = Promise.allSettled(Array.from({ length: 4 }, () => sender.pushChunk(new Uint8Array(640))));
+    await expect(sender.pushChunk(new Uint8Array(640))).rejects.toMatchObject({ code: 'daemon_speech_stream_backpressure' });
+    await sender.cancel();
+    expect(await settled).toEqual(Array.from({ length: 4 }, () => ({ status: 'rejected', reason: expect.objectContaining({ code: 'daemon_speech_stream_closed' }) })));
+    response.resolve({ ok: true, streamId: 'stream', generation: 0, ackSeq: 0, events: [] });
+    await sender.waitForDrain();
+  });
+
+  it('coalesces waiting PCM within the carrier budget while slow acknowledgements keep the window full', async () => {
+    vi.useFakeTimers();
+    const received: Uint8Array[] = [];
+    const events: number[] = [];
+    const errors: unknown[] = [];
+    const settlements: Promise<void>[] = [];
+    const sender = createDaemonSpeechStreamSender({
+      requestId: 'slow-relay',
+      transport: {
+        maxPcm16ChunkBytes: 64 * 1024,
+        start: async () => startResponse({ streamId: 'stream', generation: 0 }),
+        chunk: async ({ seq, carrierFrame }) => {
+          if (carrierFrame.kind !== 'binary_tunnel_frame_v2') throw new Error('expected binary PCM');
+          received.push(carrierFrame.payloadBytes);
+          await new Promise(resolve => setTimeout(resolve, 2500));
+          return { ok: true, streamId: 'stream', generation: 0, ackSeq: seq,
+            events: [{ type: 'partial', seq, text: String(seq), isEndpoint: false, confidence: null }] };
+        },
+        finish: async ({ finalSeq }) => ({ ok: true, streamId: 'stream', generation: 0,
+          ackSeq: finalSeq, finalText: 'all PCM', language: 'en', modelPackId: null, events: [] }),
+        cancel: async () => ({ ok: true, streamId: 'stream', generation: 0 }),
+      },
+      carrierAdapter: createDaemonSpeechStreamCarrierAdapter({ routeKind: 'server_relay', binaryCapable: true }),
+    });
+    try {
+      await sender.start();
+      const expected: number[] = [];
+      for (let frame = 0; frame < 425; frame++) {
+        const pcm = new Uint8Array(640).fill(frame % 256);
+        expected.push(...pcm);
+        settlements.push(sender.pushChunk(pcm).then(reply => { events.push(...reply.map(event => event.seq)); }, error => { errors.push(error); }));
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      const finishing = sender.finish().then(result => ({ ok: true as const, result }), (error: unknown) => ({ ok: false as const, error }));
+      await vi.runAllTimersAsync();
+      await Promise.all(settlements);
+      expect(errors).toEqual([]);
+      await expect(finishing).resolves.toMatchObject({ ok: true, result: { ok: true, finalText: 'all PCM' } });
+      expect([...Buffer.concat(received)]).toEqual(expected);
+      expect(received.every(pcm => pcm.byteLength <= 64 * 1024)).toBe(true);
+      expect(received.some(pcm => pcm.byteLength > 640)).toBe(true);
+      expect(events).toEqual(received.map((_, seq) => seq));
+    } finally {
+      await sender.cancel();
+      vi.useRealTimers();
+    }
+  });
+
   it('sends multiple 20 ms chunks before the first application acknowledgement', async () => {
     const responses = [deferred<any>(), deferred<any>()];
     const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => responses[seq]!.promise);

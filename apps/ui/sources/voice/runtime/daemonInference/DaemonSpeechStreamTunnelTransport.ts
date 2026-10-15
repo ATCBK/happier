@@ -10,6 +10,7 @@ import type { PeerTcpTunnelFrame } from '@happier-dev/peer-transport/duplexFrame
 import { DaemonVoiceInferenceSttStreamChunkResponseSchema as SttStreamChunkResponseSchema, DaemonVoiceInferenceSttStreamFinishResponseSchema as SttStreamFinishResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 import { PEER_APPLICATION_ENCRYPTION_DATA_KEY_BYTES_V1, PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1, PEER_APPLICATION_ENCRYPTION_INSTALL_PROOF_V1, createPeerApplicationEncryptionAadV1, createPeerApplicationEncryptionNonceV1, decodePeerApplicationEncryptedFrameV1, encodePeerApplicationEncryptedFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/peerApplicationEncryptionV1';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1, PEER_APPLICATION_ENCRYPTION_CIPHERTEXT_MAX_BYTES_V1, PEER_APPLICATION_ENCRYPTION_NONCE_BYTES_V1 } from '@happier-dev/protocol/machines/peer/mediation/peerApplicationEncryptionV1';
 
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { openAes256GcmBytes, sealAes256GcmBytes } from '@/encryption/aes256GcmBytes';
@@ -24,6 +25,7 @@ import type {
 
 export type DaemonSpeechStreamTunnelTransportOptions = Readonly<{
   tunnelId: string;
+  maxFrameBytes?: number;
   stream: Pick<PeerTcpTunnelClientStream, 'sendFrame' | 'sendSubstreamDataFrame' | 'sendSubstreamFrame' | 'onSubstreamFrame'>
     & Partial<Pick<PeerTcpTunnelClientStream, 'onFrame'>>;
   controlTransport: Pick<DaemonSpeechStreamTransport, 'start' | 'finish' | 'cancel'>;
@@ -43,6 +45,20 @@ export type DaemonSpeechStreamTunnelTransportOptions = Readonly<{
 }>;
 
 const DEFAULT_RESPONSE_TIMEOUT_MS = 10_000;
+
+function resolvePcmPacketBudget(maxFrameBytes: number, encrypted: boolean): number {
+  if (!encrypted) return Math.floor(maxFrameBytes / 2) * 2;
+  // Only ciphertext grows with the PCM. Derive the data-envelope overhead from
+  // its real encoder, including the GCM tag and unpadded base64url expansion.
+  const ciphertext = encodeBase64(new Uint8Array(PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1), 'base64url');
+  const overhead = encodePeerApplicationEncryptedFrameV1({
+    v: 1, kind: 'data',
+    nonceBase64Url: encodeBase64(new Uint8Array(PEER_APPLICATION_ENCRYPTION_NONCE_BYTES_V1), 'base64url'),
+    ciphertextBase64Url: ciphertext,
+  }).byteLength - ciphertext.length;
+  const ciphertextBytes = Math.min(PEER_APPLICATION_ENCRYPTION_CIPHERTEXT_MAX_BYTES_V1, Math.floor((maxFrameBytes - overhead) * 3 / 4));
+  return Math.max(0, Math.floor((ciphertextBytes - PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1) / 2) * 2);
+}
 
 export function createDaemonSpeechStreamTunnelSubstreamId(input: Readonly<{
   streamId: string;
@@ -147,6 +163,8 @@ export function createDaemonSpeechStreamTunnelTransport(
   options: DaemonSpeechStreamTunnelTransportOptions,
 ): DaemonSpeechStreamTransport {
   const direction = options.direction ?? 'client_to_daemon';
+  const maxPcm16ChunkBytes = options.maxFrameBytes === undefined
+    ? undefined : resolvePcmPacketBudget(options.maxFrameBytes, Boolean(options.peerApplicationEncryption));
   const resolveSubstreamId = options.resolveSubstreamId ?? createDaemonSpeechStreamTunnelSubstreamId;
   let encryptionSession: Readonly<{
     streamId: string;
@@ -291,6 +309,7 @@ export function createDaemonSpeechStreamTunnelTransport(
   };
 
   return {
+    ...(maxPcm16ChunkBytes === undefined ? {} : { maxPcm16ChunkBytes }),
     start: async (input: DaemonVoiceInferenceSttStreamStartRequest): Promise<DaemonVoiceInferenceSttStreamStartResponse> => {
       const response = await options.controlTransport.start({
         ...input,

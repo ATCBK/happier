@@ -91,6 +91,7 @@ export type ProductionVoiceMediaTunnelInput = Readonly<{
 
 export type OpenedProductionVoiceMediaTunnel = Readonly<{
   stream: PeerTcpTunnelClientStream;
+  maxFrameBytes?: number;
   routeKind: 'loopback_direct' | 'server_relay';
   tunnelId: string;
   machineId: string;
@@ -377,6 +378,7 @@ function createBinaryOpenBase(input: Readonly<{
 
 function createSelection(input: Readonly<{
   stream: PeerTcpTunnelClientStream;
+  maxFrameBytes?: number;
   routeKind: 'loopback_direct' | 'server_relay';
   tunnelId: string;
   machineId: string;
@@ -391,6 +393,7 @@ function createSelection(input: Readonly<{
   });
   const tunnelTransport = createDaemonSpeechStreamTunnelTransport({
     tunnelId: input.tunnelId,
+    maxFrameBytes: input.maxFrameBytes,
     stream: input.stream,
     controlTransport: input.compatibilityTransport,
     fallbackTransport: input.compatibilityTransport,
@@ -427,6 +430,7 @@ function createSelection(input: Readonly<{
       binaryCapable: true,
     }),
     transport: {
+      maxPcm16ChunkBytes: tunnelTransport.maxPcm16ChunkBytes,
       start: async (payload) => {
         let response: Awaited<ReturnType<typeof tunnelTransport.start>>;
         try {
@@ -522,6 +526,7 @@ async function tryOpenDirectTunnel(
   return {
     stream: result.stream,
     // This Voice call requests only the direct route; iroh belongs to tcp_tunnel.
+    maxFrameBytes: result.response.maxFrameBytes,
     routeKind: 'loopback_direct',
     tunnelId: params.tunnelId,
     machineId: params.input.machineTarget.machineId,
@@ -665,6 +670,7 @@ async function tryOpenServerRelayTunnel(
   return {
     stream: result.stream,
     routeKind: 'server_relay',
+    maxFrameBytes: Math.min(result.response.maxFrameBytes, relayAuthority.maxFrameBytes),
     tunnelId: params.tunnelId,
     machineId: params.input.machineTarget.machineId,
     peerApplicationEncryption: {
@@ -805,6 +811,7 @@ export async function createProductionDaemonSpeechStreamingSttTransport(
   }
   return createSelection({
     stream: opened.stream,
+    maxFrameBytes: opened.maxFrameBytes,
     routeKind: opened.routeKind,
     tunnelId: opened.tunnelId,
     machineId: opened.machineId,

@@ -443,9 +443,11 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
   it.each([{}, { maxDurationMs: 60_000, maxTotalBytes: 960_000 }])('authenticates relay PCM/final and closes failed installation before retry with caps %j', async caps => {
     direct = false; applicationCaps = caps; publishFeatures(); selectMachine(false);
     const stream = await sender(); expect(stream.transportKind).toBe('binary_tunnel'); await stream.start();
-    await stream.pushChunk(new Uint8Array([4, 5, 6]));
+    const capture = Array.from({ length: 120 }, (_, frame) => new Uint8Array(640).fill(frame));
+    await Promise.all(capture.map(pcm => stream.pushChunk(pcm)));
     await expect(stream.finish()).resolves.toMatchObject({ finalText: 'hello' });
-    expect(receivedPcm).toEqual([new Uint8Array([4, 5, 6])]);
+    expect(Buffer.concat(receivedPcm)).toEqual(Buffer.concat(capture));
+    expect(receivedPcm.some(pcm => pcm.byteLength > 640)).toBe(true);
     expect(receipt()).toMatchObject({ relayEvidence: 'finish_authenticated', localTransport: 'closed' });
     expect(grants[0]).toMatchObject({ scope: caps });
     expect((grants[0] as { scope: unknown }).scope).not.toHaveProperty('maxIdleMs');

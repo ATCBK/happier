@@ -26,6 +26,8 @@ type ActiveStream = Readonly<{
 }>;
 
 export type DaemonSpeechStreamTransport = Readonly<{
+  /** PCM capacity of one negotiated carrier frame, after its encoding overhead. */
+  maxPcm16ChunkBytes?: number;
   start: (input: DaemonVoiceInferenceSttStreamStartRequest) => Promise<DaemonVoiceInferenceSttStreamStartResponse>;
   chunk: (input: DaemonSpeechStreamTransportChunkRequest) => Promise<DaemonVoiceInferenceSttStreamChunkResponse>;
   finish: (input: DaemonVoiceInferenceSttStreamFinishRequest) => Promise<DaemonVoiceInferenceSttStreamFinishResponse>;
@@ -63,6 +65,7 @@ type PendingChunk = {
   responseEvents: readonly DaemonVoiceInferenceSttStreamEvent[] | null;
   resolve: (events: readonly DaemonVoiceInferenceSttStreamEvent[]) => void;
   reject: (error: unknown) => void;
+  followers: Array<Readonly<{ resolve: (events: readonly DaemonVoiceInferenceSttStreamEvent[]) => void; reject: (error: unknown) => void }>>;
 };
 
 const DEFAULT_MAX_BUFFERED_CHUNKS = 64;
@@ -159,10 +162,26 @@ export class DaemonSpeechStreamSender {
       return Promise.reject(createSenderError('daemon_speech_stream_closed'));
     }
     if (
-      this.pendingChunks.size >= this.maxBufferedChunks
-      || this.pendingBytes + pcm16Bytes.byteLength > this.maxBufferedBytes
+      this.pendingBytes + pcm16Bytes.byteLength > this.maxBufferedBytes
       || pcm16Bytes.byteLength > this.maxInFlightBytes
     ) {
+      return Promise.reject(createSenderError('daemon_speech_stream_backpressure'));
+    }
+    // Capture cadence is not packet cadence. While response slots are occupied,
+    // fill an unsent packet up to the negotiated carrier capacity rather than
+    // spending another slot on each 20ms capture frame. Never mutate sent PCM.
+    const tail = [...this.pendingChunks.values()].at(-1);
+    const packetBudget = Math.min(this.transport.maxPcm16ChunkBytes ?? 0, this.maxInFlightBytes);
+    if (tail && tail.scheduledGeneration === null && !tail.acknowledged
+      && tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength <= packetBudget) {
+      const combined = new Uint8Array(tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength);
+      combined.set(tail.pcm16Bytes);
+      combined.set(pcm16Bytes, tail.pcm16Bytes.byteLength);
+      tail.pcm16Bytes = combined;
+      this.pendingBytes += pcm16Bytes.byteLength;
+      return new Promise((resolve, reject) => { tail.followers.push({ resolve, reject }); });
+    }
+    if (this.pendingChunks.size >= this.maxBufferedChunks) {
       return Promise.reject(createSenderError('daemon_speech_stream_backpressure'));
     }
     const seq = this.nextSeq++;
@@ -175,6 +194,7 @@ export class DaemonSpeechStreamSender {
         responseEvents: null,
         resolve,
         reject,
+        followers: [],
       });
     });
     this.pendingBytes += pcm16Bytes.byteLength;
@@ -332,12 +352,16 @@ export class DaemonSpeechStreamSender {
       if (!pending.acknowledged || pending.responseEvents === null) return;
       this.pendingChunks.delete(pending.seq);
       pending.resolve(pending.responseEvents);
+      // One packet yields one recognizer event batch, even when several capture
+      // callbacks await its acknowledgement.
+      for (const follower of pending.followers) follower.resolve([]);
     }
   }
 
   private closePending(error: unknown): void {
     for (const pending of this.pendingChunks.values()) {
       pending.reject(error);
+      for (const follower of pending.followers) follower.reject(error);
     }
     this.pendingChunks.clear();
     this.pendingBytes = 0;
