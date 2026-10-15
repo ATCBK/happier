@@ -79,7 +79,6 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
 const { profileDefaults } = await import('@/sync/domains/profiles/profile');
 const { FeedResponseSchema } = await import('@/sync/domains/social/feedTypes');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
 const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
@@ -144,9 +143,8 @@ describe('Session viewer semantic Action ingress', () => {
         availabilityCursor: 0, pluginIds: [], intentReads: [], failedPluginIds: [],
       }),
     });
-    const request = createServerFetchAtEndpoint({ endpointUrl: 'https://viewer-action.test', credentials: { token } });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://viewer-action.test', accountId: 'alice', credentials: { token },
-      request: (url, init) => request(String(url), init) });
+      request: (url, init) => home.request(url, init) });
     stage = 'real Account bootstrap';
     await waitForHomeGovernance(() => {
       expect(storage.getState().profileScope?.accountId).toBe('alice');
