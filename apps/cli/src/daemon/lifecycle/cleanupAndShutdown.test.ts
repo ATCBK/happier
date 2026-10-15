@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createDeferred } from '@/testkit/async/deferred';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { DaemonState } from '@/api/types';
@@ -162,6 +163,58 @@ describe('cleanupAndShutdown', () => {
                 'exit:0',
             ]);
             exitSpy.mockRestore();
+        });
+    });
+
+    it('preserves its daemon publication through slow cleanup until lifecycle lock release', async () => {
+        await withTempDir('happier-cleanup-live-publication-', async (homeDir) => {
+            envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: 'cloud' });
+            vi.resetModules();
+
+            const [{ configuration }, { cleanupAndShutdown }, {
+                acquireDaemonLock, readDaemonState, releaseDaemonLock, writeDaemonStateForLockOwner,
+            }] = await Promise.all([
+                import('@/configuration'),
+                import('./cleanupAndShutdown'),
+                import('@/persistence'),
+            ]);
+            const lockHandle = await acquireDaemonLock(2, 1);
+            expect(lockHandle).not.toBeNull();
+            if (!lockHandle) throw new Error('Daemon lifecycle lock was not acquired');
+            const stateOwner = {
+                pid: process.pid, httpPort: 5111, startedAt: 1_111,
+                startedWithCliVersion: '0.0.0-test', controlToken: 'control-owner',
+            };
+            expect(writeDaemonStateForLockOwner(lockHandle, stateOwner)).toBe(true);
+            const controlStopStarted = createDeferred();
+            const releaseControlStop = createDeferred();
+            const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined as never) as typeof process.exit);
+            const shutdown = cleanupAndShutdown({
+                source: 'happier-cli', processEnv: {}, resolvePositiveIntEnv: (_raw, fallback) => fallback,
+                restartOnStaleVersionAndHeartbeat: null, connectedServiceRefreshLoopHandle: null,
+                connectedServiceQuotasLoopHandle: null, apiMachine: null, machineConnectionStateCleanup: null,
+                automationWorker: null, memoryWorker: null, voiceInferenceWorker: null, trackedSessionCount: 0,
+                stopDirectPeerServer: async () => {}, stopTailscaleTransferServeLifecycle: async () => {},
+                // Hold only the control-transport IO boundary; real cleanup,
+                // publication ownership and lifecycle lock release stay active.
+                stopControlServer: async () => {
+                    controlStopStarted.resolve();
+                    await releaseControlStop.promise;
+                },
+                stopKeepAwake: async () => {},
+                daemonStateOwner: stateOwner, daemonLockHandle: lockHandle, releaseDaemonLock,
+            });
+            try {
+                await controlStopStarted.promise;
+                await expect(readDaemonState()).resolves.toMatchObject(stateOwner);
+                expect(existsSync(configuration.daemonLockFile)).toBe(true);
+            } finally {
+                releaseControlStop.resolve();
+                await shutdown;
+            }
+            await expect(readDaemonState()).resolves.toBeNull();
+            expect(existsSync(configuration.daemonLockFile)).toBe(false);
+            expect(exitSpy).toHaveBeenCalledWith(0);
         });
     });
 

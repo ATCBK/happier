@@ -89,21 +89,6 @@ export async function cleanupAndShutdown(params: CleanupAndShutdownParams): Prom
         }
     }
 
-    // Clear daemon.state.json early only while this process still owns the exact lifecycle lock.
-    // A self-restart predecessor has already handed that lock to its successor and must preserve
-    // the successor's state publication.
-    if (params.daemonLockHandle && params.daemonStateOwner) {
-        const removed = clearDaemonStateForLockOwner(
-            params.daemonLockHandle,
-            params.daemonStateOwner,
-        );
-        logger.debug(
-            removed
-                ? '[DAEMON RUN] Daemon state file removed'
-                : '[DAEMON RUN] Daemon state cleanup skipped because lifecycle ownership changed',
-        );
-    }
-
     if (params.connectedServiceRefreshLoopHandle) {
         params.connectedServiceRefreshLoopHandle.stop();
     }
@@ -161,6 +146,20 @@ export async function cleanupAndShutdown(params: CleanupAndShutdownParams): Prom
     await params.stopSshTunnelsOnShutdown?.();
     await params.stopControlServer();
     await params.stopKeepAwake();
+    // Keep the exact owner publication through cleanup so a stop caller can
+    // still verify this process if graceful shutdown outlasts its wait.
+    // A self-restart predecessor must preserve its successor's publication.
+    if (params.daemonLockHandle && params.daemonStateOwner) {
+        const removed = clearDaemonStateForLockOwner(
+            params.daemonLockHandle,
+            params.daemonStateOwner,
+        );
+        logger.debug(
+            removed
+                ? '[DAEMON RUN] Daemon state file removed'
+                : '[DAEMON RUN] Daemon state cleanup skipped because lifecycle ownership changed',
+        );
+    }
     if (params.daemonLockHandle) {
         await params.releaseDaemonLock(params.daemonLockHandle);
     }
