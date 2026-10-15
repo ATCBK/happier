@@ -766,15 +766,22 @@ export class DaemonVoiceInferenceClient {
                         ...(rpcSignal ? { signal: rpcSignal } : {}),
                     }),
                 ),
-            cancel: async (payload) =>
-                parseSchema(
+            cancel: async (payload) => {
+                const response = parseSchema(
                     DaemonVoiceInferenceSttStreamCancelResponseSchema,
                     await this.deps.machineRpcWithServerScope({
                         machineId: machineTarget.machineId,
                         method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL,
                         payload,
                     }),
-                ),
+                );
+                // Capture retirement can close the media tunnel first. The
+                // daemon then removes this admitted stream through transport-loss
+                // cleanup, so an absent stream already satisfies cancellation.
+                return !response.ok && response.errorCode === 'stream_not_found'
+                    ? { ok: true, streamId: payload.streamId, generation: payload.generation }
+                    : response;
+            },
         };
         const selectedTransport = await this.deps.createStreamingSttTransport({
             sessionId: params.sessionId ?? null,

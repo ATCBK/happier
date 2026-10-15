@@ -58,7 +58,7 @@ let mintVersions = [2];
 let applicationCaps: { maxDurationMs?: number; maxTotalBytes?: number } = {};
 let startFailure: 'response' | 'throw' | null = null;
 let finishFailure = false;
-let cancelFailure = false;
+let cancelFailure: 'runtime_unavailable' | 'stream_not_found' | null = null;
 let closeFailure = false;
 let confirmation: string = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1;
 let relayDenial = false;
@@ -241,7 +241,7 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
       ...(contentKeyPair ? { dataKeyPublicKey: contentKeyPair.publicKey } : {}),
     }) : null;
     direct = true; relay = true; mintVersions = [2]; applicationCaps = {};
-    startFailure = null; finishFailure = false; cancelFailure = false; closeFailure = false;
+    startFailure = null; finishFailure = false; cancelFailure = null; closeFailure = false;
     confirmation = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1; grantFailure = false;
     authorization = null; installedKey = null; highestAcknowledgedInput = -1;
     grants.length = 0; opens.length = 0; receivedPcm.length = 0;
@@ -290,7 +290,8 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
         return finishResult(highestAcknowledgedInput);
       }
       if (method.endsWith('.cancel')) {
-        if (cancelFailure) return { ok: false, errorCode: 'runtime_unavailable', error: 'daemon_cancel_failed' };
+        if (cancelFailure) return { ok: false, errorCode: cancelFailure, error: cancelFailure === 'stream_not_found'
+          ? 'daemon_voice_inference_stream_not_found' : 'daemon_cancel_failed' };
         return { ok: true, streamId: 'stream-1', generation: 7 };
       }
       throw new Error('Unexpected compatibility RPC: ' + method);
@@ -378,9 +379,26 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     expect(receipt()).toMatchObject({ localTransport: 'closed', operation: { kind: 'finish', result: 'error' } });
   });
   it('keeps daemon cancel failure distinct from successful local retirement', async () => {
-    const stream = await sender(); await stream.start(); cancelFailure = true;
+    const stream = await sender(); await stream.start(); cancelFailure = 'runtime_unavailable';
     await stream.cancel();
     expect(receipt()).toMatchObject({ localTransport: 'closed', operation: { kind: 'cancel', result: 'error' } });
+  });
+  it.each(['direct', 'relay'] as const)('completes %s cancellation when transport retirement already removed the admitted stream', async route => {
+    direct = route === 'direct'; publishFeatures();
+    const abort = new AbortController();
+    const stream = await new DaemonVoiceInferenceClient({ createRequestId: () => 'request-1' })
+      .createStreamingSttSender({ packId: 'stt-pack-1', language: 'en', signal: abort.signal });
+    await stream.start();
+    await stream.pushChunk(new Uint8Array([1, 2]));
+    // The live daemon's transport-loss cleanup wins before this explicit cancel.
+    // Its real wire result is stream_not_found, not a provider failure.
+    cancelFailure = 'stream_not_found';
+    abort.abort();
+    await stream.cancel();
+    await stream.cancel();
+    expect(receipt()).toMatchObject({ routeKind: route === 'direct' ? 'loopback_direct' : 'server_relay',
+      localTransport: 'closed', operation: { kind: 'cancel', result: 'ok' } });
+    expect(network.requests.filter(request => request.method.endsWith('.cancel'))).toHaveLength(1);
   });
   it('uses the actual machine TCP preference to skip the direct Voice grant', async () => {
     storage.getState().applySettingsLocal({ peerMediationPreferencesV1: {
