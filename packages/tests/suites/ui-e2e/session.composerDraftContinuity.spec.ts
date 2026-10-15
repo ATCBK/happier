@@ -196,7 +196,7 @@ async function waitForDraftMutation(page: Page, action: () => Promise<void>): Pr
     // Match a request that starts after this action is armed. A response matcher can accidentally
     // consume a still-finishing mutation from the preceding test and return before this edit is durable.
     const mutation = page.waitForRequest(
-        (request) => request.url().endsWith('/v1/account/session-drafts/mutate')
+        (request) => new URL(request.url()).pathname === '/v1/account/session-drafts/mutate'
             && request.method() === 'POST',
         { timeout: 60_000 },
     );
@@ -215,7 +215,7 @@ async function holdNextDraftMutation(page: Page): Promise<Readonly<{
     release: () => void;
     dispose: () => Promise<void>;
 }>> {
-    const mutationUrl = '**/v1/account/session-drafts/mutate';
+    const mutationUrl = (url: URL) => url.pathname === '/v1/account/session-drafts/mutate';
     let markIntercepted!: () => void;
     const intercepted = new Promise<void>((resolve) => { markIntercepted = resolve; });
     let markCompleted!: () => void;
