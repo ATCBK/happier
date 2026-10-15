@@ -52,3 +52,27 @@ it.runIf(process.platform !== 'win32')('follows the selected Claude symlink targ
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it('leaves a missing executable to the launch boundary instead of failing classification', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'happier-claude-missing-launch-'));
+  try {
+    expect(isClaudeCliJavaScriptFile(join(dir, 'missing.js'))).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it.runIf(process.platform !== 'win32')('handles a selected Claude symlink whose target disappeared', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'happier-claude-dangling-launch-'));
+  const target = join(dir, 'cli.js');
+  const selected = join(dir, 'claude');
+  writeFileSync(target, '', { mode: 0o755 });
+  symlinkSync(target, selected);
+  try {
+    expect(isClaudeCliJavaScriptFile(selected)).toBe(true);
+    unlinkSync(target);
+    expect(isClaudeCliJavaScriptFile(selected)).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
