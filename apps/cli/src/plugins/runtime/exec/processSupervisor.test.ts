@@ -14,8 +14,55 @@ import { readProcessCensus } from '@/processes/census/processCensus';
 import { resolveProcessOwnership } from '@/daemon/processes/ownership/resolveProcessOwnership';
 import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
 import { logger } from '@/ui/logger';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { createDaemonizingProcessFixture } from '@/testkit/process/daemonizingProcess';
+import { waitForProcessExit } from '@/testkit/process/spawn';
 
 describe('spawnSupervisedPluginProcess', () => {
+    it.each([undefined, 'preserve-on-success'] as const)('settles a daemonizing launcher with descendant disposition %s', async (descendantDisposition) => {
+        await withTempDir('happier-native-descendants-', async directory => {
+            const fixture = createDaemonizingProcessFixture(directory);
+            const supervised = spawnSupervisedPluginProcess({ command: process.execPath, args: fixture.args,
+                env: {}, spawnOptions: { detached: true, windowsHide: true }, descendantDisposition });
+            try {
+                const pid = await fixture.ready();
+                await fixture.release();
+                expect((await supervised.handle.wait()).termination).toEqual({ observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } });
+                await supervised.dispose();
+                await supervised.waitForSettlement();
+                expect(await waitForProcessExit(pid, { timeoutMs: 200 })).toBe(descendantDisposition === undefined);
+            } finally {
+                supervised.child.kill('SIGKILL');
+                await supervised.dispose().catch(() => undefined);
+                await fixture.cleanup();
+            }
+        });
+    });
+
+    it.each(['abort', 'dispose', 'timeout', 'failed-exit'] as const)('does not hand off descendants after %s', async kind => {
+        await withTempDir('happier-native-cancel-', async directory => {
+            const fixture = createDaemonizingProcessFixture(directory);
+            const controller = new AbortController();
+            const supervised = spawnSupervisedPluginProcess({ command: process.execPath, args: fixture.args,
+                env: {}, signals: [controller.signal], spawnOptions: { detached: true, windowsHide: true },
+                descendantDisposition: 'preserve-on-success' });
+            try {
+                const pid = await fixture.ready();
+                if (kind === 'abort') controller.abort();
+                else if (kind === 'failed-exit') await fixture.release(1);
+                else await supervised.requestTermination(kind === 'timeout' ? { kind: 'timeout' } : { kind: 'dispose', reason: 'caller' });
+                const result = await supervised.handle.wait();
+                expect(result.termination.requestedBy.kind).toBe(kind === 'failed-exit' ? 'none' : kind);
+                await supervised.dispose();
+                expect(await waitForProcessExit(pid)).toBe(true);
+            } finally {
+                supervised.child.kill('SIGKILL');
+                await supervised.dispose().catch(() => undefined);
+                await fixture.cleanup();
+            }
+        });
+    });
+
     it('records OS launch timing without logging command arguments or environment', async () => {
         const fileLog = vi.spyOn(logger, 'infoFile');
         const supervised = spawnSupervisedPluginProcess({ command: process.execPath,

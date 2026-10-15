@@ -59,6 +59,11 @@ export interface ExecService {
         request: PluginExecSpawnRequest & { timeoutMs?: number },
         options?: {
             signal?: AbortSignal;
+            /** Leave daemonized descendants to the native tool after an unrequested
+             * root exit with code zero. Cancellation, timeout, early disposal and
+             * failed exit still terminate the tree. Default: terminate.
+             */
+            descendantDisposition?: 'terminate' | 'preserve-on-success';
             /** Select the process carrying an admitted invocation's live output.
              * Without a host-private observer this remains ordinary captured output.
              */
@@ -67,7 +72,11 @@ export interface ExecService {
     ): Promise<PluginProcessResult>;
     spawn(
         request: PluginExecSpawnRequest,
-        options?: { signal?: AbortSignal },
+        options?: {
+            signal?: AbortSignal;
+            /** Same successful native descendant handoff as run; no managed-service custody transfer. */
+            descendantDisposition?: 'terminate' | 'preserve-on-success';
+        },
     ): Promise<PluginProcessHandle>;
     readonly clients: ProtocolClientsService;
 }

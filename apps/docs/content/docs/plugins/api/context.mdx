@@ -147,6 +147,31 @@ Resources. Import each service contract from its final domain path, such as
 `@happier-dev/plugin-sdk/actions`, `@happier-dev/plugin-sdk/http`, or
 `@happier-dev/plugin-sdk/interactions`.
 
+### Native commands that start daemons
+
+In 0.3 development source, `context.services.exec.run` and `spawn` accept
+`descendantDisposition: 'preserve-on-success'` in their options. Use it when a
+native tool starts a daemon and owns its later stop/delete operations:
+
+```ts
+await context.services.exec.run({
+  executable: limaExecutable,
+  args: ['start', '--tty=false', instanceName],
+}, {
+  signal: context.signal,
+  descendantDisposition: 'preserve-on-success',
+});
+```
+
+The handoff happens only when the root exits with code zero and no termination
+was requested while it ran. Subsequent handle disposal or invocation retirement
+leaves those descendants running. Cancellation, timeout, disposal while the root
+is running, and unsuccessful exit retain supervised cleanup. The default,
+`'terminate'`, keeps ordinary descendant cleanup. The native daemon must close or
+redirect inherited output streams so the command can finish collecting output.
+Stop and delete commands should keep the default disposition. This option does
+not create a host-managed service or transfer a managed service's custody.
+
 Agent runtime factories receive an immutable `AgentRuntimeFactoryContext`, not
 invocation services. Session and execution-run operations receive their own
 bounded native runtime contexts from `@happier-dev/plugin-sdk/agents/runtime`.

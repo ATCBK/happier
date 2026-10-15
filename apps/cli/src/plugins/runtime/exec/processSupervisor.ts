@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 
 import type {
+    ExecService,
     PluginProcessHandle,
     PluginProcessObservedTermination,
     PluginProcessOutput,
@@ -115,6 +116,7 @@ type SpawnSupervisedPluginProcessInput = Readonly<{
     env?: NodeJS.ProcessEnv;
     stdin?: Uint8Array;
     timeoutMs?: number;
+    descendantDisposition?: NonNullable<Parameters<ExecService['spawn']>[1]>['descendantDisposition'];
     signals?: readonly AbortSignal[];
     maxStdoutBytes?: number;
     maxStderrBytes?: number;
@@ -387,6 +389,16 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         }
         if (!observed && !requestedBy) {
             requestedBy = Object.freeze({ ...request });
+        }
+        if (input.descendantDisposition === 'preserve-on-success'
+            && !input.processCustody && observed?.kind === 'exit' && observed.exitCode === 0
+            && requestedBy?.kind === 'none') {
+            // The native tool owns its daemon after successful startup. This is
+            // not a Job release or a running-process detachment: accepted abort,
+            // timeout and early disposal requests still use normal tree cleanup.
+            seal();
+            confirmSettlement();
+            return Promise.resolve();
         }
         if (observed && input.rootExitObservation) {
             return Promise.resolve(rootExitObservation).then(() => { seal(); confirmSettlement(); });

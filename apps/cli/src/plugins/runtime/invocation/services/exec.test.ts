@@ -60,6 +60,16 @@ function createService(options?: Readonly<{ current?: () => boolean; controller?
 }
 
 describe('createStablePluginExecService', () => {
+    it('refuses native descendant handoff for a host-managed process without launching it', async () => {
+        const service = createService();
+        const request = { executable, args: ['-e', 'throw new Error("must not launch")'] };
+        const authorization = installManagedProcessCustodyForHost(service, request, null);
+        try {
+            await expect(service.spawn(request, { descendantDisposition: 'preserve-on-success' }))
+                .rejects.toMatchObject({ code: 'plugin_exec_managed_handoff_forbidden' });
+        } finally { authorization.dispose(); }
+    });
+
     it('attributes generic native IO to Happier instead of borrowing the invoking Session owner', async () => {
         vi.stubEnv('HAPPIER_PROCESS_OWNER', 'v1.0123456789ab.session.session-caller');
         try {

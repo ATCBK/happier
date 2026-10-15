@@ -13,7 +13,10 @@ export function createLimaSdkExecutor({ exec, executable, signal }: Readonly<{
     const process = await exec.run({
       executable, args, ...(options?.env ? { env: options.env } : {}),
       ...(options?.input === undefined ? {} : { stdin: typeof options.input === 'string' ? new TextEncoder().encode(options.input) : options.input }),
-    }, { signal, ...(args[0] === 'shell' ? { outputDelivery: 'invocation' as const } : {}) });
+    }, { signal,
+      ...(args[0] === 'start' ? { descendantDisposition: 'preserve-on-success' as const } : {}),
+      ...(args[0] === 'shell' ? { outputDelivery: 'invocation' as const } : {}),
+    });
     if ((args[0] === 'list' || args[0] === '--version' || args[0] === 'info') && (process.stdoutTruncated || process.stderrTruncated)) {
       throw Object.assign(new Error('native Lima observation is incomplete'), { code: 'LIMA_INSPECT_UNAVAILABLE' });
     }

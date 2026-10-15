@@ -226,6 +226,7 @@ export function spawnAuthorizedHostExecLaunchForHost(
     options: Readonly<{
         signal?: AbortSignal;
         processCustody?: ProcessCustodySpawnSpec;
+        descendantDisposition?: NonNullable<Parameters<ExecService['spawn']>[1]>['descendantDisposition'];
         linuxProcessLaunchScope?: LinuxProcessLaunchScope | null;
         recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
         readSpawnFailureLimits?: SpawnFailureLimitsReader;
@@ -258,6 +259,7 @@ export function spawnAuthorizedHostExecLaunchForHost(
             ...(launch.timeoutMs === undefined ? {} : { timeoutMs: launch.timeoutMs }),
             ...(launch.maxStdoutBytes === undefined ? {} : { maxStdoutBytes: launch.maxStdoutBytes }),
             ...(launch.maxStderrBytes === undefined ? {} : { maxStderrBytes: launch.maxStderrBytes }),
+            ...(options.descendantDisposition ? { descendantDisposition: options.descendantDisposition } : {}),
             ...(launch.waitForGracefulRootExitBeforeTreeStop ? { waitForGracefulRootExitBeforeTreeStop: true } : {}),
             signals: options.signal ? [options.signal] : [],
             ...(custody ? { processCustody: custody } : {}),
@@ -1165,6 +1167,9 @@ export function createStablePluginExecService(params: Readonly<{
         // Only the supervisor installs this exact host-owned request; public
         // Exec options cannot transfer invocation authority or process custody.
         const managedCustody = readInstalledManagedProcessCustody(service, request);
+        if (managedCustody && options?.descendantDisposition === 'preserve-on-success') {
+            return fail('plugin_exec_managed_handoff_forbidden', 'Managed process custody cannot be handed to a native tool');
+        }
         const lifetime = managedCustody?.lifetime;
         const launch = await authorizeLaunch(request, options, undefined, undefined, lifetime);
         const authorizedAt = performance.now();
@@ -1187,6 +1192,7 @@ export function createStablePluginExecService(params: Readonly<{
         const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment,
             processOwnerTag: managedCustody?.processOwnerTag ?? processOwnerTag }, {
             readSpawnFailureLimits: params.readSpawnFailureLimits,
+            ...(options?.descendantDisposition ? { descendantDisposition: options.descendantDisposition } : {}),
             ...(lifetime ? { signal: lifetime.signal } : options?.signal ? { signal: options.signal } : {}),
             ...(managedCustody?.processCustody ? { processCustody: managedCustody.processCustody } : {}),
             ...(linuxProcessLaunchScope ? { linuxProcessLaunchScope } : {}),
@@ -1218,7 +1224,7 @@ export function createStablePluginExecService(params: Readonly<{
 
     async function spawnProcess(
         request: Parameters<ExecService['spawn']>[0],
-        options?: { signal?: AbortSignal },
+        options?: Parameters<ExecService['spawn']>[1],
     ): Promise<PluginProcessHandle> {
         return (await launchProcess(request, options, true)).handle;
     }

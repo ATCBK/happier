@@ -14,6 +14,17 @@ function success(stdout = new Uint8Array()): PluginProcessResult {
 }
 
 describe('public Lima process transport', () => {
+  it('hands only native start descendants to Lima while stop, delete and guest IO remain supervised', async () => {
+    const exec: Pick<ExecService, 'run'> = { run: async (request, options) => {
+      expect(options?.descendantDisposition).toBe(request.args?.[0] === 'start' ? 'preserve-on-success' : undefined);
+      return success();
+    } };
+    const executor = createLimaSdkExecutor({ exec, executable, signal: new AbortController().signal });
+    for (const verb of ['start', 'stop', 'delete', 'create', 'shell', 'list']) {
+      await executor.capture('limactl', [verb, identity.instance]);
+    }
+  });
+
   it('puts binary private payload only on stdin at the declared process boundary', async () => {
     const payload = new Uint8Array([0, 255, 10, 34, 36]);
     const requests: Parameters<ExecService['run']>[0][] = [];
