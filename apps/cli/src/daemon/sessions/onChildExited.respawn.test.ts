@@ -127,6 +127,7 @@ describe('createOnChildExited', () => {
     let accept!: () => void;
     const apiMachine = {
       enqueueDaemonTerminalExactTurnEnd: vi.fn(() => new Promise<void>((resolve) => { accept = resolve; })),
+      captureMachineSessionTerminal: async () => ({ v: 1 as const, status: 'already_inactive' as const, sessionId: 'session-1' }),
     };
     const removeSessionMarkerFn = vi.fn(async () => undefined);
 
@@ -326,9 +327,9 @@ describe('createOnChildExited', () => {
     expect(removeSessionMarkerFn).toHaveBeenCalledWith(pid);
   });
 
-  it('retains no-turn final-exit custody when terminal capture is rejected', async () => {
+  it.each([undefined, 'turn-capture-rejected'])('retains final-exit custody when terminal capture is rejected (turn %s)', async (activeTurnId) => {
     const pid = 126;
-    const tracked = { pid, startedBy: 'daemon' as const, happySessionId: 'session-capture-rejected' };
+    const tracked = { pid, startedBy: 'daemon' as const, happySessionId: 'session-capture-rejected', activeTurnId };
     const pidToTrackedSession = new Map<number, any>([[pid, tracked]]);
     const apiMachine = {
       enqueueDaemonTerminalExactTurnEnd: vi.fn(async () => undefined),

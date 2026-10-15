@@ -20,7 +20,10 @@ describe('createOnChildExited session exit reports', () => {
     let markerRetained = false;
     let markerRemoved = false;
     // The machine transport is a network boundary; real exit staging runs beneath it.
-    const apiMachine = { enqueueDaemonTerminalExactTurnEnd: async () => undefined } as unknown as ApiMachineClient;
+    const apiMachine = {
+      enqueueDaemonTerminalExactTurnEnd: async () => undefined,
+      captureMachineSessionTerminal: async () => ({ v: 1 as const, status: 'already_inactive' as const, sessionId: 'session-killed' }),
+    } as unknown as ApiMachineClient;
     const sessions = new Map([[tracked.pid, tracked]]);
     const onChildExited = createOnChildExited({ pidToTrackedSession: sessions,
       spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
