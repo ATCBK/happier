@@ -32,7 +32,7 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
   class Directory {
     uri: string;
     constructor(...parts: Array<string | { uri: string }>) { this.uri = joinUri(parts); }
-    get exists() { return directories.has(this.uri); }
+    get exists() { return directories.has(this.uri) || [...files.keys()].some((key) => key.startsWith(`${this.uri}/`)); }
     // Mirrors expo-file-system: the recursive byte total of contained files, null when the directory is missing.
     get size() {
       const contained = [...files.entries()].filter(([key]) => key.startsWith(`${this.uri}/`));
@@ -41,7 +41,7 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
     }
     create() { directories.add(this.uri); }
     delete() {
-      directories.delete(this.uri);
+      for (const dir of directories) if (dir === this.uri || dir.startsWith(`${this.uri}/`)) directories.delete(dir);
       for (const key of files.keys()) if (key.startsWith(`${this.uri}/`)) files.delete(key);
     }
   }
@@ -52,6 +52,11 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
     create() { if (!this.exists) files.set(this.uri, new Uint8Array()); }
     delete() {
       if (options.openHandles?.size) throw new Error('file_handle_still_open');
+      // Deleting a file leaves its folders behind, as on a real filesystem.
+      for (let parent = this.uri.slice(0, this.uri.lastIndexOf('/')); parent.length > 'file://'.length;
+        parent = parent.slice(0, parent.lastIndexOf('/'))) {
+        directories.add(parent);
+      }
       files.delete(this.uri);
     }
     write(value: string | Uint8Array) {
@@ -64,7 +69,7 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
     move(destination: { uri: string }) {
       const data = files.get(this.uri);
       if (!data) throw new Error('move_source_missing');
-      if (files.has(destination.uri)) throw new Error('move_destination_exists');
+      if (files.has(destination.uri) || new Directory(destination.uri).exists) throw new Error('move_destination_exists');
       // As on a real filesystem, a path that holds a file cannot also be a directory.
       for (let parent = destination.uri.slice(0, destination.uri.lastIndexOf('/')); parent.length > 'file://'.length;
         parent = parent.slice(0, parent.lastIndexOf('/'))) {
@@ -541,6 +546,22 @@ describe('modelPacks installer (native)', () => {
 
       expect(fs.files.get(`${PACK_URI}/data/model.bin`)).toEqual(nested);
       expect(fs.files.has(`${PACK_URI}/data`)).toBe(false);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest.version).toBe('v2');
+    });
+
+    it('updates a pack whose new build turns a directory into a file', async () => {
+      const fs = createFs();
+      await installedPack(fs, [{ path: 'data/model.bin', bytes: new Uint8Array([1]) }]);
+      const flat = new Uint8Array([2]);
+      const remote = manifest([
+        { path: 'data', url: 'https://example.com/v2/data', sha256: await sha256Hex(flat), sizeBytes: 1 },
+      ], 'v2');
+      useNativeDownloads(fs, () => flat);
+
+      await ensureModelPackInstalled({ ...updateOptions, signal: new AbortController().signal }, { fs, fetch: fetchManifest(remote) });
+
+      expect(fs.files.get(`${PACK_URI}/data`)).toEqual(flat);
+      expect(fs.files.has(`${PACK_URI}/data/model.bin`)).toBe(false);
       expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest.version).toBe('v2');
     });
 

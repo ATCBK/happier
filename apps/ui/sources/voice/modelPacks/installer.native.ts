@@ -105,7 +105,8 @@ async function applyPackUpdate(opts: {
   } catch {
     // ignore
   }
-  // Dropped files go first: a new build may turn a dropped file's path into a directory.
+  // Dropped files go first: a new build may turn a dropped file's path into a directory, or a dropped
+  // directory's path into a file.
   const remotePaths = new Set(opts.remote.files.map((f) => f.path));
   for (const f of opts.installed.files) {
     if (remotePaths.has(f.path)) continue;
@@ -115,6 +116,9 @@ async function applyPackUpdate(opts: {
   for (const f of changed) {
     const target = getPackFile(opts.fs, opts.rootDir, f.path, { createParents: true });
     if (target.exists) target.delete();
+    // Deleting a dropped directory's files leaves the folder itself in the way.
+    const emptiedDir = new opts.fs.Directory(target.uri);
+    if (emptiedDir.exists) emptiedDir.delete();
     getPackFile(opts.fs, stagingDir, f.path).move(target);
   }
   removePackUpdateDir(opts.fs, opts.id);
