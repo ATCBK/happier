@@ -191,6 +191,8 @@ describe('memoryWorker', () => {
     let revision = 1;
     let readable = true;
     let replaceAccountDuringSessionRead = false;
+    let retainedSourceRead: (() => Promise<void>) | undefined;
+    let accountAttached = false;
     const fact = (id: string, text: string, expiresAtMs?: number) => ({ id, text, createdAtMs: 1, sourceSessionRef: null, ...(expiresAtMs === undefined ? {} : { expiresAtMs }) });
     const artifact = (id: string) => ({ id, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
       header: encodePlainArtifactStoredContent({ v: 1, kind: id === 'memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: id }),
@@ -209,9 +211,14 @@ describe('memoryWorker', () => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
-      if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
-      if (path === '/v1/artifacts') return { status: 200, data: readable ? attached.map(artifact) : [] };
+      if (path === '/v2/account/settings') {
+        await retainedSourceRead?.();
+        return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      }
+      if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: accountAttached ? 2 : 1, content: { t: 'plain', v: key === 'coding' && accountAttached
+        ? { key, value: { v: 1, scope: { kind: 'coding' }, entries: [entry('account-instructions')] } }
+        : emptyPromptLibraryRecordV1(key) } })) } };
+      if (path === '/v1/artifacts') return { status: 200, data: readable ? [...attached, ...(accountAttached ? ['account-instructions'] : [])].map(artifact) : [] };
       if (path.startsWith('/v1/artifacts/')) return readable ? { status: 200, data: artifact(path.split('/').at(-1)!) } : { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected document indexing HTTP path: ${path}`);
     });
@@ -278,8 +285,32 @@ describe('memoryWorker', () => {
       expect(result.hits.filter(hit => !('type' in hit))).toEqual(sessionsOnly.ok ? sessionsOnly.hits : []);
       expect(sessionsOnly).not.toHaveProperty('documents');
       expect(await search(null)).toEqual(sessionsOnly);
-      const global = await search(['documents', 'sessions'], true);
-      expect(global.ok && global.hits).toHaveLength(6);
+      let releaseSource = () => {};
+      let sourceIssued = () => {};
+      const sourcePending = new Promise<void>(resolve => { releaseSource = resolve; });
+      const sourceStarted = new Promise<void>(resolve => { sourceIssued = resolve; });
+      // The real catalog publishes authoritative rows before optional source/history
+      // maintenance. Holding that HTTP response must not hold document RPC admission.
+      accountAttached = true;
+      retainedSourceRead = async () => { sourceIssued(); await sourcePending; };
+      let globalSettled = false;
+      const globalSearch = search(['documents', 'sessions'], true).then(result => { globalSettled = true; return result; });
+      try {
+        await Promise.race([sourceStarted, globalSearch]);
+        await vi.waitFor(() => expect(globalSettled,
+          'Readable document membership must not await retained-source maintenance').toBe(true));
+      } finally {
+        releaseSource();
+        retainedSourceRead = undefined;
+        await globalSearch;
+      }
+      const global = await globalSearch;
+      expect(global).toMatchObject({ ok: true, documents: { state: 'ready' } });
+      expect(global.ok && global.hits).toHaveLength(7);
+      expect(global.ok && global.hits).toContainEqual(expect.objectContaining({
+        type: 'artifact', ref: expect.objectContaining({ artifactId: 'account-instructions' }),
+      }));
+      accountAttached = false;
       revision = 2;
       const revised = await search();
       expect(revised.ok && revised.hits.some(hit => hit.summary === 'quartz index')).toBe(false);
