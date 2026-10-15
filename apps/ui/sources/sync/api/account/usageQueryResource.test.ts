@@ -121,6 +121,57 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('keeps current-only allowance readings across navigation before history has ever settled', async () => {
+    const now = Date.now();
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'current-only' };
+    const source = { bindingKind: 'account' as const, ref };
+    const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+    const record = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
+      staleAfterMs: 600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+      meters: [{ meterId: 'weekly', label: 'Weekly', usedPct: 40, utilizationPct: 40, used: null, limit: null,
+        unit: 'count', status: 'ok', resetsAt: now + 86_400_000, windowDurationMs: 7 * 86_400_000 }] });
+    const history = createDeferred<void>();
+    let currentReads = 0;
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({
+        source, recordId: record.recordId, providerAccountId: ref.accountId, fetchedAt: now, staleAfterMs: 600_000 });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
+        currentReads++;
+        if (currentReads > 1) await history.promise;
+        return Response.json({ content: { t: 'plain', v: record },
+          metadata: { fetchedAt: now, staleAfterMs: 600_000, status: 'ok' }, sources: [source] });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+        await history.promise;
+        return Response.json({ entries: [], nextCursor: null });
+      }
+      return undefined;
+    }, { connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    const store = getUsageQueryResourceStore(captured);
+    const entryFor = (startMs: number) => store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ period: { startMs, endMs: now }, includeSessionEvidence: false, includeWorkEvidence: false })] }) });
+    const first = entryFor(1000);
+    const stopFirst = first.subscribe(() => {}, false);
+    const sliceOf = (entry: typeof first) => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    try {
+      await expect.poll(() => first.getSnapshot().value && sliceOf(first).quota?.[0]?.current).toEqual(record);
+      // The useful current reading does not wait for an unrelated historical backfill.
+      expect(sliceOf(first).sources.find(state => state.source.startsWith('quota:'))?.status).toBe('stale');
+      stopFirst();
+      const returning = entryFor(2000);
+      const stopReturning = returning.subscribe(() => {}, false);
+      try {
+        await expect.poll(() => returning.getSnapshot().value !== undefined).toBe(true);
+        expect(sliceOf(returning).quota?.[0]?.current).toEqual(record);
+        expect(projectUsagePlans(sliceOf(returning).quota, now, undefined, sliceOf(returning).sources).tightest?.window.remainingFraction).toBe(0.6);
+      } finally { stopReturning(); }
+    } finally { history.resolve(); stopFirst(); }
+  });
   it('does not let an older pending batch erase the Account allowance settled by another batch', async () => {
     const now = Date.now();
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'retained' };
@@ -1344,7 +1395,7 @@ describe('usage query captured Resource adapter', () => {
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]).toMatchObject({ accounting: value,
         quota: [{ source, current: snapshot, history: { nextCursor: { id: 'first-use-page' } }, unusedCapacity: { historyStatus: 'partial' } }] });
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
-        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'pending' }));
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'stale' }));
       later.resolve(Response.json({ entries: [], nextCursor: null }));
       // Capacity history has answered even while the independent Pending-work
       // facet is still outstanding. It cannot keep every account "Still reading".

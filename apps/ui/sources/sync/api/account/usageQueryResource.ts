@@ -357,7 +357,8 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             // Allowance/history has answered at its last page, independently of
             // the Pending-work and price facets that may still be reading.
             status: failure ? value ? 'stale' : 'error' : unobservedReplacement || retainedPace ? 'stale' : settled || value?.pageProjection || value?.history?.nextCursor === null
-                ? value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'available' : 'partial' : 'pending',
+                ? value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'available' : 'partial'
+                : value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'stale' : 'pending',
             ...(value?.current && wasConnectedServiceQuotaObserved(value.current) ? { asOfMs: value.current.fetchedAtMs } : {}),
             ...(failure ? { errorCode: failure } : {}),
         };
