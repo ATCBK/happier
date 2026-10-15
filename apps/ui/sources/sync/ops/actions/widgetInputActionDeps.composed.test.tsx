@@ -22,6 +22,9 @@ import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/ar
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { readBuiltinWidgetDescriptorV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
 
+// The viewer accepts the real Action confirmation at its presentation boundary.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+
 installDisconnectedServerSocketBoundary();
 // Install the external socket before any consumer can capture its transport.
 // Each Account restoration below supplies its own HTTP Response boundary.
@@ -481,7 +484,7 @@ it('validates a mounted schema-only typed pin from its selected origin before ex
             familiesById: { pluginUi: { family: 'pluginUi', entriesById: { 'typed-widget': widget } },
                 inputTypes: { family: 'inputTypes', entriesById: { [`${inputType.pluginId}/${inputType.localId}`]: {
                     id: `${inputType.pluginId}/${inputType.localId}`, pluginId: inputType.pluginId, pluginVersion: '1.0.0', occurrenceId: 'current',
-                    ...typeOrigin,
+                    executionOrigin: typeOrigin,
                     definition: { id: inputType.localId, title: 'Repository', semantic: 'repository',
                         valueSchema: { type: 'object', required: ['repositoryId'], additionalProperties: false,
                             properties: { repositoryId: { type: 'string' } } } },
@@ -529,14 +532,16 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 
 it('admits and refreshes a B-only stored widget using current B inputs and Resource declarations', async () => {
     await import('@/sync/syncEngine');
+    const { encodeSessionSystemRecordRevision } = await import('../../../../../server/sources/app/session/systemRecords/sessionSystemRecordRevision');
     const http = createHomeHubArtifactHttpBoundary('viewer');
     let areaHttp: ReturnType<typeof createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>> | null = null;
     const features = createRootLayoutFeaturesResponse();
     if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Expected canonical Board feature');
     let boardItem: unknown = null;
-    const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
+    let itemVersion = 0;
     const record = (kind: string, localId: string, value: unknown) => ({ id: `${kind}-row`,
-        address: { owner: 'host', namespace: 'surface', kind, localId }, content: { t: 'plain', v: value }, revision,
+        address: { owner: 'host', namespace: 'surface', kind, localId }, content: { t: 'plain', v: value },
+        revision: encodeSessionSystemRecordRevision({ id: `${kind}-row`, version: kind === 'item.v1' ? itemVersion : 1 }),
         createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' });
     // Real plain system-record envelopes at the HTTP persistence boundary;
     // canonical repository, Board adapter and Action port open them normally.
@@ -610,6 +615,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
             mode: { kind: 'value' as const, value: 'current-b' },
         } };
         const request = { ref: { surface: physical, instanceId: instance.id }, instance, context: { serverId: scope.serverId } };
+        itemVersion += 1;
         boardItem = { v: 1, title: 'Bound B', frame: 'card', height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'widget', instance } };
         expect(await inputs.resolve(request)).toEqual({ status: 'ready', input: { session: { serverId: scope.serverId, sessionId: b.id }, mode: 'current-b' } });
         expect(await inputs.readSizeDeclaration(request)).toEqual({ sizes: ['medium', 'full', 'tall'], defaultSize: 'tall' });
@@ -695,6 +701,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
                 data: { kind: 'resource' as const, resource: { pluginId: surface.pluginId, localId: 'current-b-state' },
                     inputSchema, outputSchema: { type: 'number' as const } }, value: { path: [], type: 'number' as const } } } } };
         const copiedInstance = { ...instance, definition: { kind: 'inline' as const, definition: copiedDefinition } };
+        itemVersion += 1;
         boardItem = { v: 1, title: 'Copied checks', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
             source: { kind: 'widget', instance: copiedInstance } };
         daemon.resourceRead.mockResolvedValue(resourceResult);
@@ -707,6 +714,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
         const htmlDefinition = { ...copiedDefinition, body: { kind: 'html' as const,
             source: artifactHtmlBundleFromBodyV1('<main>Viewer resource</main>'),
             requestedCapabilities: { hostMethods: ['readResource' as const], resources: [{ pluginId: surface.pluginId, localId: 'current-b-state' }] } } };
+        itemVersion += 1;
         boardItem = { v: 1, title: 'HTML checks', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
             source: { kind: 'widget', instance: { ...instance, definition: { kind: 'inline', definition: htmlDefinition } } } };
         expect(await executor.execute('widgets.item.refresh', { ref: request.ref }, context))
@@ -728,6 +736,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
             inputs: native.inputs!, inputSchema: native.inputSchema!, sessionInputPath: native.sessionInputPath,
             provenance: { source: { kind: 'authored' } } };
         for (const definition of [{ kind: 'builtin' as const, id: 'changes' }, { kind: 'inline' as const, definition: savedNative }]) {
+            itemVersion += 1;
             boardItem = { v: 1, title: 'Native changes', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
                 source: { kind: 'widget', instance: { v: 1, id: 'copy-b', definition, bindings: {
                     session: { kind: 'value', value: { serverId: scope.serverId, sessionId: b.id } },
@@ -735,6 +744,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
             expect(await executor.execute('widgets.item.refresh', { ref: request.ref }, context))
                 .toMatchObject({ ok: false, errorCode: 'widget_refresh_unavailable' });
         }
+        expect(daemon.resourceRead).toHaveBeenCalledTimes(readsBeforeDenial);
     } finally {
         await act(async () => { tree?.unmount(); });
         account.dispose(); clearDaemonMergedProjectionCacheForTests(); daemon.projections.clear();
