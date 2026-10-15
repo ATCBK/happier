@@ -7,7 +7,8 @@ import {
     ExecutionRunTurnStreamStartV2RequestSchema,
     ExecutionRunTurnStreamReadResponseSchema,
 } from '@happier-dev/protocol/execution/runs/streaming';
-import { createDeferred, createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
+import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import {
     createStandaloneVoicePolicyHarness,
     prepareStandaloneVoicePolicyHarness,
@@ -47,10 +48,34 @@ describe('createDefaultVoiceQaControllerDeps', () => {
         sdk.sendContextualUpdate.mockClear();
     });
     afterEach(() => {
+        vi.useRealTimers();
         registerVoiceAdapters(previousAdapters);
         voiceSessionBindingStore.setState(previousBindings, true);
         storage.setState(previousStorage, true);
         vi.restoreAllMocks();
+    });
+
+    it('retires an interrupted-reply observation when its QA deadline ends', async () => {
+        vi.useFakeTimers();
+        storage.setState({ sessions: { 'qa-waiter': createSessionFixture({ id: 'qa-waiter', serverId: 'qa-waiter-home' }) }, sessionMessages: {} });
+        let observed: string | null | undefined;
+        const waiting = createDefaultVoiceQaControllerDeps().waitForInterruptedLocalAssistantTurn({
+            conversationSessionId: 'qa-waiter', timeoutMs: 1_000,
+        }).then(value => { observed = value; });
+        try {
+            expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('qa-waiter-home')).toContain('qa-waiter');
+            await vi.advanceTimersByTimeAsync(1_001);
+            expect(observed).toBe(null);
+            expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('qa-waiter-home')).not.toContain('qa-waiter');
+        } finally {
+            // Unstick the old adapter on RED without leaving transcript demand.
+            storage.setState({ sessionMessages: { 'qa-waiter': createSessionMessagesFixture({
+                messageIdsOldestFirst: ['cleanup'], messagesById: { cleanup: {
+                    id: 'cleanup', kind: 'agent-text', text: 'cleanup', createdAt: 1, localId: null,
+                } },
+            }) } });
+            await waiting;
+        }
     });
 
     it('refuses an unmounted Home before starting the generated realtime provider', async () => {

@@ -155,12 +155,19 @@ export function createDefaultVoiceQaControllerDeps(): VoiceQaControllerDeps {
         },
         waitForInterruptedLocalAssistantTurn: async ({ conversationSessionId, timeoutMs, baseline }) => {
             const currentBaseline = baseline ?? captureAssistantTextMessageBaseline(conversationSessionId);
-            return await waitForNextAssistantTextMessage(
-                conversationSessionId,
-                currentBaseline.baselineIds,
-                currentBaseline.baselineCount,
-                timeoutMs,
-            );
+            // This deadline belongs to the QA observation, not the Voice turn.
+            const observation = new AbortController();
+            const timeout = setTimeout(() => observation.abort(), timeoutMs);
+            try {
+                return await waitForNextAssistantTextMessage(
+                    conversationSessionId,
+                    currentBaseline.baselineIds,
+                    currentBaseline.baselineCount,
+                    observation.signal,
+                );
+            } finally {
+                clearTimeout(timeout);
+            }
         },
         installMediaTransportRouteRequirement: ({ target, routeKind }) =>
             installDaemonSpeechStreamQaRouteRequirement({
