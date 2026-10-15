@@ -7470,7 +7470,7 @@ deps: {
         invalidActionSubtitle: 'Aquesta acció ja no està disponible en aquesta compilació.',
         configureActionAccessibilityLabel: 'Configura l’acció',
         approvalHelpTitle: 'Modes d’aprovació',
-        approvalHelpBody: '“Demana primer” crea una sol·licitud d’aprovació abans que aquesta acció s’executi des d’aquesta superfície. Per a les sessions d’IA, aquesta sol·licitud queda a la superfície d’aprovacions existent i no espera en cap modal. “Permès” deixa executar l’acció des d’aquesta superfície sense cap sol·licitud d’aprovació.',
+        approvalHelpBody: "“Demana primer” requereix aprovació abans d’executar aquesta acció des d’aquesta superfície. Els controls de l’aplicació poden mostrar un diàleg de confirmació. Per a les sessions d’IA, la sol·licitud queda a la superfície d’aprovacions existent i no espera en cap modal. “Permès” deixa executar l’acció sense cap sol·licitud d’aprovació.",
         toolExposure: {
             title: 'Exposició de l’eina',
             footer: 'Controla si les accions compatibles apareixen com a eines directes o només estan disponibles mitjançant el descobriment d’accions.',

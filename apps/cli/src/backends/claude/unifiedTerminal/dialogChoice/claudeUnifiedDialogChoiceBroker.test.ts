@@ -72,6 +72,31 @@ function deferredSerializedAgentStateWrites(
 }
 
 describe('ClaudeUnifiedDialogChoiceBroker lifecycle', () => {
+  it('keeps a failed UI dialog answer retryable without releasing the choice', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('dialog-approval-retry');
+    const broker = new ClaudeUnifiedDialogChoiceBroker(session, { createRequestId: () => 'retry' });
+    broker.activate();
+    const pending = broker.requestDialogChoice({ dialog: dialog(EFFORT_DIALOG) });
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await vi.waitFor(() => expect(client.agentState.requests.retry).toBeDefined());
+    const write = vi.spyOn(client, 'updateAgentState');
+    write.mockImplementationOnce(() => { throw new Error('state transport unavailable'); });
+    const rpc = client.rpcHandlerManager.getHandler('permission')!;
+    const response = { id: 'retry', approved: true, answers: { answer: 'confirm' } };
+    try {
+      await expect(rpc(response)).resolves.toMatchObject({ ok: false, errorCode: 'permission_response_failed' });
+      expect(settled).toBe(false);
+      expect(client.agentState.requests.retry).toBeDefined();
+      await expect(rpc(response)).resolves.toEqual({ ok: true });
+      await expect(pending).resolves.toEqual({ dialogId: 'effort_change', choice: 'confirm' });
+      expect(client.agentState.requests.retry).toBeUndefined();
+    } finally {
+      write.mockRestore();
+      await broker.dispose();
+    }
+  });
+
   it('does not publish a replacement until the prior request cancellation is persisted', async () => {
     const { session, client } = createPermissionHandlerSessionStub('dialog-broker-replacement');
     let sequence = 0;
@@ -127,16 +152,19 @@ describe('ClaudeUnifiedDialogChoiceBroker lifecycle', () => {
     await vi.waitFor(() => expect(client.agentState.requests['dialog-1']).toBeDefined());
 
     const release = deferredAgentStateWrite(client);
-    await client.rpcHandlerManager.getHandler('permission')?.({
+    let responseSettled = false;
+    const response = Promise.resolve(client.rpcHandlerManager.getHandler('permission')?.({
       id: 'dialog-1',
       approved: true,
       answers: { answer: 'confirm' },
-    });
+    })).then((result) => { responseSettled = true; return result; });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(settled).toBe(false);
+    expect(responseSettled).toBe(false);
 
     release();
+    await response;
     await expect(pending).resolves.toEqual({ dialogId: 'effort_change', choice: 'confirm' });
     expect(client.agentState.completedRequests['dialog-1']).toMatchObject({
       status: 'approved',
@@ -222,28 +250,33 @@ describe('ClaudeUnifiedDialogChoiceBroker lifecycle', () => {
     const broker = new ClaudeUnifiedDialogChoiceBroker(session, { createRequestId: () => 'dialog-1' });
     broker.activate();
 
-    let choiceSettled = false;
-    const pending = broker.requestDialogChoice({ dialog: dialog(EFFORT_DIALOG) }).finally(() => {
-      choiceSettled = true;
+    let choiceApproved = false;
+    const pending = broker.requestDialogChoice({ dialog: dialog(EFFORT_DIALOG) }).then((decision) => {
+      choiceApproved = true;
+      return decision;
     });
     void pending.catch(() => {});
     await vi.waitFor(() => expect(client.agentState.requests['dialog-1']).toBeDefined());
 
     const writes = deferredSerializedAgentStateWrites(client);
-    await client.rpcHandlerManager.getHandler('permission')?.({
+    const response = client.rpcHandlerManager.getHandler('permission')?.({
       id: 'dialog-1',
       approved: true,
       answers: { answer: 'confirm' },
+    });
+    const responseRejected = expect(response).rejects.toMatchObject({
+      rpcErrorCode: 'STRUCTURED_QUESTION_RECEIVER_NOT_OWNER',
     });
     const disposal = broker.dispose();
     await vi.waitFor(() => expect(writes.count()).toBe(2));
 
     writes.release(0);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(choiceSettled).toBe(false);
+    expect(choiceApproved).toBe(false);
 
     writes.release(1);
     await disposal;
+    await responseRejected;
     await expect(pending).rejects.toThrow('claude_unified_dialog_choice_broker_disposed');
     expect(client.agentState.completedRequests['dialog-1']).toMatchObject({
       status: 'canceled',

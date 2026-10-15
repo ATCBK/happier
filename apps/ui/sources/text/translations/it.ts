@@ -8307,7 +8307,7 @@ export const it: TranslationStructure = {
         invalidActionSubtitle: "Questa azione non è più disponibile in questa build.",
         configureActionAccessibilityLabel: "Configura azione",
         approvalHelpTitle: "Modalità di approvazione",
-        approvalHelpBody: "“Chiedi prima” crea una richiesta di approvazione prima che questa azione venga eseguita da quella superficie. Per le sessioni AI, la richiesta resta nella superficie di approvazioni esistente e non attende in un modale. “Consentito” permette l’esecuzione da quella superficie senza una richiesta di approvazione.",
+        approvalHelpBody: "“Chiedi prima” richiede l’approvazione prima di eseguire questa azione da quella superficie. I controlli dell’app possono mostrare una finestra di conferma. Per le sessioni AI, la richiesta resta nella superficie di approvazioni esistente e non attende in un modale. “Consentito” permette l’esecuzione senza una richiesta di approvazione.",
         toolExposure: {
             title: "Esposizione strumento",
             footer: "Controlla se le azioni idonee compaiono come strumenti diretti o restano disponibili solo tramite individuazione delle azioni.",

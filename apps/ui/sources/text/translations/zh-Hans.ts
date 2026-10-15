@@ -7728,7 +7728,7 @@ export const zhHans: TranslationStructure = {
         invalidActionSubtitle: "此操作在此版本中不再可用。",
         configureActionAccessibilityLabel: "配置操作",
         approvalHelpTitle: "批准模式",
-        approvalHelpBody: "“先询问”会在此操作从该界面运行前创建批准请求。对于 AI 会话，该请求会排入现有批准界面，而不会在模态窗口中等待。“允许”则让此操作从该界面运行，而无需批准请求。",
+        approvalHelpBody: "“先询问”要求在此操作从该界面运行前获得批准。应用内控件可能显示确认对话框。对于 AI 会话，批准请求会排入现有批准界面，而不会在模态窗口中等待。“允许”则让此操作无需批准请求即可运行。",
         toolExposure: {
             title: "工具公开",
             footer: "控制符合条件的操作是显示为直接工具，还是仅可通过操作发现使用。",

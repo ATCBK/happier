@@ -8096,7 +8096,7 @@ export const pt: TranslationStructure = {
         invalidActionSubtitle: 'Esta ação não está mais disponível nesta versão.',
         configureActionAccessibilityLabel: 'Configurar ação',
         approvalHelpTitle: 'Modos de aprovação',
-        approvalHelpBody: '“Perguntar primeiro” cria uma solicitação de aprovação antes que esta ação seja executada nessa superfície. Para sessões de IA, essa solicitação fica na superfície de aprovações existente e não aguarda em um modal. “Permitido” deixa a ação executar nessa superfície sem uma solicitação de aprovação.',
+        approvalHelpBody: "“Perguntar primeiro” exige aprovação antes de executar esta ação nessa superfície. Os controles do aplicativo podem mostrar uma caixa de confirmação. Para sessões de IA, a solicitação fica na superfície de aprovações existente e não aguarda em um modal. “Permitido” deixa a ação executar sem uma solicitação de aprovação.",
         toolExposure: {
             title: 'Exposição da ferramenta',
             footer: 'Controla se ações elegíveis aparecem como ferramentas diretas ou ficam disponíveis apenas pela descoberta de ações.',

@@ -7978,7 +7978,7 @@ export const pl: TranslationStructure = {
         invalidActionSubtitle: 'Ta akcja nie jest już dostępna w tej wersji.',
         configureActionAccessibilityLabel: 'Skonfiguruj akcję',
         approvalHelpTitle: 'Tryby zatwierdzania',
-        approvalHelpBody: '„Najpierw zapytaj” tworzy prośbę o zatwierdzenie przed uruchomieniem tej akcji z tej powierzchni. Dla sesji AI taka prośba trafia do istniejącej powierzchni zatwierdzeń i nie czeka w modalu. „Dozwolone” pozwala uruchamiać akcję z tej powierzchni bez prośby o zatwierdzenie.',
+        approvalHelpBody: "„Najpierw zapytaj” wymaga zatwierdzenia przed uruchomieniem tej akcji z tej powierzchni. Elementy aplikacji mogą wyświetlić okno potwierdzenia. Dla sesji AI prośba trafia do istniejącej powierzchni zatwierdzeń i nie czeka w modalu. „Dozwolone” pozwala uruchamiać akcję bez prośby o zatwierdzenie.",
         toolExposure: {
             title: 'Ekspozycja narzędzia',
             footer: 'Określa, czy obsługiwane akcje pojawiają się jako narzędzia bezpośrednie, czy są dostępne tylko przez odkrywanie akcji.',

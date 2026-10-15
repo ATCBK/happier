@@ -7473,7 +7473,7 @@ export const de: TranslationStructure = {
         invalidActionSubtitle: 'Diese Aktion gibt es in diesem Build nicht mehr.',
         configureActionAccessibilityLabel: 'Aktion einrichten',
         approvalHelpTitle: 'Freigabemodi',
-        approvalHelpBody: '„Erst fragen“ erzeugt eine Freigabeanfrage, bevor diese Aktion von dieser Oberfläche aus läuft. Bei KI-Sessions landet die Anfrage in den bestehenden Freigaben und wartet nicht in einem Dialog. „Erlaubt“ lässt die Aktion ohne Freigabeanfrage laufen.',
+        approvalHelpBody: "„Erst fragen“ verlangt eine Freigabe, bevor die Aktion von dieser Oberfläche aus läuft. Bedienelemente in der App können einen Bestätigungsdialog anzeigen. Bei KI-Sessions landet die Anfrage in den bestehenden Freigaben und wartet nicht in einem Dialog. „Erlaubt“ lässt die Aktion ohne Freigabeanfrage laufen.",
         toolExposure: {
             title: 'Tool-Sichtbarkeit',
             footer: 'Legt fest, ob geeignete Aktionen als direkte Tools erscheinen oder nur über die Aktionssuche verfügbar bleiben.',

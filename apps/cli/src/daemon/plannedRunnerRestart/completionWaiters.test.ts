@@ -27,6 +27,23 @@ describe('createRestartCompletionWaiters', () => {
     expect(waiters.join('sess-1', 42)).toBeNull();
   });
 
+  it('reports whether any restart completion is still pending', async () => {
+    const waiters = createRestartCompletionWaiters({ timeoutMs: 60_000 });
+    expect(waiters.hasPending()).toBe(false);
+
+    const settled = waiters.create('sess-1', 42, intent);
+    const cancelled = waiters.create('sess-2', 43, { reason: 'version_runtime_refresh', tracked: { ...tracked, pid: 43 } });
+    expect(waiters.hasPending()).toBe(true);
+
+    waiters.settle('sess-1', 42, { ok: true });
+    await settled.promise;
+    expect(waiters.hasPending()).toBe(true);
+
+    cancelled.cancel();
+    await cancelled.promise;
+    expect(waiters.hasPending()).toBe(false);
+  });
+
   it('settles a restart that never completes as a timed-out partial failure', async () => {
     vi.useFakeTimers();
     const waiters = createRestartCompletionWaiters({ timeoutMs: 1_000 });

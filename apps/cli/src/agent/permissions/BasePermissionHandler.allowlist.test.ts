@@ -559,20 +559,23 @@ describe('BasePermissionHandler allowlist', () => {
     expect(handler.isAllowed('bash', input)).toBe(false);
   });
 
-  it('does not emit unhandledRejection when updateAgentState rejects', async () => {
+  it('keeps a failed UI approval pending for retry when updateAgentState rejects', async () => {
     const session = new FakeSession();
-    session.updateAgentState = async () => {
-      throw new Error('updateAgentState failed');
-    };
     const handler = new TestPermissionHandler(session as any);
 
     const onUnhandled = vi.fn();
     process.on('unhandledRejection', onUnhandled);
     try {
       const promise = handler.request('perm-1', 'bash', { command: ['bash', '-lc', 'echo hello'] });
+      const write = vi.spyOn(session, 'updateAgentState');
+      write.mockImplementationOnce(() => { throw new Error('updateAgentState failed'); });
       const rpc = session.rpcHandlerManager.handlers.get('permission');
+      await expect(rpc!({ id: 'perm-1', approved: true, decision: 'approved' })).rejects.toThrow('updateAgentState failed');
+      expect(await settledState(promise)).toBe('pending');
+      expect(session.agentState.requests['perm-1']).toBeDefined();
       await rpc!({ id: 'perm-1', approved: true, decision: 'approved' });
       await promise;
+      expect(session.agentState.requests['perm-1']).toBeUndefined();
 
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(onUnhandled).not.toHaveBeenCalled();

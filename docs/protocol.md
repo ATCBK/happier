@@ -154,6 +154,7 @@ from this current-work projection.
 - `session-end`
   - `{ sid, time }`
   - Closes the authorized publisher and publishes its inactive state through the same lifecycle-update owner.
+  - The current development server also accepts the released UI v0.2.1 user-scoped Stop event. Its durable session update includes the initiating UI connection because the event has no authoritative response projection.
 
 - `usage-report`
   - `{ key, sessionId?, tokens, cost }`

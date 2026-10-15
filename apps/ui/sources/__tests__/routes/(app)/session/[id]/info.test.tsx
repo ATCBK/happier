@@ -6,6 +6,8 @@ import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
 import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
@@ -55,6 +57,7 @@ const sessionOrganizationOps = vi.hoisted(() => ({
     sessionSetAttentionStandingWithServerScope: vi.fn(async () => ({ success: true })),
 }));
 let hideInactiveSessions = false;
+let actionsSettings = settingsDefaults.actionsSettingsV1;
 let sessionListAttentionPromotionMode: string | null = null;
 let pinnedSessionKeysV1: unknown = null;
 let sessionTagsV1: unknown = null;
@@ -168,6 +171,7 @@ installSessionRouteCommonModuleMocks({
             overrides: {
                 storage: {
                     getState: () => ({
+                        settings: { ...settingsDefaults, actionsSettingsV1: actionsSettings },
                         applySessionListRenderablePatches: applySessionListRenderablePatchesSpy,
                     }),
                 } as any,
@@ -416,6 +420,7 @@ vi.mock('@/components/ui/layout/layout', () => ({ layout: { screenPaddingHorizon
 
 describe('/session/[id]/info', () => {
     beforeEach(() => {
+        actionsSettings = settingsDefaults.actionsSettingsV1;
         mockSessionId = 'session-1';
         mockServerId = undefined;
         mockSession = null;
@@ -1946,15 +1951,7 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.archiveSession');
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
@@ -1968,6 +1965,21 @@ describe('/session/[id]/info', () => {
             router: expect.any(Object),
             fallbackHref: '/',
         });
+    });
+
+    it('keeps the info screen open when configurable archive confirmation is cancelled', async () => {
+        actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'session.archive': { approvalRequiredSurfaces: ['ui_button'] },
+        } });
+        modalConfirmSpy.mockResolvedValueOnce(false);
+        mockSession = {
+            id: 'session-1', active: false, accessLevel: null,
+            createdAt: 1, updatedAt: 1, seq: 1, metadata: {}, archivedAt: null,
+        };
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+        expect(sessionArchiveSpy).not.toHaveBeenCalled();
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
     it('stops and retries archiving when an inactive session is still active server-side', async () => {

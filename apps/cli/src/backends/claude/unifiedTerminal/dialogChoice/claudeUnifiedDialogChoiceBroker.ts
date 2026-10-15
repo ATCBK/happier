@@ -305,12 +305,11 @@ export class ClaudeUnifiedDialogChoiceBroker {
           },
         }),
       }),
-      completeRequest: (params) => {
+      completeRequest: (params) =>
         this.trackSourceCompletion(
           params.requestId,
           this.requestStore.completeRequest(params),
-        );
-      },
+        ),
       cancelAllRequests: (params) => { void this.cancelAllSourceOwnedRequests(params.reason); },
       hasOutstandingRequest: (requestId) => this.readSourceOwnedOutstandingRequest(requestId) !== null,
       isOutstandingRequestClaimed: (requestId) => {
@@ -329,9 +328,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
     return isClaudeUnifiedTerminalDialogChoiceAgentStateRequest(rawRequest) ? outstanding : null;
   }
 
-  private tryHandlePermissionRpc(
+  private async tryHandlePermissionRpc(
     payload: PermissionRpcPayload,
-  ): PermissionRpcConsumerOutcome | Promise<PermissionRpcConsumerOutcome> {
+  ): Promise<PermissionRpcConsumerOutcome> {
     const requestId = typeof payload?.id === 'string' ? payload.id : '';
     if (!requestId) return false;
     const context = this.permissionCoordinator.getResponseContext(requestId);
@@ -371,12 +370,15 @@ export class ClaudeUnifiedDialogChoiceBroker {
     // Only a remembered choice has a caller-visible mutation after this RPC. Keep its response
     // pending until terminal verification so the UI cannot persist a policy Claude did not apply.
     if (identity && selectedRequestOption?.settingMutation) {
+      if (this.terminalAnswerAcknowledgements.has(identity)) return false;
       let resolvePromise!: (outcome: PermissionRpcConsumerOutcome) => void;
       let rejectPromise!: (reason: Error) => void;
       const promise = new Promise<PermissionRpcConsumerOutcome>((resolve, reject) => {
         resolvePromise = resolve;
         rejectPromise = reject;
       });
+      // Terminal verification may reject while the state acknowledgement is still pending.
+      void promise.catch(() => {});
       acknowledgement = {
         promise,
         resolve: () => resolvePromise(true),
@@ -385,22 +387,28 @@ export class ClaudeUnifiedDialogChoiceBroker {
       this.terminalAnswerAcknowledgements.set(identity, acknowledgement);
     }
 
-    const completion = this.permissionCoordinator.completeResponse({
-      context,
-      completion: {
-        result: decision,
-        completedRequest: {
-          status: 'approved',
-          decision: 'allow',
-          extraCompletedFields: {
-            answers: payload.answers ?? {},
-            dialogId: decision.dialogId,
-            dialogChoice: decision.choice,
-            ...(decision.dialogId === 'safeguard_pause' ? { safeguardChoice: decision.choice } : {}),
+    let completion: boolean;
+    try {
+      completion = await this.permissionCoordinator.completeRpcResponse({
+        context,
+        completion: {
+          result: decision,
+          completedRequest: {
+            status: 'approved',
+            decision: 'allow',
+            extraCompletedFields: {
+              answers: payload.answers ?? {},
+              dialogId: decision.dialogId,
+              dialogChoice: decision.choice,
+              ...(decision.dialogId === 'safeguard_pause' ? { safeguardChoice: decision.choice } : {}),
+            },
           },
         },
-      },
-    });
+      });
+    } catch (error) {
+      if (identity) this.terminalAnswerAcknowledgements.delete(identity);
+      throw error;
+    }
     if (!acknowledgement || completion !== true) {
       if (identity) this.terminalAnswerAcknowledgements.delete(identity);
       return completion;

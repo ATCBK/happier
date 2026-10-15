@@ -7505,7 +7505,7 @@ export const en = {
         invalidActionSubtitle: 'This action is no longer available in this build.',
         configureActionAccessibilityLabel: 'Configure action',
         approvalHelpTitle: 'Approval modes',
-        approvalHelpBody: '"Ask first" creates an approval request before this action runs from that surface. For AI sessions, that request is queued in the existing approvals surface and does not wait in a modal. "Allowed" lets the action run from that surface without an approval request.',
+        approvalHelpBody: "\"Ask first\" requires approval before this action runs from that surface. App controls may show a confirmation dialog. For AI sessions, an approval request is queued in the existing approvals surface and does not wait in a modal. \"Allowed\" lets the action run from that surface without an approval request.",
         toolExposure: {
             title: 'Tool exposure',
             footer: 'Controls whether eligible actions appear as direct tools or stay available through action discovery only.',
