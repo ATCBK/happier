@@ -87,7 +87,10 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
         if (result.type === "privacy-error") return reply.code(409).send(createSessionMetadataPrivacyUpgradeRequiredResponse());
         if (result.type === "publication-error") return reply.code(409).send({ error: result.error, code: result.code });
         if (result.type === "external-sharing-error") return reply.code(result.error === "session_access_authentication_unavailable" ? 503 : 403).send({ error: result.error });
-        if (result.type === "error") return reply.code(result.error === "public_share_isolation_unavailable" ? 503 : 400).send({ error: result.error });
+        if (result.type === "error") return reply.code(result.error === "public_share_isolation_unavailable" ? 503 : 400).send({
+            error: result.error,
+            ...("missingPrerequisites" in result ? { missingPrerequisites: result.missingPrerequisites } : {}),
+        });
         return reply.send({ publicShare: projectStoredContentPublicShare(result.publicShare), viewerOrigin: resolveStoredContentPublicShareSubjectOrigin(result.publicShare, configEnv)! });
     });
     app.get("/v1/public-shares", { preHandler: app.authenticate, schema: { querystring: subjectQuery } }, async (request, reply) => {

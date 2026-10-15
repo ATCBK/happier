@@ -247,9 +247,15 @@ async function persistStoredContentPublicShare(tx: Tx, input: Readonly<{
     if ((!existing || rotates) && input.keyDerivation !== "fragment_v1")
         return { type: "error" as const, error: "lookupId required" as const };
     const configEnv = input.configEnv ?? await readHomeConfigEnvInTx(tx);
-    if (input.keyDerivation === "fragment_v1" && (!resolveStoredContentPublicShareSubjectOrigin({ id, artifactId: input.subject.kind === 'artifact' ? input.subject.id : null }, configEnv)
-        || !storedContentPublicRateLimiter(configEnv)))
-        return { type: "error" as const, error: "public_share_isolation_unavailable" as const };
+    if (input.keyDerivation === "fragment_v1") {
+        const missingPrerequisites: ("viewer_origin" | "public_rate_limiter")[] = [];
+        if (!resolveStoredContentPublicShareSubjectOrigin({ id, artifactId: input.subject.kind === 'artifact' ? input.subject.id : null }, configEnv))
+            missingPrerequisites.push("viewer_origin");
+        if (!storedContentPublicRateLimiter(configEnv))
+            missingPrerequisites.push("public_rate_limiter");
+        if (missingPrerequisites.length > 0)
+            return { type: "error" as const, error: "public_share_isolation_unavailable" as const, missingPrerequisites };
+    }
     if (input.mode === "e2ee" && ((!existing || rotates) && !input.encryptedDataKey)) {
         return { type: "error" as const, error: "encryptedDataKey required" as const };
     }

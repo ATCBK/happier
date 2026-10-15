@@ -328,7 +328,9 @@ still need isolated origins. A single-hostname HTTPS endpoint, including
 Tailscale Serve, does not change who can reach that endpoint.
 
 Without an admitted viewer origin or limiter, creation returns HTTP 503
-`public_share_isolation_unavailable`. No link is created; the app keeps it Off.
+`public_share_isolation_unavailable`. Its `missingPrerequisites` list identifies
+`viewer_origin`, `public_rate_limiter`, or both, so the operator can correct the
+required configuration. No link is created; the app keeps it Off.
 An HTTP-only local deployment cannot provide these public links by enabling
 the sharing feature or the hostname option alone.
 

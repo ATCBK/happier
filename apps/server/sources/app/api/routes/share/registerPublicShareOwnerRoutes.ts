@@ -76,7 +76,10 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
             return reply.code(409).send(createSessionMetadataPrivacyUpgradeRequiredResponse());
         }
         if (result.type === 'error') {
-            return reply.code(result.error === "public_share_isolation_unavailable" ? 503 : 400).send({ error: result.error });
+            return reply.code(result.error === "public_share_isolation_unavailable" ? 503 : 400).send({
+                error: result.error,
+                ...("missingPrerequisites" in result ? { missingPrerequisites: result.missingPrerequisites } : {}),
+            });
         }
         const publicShare = result.publicShare;
 

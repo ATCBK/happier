@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as privacyKit from "privacy-kit";
 import { createHash } from "node:crypto";
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, ARTIFACT_HTML_BUNDLE_MIME_V1, encodePlainArtifactStoredContent, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION, buildAccountStoredContentCompatibilityHttpHeadersV1 } from "@happier-dev/protocol";
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, ARTIFACT_HTML_BUNDLE_MIME_V1, encodePlainArtifactStoredContent, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION, buildAccountStoredContentCompatibilityHttpHeadersV1, StoredContentPublicShareCreateResponseV1Schema } from "@happier-dev/protocol";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { sealPublicShareDataKeyV1, openPublicShareDataKeyV1, sealSessionDataKeyBundleV0, openSessionDataKeyBundleV0 } from "@happier-dev/protocol";
 import { db } from "@/storage/db";
@@ -137,6 +137,7 @@ describe("stored-content public share owner (real SQLite)", () => {
             const previousTestChecker = process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER;
             const previousMaxRequests = process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_MAX_REQUESTS;
             const previousWindow = process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_WINDOW_MS;
+            const previousUrl = process.env.HAPPIER_PUBLIC_SERVER_URL;
             delete process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER;
             delete process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER;
             const lookupId = crypto.randomUUID();
@@ -146,6 +147,13 @@ describe("stored-content public share owner (real SQLite)", () => {
                         payload: { subject: { kind: 'artifact', id: artifact.id }, lookupId, keyDerivation: 'fragment_v1' } };
                     const blocked = await app.inject(request);
                     expect(blocked.statusCode, blocked.body).toBe(503);
+                    expect(blocked.json()).toEqual({ error: 'public_share_isolation_unavailable', missingPrerequisites: ['public_rate_limiter'] });
+                    process.env.HAPPIER_PUBLIC_SERVER_URL = 'http://home.example.test';
+                    const bothMissing = await app.inject(request);
+                    expect(bothMissing.statusCode, bothMissing.body).toBe(503);
+                    expect(bothMissing.json()).toEqual({ error: 'public_share_isolation_unavailable', missingPrerequisites: ['viewer_origin', 'public_rate_limiter'] });
+                    if (previousUrl === undefined) delete process.env.HAPPIER_PUBLIC_SERVER_URL;
+                    else process.env.HAPPIER_PUBLIC_SERVER_URL = previousUrl;
                     expect(await db.publicSessionShare.count({ where: { artifactId: artifact.id } })).toBe(0);
                     // Limiter configuration is restart-applied; only the public-share opt-in is live.
                     process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER = 'fixed_window';
@@ -161,6 +169,8 @@ describe("stored-content public share owner (real SQLite)", () => {
                     expect((await db.publicSessionShare.findUniqueOrThrow({ where: { artifactId: artifact.id } })).useCount).toBe(0);
                 });
             } finally {
+                if (previousUrl === undefined) delete process.env.HAPPIER_PUBLIC_SERVER_URL;
+                else process.env.HAPPIER_PUBLIC_SERVER_URL = previousUrl;
                 if (previousChecker === undefined) delete process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER;
                 else process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER = previousChecker;
                 if (previousTestChecker === undefined) delete process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER;
@@ -198,11 +208,12 @@ describe("stored-content public share owner (real SQLite)", () => {
                 const ownerHeaders = { 'x-test-user-id': owner.id };
                 const blocked = await app.inject({ method: 'POST', url, headers: ownerHeaders, payload });
                 expect(blocked.statusCode, blocked.body).toBe(503);
-                expect(blocked.json()).toEqual({ error: 'public_share_isolation_unavailable' });
+                expect(blocked.json()).toEqual({ error: 'public_share_isolation_unavailable', missingPrerequisites: ['viewer_origin'] });
                 expect(await db.publicSessionShare.count({ where: subjectWhere })).toBe(0);
                 await db.homeSettings.update({ where: { id: 'home' }, data: { values: { HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH: true } } });
                 const created = await app.inject({ method: 'POST', url, headers: ownerHeaders, payload });
                 expect(created.statusCode, created.body).toBe(200);
+                if (route !== 'session') StoredContentPublicShareCreateResponseV1Schema.parse(created.json());
                 expect(created.json().viewerOrigin).toBe('https://home.example.test');
                 const shareId = created.json().publicShare.id;
                 const headers = { host: 'home.example.test' };
@@ -276,7 +287,7 @@ describe("stored-content public share owner (real SQLite)", () => {
             try {
                 const blocked = await app.inject({ method: 'POST', url, headers: { 'x-test-user-id': owner.id }, payload });
                 expect(blocked.statusCode, blocked.body).toBe(503);
-                expect(blocked.json()).toEqual({ error: 'public_share_isolation_unavailable' });
+                expect(blocked.json()).toEqual({ error: 'public_share_isolation_unavailable', missingPrerequisites: ['viewer_origin'] });
                 expect(await db.publicSessionShare.count({ where: { sessionId: session.id } })).toBe(0);
             } finally {
                 if (previous === undefined) delete process.env.HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN;
