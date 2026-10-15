@@ -1,5 +1,6 @@
 import { MachineLiveStreamCapsV1Schema, MachineLiveStreamStartRequestV1Schema, type MachineLiveStreamCapsV1, type MachineLiveStreamRelayAuthorizationV1, type MachineLiveStreamStartRequestV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import type { MachineLiveStreamCodecIdV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type MachineLiveStreamUnsignedStartRequest = Readonly<{
     v: 1;
@@ -56,7 +57,8 @@ export function createLiveStreamStartRequest(input: Readonly<{
     baseRequest: MachineLiveStreamUnsignedStartRequest;
     authorization?: MachineLiveStreamRelayAuthorizationV1;
 }>): MachineLiveStreamStartRequestV1 {
-    return MachineLiveStreamStartRequestV1Schema.parse({
+    // Optional native fields must match their wire omission before the Machine RPC receipt signs them.
+    return MachineLiveStreamStartRequestV1Schema.parse(projectNativeJsonValueForTransport({
         ...input.baseRequest,
         // The grant owner folds requested quality with explicit Home policies.
         // Use those signed effective values; identity mismatches still fail below.
@@ -70,5 +72,5 @@ export function createLiveStreamStartRequest(input: Readonly<{
             viewerCodecs: input.authorization.payload.viewerCodecs,
             authorization: input.authorization,
         } : {}),
-    });
+    }));
 }
