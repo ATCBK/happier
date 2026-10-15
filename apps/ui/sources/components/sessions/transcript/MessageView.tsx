@@ -712,7 +712,7 @@ function UserTextBlock(props: {
   const find = useTranscriptFindRow(props.message.id);
   const findActive = useTranscriptFindActive();
   const findSourceRanges = find?.blocks.find((block) => block.id === 'text')?.sourceRanges;
-  const [isMessageHovered, setIsMessageHovered] = React.useState(false);
+  const { isHovered: isMessageHovered, hoverProps } = useRowActionHoverHost();
   const [isCopyButtonHovered, setIsCopyButtonHovered] = React.useState(false);
   const [isActionRowFocused, setIsActionRowFocused] = React.useState(false);
   const handleActionsFocus = React.useCallback(() => setIsActionRowFocused(true), []);
@@ -875,8 +875,7 @@ function UserTextBlock(props: {
       onActionsFocus={handleActionsFocus} onActionsBlur={handleActionsBlur}
       onActionHoverIn={isWeb ? () => setIsCopyButtonHovered(true) : undefined}
       onActionHoverOut={isWeb ? () => setIsCopyButtonHovered(false) : undefined}
-      onHoverIn={isWeb ? () => setIsMessageHovered(true) : undefined}
-      onHoverOut={isWeb ? () => setIsMessageHovered(false) : undefined}
+      hoverProps={hoverProps}
 >
       {(actionsRow) => (
         <View
@@ -960,8 +959,7 @@ function UserTextBlock(props: {
       onActionsFocus={handleActionsFocus} onActionsBlur={handleActionsBlur}
       onActionHoverIn={isWeb ? () => setIsCopyButtonHovered(true) : undefined}
       onActionHoverOut={isWeb ? () => setIsCopyButtonHovered(false) : undefined}
-      onHoverIn={isWeb ? () => setIsMessageHovered(true) : undefined}
-      onHoverOut={isWeb ? () => setIsMessageHovered(false) : undefined}
+      hoverProps={hoverProps}
 >
       {(actionsRow) => (
       <View
@@ -1067,7 +1065,7 @@ function AgentTextBlock(props: {
   React.useEffect(() => {
     if (findRevealId !== undefined && props.message.isThinking) props.onThinkingExpandedChange?.(true);
   }, [findRevealId, props.message.isThinking, props.onThinkingExpandedChange]);
-  const [isMessageHovered, setIsMessageHovered] = React.useState(false);
+  const { isHovered: isMessageHovered, hoverProps } = useRowActionHoverHost();
   const [isCopyButtonHovered, setIsCopyButtonHovered] = React.useState(false);
   const [isActionRowFocused, setIsActionRowFocused] = React.useState(false);
   const handleActionsFocus = React.useCallback(() => setIsActionRowFocused(true), []);
@@ -1331,8 +1329,7 @@ function AgentTextBlock(props: {
       onActionsFocus={handleActionsFocus} onActionsBlur={handleActionsBlur}
       onActionHoverIn={isWeb ? () => setIsCopyButtonHovered(true) : undefined}
       onActionHoverOut={isWeb ? () => setIsCopyButtonHovered(false) : undefined}
-      onHoverIn={isWeb ? () => setIsMessageHovered(true) : undefined}
-      onHoverOut={isWeb ? () => setIsMessageHovered(false) : undefined}
+      hoverProps={hoverProps}
     >
       {(actionsRow) => (
       <TranscriptJumpAttention

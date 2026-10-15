@@ -1,11 +1,17 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
+import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
+import type { RowActionHoverHost } from './rowActionRevealHost';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserTextMessage, AgentTextMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptForkCommon } from '../transcriptSessionCommon';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
+const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' | 'web' }));
+vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
+vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => true) }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ Platform: { OS: 'ios', select: (values: Record<string, unknown>) => values.ios ?? values.default ?? values.web } });
+    return createReactNativeWebMock({ Platform: { get OS() { return platformState.os; }, select: (values: Record<string, unknown>) => values[platformState.os] ?? values.default ?? values.web } });
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -31,6 +37,7 @@ let serverId = '';
 let activeFeatureSubscriptions = 0;
 let restoreFeatureSubscriptionObservation = () => {};
 beforeEach(async () => {
+    platformState.os = 'ios';
     bodyRenders = 0;
     await home.reset();
     serverId = await home.addHome({ serverUrl: 'https://committed-actions.test', name: 'Action test', accountId: 'account-a' });
@@ -64,7 +71,7 @@ function MessageBody(props: Readonly<{ row: React.ReactNode }>) {
     return <View accessibilityLabel={identity} testID="committed-message-body">{props.row}</View>;
 }
 
-function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false) {
+function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false, hoverProps?: RowActionHoverHost['hoverProps']) {
     const message: UserTextMessage | AgentTextMessage = { kind, id, localId: id, text, createdAt: 1, seq: 5, transcriptBlockIndex: 0,
         ...(kind === 'agent-text' ? { isThinking: thinking } : {}),
         messageActionReference: { v: 1, sessionId: 's1', messageId: id, observedRevision: 'r1' } };
@@ -78,13 +85,70 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
             onToggleMessagePin={noop} messagePins={pinned ? [{ version: 1, sessionId: 's1', seq: 5, transcriptBlockIndex: 0,
                 routeMessageId: `local:${id}`, role: kind === 'user-text' ? 'user' : 'assistant', pinnedAtMs: 1, label: null }] : []}
             showActions showPinAction timestampText={null} invertTimestampAndActions={false}
-            onActionsFocus={noop} onActionsBlur={noop}>
+            onActionsFocus={noop} onActionsBlur={noop} hoverProps={hoverProps}>
             {(row) => <MessageBody row={row} />}
         </CommittedMessageActions>
     </TranscriptMessageSelectionProvider>, createTestSessionTranscriptSource({ sessionId: 's1', serverId }));
 }
 
 describe('Committed row and native menu availability', () => {
+    it.each(['android', 'ios'] as const)('keeps the %s message passive while native hold and child copy stay usable', async (platform) => {
+        platformState.os = platform;
+        const Clipboard = await import('expo-clipboard');
+        const screen = await renderScreen(element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }));
+        const body = screen.findHostByTestId('committed-message-body')!;
+        for (let ancestor = body.parent; ancestor; ancestor = ancestor.parent) {
+            expect(typeof ancestor.type === 'string' && String(ancestor.type) === 'Pressable').toBe(false);
+        }
+        const detector = screen.findAllByType('GestureDetector')[0];
+        expect(detector).toBeDefined();
+        const hold = detector.props.gesture as TestGestureChain;
+        expect(hold.__kind).toBe('longPress');
+        expect(hold.__config.enabled).toBe(true);
+        expect(screen.findAllByType(ContextMenu)[0]?.props.open).toBe(false);
+        await act(async () => { hold.__handlers.onStart(); });
+        expect(screen.findAllByType(ContextMenu)[0]?.props.open).toBe(true);
+        const copy = screen.findHostByTestId('transcript-message-copy:m1');
+        if (!copy) throw new Error('Missing child copy action');
+        vi.mocked(Clipboard.setStringAsync).mockClear();
+        await act(async () => { await copy.props.onPress(); });
+        expect(Clipboard.setStringAsync).toHaveBeenCalledWith('Useful prompt');
+        const identity = body.props.accessibilityLabel;
+        await screen.update(element('agent-text', {
+            transcriptMessageCopyActionEnabled: false, transcriptMessageForkActionEnabled: false,
+            transcriptMessageRollbackActionEnabled: false, transcriptMessageSelectionEnabled: false,
+            transcriptMessagePinActionEnabled: false, transcriptMessageSavePromptActionEnabled: false,
+            transcriptMessageMakeRepeatableActionEnabled: false, transcriptMessagePluginActionsEnabled: false,
+        }));
+        expect((screen.findAllByType('GestureDetector')[0]?.props.gesture as TestGestureChain).__config.enabled).toBe(false);
+        expect(screen.findHostByTestId('committed-message-body')?.props.accessibilityLabel).toBe(identity);
+    });
+
+    it('keeps web message content passive while hover tracking and child copy stay usable', async () => {
+        platformState.os = 'web';
+        const onPointerEnter = vi.fn();
+        const onPointerLeave = vi.fn();
+        const initial = element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }, false, 'm1', false, 'Useful prompt', false, false, { onPointerEnter, onPointerLeave });
+        const screen = await renderScreen(initial);
+        const body = screen.findHostByTestId('committed-message-body')!;
+        for (let ancestor = body.parent; ancestor; ancestor = ancestor.parent) {
+            expect(typeof ancestor.type === 'string' && String(ancestor.type) === 'Pressable').toBe(false);
+        }
+        let wrapper = body.parent;
+        while (wrapper && !(typeof wrapper.type === 'string' && typeof wrapper.props.onPointerEnter === 'function')) wrapper = wrapper.parent;
+        if (!wrapper) throw new Error('Missing web hover host');
+        await act(async () => { wrapper.props.onPointerEnter(); wrapper.props.onPointerLeave(); });
+        expect(onPointerEnter).toHaveBeenCalledOnce();
+        expect(onPointerLeave).toHaveBeenCalledOnce();
+        expect(screen.findAllByType('GestureDetector')).toHaveLength(0);
+        const Clipboard = await import('expo-clipboard');
+        const copy = screen.findHostByTestId('transcript-message-copy:m1');
+        if (!copy) throw new Error('Missing child copy action');
+        vi.mocked(Clipboard.setStringAsync).mockClear();
+        await act(async () => { await copy.props.onPress(); });
+        expect(Clipboard.setStringAsync).toHaveBeenCalledWith('Useful prompt');
+    });
+
     it('does not republish an unavailable workflow capability into a second message-body render', async () => {
         const features = createRootLayoutFeaturesResponse();
         features.features.workflows.enabled = false;

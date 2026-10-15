@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { HappierPressable, happierFocusRingStyle } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -19,6 +20,7 @@ import { t } from '@/text';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
 import { useWorkflowMakeRepeatable } from '@/components/workflows/authoring/useWorkflowMakeRepeatable';
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
+import type { RowActionHoverHost } from './rowActionRevealHost';
 
 type Props = Omit<CommittedMessageActionInput, 'openSavePrompt'> & Readonly<{
     showActions: boolean;
@@ -27,8 +29,7 @@ type Props = Omit<CommittedMessageActionInput, 'openSavePrompt'> & Readonly<{
     invertTimestampAndActions: boolean;
     onActionsFocus: () => void;
     onActionsBlur: () => void;
-    onHoverIn?: () => void;
-    onHoverOut?: () => void;
+    hoverProps?: RowActionHoverHost['hoverProps'];
     onActionHoverIn?: () => void;
     onActionHoverOut?: () => void;
     children: (row: React.ReactNode) => React.ReactNode;
@@ -77,6 +78,11 @@ export function CommittedMessageActions(props: Props) {
                 icon: <Icon name={action.icon} size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
                 ...(action.id === 'savePrompt' ? { subtitle: t('committedMessageActions.savePromptHint') } : {}),
             }]);
+    const hasNativeMenu = Platform.OS !== 'web' && items.length > 0;
+    const nativeMenuHold = React.useMemo(() => Gesture.LongPress()
+        .enabled(hasNativeMenu)
+        .runOnJS(true)
+        .onStart(() => setMenuOpen(true)), [hasNativeMenu]);
     const perform = (id: string) => {
         setMenuOpen(false);
         if (id.startsWith('plugin:')) {
@@ -127,15 +133,9 @@ export function CommittedMessageActions(props: Props) {
             /></View>;
         })}
     </MessageActionRow>;
-    return <>
-        {makeRepeatableSource ? <MakeRepeatableSubscription
-            source={makeRepeatableSource} text={props.selectableText!.text} onChange={setMakeRepeatableCapability}
-        /> : null}
-        <Pressable ref={anchorRef} collapsable={false}
-        onHoverIn={props.onHoverIn} onHoverOut={props.onHoverOut}
-        onLongPress={Platform.OS !== 'web' && items.length > 0 ? () => setMenuOpen(true) : undefined}>
+    const contents = <>
         {props.children(row)}
-        {Platform.OS !== 'web' && items.length > 0 ? <ContextMenu
+        {hasNativeMenu ? <ContextMenu
             open={menuOpen} onOpenChange={setMenuOpen} anchorRef={anchorRef}
             items={items} onSelect={perform} placement="auto" variant="slim" showCategoryTitles={false}
         /> : null}
@@ -143,7 +143,23 @@ export function CommittedMessageActions(props: Props) {
             messageId={props.message.id} text={props.selectableText!.text} serverId={props.serverId ?? source.serverId}
             anchorRef={saveAnchorRef} onClose={() => setSaveOpen(false)}
             onSaved={(artifactId) => { setSavedArtifactId(artifactId); setSaveOpen(false); }} /> : null}
-        </Pressable>
+    </>;
+    return <>
+        {makeRepeatableSource ? <MakeRepeatableSubscription
+            source={makeRepeatableSource} text={props.selectableText!.text} onChange={setMakeRepeatableCapability}
+        /> : null}
+        {Platform.OS === 'web' ? (
+            <View ref={anchorRef} collapsable={false} {...props.hoverProps}>
+                {contents}
+            </View>
+        ) : (
+            // A parent RN Pressable acquires the JS responder before a hesitant child scroll.
+            // Keep the native host passive; RNGH recognizes a hold only after its native defaults
+            // (500ms / 10pt movement) are met, without holding the child scroll's responder.
+            <GestureDetector gesture={nativeMenuHold}>
+                <View ref={anchorRef} collapsable={false}>{contents}</View>
+            </GestureDetector>
+        )}
     </>;
 }
 
