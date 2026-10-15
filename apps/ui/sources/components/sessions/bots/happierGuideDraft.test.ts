@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -15,16 +16,16 @@ import { openNewBotDraft } from './newBotDraft';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+const userConfirmation = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: navigation.push } }).module;
 });
 vi.mock('@react-navigation/native', async () =>
     (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute:
-        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { confirm: userConfirmation } }).module;
 });
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 afterEach(async () => {
@@ -32,6 +33,8 @@ afterEach(async () => {
     await home?.dispose(); home = undefined;
     resetSessionDraftRepositoryForTests();
     navigation.push.mockReset();
+    userConfirmation.mockReset();
+    userConfirmation.mockResolvedValue(true);
 });
 async function prepare(handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>) {
     const catalog = createPromptLibraryCatalogBoundary();
@@ -167,19 +170,34 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('retains the created reference and canonical draft after navigation fails', async () => {
+        const confirmationRequested = createDeferred<void>();
+        const confirmation = createDeferred<boolean>();
+        userConfirmation.mockImplementationOnce(async () => {
+            confirmationRequested.resolve(undefined);
+            return await confirmation.promise;
+        });
         const { home: f, lifetime, executeAction } = await prepare();
         navigation.push.mockImplementation(() => { throw new Error('Router unavailable'); });
-        const result = await openAskHappierDraft({ lifetime, executeAction });
-        expect(result).toMatchObject({ kind: 'unavailable', reason: 'navigation_unavailable', guideRef: { artifactId: f.boundary.list()[0]?.id } });
+        const pending = openAskHappierDraft({ lifetime, executeAction });
+        // The native Alert stub cannot answer the default UI confirmation itself.
+        await confirmationRequested.promise;
+        expect(f.boundary.list()).toEqual([]);
+        expect(navigation.push).not.toHaveBeenCalled();
+        confirmation.resolve(true);
+        const result = await pending;
+        expect(result).toMatchObject({ kind: 'unavailable', reason: 'navigation_unavailable', guideRef: { artifactId: expect.any(String) } });
         const route = navigation.push.mock.calls[0]?.[0] as { params: { draftId: string } };
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: route.params.draftId })).toMatchObject({ sessionName: 'Happier', promptStack: [{ ref: result.guideRef }] });
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledTimes(1);
         if (!result.guideRef) throw new Error('Expected reusable acknowledged guide');
+        expect(decodePlainArtifactStoredContent(f.boundary.read(result.guideRef.artifactId)!.header)).toMatchObject({ kind: 'prompt_doc.v2' });
         navigation.push.mockReset();
         const retried = await openAskHappierDraft({ lifetime, executeAction, guideRef: result.guideRef });
         expect(retried.kind).toBe('opened');
+        expect(retried.guideRef).toEqual(result.guideRef);
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledTimes(1);
+        expect(userConfirmation).toHaveBeenCalledTimes(1);
     });
 });

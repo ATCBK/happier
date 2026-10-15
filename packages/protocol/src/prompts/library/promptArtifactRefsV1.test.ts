@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as Protocol from '../../index.js';
 
 import {
   PromptArtifactRefV1Schema,
@@ -65,8 +66,7 @@ describe('PromptArtifactRefV1Schema', () => {
     }
   });
 
-  it('exports the shared artifact ref schemas from the protocol root entrypoint', async () => {
-    const Protocol = await import('../../index.js');
+  it('exports the shared artifact ref schemas from the protocol root entrypoint', () => {
     expect(Protocol.PromptArtifactRefV1Schema).toBe(PromptArtifactRefV1Schema);
     expect(Protocol.PromptDocArtifactRefV1Schema).toBe(PromptDocArtifactRefV1Schema);
   });
