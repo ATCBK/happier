@@ -203,7 +203,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         admitWidgetMovement: movement.admit, ...(props.port.movement ? { widgetMovement: props.port.movement } : {}),
         target: { acceptedKinds: ['widget-area-instance', 'home-section', 'work-board-widget', 'session-board-item', 'companion-item', 'widget-layout-group'],
             listDestinations: () => [{ destination: { anchorId: null, placement: 'after' },
-                label: props.area ? t(props.area === 'main' ? 'projects.widgets.mainArea' : 'projects.widgets.sideArea') : props.surfaceName,
+                label: t('widgetFrame.moveIntoGroupNamed', { group: props.area ? t(props.area === 'main' ? 'projects.widgets.mainArea' : 'projects.widgets.sideArea') : props.surfaceName }),
                 group: props.surfaceName }],
             resolve: ({ item, destination }) => resolveWidgetAreaEntityDrop({ item, destination, surface: ready.surface,
                 placements: ready.items, ...(movement.sourceItem ? { sourceItem: movement.sourceItem } : {}), area: props.area, canEdit: ready.canEdit, preview: { verb: t('entityDragDrop.organize.title'), target: props.surfaceName } }),
@@ -544,7 +544,7 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
         getWidgetAreaTarget: () => ({ surface: props.surface, area: props.area, groupId: null, itemId: group.id,
             itemIds: props.items.filter(item => props.surface.owner.kind !== 'project' || (item.area ?? 'main') === (props.area ?? 'main')).map(getWidgetLayoutItemIdV1) }),
         pointerDestination: (bounds, pointer) => resolveWidgetGroupPointerDestination(group.id, bounds, pointer),
-        target: widgetGroupDropTarget({ surface: props.surface, items: props.items, group, name, area: props.area, canEdit: props.canEdit,
+        target: widgetGroupDropTarget({ surface: props.surface, items: props.items, group, name, area: props.area, canEdit: props.canEdit, surfaceLabel: props.surfaceName,
             describeGroup: entry => describeWidgetGroup(entry, props.childTitle),
             sourceItem: props.movementSourceItem }),
     } : null);
@@ -714,7 +714,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         // Inside a group, the line on the hairline reorders within it (lab wgdnd B).
         pointerDestination: (bounds, pointer) => ({ ...resolveEntityFlatRowPosition(instance.id, bounds, pointer), ...(parent ? { groupId: parent.group.id } : {}) }),
         target: widgetLayoutCardDropTarget({ surface, items: props.layoutItems, itemId: instance.id, title,
-            groupLabel: props.surfaceName, groupId: parent?.group.id,
+            groupLabel: parent ? describeWidgetGroup(parent.group, props.childTitle) : props.surfaceName, groupId: parent?.group.id,
             describeGroup: group => describeWidgetGroup(group, props.childTitle),
             sourceItem: props.movementSourceItem, area: props.area, canEdit: props.canEdit }),
     } : null);

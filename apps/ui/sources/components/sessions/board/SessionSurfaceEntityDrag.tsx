@@ -20,6 +20,7 @@ import { resolveSessionSurfaceIndicatorEdge } from './sessionSurfaceIndicatorEdg
 import { executeWidgetEntityMovement, type WidgetEntityMovementPort } from '@/sync/ops/actions/widgetEntityMovement';
 import { resolveSessionSurfaceKeyboardRoute } from './sessionSurfaceKeyboardDestination';
 import { useEntityDragChooser } from '@/components/ui/treeDragDrop/useEntityDragChooser';
+import { WIDGET_MOVE_PENDING_CODE } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
 
 export type SessionSurfaceEntityBinding = Readonly<{
     scope: EntityDragScopeV1;
@@ -145,6 +146,24 @@ export function useSessionSurfaceGeometryRefresh(refresh: () => void) {
     }, [refresh]);
 }
 
+/**
+ * The Move chooser's places, grouped by the container each is in. While a widget's admission is still being read
+ * every place would say the same "Loading…", so the chooser says it once instead of once per row.
+ */
+export function resolveSurfaceChooserSections(destinations: readonly EntityDropDestination[]) {
+    const isPending = (destination: EntityDropDestination) => destination.admission.status === 'refused' && destination.admission.reason.code === WIDGET_MOVE_PENDING_CODE;
+    const admissionPending = destinations.some(isPending);
+    // Admission belongs to each destination. An unanswered area cannot hide
+    // already admitted places; option ids still index the original destination list.
+    const options = destinations.flatMap((destination, index) => isPending(destination) ? [] : [{
+        id: String(index), label: destination.label ?? t('entityDragDrop.organize.title'), group: destination.group,
+        refusedReason: destination.admission.status === 'refused' ? destination.admission.reason.message : null,
+    }]);
+    const sections = options.length || !admissionPending ? resolveHappierDropChooserSections({ options,
+        unavailableTitle: t('entityDragDrop.chooser.unavailable') }) : [];
+    return admissionPending ? [...sections, { id: 'pending', options: [{ id: 'pending', label: t('common.loading'), disabled: true, current: false }] }] : sections;
+}
+
 /** Shared grip/chooser/dock; arrows stage the same semantic destination that a pointer resolves. */
 export function SessionSurfaceEntityDragHandle(props: Readonly<{ drag: SessionSurfaceEntityDrag; title: string; testID: string;
     renderTrigger?: (input: Readonly<{ toggle(): void; grip: React.ReactNode }>) => React.ReactNode;
@@ -156,10 +175,7 @@ export function SessionSurfaceEntityDragHandle(props: Readonly<{ drag: SessionSu
     const carry = React.useRef<EntityDragCarry | null>(null);
     const selected = React.useRef<EntityDropDestination | null>(null);
     const destinations = chooser.destinations;
-    const sections = resolveHappierDropChooserSections({ options: destinations.map((destination, index) => ({
-        id: String(index), label: destination.label ?? t('entityDragDrop.organize.title'), group: destination.group,
-        refusedReason: destination.admission.status === 'refused' ? destination.admission.reason.message : null,
-    })), unavailableTitle: t('entityDragDrop.chooser.unavailable') });
+    const sections = resolveSurfaceChooserSections(destinations);
     const onKeyDown = (event: EntityDragGripKeyEvent): boolean => {
         if (chooser.onMenuKeyDown(event)) return true;
         const staged = runtime.getSnapshot().phase === 'carrying' && runtime.getSnapshot().sourceId === sourceId;

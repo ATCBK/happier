@@ -28,6 +28,9 @@ export function EntityDragGripChooser(
         ? {}
         : { closeOnSelect: props.closeOnSelect })}
       matchTriggerWidth={false}
+      // Places are listed under the container they are in ("Home", a group's name), so two rows that read alike
+      // still say which place they mean.
+      showCategoryTitles
       // "Move below New in PRs & Issues · Capacity" names a real destination: the menu is as wide as its longest
       // row (the overlay still clamps it to the room), not the 320 px default that ellipsized it.
       maxWidthCap={CHOOSER_MAX_WIDTH_PX}

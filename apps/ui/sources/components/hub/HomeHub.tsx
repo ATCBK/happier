@@ -18,7 +18,7 @@ import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameR
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { runWidgetSetupCommand, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
-import { resolveWidgetSizeChoicesV1, type WidgetInputBindingsV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { resolveWidgetSizeChoicesV1, type WidgetInputBindingsV1, type WidgetLayoutGroupV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { WidgetGroupFrame } from '@/components/widgets/group/WidgetGroupFrame';
 import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMenuButton';
@@ -148,6 +148,11 @@ function HubBuiltinSlot(props: SlotProps & Readonly<{
     );
 }
 
+function describeContainer(items: readonly WidgetLayoutItemV1[], groupId: string | undefined, childTitle: (instanceId: string) => string): string {
+    const group = groupId ? items.find((item): item is WidgetLayoutGroupV1 => item.kind === 'group' && item.id === groupId) : undefined;
+    return group ? describeWidgetGroup(group, childTitle) : t('common.home');
+}
+
 /** A Home card's drop target: the line above or below it, in its group when it is grouped. */
 function homeCardTarget(input: Readonly<{ surface: WidgetSurfaceRefV1; items: readonly WidgetLayoutItemV1[]; itemId: string; title: string;
     topLevelIds: readonly string[];
@@ -155,7 +160,9 @@ function homeCardTarget(input: Readonly<{ surface: WidgetSurfaceRefV1; items: re
     return {
         target: widgetLayoutCardDropTarget({ surface: input.surface, items: input.items, itemId: input.itemId, title: input.title,
             topLevelIds: input.topLevelIds,
-            groupId: input.groupId, groupLabel: t('common.home'), sourceItem: input.sourceItem,
+            // The chooser heads a card's places with the container they are in: its group, or Home.
+            groupId: input.groupId, sourceItem: input.sourceItem,
+            groupLabel: describeContainer(input.items, input.groupId, input.childTitle),
             describeGroup: group => describeWidgetGroup(group, input.childTitle) }),
         pointerDestination: (bounds, pointer) => resolveWidgetCardPointerDestination(input.itemId, input.groupId, bounds, pointer),
         getWidgetAreaTarget: () => ({ surface: input.surface, groupId: input.groupId ?? null, itemId: input.itemId,
@@ -212,7 +219,7 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
             ? { kind: 'widget-layout-group', scope: props.widgetDrag!.scope, ref: { surface: homeSurface, instanceId: group.id } } : null,
         getWidgetAreaTarget: () => ({ surface: homeSurface, groupId: null, itemId: group.id, itemIds: widgetLayoutSiblingIds(layout.items, undefined, props.topLevelIds) }),
         pointerDestination: (bounds, pointer) => resolveWidgetGroupPointerDestination(group.id, bounds, pointer),
-        target: widgetGroupDropTarget({ surface: homeSurface, items: layout.items, topLevelIds: props.topLevelIds, group, name, sourceItem: props.movementSourceItem,
+        target: widgetGroupDropTarget({ surface: homeSurface, items: layout.items, topLevelIds: props.topLevelIds, group, name, surfaceLabel: t('common.home'), sourceItem: props.movementSourceItem,
             describeGroup: entry => describeWidgetGroup(entry, childTitle) }),
     } : null);
     const carriedStyle = useSessionSurfaceCarriedStyle(drop);
@@ -378,7 +385,7 @@ function HomeNewRowTarget(props: Readonly<{
         ...props.widgetDrag, title: t('homeIndex.newRow'), getItem: () => null,
         getWidgetAreaTarget: () => ({ surface, groupId: null, itemId: NEW_ROW_TARGET_ID, itemIds: [] }),
         target: widgetLayoutEndDropTarget({ surface, items: layout.items, topLevelIds: props.topLevelIds, sourceItem: props.sourceItem,
-            verb: t('homeIndex.newRowVerb'), label: t('homeIndex.newRow'), groupLabel: t('common.home') }),
+            verb: t('homeIndex.newRowVerb'), label: t('homeIndex.newRowVerb'), groupLabel: t('common.home') }),
     });
     return (
         <ItemGroup surface="none">
@@ -507,7 +514,7 @@ export const HomeHub = React.memo(function HomeHub() {
         } : null, [accountScope, focused, layout.status, guidance.kind, admitWidgetMovement]);
     const homeDrop = useSessionSurfaceEntityDrag(widgetDrag && surface ? { ...widgetDrag, title: t('common.home'), getItem: () => null,
         target: { acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance', 'widget-layout-group'],
-            listDestinations: () => [{ destination: { index: 0 }, label: t('common.home'), group: t('common.home') }],
+            listDestinations: () => [{ destination: { index: 0 }, label: t('widgetFrame.moveIntoGroupNamed', { group: t('common.home') }), group: t('common.home') }],
             resolve: ({ item }) => {
                 const ref = widgetEntitySourceRef(item);
                 if (!ref) return widgetMovementRefused('unsupported_widget_surface');

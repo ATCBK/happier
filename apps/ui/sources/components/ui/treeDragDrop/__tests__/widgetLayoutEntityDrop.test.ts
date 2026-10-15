@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
+import type { EntityDragItemV1, EntityDropAdmissionV1, PluginUiJsonValueV1 } from '@happier-dev/protocol/plugins/ui';
 import { applyWidgetAreaLayoutIntentV1, createHomeWidgetActionPortV1, createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, getWidgetLayoutItemIdV1, WidgetInstanceActionInputSchemasV1, type WidgetLayoutItemV1, type WidgetLayoutGroupV1, type WidgetLayoutWidgetV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { applyHomeHubLayoutIntent, buildHomeHubLayoutResult, buildHomeHubArtifactIdV1, createHomeHubArtifactPortV1, HOME_HUB_ARTIFACT_KIND_V1, resolveHomeHubLayout } from '@happier-dev/protocol/home';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
@@ -8,8 +8,10 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import { createWorkBoardArtifactBoundary } from '../../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 import { resolveWidgetAreaEntityDrop } from '@/components/widgets/area/widgetAreaEntityDrop';
 import { resolveSessionSurfaceIndicatorEdge } from '@/components/sessions/board/sessionSurfaceIndicatorEdge';
+import { resolveSurfaceChooserSections } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
-import { resolveWidgetLayoutEntityDrop } from '../widgetLayoutEntityDrop';
+import { resolveWidgetLayoutEntityDrop, WIDGET_MOVE_PENDING_CODE } from '../widgetLayoutEntityDrop';
+import { widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { describeEntityDropOutcome } from '../ui/entityDropOutcome';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetGroupTakesEffect, widgetLayoutCardDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
 import { t } from '@/text';
@@ -371,9 +373,46 @@ describe('shared layout DnD admission', () => {
         });
         const sections = resolveHappierDropChooserSections({ options, unavailableTitle: 'Unavailable' });
         const unavailable = sections.find(section => section.title === 'Unavailable')!;
-        expect(unavailable.options).toEqual([expect.objectContaining({ label: 'website', disabled: true, detail: t('widgetFrame.groupRefusedWidth') })]);
+        expect(unavailable.options).toEqual([expect.objectContaining({ label: t('widgetFrame.moveIntoGroupNamed', { group: 'website' }), disabled: true, detail: t('widgetFrame.groupRefusedWidth') })]);
         // Beside the group stays available.
         expect(sections.filter(section => section !== unavailable).flatMap(section => section.options)).toHaveLength(2);
+    });
+    it('heads each chooser place with its container, so alike-named places still say where they are (H12)', () => {
+        const happier: WidgetLayoutGroupV1 = { ...group, title: 'happier', children: [widget('child'), widget('second')] };
+        const items = [widget('top'), happier, widget('moving')];
+        const item: EntityDragItemV1 = { kind: 'home-section', scope, sectionId: 'moving' };
+        const places = (target: NonNullable<ReturnType<typeof widgetGroupDropTarget>['listDestinations']>) => target(item).map(entry => [entry.group, entry.label]);
+        expect(places(widgetGroupDropTarget({ surface, items, group: happier, name: 'happier', surfaceLabel: 'Home' }).listDestinations!)).toEqual([
+            ['happier', t('widgetFrame.moveIntoGroupNamed', { group: 'happier' })],
+            ['Home', t('entityDragDrop.preview.moveAbove', { target: 'happier' })],
+            ['Home', t('entityDragDrop.preview.moveBelow', { target: 'happier' })],
+        ]);
+        expect(places(widgetLayoutCardDropTarget({ surface, items, itemId: 'child', title: 'Child', groupId: 'group', groupLabel: 'happier' }).listDestinations!))
+            .toEqual([['happier', t('entityDragDrop.preview.moveAbove', { target: 'Child' })], ['happier', t('entityDragDrop.preview.moveBelow', { target: 'Child' })]]);
+    });
+    it('says "Loading…" once while the widget admission is read, then lists the places under their containers', () => {
+        const target = widgetLayoutCardDropTarget({ surface, items: [widget('top'), widget('tail'), widget('moving')], itemId: 'top', title: 'Top', groupLabel: 'Home' });
+        const source: EntityDragItemV1 = { kind: 'widget-area-instance', scope, ref: { surface, instanceId: 'moving' } };
+        const read = (admission: (destination: PluginUiJsonValueV1) => EntityDropAdmissionV1) => target.listDestinations!(source)
+            .map(entry => ({ ...entry, targetId: 'card', admission: admission(entry.destination) }));
+        // The surface has not yet read the carried widget's source: every place is pending, and none says so itself.
+        expect(resolveSurfaceChooserSections(read(() => widgetMovementRefused(WIDGET_MOVE_PENDING_CODE))))
+            .toEqual([{ id: 'pending', options: [{ id: 'pending', label: t('common.loading'), disabled: true, current: false }] }]);
+        const ready = resolveSurfaceChooserSections(read(destination => target.resolve({ item: source, pointer: null, destination, input: 'chooser' })));
+        expect(ready).toEqual([expect.objectContaining({ title: 'Home' })]);
+    });
+    it('keeps admitted places selectable while another mounted destination is still reading admission', () => {
+        const target = widgetLayoutCardDropTarget({ surface, items: [widget('top'), widget('moving')], itemId: 'top', title: 'Top', groupLabel: 'Home' });
+        const source: EntityDragItemV1 = { kind: 'widget-area-instance', scope, ref: { surface, instanceId: 'moving' } };
+        const destinations = target.listDestinations!(source).map(entry => ({ ...entry, targetId: 'card',
+            admission: target.resolve({ item: source, pointer: null, destination: entry.destination, input: 'chooser' }) }));
+        const pending = { targetId: 'another-area', destination: { index: 0 }, admission: widgetMovementRefused(WIDGET_MOVE_PENDING_CODE) };
+        const sections = resolveSurfaceChooserSections([pending, ...destinations, pending]);
+        const options = sections.flatMap(section => section.options);
+        // Keep the original destination index: selecting it must still reach the admitted Home place.
+        expect(options).toContainEqual(expect.objectContaining({ id: '1', disabled: false }));
+        expect(options.filter(option => option.id === 'pending')).toHaveLength(1);
+        expect(options.find(option => option.id === 'pending')).toMatchObject({ disabled: true });
     });
     it('says the size a widget keeps inside the group, and names both groups in the nesting way forward (lab wgdnd 1 and 6, F4 D-19)', () => {
         const named: WidgetLayoutGroupV1 = { ...group, title: 'happier', children: [widget('child'), widget('second')] };

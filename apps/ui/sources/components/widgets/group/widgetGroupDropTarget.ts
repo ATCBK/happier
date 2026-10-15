@@ -48,6 +48,8 @@ type Shared = Readonly<{
   sourceItem?: WidgetLayoutItemV1 | undefined;
   /** What the host calls a group, so the preview names an untitled one by its widgets. */
   describeGroup?: ((group: WidgetLayoutGroupV1) => string) | undefined;
+  /** What the chooser calls the surface's top level ("Home"), the heading over the places beside a group. */
+  surfaceLabel?: string | undefined;
 }>;
 
 function layoutTarget(
@@ -107,11 +109,13 @@ export function widgetGroupDropTarget(
     fallback: into,
     describeGroup: input.describeGroup ?? ((group) => group.id === input.group.id ? input.name : readWidgetGroupTitle(group) ?? t('widgetFrame.groupUntitled')),
     preview: { verb: t('widgetFrame.moveIntoGroupNamed', { group: input.name }), target: input.name },
+    // The chooser lists places under the container they are in: going into the group heads with the group's
+    // own widgets, going beside it with the surface's top level.
     destinations: () => [
       {
         destination: into,
-        label: input.name,
-        group: t('widgetFrame.moveToGroup'),
+        label: t('widgetFrame.moveIntoGroupNamed', { group: input.name }),
+        group: input.name,
       },
       ...(['before', 'after'] as const).map((placement) => ({
         destination: { anchorId: input.group.id, placement },
@@ -121,6 +125,7 @@ export function widgetGroupDropTarget(
             : 'entityDragDrop.preview.moveBelow',
           { target: input.name },
         ),
+        ...(input.surfaceLabel ? { group: input.surfaceLabel } : {}),
       })),
     ],
   });
