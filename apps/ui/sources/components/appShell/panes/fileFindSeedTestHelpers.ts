@@ -6,7 +6,9 @@ const fileFindAccountBoundary = vi.hoisted(() => ({ serverId: 'home-a', accountI
 export function installFileFindAccountBoundaryMocks(serverId = 'home-a', accountId = 'account-a') {
     fileFindAccountBoundary.serverId = serverId;
     fileFindAccountBoundary.accountId = accountId;
-    vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', () => ({
+    vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', async (importOriginal) => ({
+        ...await importOriginal<typeof import('@/sync/runtime/orchestration/appliedActiveServerRuntime')>(),
+        getAppliedActiveServerId: () => fileFindAccountBoundary.serverId,
         getAppliedActiveServerSnapshot: () => ({ serverId: fileFindAccountBoundary.serverId, serverUrl: 'https://home.test', generation: 0 }),
         isAppliedActiveServerRuntimeAvailable: () => true,
     }));

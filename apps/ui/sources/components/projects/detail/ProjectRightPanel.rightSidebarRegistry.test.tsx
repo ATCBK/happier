@@ -112,8 +112,10 @@ function createProjection(pluginId = PLUGIN_ID, destinationId = DESTINATION_ID) 
                 renderer: { kind: 'declarative', contributionId: 'project-panel-renderer' },
                 display: { developerFallback: 'Review' },
                 availability: { state: 'available', reason: 'available', diagnostics: [] },
-                serverIdentityId: runtime.serverIdentityId,
-                materializationRef: { pluginId, machineId: 'm1', materializationId: 'project-review-install-a' },
+                executionOrigin: {
+                    serverIdentityId: runtime.serverIdentityId,
+                    materializationRef: { pluginId, machineId: 'm1', materializationId: 'project-review-install-a' },
+                },
                 headerActions: [],
             },
         } } },
