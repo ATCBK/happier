@@ -1788,7 +1788,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const zhHans: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "即将到期优先",
-    strategyExpiryFirstDescription: "优先选择额度充足且长期额度重置或不续订的订阅结束时间更近的账号。",
+    strategyExpiryFirstDescription: "优先使用最先重置或到期的账号。",
     leadExpiryFirst: "即将到期优先。",
     membersOn: ({ service, on, total }) => `${service} · ${total} 个成员中 ${on} 个已开启`,
     rename: '重命名',

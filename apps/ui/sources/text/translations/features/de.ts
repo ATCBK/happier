@@ -1787,7 +1787,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const de: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "Früher ablaufend",
-    strategyExpiryFirstDescription: "Bevorzuge genügend Kontingent mit früherem Reset des langen Zeitfensters oder früherem Ende eines nicht verlängernden Abos.",
+    strategyExpiryFirstDescription: "Nutzt zuerst das Konto, das am frühesten zurückgesetzt wird oder endet.",
     leadExpiryFirst: "Früher ablaufend zuerst.",
     membersOn: ({ service, on, total }) => `${service} · ${on} von ${total} Mitgliedern aktiv`,
     rename: 'Umbenennen',

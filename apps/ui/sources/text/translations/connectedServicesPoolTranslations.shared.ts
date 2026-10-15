@@ -6,7 +6,7 @@ export type ConnectedServicesPoolCopy = typeof en;
 
 export const en = {
     strategyExpiryFirst: "Expiring first",
-    strategyExpiryFirstDescription: "Prefer ample quota whose long allowance resets or nonrenewing subscription ends sooner.",
+    strategyExpiryFirstDescription: "Uses the account that resets or ends soonest first.",
     leadExpiryFirst: "Expiring first.",
     membersOn: ({ service, on, total }: { service: string; on: number; total: number }) => `${service} · ${on} of ${total} members on`,
     rename: 'Rename',

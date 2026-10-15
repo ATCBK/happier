@@ -1815,7 +1815,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const ru: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "Скорее истекает",
-    strategyExpiryFirstDescription: "Предпочитать достаточный запас с более ранним сбросом длительного лимита или окончанием подписки без продления.",
+    strategyExpiryFirstDescription: "Сначала используется аккаунт, лимит или подписка которого сбрасывается или заканчивается раньше.",
     leadExpiryFirst: "Сначала ближайший срок.",
     membersOn: ({ service, on, total }) => `${service} · включено ${on} из ${total}`,
     rename: 'Переименовать',

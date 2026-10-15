@@ -1788,7 +1788,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const zhHant: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "即將到期優先",
-    strategyExpiryFirstDescription: "優先選擇額度充足且長期額度重設或不續訂的訂閱結束時間更近的帳號。",
+    strategyExpiryFirstDescription: "優先使用最先重設或到期的帳號。",
     leadExpiryFirst: "即將到期優先。",
     membersOn: ({ service, on, total }) => `${service} · ${total} 個成員中 ${on} 個已開啟`,
     rename: '重新命名',

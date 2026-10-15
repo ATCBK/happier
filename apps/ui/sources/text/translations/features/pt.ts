@@ -1793,7 +1793,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const pt: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "Expira antes",
-    strategyExpiryFirstDescription: "Prefira uma quota suficiente cujo período longo reinicie ou cuja assinatura sem renovação termine mais cedo.",
+    strategyExpiryFirstDescription: "Usa primeiro a conta que reinicia ou termina mais cedo.",
     leadExpiryFirst: "Primeiro o que expira antes.",
     membersOn: ({ service, on, total }) => `${service} · ${on} de ${total} membros ativos`,
     rename: 'Renomear',

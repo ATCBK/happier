@@ -1793,7 +1793,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const it: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "Scade prima",
-    strategyExpiryFirstDescription: "Preferisci una quota sufficiente con un ripristino del periodo lungo o una scadenza dell’abbonamento senza rinnovo più vicini.",
+    strategyExpiryFirstDescription: "Usa prima l’account che si ripristina o scade per primo.",
     leadExpiryFirst: "Prima ciò che scade prima.",
     membersOn: ({ service, on, total }) => `${service} · ${on} di ${total} membri attivi`,
     rename: 'Rinomina',

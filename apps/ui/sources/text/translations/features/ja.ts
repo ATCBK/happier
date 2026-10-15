@@ -1793,7 +1793,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const ja: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "期限優先",
-    strategyExpiryFirstDescription: "十分な残量があるアカウントのうち、長期枠のリセットまたは自動更新なしの契約終了が近いものを優先します。",
+    strategyExpiryFirstDescription: "リセットまたは終了が最も早いアカウントを先に使います。",
     leadExpiryFirst: "期限の近いものを優先。",
     membersOn: ({ service, on, total }) => `${service} · ${total} 人中 ${on} 人がオン`,
     rename: '名前を変更',

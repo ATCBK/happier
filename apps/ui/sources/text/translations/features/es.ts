@@ -1793,7 +1793,7 @@ const en = Shared_connectedServicesPoolTranslations.en;
 
 const es: ConnectedServicesPoolCopy = {
     strategyExpiryFirst: "Caduca antes",
-    strategyExpiryFirstDescription: "Prioriza una cuota suficiente cuyo periodo largo se reinicie o cuya suscripción sin renovación termine antes.",
+    strategyExpiryFirstDescription: "Usa primero la cuenta que se reinicia o termina antes.",
     leadExpiryFirst: "Primero lo que caduca antes.",
     membersOn: ({ service, on, total }) => `${service} · ${on} de ${total} miembros activos`,
     rename: 'Cambiar nombre',
