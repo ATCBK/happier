@@ -20,7 +20,7 @@ import { measureWindowBounds, readWindowBounds } from '../registry/measureWindow
 import type { WindowBounds, WindowPointer } from '../treeDragDropTypes';
 import { useTreeDropAutoscroll } from '../autoscroll/useTreeDropAutoscroll';
 import { entityFlatPositionAtIndex, resolveEntityFlatRowPosition } from '../geometry/entityFlatListStrategy';
-import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from './EntityReleasePreview';
+import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from './EntityReleasePreview';
 import { EntityDropSettledFeedback } from './EntityDropSettledFeedback';
 import { EntityDragGripChooser } from './EntityDragGripChooser';
 import { useEntityDropOutcome } from './entityDropOutcome';
@@ -267,6 +267,8 @@ function rowSourceId(context: Pick<FlatContext, 'id'>, id: string): string { ret
 /** Optional handle slot keeps dense domain rows in their existing layout and normal flow. */
 export function EntityFlatReorderRow(props: Readonly<{
     id: string;
+    /** The row's owner has a write for this row in flight: it waits half-dimmed, as a released move does. */
+    pending?: boolean;
     children: React.ReactNode | ((args: Readonly<{ renderHandle: (testID?: string) => React.ReactNode; isDragging: boolean; moveBy: (delta: number) => Promise<EntityDropOutcomeV1 | null> }>) => React.ReactNode);
 }>) {
     const context = React.useContext(FlatContext);
@@ -284,7 +286,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     const targetId = rowTargetId(context, id);
     const active = useEntityDragSourceState(runtime, sourceId);
     // Released and waiting: at its new slot and half-dimmed until the owner's list shows it.
-    const waiting = context.landedItemId === id;
+    const waiting = context.landedItemId === id || props.pending === true;
     const settledMatch = React.useMemo(() => ({ sourceId }), [sourceId]);
     const [chooserOpen, setChooserOpen] = React.useState(false);
     const rowNode = React.useRef<View>(null);
@@ -463,8 +465,19 @@ function FlatFeedback(props: Readonly<{ context: FlatContext; testID: string }>)
     const staged = ours && (snapshot.phase === 'carrying' || snapshot.phase === 'pending' && props.context.landedItemId !== null);
     const outcome = useEntityDropOutcome(staged ? snapshot : null);
     const keyboard = props.context.runtime.getPointer() === null;
+    const docked = outcome !== null && keyboard && snapshot.phase === 'carrying';
+    // A host footer (the Sections popover) takes the dock; without one it sits over the list's foot.
+    const slot = React.useContext(StagedMoveDockSlotContext);
+    const outcomeKey = JSON.stringify(outcome);
+    React.useEffect(() => {
+        if (!slot || !docked || !outcome) return;
+        slot(<EntityStagedMoveDock testID={`${props.testID}.staged`} outcome={outcome} hints={hints} />);
+        return () => slot(null);
+        // `outcome` is rebuilt on every render; its content is the dependency.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [slot, docked, outcomeKey, hints, props.testID]);
     return <>
-        {outcome && keyboard && snapshot.phase === 'carrying' ? <View pointerEvents="none" style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT}>
+        {docked && !slot ? <View pointerEvents="none" style={ENTITY_STAGED_MOVE_DOCK_PLACEMENT}>
             <EntityStagedMoveDock testID={`${props.testID}.staged`} outcome={outcome} hints={hints} />
         </View> : null}
         <PoliteAccessibilityStatus statusTestID={`${props.testID}.status`} transitionKey={JSON.stringify([snapshot.phase, snapshot.targetId, outcome])} announcement={describeHappierDropAnnouncement(outcome)} />

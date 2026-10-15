@@ -14,7 +14,7 @@ import {
     resolveHappierStagedMoveHints,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { I18nManager, Platform, type View } from 'react-native';
+import { I18nManager, Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -116,6 +116,25 @@ export function EntityReleaseOutcomePill(props: Readonly<{ outcome: HappierRelea
 
 /** Where a staged-move dock sits: over its list's foot, so the list never grows when a move starts. */
 export const ENTITY_STAGED_MOVE_DOCK_PLACEMENT = { position: 'absolute', left: 8, right: 8, bottom: 12 } as const;
+
+/**
+ * A host with a fixed footer (a popover) takes the staged-move dock there, so the dock never covers a row and
+ * stays in view while the list scrolls; a host without one keeps the dock over its list's foot. The host renders
+ * {@link StagedMoveDockFooter} in its footer and provides the slot around its list.
+ */
+export type StagedMoveDockSlot = (dock: React.ReactNode) => void;
+export const StagedMoveDockSlotContext = React.createContext<StagedMoveDockSlot | null>(null);
+
+export function useStagedMoveDockSlot(): Readonly<{ dock: React.ReactNode; slot: StagedMoveDockSlot }> {
+    const [dock, slot] = React.useState<React.ReactNode>(null);
+    return { dock, slot };
+}
+
+export function StagedMoveDockFooter(props: Readonly<{ dock: React.ReactNode }>): React.ReactElement | null {
+    return props.dock ? <View pointerEvents="none" style={STAGED_MOVE_DOCK_FOOTER_STYLE}>{props.dock}</View> : null;
+}
+
+const STAGED_MOVE_DOCK_FOOTER_STYLE = { paddingHorizontal: ENTITY_STAGED_MOVE_DOCK_PLACEMENT.left, paddingTop: 8, paddingBottom: ENTITY_STAGED_MOVE_DOCK_PLACEMENT.left } as const;
 
 export function EntityStagedMoveDock(props: Readonly<{
     outcome: HappierReleaseOutcome;

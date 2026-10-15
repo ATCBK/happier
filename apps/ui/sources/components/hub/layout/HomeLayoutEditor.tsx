@@ -192,7 +192,16 @@ function EditorRowView(props: Readonly<{
     const { row, layout } = props;
     const title = homeHubSectionTitle(row.section);
     const alwaysShown = !row.section.hideable;
-    const shown = !row.section.hidden;
+    // A pressed switch shows its new value at once and its row waits (the reorder owner's treatment) until the
+    // Account acknowledges. A press while one is waiting is ignored: the switch always shows the one intent in
+    // flight, so a queued second press can never land later and flip the row back.
+    const [requestedShown, setRequestedShown] = React.useState<boolean | null>(null);
+    const shown = requestedShown ?? !row.section.hidden;
+    const setShown = (next: boolean) => {
+        if (requestedShown !== null) return;
+        setRequestedShown(next);
+        layout.setHidden(row.id, !next).catch(() => {}).finally(() => setRequestedShown(null));
+    };
     const sizeChoices = row.section.kind === 'widget' ? resolveWidgetSizeChoicesV1('home', row.section.widget?.sizeDeclaration) : null;
     const size = row.section.kind === 'widget' && row.section.widget && sizeChoices?.defaultSize ? (
         <WidgetSizeControl surface="home" sizes={sizeChoices.sizes}
@@ -224,7 +233,7 @@ function EditorRowView(props: Readonly<{
                                 testID={`home-layout.${row.id}.shown`}
                                 accessibilityLabel={`${t('settingsOverview.homeShowSection')}: ${title}`}
                                 value={shown}
-                                onValueChange={(next) => { void layout.setHidden(row.id, !next).catch(() => {}); }}
+                                onValueChange={setShown}
                             />
                         )}
                     />
@@ -233,7 +242,7 @@ function EditorRowView(props: Readonly<{
             {size ? <View style={[styles.size, props.showDivider ? styles.sizeDivided : null]}>{size}</View> : null}
         </>
     );
-    return <EntityFlatReorderRow id={row.id}>{({ renderHandle }) => content(renderHandle)}</EntityFlatReorderRow>;
+    return <EntityFlatReorderRow id={row.id} pending={requestedShown !== null}>{({ renderHandle }) => content(renderHandle)}</EntityFlatReorderRow>;
 }
 
 const styles = StyleSheet.create((theme) => ({

@@ -5,6 +5,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { HomeWidgetAddPopover } from '@/components/widgets/add/HomeWidgetAddPopover';
+import { StagedMoveDockFooter, StagedMoveDockSlotContext, useStagedMoveDockSlot } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { CustomModal } from '@/modal/components/CustomModal';
 import type { CustomModalConfig } from '@/modal/types';
 import { t } from '@/text';
@@ -47,6 +48,8 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
   const [sectionsOpen, setSectionsOpen] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
   const [lookOpen, setLookOpen] = React.useState(false);
+  // A keyboard move's key hints sit in the Sections popover's footer, clear of the rows.
+  const stagedDock = useStagedMoveDockSlot();
   const toggleLook = React.useCallback(() => setLookOpen((open) => !open), []);
   const closeLook = React.useCallback(() => setLookOpen(false), []);
   const toggleSections = React.useCallback(
@@ -122,6 +125,7 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
           {({ maxHeight, maxWidth }) => (
             <View testID="home-hub.customize.popover">
               <FloatingOverlay
+                footer={<StagedMoveDockFooter dock={stagedDock.dock} />}
                 maxHeight={Math.min(maxHeight, SECTIONS_POPOVER_MAX_HEIGHT_PX)}
                 edgeFades={{ top: true, bottom: true, size: 18 }}
                 surfaceChrome="theme"
@@ -130,7 +134,9 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
                   width: Math.min(maxWidth, SECTIONS_POPOVER_WIDTH_PX),
                 }}
               >
-                <HomeLayoutEditor presentation="popover" />
+                <StagedMoveDockSlotContext.Provider value={stagedDock.slot}>
+                  <HomeLayoutEditor presentation="popover" />
+                </StagedMoveDockSlotContext.Provider>
               </FloatingOverlay>
             </View>
           )}

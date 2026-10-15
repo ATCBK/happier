@@ -11,7 +11,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
-import { EntityDragGripTrigger, EntityStagedMoveDock } from './EntityReleasePreview';
+import { EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, type StagedMoveDockSlot } from './EntityReleasePreview';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 
 vi.mock('react-native', async () => {
@@ -53,7 +53,7 @@ function RuntimeProbe(props: Readonly<{ enumerate?: boolean }>) {
 }
 
 function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>, enumerate = false) {
-    const model = { ids: ['a', 'b', 'c'], scope, writes: [] as TodoReorderInputV1[] };
+    const model = { ids: ['a', 'b', 'c'], scope, writes: [] as TodoReorderInputV1[], pending: new Set<string>(), dockSlot: null as StagedMoveDockSlot | null };
     const binding = (): EntityFlatReorderBinding => ({
         scope: model.scope, kind: 'todo', items: model.ids.map(id => ({ id, title: id })),
         getItem: id => model.ids.includes(id) ? { kind: 'todo', scope: model.scope, todoId: id } : null,
@@ -75,11 +75,11 @@ function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement
             return { status: 'applied' };
         },
     });
-    const render = () => <><RuntimeProbe enumerate={enumerate} /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
-        {model.ids.map(id => <EntityFlatReorderRow key={id} id={id}>
+    const render = () => <StagedMoveDockSlotContext.Provider value={model.dockSlot}><RuntimeProbe enumerate={enumerate} /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
+        {model.ids.map(id => <EntityFlatReorderRow key={id} id={id} pending={model.pending.has(id)}>
             {({ renderHandle }) => <>{renderHandle(`grip:${id}`)}<Text>{id}</Text></>}
         </EntityFlatReorderRow>)}
-    </EntityFlatReorderList></>;
+    </EntityFlatReorderList></StagedMoveDockSlotContext.Provider>;
     return { model, render };
 }
 
@@ -241,6 +241,31 @@ describe('shared flat reorder UI binding', () => {
             // The row itself waits half-dimmed at its landing slot; a key-hint card there would sit over its neighbours.
             expect(screen.findByTestId('list.staged')).toBeNull();
         } finally { acknowledgement.resolve(); }
+    });
+
+    it('hands the staged-move dock to a host footer rather than drawing it over the rows', async () => {
+        const f = fixture();
+        const docks: React.ReactNode[] = [];
+        f.model.dockSlot = dock => { docks.push(dock); };
+        const screen = await mount(f);
+        await key(screen, 'a', ' ');
+        await key(screen, 'a', 'ArrowDown');
+        // The footer owner draws it; the list keeps nothing over its foot rows.
+        expect(screen.findByTestId('list.staged')).toBeNull();
+        const staged = docks.at(-1);
+        expect(React.isValidElement(staged) && staged.type === EntityStagedMoveDock).toBe(true);
+        await key(screen, 'a', 'Escape');
+        expect(docks.at(-1)).toBeNull();
+    });
+
+    it('dims a row whose owner has a write in flight, as a released move waits', async () => {
+        const f = fixture();
+        f.model.pending.add('b');
+        const screen = await mount(f);
+        const opacity = (id: string) => StyleSheet.flatten(screen.findAllByType('View').find(node => node.props.onLayout
+            && node.props.testID !== 'list' && node.findAll(child => child.props.testID === `grip:${id}`).length > 0)!.props.style)?.opacity ?? 1;
+        expect([opacity('a'), opacity('c')]).toEqual([1, 1]);
+        expect(opacity('b')).toBeLessThan(1);
     });
 
     it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {

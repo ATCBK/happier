@@ -27,7 +27,7 @@ vi.mock('react-native-reanimated', async () => {
 
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { HomeLayoutEditor } = await import('./HomeLayoutEditor');
-const { EntityFlatReorderList } = await import('@/components/ui/treeDragDrop/ui/EntityFlatReorder');
+const { EntityFlatReorderList, EntityFlatReorderRow } = await import('@/components/ui/treeDragDrop/ui/EntityFlatReorder');
 const { EntityDragGripChooser } = await import('@/components/ui/treeDragDrop/ui/EntityDragGripChooser');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useHomeHubArtifactLayout } = await import('./useHomeHubArtifactLayout');
@@ -271,6 +271,38 @@ describe('Home Customize entity reorder binding', () => {
         expect(subtitle('g1')).toBe('widgetFrame.groupCopyOf(count=1,index=1,total=2)');
         expect(subtitle('g2')).toBe('widgetFrame.groupCopyOf(count=1,index=2,total=2)');
         expect(subtitle('g3')).toBe('widgetFrame.groupCount(count=1)');
+    });
+    it('shows a pressed Sections switch at once, waits for the Account, and ignores a second press meanwhile (H18)', async () => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        artifact.seed({ v: 1, items: [], order: [], hidden: ['setup'] });
+        await import('@/sync/syncEngine');
+        let hold = false;
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        restoreActionLoader = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-switch-pending.test', accountId: 'account-a', request: async (url, init) => {
+            if (hold && init?.method === 'POST' && new URL(String(url)).pathname === `/v1/artifacts/${artifact.artifactId}`) await held;
+            return artifact.request(url, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /></AccountShell>);
+        await flushHookEffects({ cycles: 3 });
+        const value = () => screen.findByTestId('home-layout.setup.shown')!.props.value;
+        const waiting = () => screen.root.findAllByType(EntityFlatReorderRow).find(row => row.props.id === 'setup')!.props.pending;
+        expect([value(), waiting()]).toEqual([false, false]);
+        hold = true;
+        await act(async () => { screen.findByTestId('home-layout.setup.shown')!.props.onValueChange(true); });
+        // The Account has not answered: the switch already shows the new value and its row waits.
+        expect([value(), waiting(), artifact.writes.length]).toEqual([true, true, 0]);
+        await act(async () => { screen.findByTestId('home-layout.setup.shown')!.props.onValueChange(false); });
+        expect(value()).toBe(true);
+        await act(async () => { release(); });
+        await flushHookEffects({ cycles: 3 });
+        // One write landed (the ignored press queued none) and the row stopped waiting on the acknowledged value.
+        expect(artifact.writes).toHaveLength(1);
+        expect(artifact.layout().hidden).not.toContain('setup');
+        expect([value(), waiting()]).toEqual([true, false]);
     });
     it('names an unreachable Home when a preparatory read prevents a Customize write', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
