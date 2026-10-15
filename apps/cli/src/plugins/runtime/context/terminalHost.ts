@@ -93,7 +93,7 @@ export function installAgentChildLaunchEnvironmentTransformerForTerminalHost(
 export type CreatePluginTerminalHostServiceParams = Readonly<{
     hasCapability: (capability: string) => boolean;
     resolveTerminalHost: (preference: TerminalHostPreference) => TerminalHostResolution | Promise<TerminalHostResolution>;
-    resolveAgentCliLaunch: (launch: AgentTerminalHostLaunchInput) => Pick<AgentCliLaunchSpec, 'command' | 'args'> & Readonly<{
+    resolveAgentCliLaunch: (launch: AgentTerminalHostLaunchInput) => Pick<AgentCliLaunchSpec, 'command' | 'args' | 'providerExitOwnership'> & Readonly<{
         env?: Readonly<Record<string, string>>;
     }>;
     resolveCurrentHost?: () => Readonly<{
@@ -305,6 +305,7 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
         label?: string;
         workingDirectory: string;
         spawnArgv: readonly string[];
+        providerExitOwnership?: AgentCliLaunchSpec['providerExitOwnership'];
         spawnEnv: Readonly<Record<string, string>>;
         unsetEnvKeys?: readonly string[];
         isolatedEnv: boolean;
@@ -369,10 +370,17 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
         }
         if (currentHostProcess && currentHostState) {
             const notifyExit = (result: TerminalHostExit) => {
+                // The launcher reports its immediate child's exit. A shell shim's
+                // closure does not prove that the selected Agent process stopped.
+                const qualifiedResult: TerminalHostExit = {
+                    code: result.code, signal: result.signal,
+                    ...(result.nativeExited === true && request.providerExitOwnership === 'direct'
+                        ? { nativeExited: true as const } : {}),
+                };
                 currentHostState.exited = true;
-                currentHostState.result = result;
+                currentHostState.result = qualifiedResult;
                 for (const listener of currentHostState.listeners) {
-                    try { listener(result); }
+                    try { listener(qualifiedResult); }
                     catch { logger.infoFile('[terminal-host] Exit observer failed (terminal_exit_observer_failed)'); }
                 }
                 currentHostState.listeners.clear();
@@ -425,6 +433,7 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
             const spawnArgv = [launch.command, ...launch.args, ...(request.launch.args ?? [])];
             const spawnEnv = transform ? transform(mergedSpawnEnvironment) : mergedSpawnEnvironment;
             return await createHost({ ...request, spawnArgv, spawnEnv,
+                providerExitOwnership: launch.providerExitOwnership,
                 ...(request.launch.unsetEnvKeys ? { unsetEnvKeys: request.launch.unsetEnvKeys } : {}) });
         },
         async injectUserPrompt(

@@ -21,7 +21,7 @@ import {
 import { createClaudeUnifiedTerminalTurnOperations } from '../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/turnOperations.testkit';
 
 describe('Claude unified borrowed-terminal exit composition', () => {
-    it.each(['native-close', 'wrapper-killed'] as const)('reconciles %s without another prompt', async (outcome) => {
+    it.each(['native-close', 'wrapper-killed', 'shell-wrapper-close'] as const)('reconciles %s without another prompt', async (outcome) => {
         if (process.platform === 'win32') return; // Real wrapper-only SIGKILL is a POSIX process boundary.
         const directory = await mkdtemp(join(tmpdir(), 'happier-unified-native-exit-'));
         const readyPath = join(directory, 'ready.json');
@@ -43,15 +43,28 @@ describe('Claude unified borrowed-terminal exit composition', () => {
             'fs.writeFileSync(process.argv[1], JSON.stringify({ nativePid: process.pid, launcherPid: process.ppid }));',
             'setInterval(() => {}, 1000);',
         ].join('\n');
+        const wrapperSource = `require('node:child_process').spawn(process.execPath,
+            ['-e', ${JSON.stringify(nativeSource)}, '--', process.argv[1]],
+            { stdio: 'ignore', detached: true }).unref(); setInterval(() => {}, 1000);`;
         const host = createPluginTerminalHostService({
             hasCapability: capability => capability === 'terminalHost',
             resolveTerminalHost: () => ({ status: 'resolved', adapter, reason: 'zellij_forced' }),
-            resolveAgentCliLaunch: () => ({ command: process.execPath, args: ['-e', nativeSource, '--', readyPath] }),
+            resolveAgentCliLaunch: () => ({ command: process.execPath,
+                args: ['-e', outcome === 'shell-wrapper-close' ? wrapperSource : nativeSource, '--', readyPath],
+                ...(outcome === 'shell-wrapper-close' ? {} : { providerExitOwnership: 'direct' as const }) }),
             resolveCurrentHost: () => ({ handle: boundary.handle, lifecycle: 'borrowed' }),
             disposeHost: async () => undefined,
         });
+        const requestingHost: typeof host = outcome === 'shell-wrapper-close' ? {
+            ...host,
+            createOrAttachHost(request) {
+                // Extra public request fields cannot grant host-owned process qualification.
+                const forgedRequest = { ...request, providerExitOwnership: 'direct' as const };
+                return host.createOrAttachHost(forgedRequest);
+            },
+        } : host;
         const hooks = createSessionHooksFixture();
-        const ctx = createPluginContextFixture(host, createEventsFixture().service, { sessionHooks: hooks.service });
+        const ctx = createPluginContextFixture(requestingHost, createEventsFixture().service, { sessionHooks: hooks.service });
         const envelope = expectRuntimeEnvelope(createClaudeUnifiedTerminalTurnOperations({
             ctx, directory, happierSessionId: 'unified-native-exit', hostPreference: 'zellij',
             launchEnv: { PATH: process.env.PATH ?? '' }, permissionMode: 'default',
@@ -75,7 +88,7 @@ describe('Claude unified borrowed-terminal exit composition', () => {
                 process.kill(processes!.nativePid, 'SIGTERM');
                 await expect(waitForProcessExit(processes!.nativePid, { timeoutMs: 10_000 })).resolves.toBe(true);
             } else {
-                process.kill(processes!.launcherPid, 'SIGKILL');
+                process.kill(processes!.launcherPid, outcome === 'shell-wrapper-close' ? 'SIGTERM' : 'SIGKILL');
                 await expect(waitForProcessExit(processes!.launcherPid, { timeoutMs: 10_000 })).resolves.toBe(true);
                 expect(isPidAlive(processes!.nativePid)).toBe(true);
             }

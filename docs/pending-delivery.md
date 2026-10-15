@@ -111,6 +111,8 @@ The SDK execution adapter preserves the same launch builder's
 resolution. It emits `providerStopped: true` only with an actual exit or signal
 from that exact resolved invocation. Shell-wrapper exit and missing qualification
 retain unknown Activity; a numeric root exit code is not provider-stop proof.
+The Agent terminal host retains that launch qualification when projecting its
+immediate child exit to the Agent runtime.
 A managed child operation error, including cancellation after launch, does not
 settle its physical-exit waiter. Its owner still awaits actual child exit.
 A completed query observation can report idle without releasing its physical
