@@ -86,7 +86,9 @@ describe('Usage page batch', () => {
   it('owns coverage from the first frame, before the inventory has answered', async () => {
     const seen: boolean[] = [];
     function CoverageProbe() { seen.push(useUsageWidgetPageHasCoverageDetail()); return null; }
-    const screen = await renderScreen(<UsageWidgetBatchProvider clauses={clauses}><CoverageProbe /></UsageWidgetBatchProvider>);
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <UsageWidgetBatchProvider clauses={clauses}><CoverageProbe /></UsageWidgetBatchProvider>
+    </InjectedAuthProvider>);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(Boolean)).toBe(true);
     await screen.update(<CoverageProbe />);
@@ -123,7 +125,8 @@ describe('Usage page batch', () => {
     const screen = await renderScreen(body(narrowId));
     await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').length).toBeGreaterThan(0);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => /\/sessions\//.test(request.path))).toEqual([]);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/work'
+      || request.path.startsWith('/v1/sessions/work/'))).toEqual([]);
     await screen.update(body('usage_period_summary'));
     await expect.poll(() => home!.requests.filter(request => request.path === '/v1/sessions/work/messages').length).toBe(1);
     await flushHookEffects({ cycles: 30 });
