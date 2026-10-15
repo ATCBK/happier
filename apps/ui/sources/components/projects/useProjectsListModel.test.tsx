@@ -9,6 +9,7 @@ import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema } f
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -186,7 +187,8 @@ describe('Projects model Action admission', () => {
         await hook.unmount();
     });
 
-    it('an admitted Forget refuses even a paused link without changing the accepted rows', async () => {
+    it('routes paused relationship termination through its Action before Forget changes accepted rows', async () => {
+        await homes.requireUiApproval(serverId, 'workspace.sync.relationship.terminate');
         const target = { id: 'target', serverId, machineId: 'other', rootPath: '/target', projectKey: 'anchor', createdAtMs: 1 };
         const targetKey = { kind: 'workspace-ref' as const, serverId, id: 'target' };
         const policy = { v: 1 as const, selection: 'git_worktree' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
@@ -196,10 +198,30 @@ describe('Projects model Action admission', () => {
         const graphKey = { kind: 'relationship-graph' as const };
         rows.push({ key: targetKey, revision: 0, content: { t: 'plain', v: { key: targetKey, value: target } } },
             { key: graphKey, revision: 0, content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } });
+        const sourceContent = rows[0]?.content;
+        if (sourceContent?.t !== 'plain') throw new Error('Expected a plain source workspace fixture');
+        applyProjectAccountRowsFixture(storage, {
+            workspaceRefs: [sourceContent.v.value, target],
+            relationships: [relationship],
+        });
         const before = [...rows];
-        expect(await forgetProjectWorkspace({ serverId, workspaceId: 'ref' }))
-            .toMatchObject({ ok: false, errorCode: 'workspace_ref_in_use', details: { relationshipIds: ['link'] } });
-        expect(rows).toEqual(before); expect(homes.requestsFor(mutationPath)).toEqual([]);
+        vi.spyOn((await import('@/modal')).Modal, 'confirm').mockResolvedValue(true);
+        const hook = await renderHook(() => useProjectsListModel());
+        const ref = hook.getCurrent().groups.projectGroups.flatMap(group => group.items).find(item => item.id === 'ref');
+        if (!ref) throw new Error('Expected the source workspace fixture');
+        expect(storage.getState().projectAccountRows?.relationships).toHaveLength(1);
+        let outcome: unknown;
+        await act(async () => { outcome = await hook.getCurrent().removeProject(ref); });
+        if (!outcome || typeof outcome !== 'object' || !('ok' in outcome) || outcome.ok !== true) {
+            throw new Error(`Expected relationship Action admission: ${JSON.stringify(outcome)}`);
+        }
+        expect(outcome).toMatchObject({ kind: 'approval_request_created' });
+        expect(hook.getCurrent().projectActionApproval).toMatchObject({
+            actionId: 'workspace.sync.relationship.terminate',
+        });
+        expect(rows).toEqual(before);
+        expect(homes.requestsFor(mutationPath)).toEqual([]);
+        await hook.unmount();
     });
 
     it('includes group and direct Account grants in the shared admitted Add composition', async () => {

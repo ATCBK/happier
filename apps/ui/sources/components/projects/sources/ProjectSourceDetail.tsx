@@ -462,12 +462,6 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
 
   const remove = React.useCallback(async () => {
     if (!current) return;
-    const confirmed = await Modal.confirm(
-      t('projects.sources.deleteConfirmTitle', { name: current.name }),
-      t('projects.sources.deleteConsequence'),
-      { confirmText: t('projects.sources.delete'), destructive: true },
-    );
-    if (!confirmed) return;
     await controller.remove();
     if (!controller.getSnapshot().current) props.onDeleted();
   }, [controller, current, props]);

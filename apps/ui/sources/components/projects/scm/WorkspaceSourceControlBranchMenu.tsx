@@ -271,17 +271,6 @@ export function WorkspaceSourceControlBranchMenu(props: WorkspaceSourceControlBr
     const removeWorktree = React.useCallback(async (worktreePath: string) => {
         if (!canCreateWorktrees) return;
 
-        const confirmed = await Modal.confirm(
-            t('files.branchMenu.worktrees.removeConfirmTitle'),
-            t('files.branchMenu.worktrees.removeConfirmBody', { path: worktreePath }),
-            {
-                confirmText: t('files.branchMenu.worktrees.removeConfirmButton'),
-                cancelText: t('common.cancel'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-
         const response = await repoScmWorktreeService.removeWorktreeForMachinePath({
             ...(serverId ? { serverId } : {}),
             machineId: props.machineId,

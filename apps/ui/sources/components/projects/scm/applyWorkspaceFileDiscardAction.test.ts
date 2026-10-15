@@ -3,7 +3,7 @@ import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { machineScmChangeDiscard } from '@/sync/ops/scm/machineScm';
 
 const machineScmChangeDiscardSpy = vi.hoisted(() => vi.fn<typeof machineScmChangeDiscard>(async () => ({ success: true })));
-const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => true));
+const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => false));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -79,5 +79,6 @@ describe('applyWorkspaceFileDiscardAction', () => {
             },
             { serverId: 'server-1' },
         );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
     });
 });

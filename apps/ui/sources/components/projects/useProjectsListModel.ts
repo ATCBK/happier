@@ -11,8 +11,8 @@ import { Modal } from '@/modal';
 import { useWorkspaceSyncRelationshipSummaries, resolveWorkspaceSyncStatusScope } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
 import { projectWorkspaceSyncSetAttentionByWorkspaceRefId } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { formatWorkspaceSyncSetAttention } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
-import { terminatePersistedWorkspaceSyncRelationship } from '@/sync/ops/workspaceSync';
 import { updateProjectWorkspace, forgetProjectWorkspace } from '@/sync/ops/actions/projectWorkspaceActions';
+import { terminateWorkspaceSyncRelationship } from '@/sync/ops/actions/workspaceSyncRelationshipActions';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 
@@ -65,7 +65,9 @@ export function useProjectsListModel() {
     const [projectActionApproval, setProjectActionApproval] = React.useState<Readonly<{
         request: ActionApprovalRequestCreatedResult; isCurrent(): boolean;
     }> | null>(null);
-    const rememberApproval = React.useCallback((result: Awaited<ReturnType<typeof updateProjectWorkspace>>) => {
+    const rememberApproval = React.useCallback((result:
+        | Awaited<ReturnType<typeof updateProjectWorkspace>>
+        | Awaited<ReturnType<typeof terminateWorkspaceSyncRelationship>>) => {
         if (!result.ok || !('kind' in result) || result.kind !== 'approval_request_created') return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime?.isCurrent()) setProjectActionApproval({ request: result, isCurrent: lifetime.isCurrent });
@@ -311,22 +313,19 @@ export function useProjectsListModel() {
                 Modal.alert(t('common.error'), t('projects.actions.removeStopSyncingFailed'));
                 return;
             }
-            const confirmed = await Modal.confirm(
-                t('projects.actions.removeBlockedBySyncTitle'),
-                t('projects.actions.removeBlockedBySyncBody', { count: blocking.length }),
-                { confirmText: t('projects.actions.removeBlockedBySyncConfirm'), destructive: true },
-            );
-            if (!confirmed || !lifetime.isCurrent()) return;
-            try {
-                // Stop syncing through the canonical daemon relationship owner;
-                // the reference is only released once nothing still points at it.
-                for (const summary of blocking) {
-                    if (!lifetime.isCurrent()) return;
-                    await terminatePersistedWorkspaceSyncRelationship(resolveWorkspaceSyncStatusScope(summary));
+            for (const summary of blocking) {
+                if (!lifetime.isCurrent()) return;
+                const scope = resolveWorkspaceSyncStatusScope(summary);
+                const stopped = await terminateWorkspaceSyncRelationship({
+                    controllerMachineId: scope.controllerMachineId,
+                    relationshipId: scope.relationshipId,
+                }, lifetime);
+                rememberApproval(stopped);
+                if (stopped.ok && 'kind' in stopped) return stopped;
+                if (!stopped.ok) {
+                    Modal.alert(t('common.error'), t('projects.actions.removeStopSyncingFailed'));
+                    return stopped;
                 }
-            } catch {
-                Modal.alert(t('common.error'), t('projects.actions.removeStopSyncingFailed'));
-                return;
             }
             removal = await forgetProjectWorkspace({ serverId, workspaceId: id }, lifetime);
             if (removal.ok && 'kind' in removal) { rememberApproval(removal); return removal; }

@@ -43,17 +43,6 @@ export async function applyWorkspaceFileDiscardAction(input: Readonly<{
         return;
     }
 
-    const confirmed = await Modal.confirm(
-        t('common.discardChanges'),
-        input.file.fullPath,
-        {
-            cancelText: t('common.cancel'),
-            confirmText: t('common.discard'),
-            destructive: true,
-        }
-    );
-    if (!confirmed) return;
-
     const lockResult = await withWorkspaceScmOperationLock({
         state: storage.getState(),
         scope: input.scope,

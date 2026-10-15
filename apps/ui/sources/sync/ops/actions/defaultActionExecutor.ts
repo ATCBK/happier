@@ -247,6 +247,13 @@ import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/s
 import {
   preflightWorkspaceDestinationReplacement,
   startSessionHandoff as startSessionHandoffOp,
+import { listWorkspaceSyncRelationshipsOnController } from '@/sync/ops/workspaceSyncRelationshipsListRpc';
+import {
+  disableWorkspaceSyncRelationship,
+  enableWorkspaceSyncRelationship,
+  flushWorkspaceSyncRelationship,
+  terminatePersistedWorkspaceSyncRelationship,
+} from '@/sync/ops/workspaceSync';
 } from '@/sync/ops/sessionHandoffs';
 import { createWorkspaceSyncRelationshipOnController } from '@/sync/ops/workspaceSyncRelationshipCreateRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
@@ -1925,6 +1932,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       serverId,
       targetReplacementApproval,
       targetReplacementApprovalReceiptId,
+    workspaceSyncRelationshipsList: async ({ input, signal }) => await listWorkspaceSyncRelationshipsOnController({
+      input, account: accountContext, ...(signal ? { signal } : {}),
+    }),
+
       signal,
     }) => await createWorkspaceSyncRelationshipOnController({
       input,
@@ -1942,6 +1953,55 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       targetPath,
       targetSessionStorageMode,
       stateTransfer,
+    workspaceSyncRelationshipTerminate: async ({ input, serverId, signal }) => {
+      const scope = accountContext?.accountLifetime.scope;
+      if (!scope || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
+      accountContext?.assertCurrent();
+      await terminatePersistedWorkspaceSyncRelationship({
+        serverId: scope.serverId,
+        controllerMachineId: input.controllerMachineId,
+        relationshipId: input.relationshipId,
+        ...(signal ? { signal } : {}),
+      });
+      accountContext?.assertCurrent();
+      return { v: 1 as const, relationshipId: input.relationshipId, terminated: true as const };
+    },
+
+    workspaceSyncRelationshipDisable: async ({ input, serverId, signal }) => {
+      const scope = accountContext?.accountLifetime.scope;
+      if (!scope || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
+      accountContext.assertCurrent();
+      await disableWorkspaceSyncRelationship({ serverId: scope.serverId, ...input, ...(signal ? { signal } : {}) });
+      accountContext.assertCurrent();
+      return { v: 1 as const, relationshipId: input.relationshipId, enabled: false as const };
+    },
+
+    workspaceSyncRelationshipEnable: async ({ input, serverId, signal }) => {
+      const scope = accountContext?.accountLifetime.scope;
+      if (!scope || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
+      accountContext.assertCurrent();
+      await enableWorkspaceSyncRelationship({ serverId: scope.serverId, ...input, ...(signal ? { signal } : {}) });
+      accountContext.assertCurrent();
+      return { v: 1 as const, relationshipId: input.relationshipId, enabled: true as const };
+    },
+
+    workspaceSyncRelationshipFlush: async ({ input, serverId, signal }) => {
+      const scope = accountContext?.accountLifetime.scope;
+      if (!scope || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
+      accountContext.assertCurrent();
+      const status = await flushWorkspaceSyncRelationship({ serverId: scope.serverId, ...input, ...(signal ? { signal } : {}) });
+      accountContext.assertCurrent();
+      return { v: 1 as const, relationshipId: input.relationshipId, status };
+    },
+
       workspaceAction,
       serverId,
       actionRequestId,

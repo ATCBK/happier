@@ -86,7 +86,7 @@ export type WorkspaceSyncWorkerCopyProvenanceV1 = z.infer<typeof WorkspaceSyncWo
 
 const OptionalWorkspaceSyncWorkerCopyProvenanceV1Schema = defineStoredReadProjection(
   z.optional(WorkspaceSyncWorkerCopyProvenanceV1Schema),
-  () => z.pipe(z.transform((value) => (
+  () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => (
     typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'worker_clean_copy'
       ? value : undefined
   )), z.optional(createStoredReadSchema(WorkspaceSyncWorkerCopyProvenanceV1Schema))),
@@ -1201,6 +1201,76 @@ export const WorkspaceSyncRelationshipCreateActionInputV1Schema = lazyZodSchema(
 }));
 export type WorkspaceSyncRelationshipCreateActionInputV1 = z.infer<
   typeof WorkspaceSyncRelationshipCreateActionInputV1Schema
+>;
+
+/** Exact authority subject for permanently stopping one persisted relationship. */
+export const WorkspaceSyncRelationshipTerminateActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  controllerMachineId: exactBoundedString(MAX_MACHINE_ID_LENGTH),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+}));
+export type WorkspaceSyncRelationshipTerminateActionInputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipTerminateActionInputV1Schema
+>;
+
+/** Semantic acknowledgement from the existing relationship lifecycle owner. */
+export const WorkspaceSyncRelationshipTerminateActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+  terminated: z.literal(true),
+}));
+export type WorkspaceSyncRelationshipTerminateActionOutputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipTerminateActionOutputV1Schema
+>;
+
+/** Exact authority subject for pausing one persisted relationship. */
+export const WorkspaceSyncRelationshipDisableActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  controllerMachineId: exactBoundedString(MAX_MACHINE_ID_LENGTH),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+}));
+export type WorkspaceSyncRelationshipDisableActionInputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipDisableActionInputV1Schema
+>;
+export const WorkspaceSyncRelationshipDisableActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+  enabled: z.literal(false),
+}));
+export type WorkspaceSyncRelationshipDisableActionOutputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipDisableActionOutputV1Schema
+>;
+
+/** Exact authority subject for resuming one persisted relationship. */
+export const WorkspaceSyncRelationshipEnableActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  controllerMachineId: exactBoundedString(MAX_MACHINE_ID_LENGTH),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+}));
+export type WorkspaceSyncRelationshipEnableActionInputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipEnableActionInputV1Schema
+>;
+export const WorkspaceSyncRelationshipEnableActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+  enabled: z.literal(true),
+}));
+export type WorkspaceSyncRelationshipEnableActionOutputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipEnableActionOutputV1Schema
+>;
+
+/** Exact authority subject for synchronizing one persisted relationship now. */
+export const WorkspaceSyncRelationshipFlushActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  controllerMachineId: exactBoundedString(MAX_MACHINE_ID_LENGTH),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+}));
+export type WorkspaceSyncRelationshipFlushActionInputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipFlushActionInputV1Schema
+>;
+export const WorkspaceSyncRelationshipFlushActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  relationshipId: exactBoundedString(MAX_RELATIONSHIP_ID_LENGTH),
+  status: WorkspaceSyncStatusV1Schema,
+}));
+export type WorkspaceSyncRelationshipFlushActionOutputV1 = z.infer<
+  typeof WorkspaceSyncRelationshipFlushActionOutputV1Schema
 >;
 
 /**

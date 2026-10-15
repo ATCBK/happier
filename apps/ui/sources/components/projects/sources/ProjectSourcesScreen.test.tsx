@@ -31,6 +31,7 @@ const shared = vi.hoisted(() => ({
   navigation: [] as unknown[],
   createOutcomes: [] as Array<'unknown'>,
   artifacts: {} as Record<string, unknown>,
+  confirm: vi.fn(async () => false),
 }));
 
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
@@ -89,6 +90,10 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
       shared.sources = [...shared.sources, source];
       return { ok: true, result: { ok: true, source, canManage: true } };
     }
+    if (actionId === 'projects.sources.delete') {
+      shared.sources = shared.sources.filter((row: any) => row.id !== input.sourceId);
+      return { ok: true, result: { ok: true, sourceId: input.sourceId, revision: input.expectedRevision + 1 } };
+    }
     return { ok: true, result: {} };
   },
 }));
@@ -110,7 +115,7 @@ vi.mock('expo-router', async () => {
 
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({}).module;
+  return createModalModuleMock({ spies: { confirm: shared.confirm } }).module;
 });
 
 vi.mock('@/text', async () => {
@@ -133,6 +138,7 @@ afterEach(() => {
   shared.navigation = [];
   shared.routes.params = {};
   shared.createOutcomes = [];
+  shared.confirm.mockClear();
 });
 
 function signIn() {
@@ -149,6 +155,18 @@ function signIn() {
 }
 
 describe('Projects › Sources', () => {
+  it('routes Delete directly to Action admission without a caller-owned confirmation floor', async () => {
+    signIn();
+    shared.sources = [{ id: 'source-1', revision: 1, name: 'happier', audience: [], createdByAccountId: 'account-1',
+      repository: { provider: { id: 'happier.scm.forge.github/github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+        repository: { nameWithOwner: 'happier-dev/happier' }, protocol: 'https' } }];
+    shared.routes.params = { source: 'source-1' };
+    const screen = await renderScreen(<ProjectSourcesScreen />);
+    await vi.waitFor(() => expect(screen.findByTestId('projects.sources.detail.delete')).toBeTruthy());
+    await act(async () => screen.pressByTestId('projects.sources.detail.delete'));
+    await vi.waitFor(() => expect(shared.calls.some((call) => call.actionId === 'projects.sources.delete')).toBe(true));
+    expect(shared.confirm).not.toHaveBeenCalled();
+  });
   it('invites the first Source when the authenticated catalog is empty, and Add opens the draft', async () => {
     signIn();
     const screen = await renderScreen(<ProjectSourcesScreen />);

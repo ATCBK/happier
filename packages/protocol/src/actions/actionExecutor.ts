@@ -435,6 +435,10 @@ import {
   WorkspaceSyncConflictInspectActionInputV1Schema,
   WorkspaceSyncRelationshipsListActionInputV1Schema,
   WorkspaceSyncRelationshipCreateActionInputV1Schema,
+  WorkspaceSyncRelationshipDisableActionInputV1Schema,
+  WorkspaceSyncRelationshipEnableActionInputV1Schema,
+  WorkspaceSyncRelationshipFlushActionInputV1Schema,
+  WorkspaceSyncRelationshipTerminateActionInputV1Schema,
   type HandoffWorkspaceActionV1,
 } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 import {
@@ -7652,7 +7656,40 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
-          return completeActionResult(res);
+          return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });
+        }
+
+        if (actionId === 'workspace.sync.relationship.terminate') {
+          if (!deps.workspaceSyncRelationshipTerminate) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.sync.relationship.terminate' };
+          }
+          const res = await deps.workspaceSyncRelationshipTerminate({
+            input: WorkspaceSyncRelationshipTerminateActionInputV1Schema.parse(parsed.data),
+            ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          });
+          return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });
+        }
+
+        if (actionId === 'workspace.sync.relationship.disable') {
+          if (!deps.workspaceSyncRelationshipDisable) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.sync.relationship.disable' };
+          const res = await deps.workspaceSyncRelationshipDisable({ input: WorkspaceSyncRelationshipDisableActionInputV1Schema.parse(parsed.data),
+            ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });
+        }
+
+        if (actionId === 'workspace.sync.relationship.enable') {
+          if (!deps.workspaceSyncRelationshipEnable) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.sync.relationship.enable' };
+          const res = await deps.workspaceSyncRelationshipEnable({ input: WorkspaceSyncRelationshipEnableActionInputV1Schema.parse(parsed.data),
+            ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });
+        }
+
+        if (actionId === 'workspace.sync.relationship.flush') {
+          if (!deps.workspaceSyncRelationshipFlush) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.sync.relationship.flush' };
+          const res = await deps.workspaceSyncRelationshipFlush({ input: WorkspaceSyncRelationshipFlushActionInputV1Schema.parse(parsed.data),
+            ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });
         }
 
         if (actionId === 'workspace.sync.relationships.list') {

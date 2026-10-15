@@ -175,6 +175,14 @@ import type {
   WorkspaceSyncRelationshipsListActionOutputV1,
   WorkspaceSyncRelationshipCreateActionInputV1,
   WorkspaceSyncRelationshipCreateResultV1,
+  WorkspaceSyncRelationshipDisableActionInputV1,
+  WorkspaceSyncRelationshipDisableActionOutputV1,
+  WorkspaceSyncRelationshipEnableActionInputV1,
+  WorkspaceSyncRelationshipEnableActionOutputV1,
+  WorkspaceSyncRelationshipFlushActionInputV1,
+  WorkspaceSyncRelationshipFlushActionOutputV1,
+  WorkspaceSyncRelationshipTerminateActionInputV1,
+  WorkspaceSyncRelationshipTerminateActionOutputV1,
   WorkspaceSyncConflictResolutionResultV1,
 } from '../../sessions/control/handoff/workspaceSyncSchemas.js';
 import type { HandoffTargetReplacementApprovalV1 } from '../../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
@@ -1406,6 +1414,20 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<WorkspaceSyncRelationshipCreateResultV1 | unknown>;
   workspaceSyncRelationshipsList?: (args: Readonly<{
     input: WorkspaceSyncRelationshipsListActionInputV1;
+  workspaceSyncRelationshipTerminate?: (args: Readonly<{
+    input: WorkspaceSyncRelationshipTerminateActionInputV1;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  }>) => Promise<WorkspaceSyncRelationshipTerminateActionOutputV1 | unknown>;
+  workspaceSyncRelationshipDisable?: (args: Readonly<{
+    input: WorkspaceSyncRelationshipDisableActionInputV1; serverId?: string | null; signal?: AbortSignal;
+  }>) => Promise<WorkspaceSyncRelationshipDisableActionOutputV1 | unknown>;
+  workspaceSyncRelationshipEnable?: (args: Readonly<{
+    input: WorkspaceSyncRelationshipEnableActionInputV1; serverId?: string | null; signal?: AbortSignal;
+  }>) => Promise<WorkspaceSyncRelationshipEnableActionOutputV1 | unknown>;
+  workspaceSyncRelationshipFlush?: (args: Readonly<{
+    input: WorkspaceSyncRelationshipFlushActionInputV1; serverId?: string | null; signal?: AbortSignal;
+  }>) => Promise<WorkspaceSyncRelationshipFlushActionOutputV1 | unknown>;
     signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncRelationshipsListActionOutputV1>;
   workspaceSyncConflictsList?: (args: Readonly<{

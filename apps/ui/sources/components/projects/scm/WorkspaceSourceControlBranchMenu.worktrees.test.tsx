@@ -15,6 +15,7 @@ const fetchBranchesForMachinePathMock = vi.hoisted(() => vi.fn<(input: unknown) 
 const machineScmBranchCheckoutMock = vi.hoisted(() => vi.fn<(machineId: string, request: unknown, options?: unknown) => Promise<unknown>>(async () => ({ success: true })));
 const machineScmBranchCreateMock = vi.hoisted(() => vi.fn<(machineId: string, request: unknown, options?: unknown) => Promise<unknown>>(async () => ({ success: true })));
 const machineScmRemotePublishMock = vi.hoisted(() => vi.fn<(machineId: string, request: unknown) => Promise<unknown>>(async (_machineId, _request) => ({ success: true })));
+const modalConfirmMock = vi.hoisted(() => vi.fn(async () => false));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -38,7 +39,7 @@ vi.mock('@/text', async () => {
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ confirmResult: true }).module;
+    return createModalModuleMock({ spies: { confirm: modalConfirmMock } }).module;
 });
 
 vi.mock('@/components/ui/popover', () => ({
@@ -148,6 +149,7 @@ describe('WorkspaceSourceControlBranchMenu worktrees', () => {
         machineScmBranchCheckoutMock.mockClear();
         machineScmBranchCreateMock.mockClear();
         machineScmRemotePublishMock.mockClear();
+        modalConfirmMock.mockClear();
         readCachedBranchesForMachinePathMock.mockReturnValue([]);
         fetchBranchesForMachinePathMock.mockResolvedValue([]);
     });
@@ -344,6 +346,7 @@ describe('WorkspaceSourceControlBranchMenu worktrees', () => {
             path: '/repo',
             worktreePath: '/repo/.worktrees/feature-auth',
         });
+        expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
     it('does not expose publish for an untracked branch when no remote is configured', async () => {

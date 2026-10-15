@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -9,8 +10,19 @@ import { installSessionHandoffCommonModuleMocks } from '@/components/sessions/ha
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const openDefaultDetailsSpy = vi.hoisted(() => vi.fn());
+const relationshipActionSpies = vi.hoisted(() => ({
+    disable: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', enabled: false })),
+    enable: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', enabled: true })),
+    flush: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', status: null })),
+    terminate: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', terminated: true })),
+}));
+const mountedExecuteSpy = vi.hoisted(() => vi.fn());
 
 installSessionHandoffCommonModuleMocks({
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: false }).module;
+    },
     storage: async (importOriginal) => {
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
@@ -19,16 +31,23 @@ installSessionHandoffCommonModuleMocks({
                 useMachineDisplayNamesById: () => ({}),
         });
     },
-    typography: async () => ({
-        FontWeights: { regular: '400', semiBold: '500', bold: '600' },
-        Typography: new Proxy({}, { get: () => () => ({}) }),
-    }),
     text: async () => ({
         t: (key: string, params?: Record<string, unknown>) => params
             ? `${key}:${JSON.stringify(params)}`
             : key,
     }),
 });
+
+vi.mock('@/components/approvals/useMountedActionExecution', () => ({
+    useMountedActionExecution: () => ({ execute: mountedExecuteSpy, ready: true, isCurrent: () => true }),
+}));
+
+vi.mock('@/sync/ops/actions/workspaceSyncRelationshipActions', () => ({
+    disableWorkspaceSyncRelationshipAction: relationshipActionSpies.disable,
+    enableWorkspaceSyncRelationshipAction: relationshipActionSpies.enable,
+    flushWorkspaceSyncRelationshipAction: relationshipActionSpies.flush,
+    terminateWorkspaceSyncRelationship: relationshipActionSpies.terminate,
+}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -121,6 +140,19 @@ function createSummary(
 }
 
 describe('WorkspaceSyncRelationshipRow', () => {
+    it('routes termination through its Action even when a private modal would refuse', async () => {
+        for (const spy of Object.values(relationshipActionSpies)) spy.mockClear();
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={createSummary(0)} />);
+        const menu = screen.findAllByType('DropdownMenu')[0];
+
+        await act(async () => { menu?.props.onSelect('terminate'); });
+        await vi.waitFor(() => expect(relationshipActionSpies.terminate).toHaveBeenCalledWith({
+            controllerMachineId: 'machine-alpha',
+            relationshipId: 'relationship-1',
+        }, null, mountedExecuteSpy));
+    });
+
     it('opens general details from every row while keeping conflict attention and actions row-scoped', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const openDetails = vi.fn();

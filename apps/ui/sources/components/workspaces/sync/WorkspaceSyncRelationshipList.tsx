@@ -8,11 +8,11 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 import {
-    disableWorkspaceSyncRelationship,
-    enableWorkspaceSyncRelationship,
-    flushWorkspaceSyncRelationship,
-    terminatePersistedWorkspaceSyncRelationship,
-} from '@/sync/ops/workspaceSync';
+    disableWorkspaceSyncRelationshipAction,
+    enableWorkspaceSyncRelationshipAction,
+    flushWorkspaceSyncRelationshipAction,
+    terminateWorkspaceSyncRelationship,
+} from '@/sync/ops/actions/workspaceSyncRelationshipActions';
 import {
     resolveWorkspaceSyncErrorTranslationKey,
     formatWorkspaceSyncRelationshipTitle,
@@ -35,6 +35,7 @@ import { Modal } from '@/modal';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { openWorkspaceSyncRelationshipDetails } from './openWorkspaceSyncRelationshipDetails';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 export type WorkspaceSyncRelationshipListProps = Readonly<{
     serverId?: string;
@@ -56,6 +57,11 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
 }>) {
     const router = useRouter();
     const scope = resolveWorkspaceSyncStatusScope(props.summary);
+    const actionInput = React.useMemo(() => ({
+        controllerMachineId: scope.controllerMachineId,
+        relationshipId: scope.relationshipId,
+    }), [scope.controllerMachineId, scope.relationshipId]);
+    const actionExecution = useMountedActionExecution(scope.serverId, { openOnRequest: true });
     const snapshot = getWorkspaceSyncStatusSnapshot(scope);
     const status = props.summary.status;
     const modeKey = resolveWorkspaceSyncModeTranslationKey(props.summary.relationship.mode);
@@ -86,35 +92,29 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
         setMenuOpen(false);
         try {
             if (action === 'sync') {
-                const nextStatus = await flushWorkspaceSyncRelationship(scope);
-                setWorkspaceSyncStatus(scope, nextStatus);
+                const result = await flushWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
+                if (!result.ok) throw new Error(result.error);
+                if ('status' in result) setWorkspaceSyncStatus(scope, result.status);
                 return;
             }
             if (action === 'terminate') {
-                const confirmed = await Modal.confirm(
-                    t('workspaceSync.terminate.title'),
-                    t('workspaceSync.terminate.body'),
-                    {
-                        cancelText: t('common.cancel'),
-                        confirmText: t('workspaceSync.actions.terminate'),
-                        destructive: true,
-                    },
-                );
-                if (!confirmed) return;
-                await terminatePersistedWorkspaceSyncRelationship(scope);
+                const result = await terminateWorkspaceSyncRelationship(actionInput, null, actionExecution.execute);
+                if (!result.ok) throw new Error(result.error);
                 return;
             }
             if (action === 'disable') {
-                await disableWorkspaceSyncRelationship(scope);
+                const result = await disableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
+                if (!result.ok) throw new Error(result.error);
             } else {
-                await enableWorkspaceSyncRelationship(scope);
+                const result = await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
+                if (!result.ok) throw new Error(result.error);
             }
         } catch {
             Modal.alert(t('common.error'), t('errors.operationFailed'));
         } finally {
             setPendingAction(null);
         }
-    }, [scope]);
+    }, [actionExecution.execute, actionInput, scope]);
 
     const actionItems = React.useMemo<readonly DropdownMenuItem[]>(() => {
         const toggleAction = !props.summary.relationship.enabled
