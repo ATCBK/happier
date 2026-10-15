@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
@@ -14,7 +14,8 @@ import { writeVoiceConversationScopeMetadata } from '@/voice/persistence/voiceCo
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { RawRecordSchema } from '@happier-dev/session-core/raw';
-import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
+import { readStoredSessionMessages, type Message } from '@happier-dev/session-core/messages';
+import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 import { readCanonicalVoiceTranscriptSnapshot } from '@/voice/transcript/voiceConversationTranscript';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
@@ -27,8 +28,16 @@ import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import type { SpeechOptions } from 'expo-speech';
 
 const conversationModeState: { current: 'agent' | 'direct_session' } = { current: 'agent' };
+const speech = vi.hoisted(() => ({ speak: vi.fn<(text: string, options: SpeechOptions) => void>(), stop: vi.fn() }));
+// The OS speech engine is the external boundary; admission, storage and playback stay real.
+vi.mock('expo-speech', () => speech);
+vi.mock('react-native', async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock();
+});
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 let retainedAgent: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
@@ -282,6 +291,46 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     })).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(pendingWrites('s1')).toEqual([]);
+  });
+
+  it.each(['reply', 'cancel'] as const)('keeps a slow direct-session turn owned until %s', async (outcome) => {
+    conversationModeState.current = 'direct_session';
+    const { sendVoiceTextTurn } = await import('./sendVoiceTextTurn');
+    const { sync } = await import('@/sync/sync');
+    // Observe the real submit promise so the reply clock starts after HTTP acceptance.
+    const submission = vi.spyOn(sync, 'submitMessage');
+    const settings = buildAccountSettings();
+    const config = settings.voice.providers.local_conversation!.config;
+    const controller = new AbortController();
+    speech.speak.mockReset();
+    speech.speak.mockImplementation((_text, options) => { options.onStart?.(); options.onDone?.(); });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const turn = sendVoiceTextTurn({
+      sessionId: 's1', userText: 'slow spoken reply', signal: controller.signal,
+      settings: { ...settings, voice: { ...settings.voice, providers: { ...settings.voice.providers,
+        local_conversation: { schemaVersion: 1, config: { ...config, tts: { autoSpeakReplies: true, provider: 'device' } } },
+      } } },
+      playbackController: createVoicePlaybackController(), voiceAgentSessions,
+    });
+    try {
+      await vi.waitFor(() => expect(pendingWrites('s1')).toHaveLength(1));
+      await submission.mock.results[0]!.value;
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).toContain('s1');
+      if (outcome === 'cancel') controller.abort();
+      const reply = { id: 'slow-reply', kind: 'agent-text', text: 'Here is the slow reply.', localId: null, createdAt: Date.now() } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [reply.id], messagesById: { [reply.id]: reply },
+      }) } });
+      await turn;
+      expect(speech.speak.mock.calls.map(call => call[0])).toEqual(outcome === 'reply' ? [reply.text] : []);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).not.toContain('s1');
+    } finally {
+      controller.abort();
+      await turn;
+      vi.useRealTimers();
+      submission.mockRestore();
+    }
   });
 
   it('does not duplicate daemon-owned local agent turns in the UI transcript projector', async () => {

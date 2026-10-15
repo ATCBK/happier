@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
@@ -16,14 +16,37 @@ describe('waitForNextAssistantTextMessage', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     storage.setState(previousState, true);
+  });
+
+  it('retains transcript demand for a reply after 65 seconds until the owning turn ends', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waiting = waitForNextAssistantTextMessage(
+      's1', baseline.baselineIds, baseline.baselineCount, controller.signal,
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { id: 'late', kind: 'agent-text', text: 'A slow reply.', localId: null, createdAt: Date.now() } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [reply.id], messagesById: { [reply.id]: reply },
+      }) } });
+      await expect(waiting).resolves.toBe(reply.text);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
+    } finally {
+      controller.abort();
+      await waiting;
+    }
   });
 
   it('resolves null when aborted', async () => {
     const abortController = new AbortController();
     const baseline = captureAssistantTextMessageBaseline('s1');
     const waitPromise = waitForNextAssistantTextMessage(
-      's1', baseline.baselineIds, baseline.baselineCount, 60_000, abortController.signal,
+      's1', baseline.baselineIds, baseline.baselineCount, abortController.signal,
     );
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
 
@@ -41,7 +64,7 @@ describe('waitForNextAssistantTextMessage', () => {
       messagesById: { [user.id]: user, [olderReply.id]: olderReply },
     }) } });
     const baseline = captureAssistantTextMessageBaseline('s1');
-    const waitPromise = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, 60_000);
+    const waitPromise = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount);
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
 
     const assistant = { id: 'm3', kind: 'agent-text', text: 'assistant reply', localId: null, createdAt: 3 } satisfies Message;

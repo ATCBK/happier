@@ -532,7 +532,6 @@ export async function sendVoiceTextTurn(params: {
     sessionId,
     baselineIds,
     baselineCount,
-    60_000,
     params.signal,
   );
   if (params.signal?.aborted) {

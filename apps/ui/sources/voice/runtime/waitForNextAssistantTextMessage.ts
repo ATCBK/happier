@@ -73,13 +73,11 @@ export async function waitForNextAssistantTextMessageEntry(
   sessionId: string,
   baselineIds: Set<string>,
   baselineCount: number,
-  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<AssistantTextMessageEntry | null> {
   if (signal?.aborted) return null;
   return await new Promise((resolve) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
     let unsubscribe: null | (() => void) = null;
     const releaseTranscriptConsumer = registerSessionRealtimeTranscriptConsumer(sessionId);
     const abortListener = signal
@@ -89,8 +87,6 @@ export async function waitForNextAssistantTextMessageEntry(
       : null;
 
     const cleanup = () => {
-      if (timeout) clearTimeout(timeout);
-      timeout = null;
       try {
         unsubscribe?.();
       } catch {
@@ -127,7 +123,8 @@ export async function waitForNextAssistantTextMessageEntry(
       }
     };
 
-    timeout = setTimeout(() => done(null), timeoutMs);
+    // Reply latency belongs to the active Voice turn. Its cancellation signal
+    // releases this demand on End, interrupt, retarget or disconnect.
     if (signal && abortListener) {
       try {
         signal.addEventListener('abort', abortListener, { once: true });
@@ -149,14 +146,12 @@ export async function waitForNextAssistantTextMessage(
   sessionId: string,
   baselineIds: Set<string>,
   baselineCount: number,
-  timeoutMs: number,
   signal?: AbortSignal
 ): Promise<string | null> {
   const entry = await waitForNextAssistantTextMessageEntry(
     sessionId,
     baselineIds,
     baselineCount,
-    timeoutMs,
     signal,
   );
   return entry?.text ?? null;
