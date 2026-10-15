@@ -115,10 +115,10 @@ describe('local model Session voice consumption', () => {
     return result;
   }
 
-  it.each(['direct', 'bound', 'global', 'inherit'] as const)(
+  it.each(['direct', 'bound', 'global', 'inherit', 'foreign_home'] as const)(
     'resolves %s Session selection through the real TTS entry point before its first synthesis', async mode => {
       const homeId = account.homes.voice!.id;
-      const target = createSessionFixture({ id: 'speech-target', serverId: homeId, metadata: {
+      const target = createSessionFixture({ id: 'speech-target', serverId: mode === 'foreign_home' ? 'other-home' : homeId, metadata: {
         path: '/speech-target', host: 'voice.test', work: { voicePreference: {
           providerContributionId: 'happier.voice.builtin/local-neural', settingFieldPath: 'voiceId', value: 'am_adam',
         } },
@@ -142,6 +142,12 @@ describe('local model Session voice consumption', () => {
           assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart', speed: 1.2 } },
         networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {}, onTtsFailed: failed,
       });
+      if (mode === 'foreign_home') {
+        expect(failed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'tts_failed', reason: 'session_metadata_unavailable' }));
+        expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+        expect(encodedAudio.start).not.toHaveBeenCalled();
+        return;
+      }
       expect(failed).not.toHaveBeenCalled();
       expect(daemonStreamStartRpc).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         voiceId: mode === 'direct' || mode === 'bound' ? 'am_adam' : 'af_heart', speed: 1.2,
