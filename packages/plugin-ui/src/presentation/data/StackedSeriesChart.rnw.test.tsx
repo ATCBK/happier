@@ -20,6 +20,12 @@ const series = [
   { id: 'returned', label: 'Returned', points: [{ id: 'mon', x: 'Mon', y: 2 }, { id: 'tue', x: 'Tue', y: 1 }, { id: 'wed', x: 'Wed', y: 0 }] },
 ];
 const find = (root: HTMLElement, id: string) => root.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+/** True when the browser is told to run keyframes on the element (react-native-web compiles them into its style sheet). */
+function animates(element: Element): boolean {
+  return [...document.styleSheets].some((sheet) => [...sheet.cssRules].some((rule) => 'selectorText' in rule
+    && [...element.classList].some((name) => String(rule.selectorText).includes(`.${name}`)) && /animation-name/u.test(rule.cssText)));
+}
+
 describe('neutral series dataset', () => {
   it('draws an observed upper edge on the area scale without stacking it onto the mean or filling it', () => {
     const input = [
@@ -329,46 +335,47 @@ describe('neutral series dataset', () => {
       expect(find(mount.container, 'orders-values').querySelectorAll('button')).toHaveLength(2);
     } finally { mount.unmount(); }
   });
-  it('grows a bar once but renders its final value statically with reduced motion', async () => {
-    const input = [{ id: 'orders', label: 'Orders', points: [{ id: 'one', x: 1, y: 10 }] }];
+  it('raises a column as one unit on entrance, never drawing a segment short, and is static with reduced motion', async () => {
+    const input = [{ id: 'orders', label: 'Orders', points: [{ id: 'one', x: 1, y: 10 }] }, { id: 'refunds', label: 'Refunds', points: [{ id: 'one', x: 1, y: 5 }] }];
     const motion = { entrance: { durationMs: 30 }, change: { stiffness: 180, damping: 22, mass: 1 } };
+    const rises = (testID: string) => animates(find(mount.container, testID));
     const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={input}
       variant="bar" size="full" barMotion={motion} reducedMotion={false} testID="orders" />);
     try {
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBe(0);
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBeGreaterThan(100);
+      // Every segment has its own height on the first frame; the browser moves the stack that holds them together.
+      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBeGreaterThan(50);
+      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-1').style.height)).toBeGreaterThan(20);
+      expect(rises('orders-stack-0')).toBe(true);
+      expect(find(mount.container, 'orders-bar-0-1').parentElement).toBe(find(mount.container, 'orders-stack-0'));
+      expect(find(mount.container, 'orders-bar-0-0').parentElement).toBe(find(mount.container, 'orders-stack-0'));
       await mount.render(<HappierUiEnvironmentProvider environment={projectHappierUiEnvironment(createSurfaceContextFixture({ reducedMotion: true }))}>
         <StackedSeriesChart theme={theme} label="Orders" series={input} variant="bar" size="full"
           barMotion={motion} reducedMotion={false} testID="orders" />
       </HappierUiEnvironmentProvider>);
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBe(150);
-      await mount.render(<StackedSeriesChart theme={theme} label="Orders" series={input}
-        variant="bar" size="full" barMotion={motion} reducedMotion testID="orders" />);
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBeGreaterThan(100);
+      expect(rises('orders-stack-0')).toBe(false);
     } finally { mount.unmount(); }
   });
-  it('keeps retained buckets mounted and grows joining buckets from the baseline on a period change', async () => {
+  it('keeps retained buckets mounted, raises a joining bucket as one unit and drops a segment that joins at its final height', async () => {
     const motion = { change: { stiffness: 180, damping: 22, mass: 1 } };
-    const at = (ids: readonly string[]) => [{ id: 'orders', label: 'Orders', points: ids.map((id) => ({ id, x: id, y: 10 })) }];
-    const render = (ids: readonly string[]) => <StackedSeriesChart theme={theme} label="Orders" series={at(ids)} width={200}
+    const at = (ids: readonly string[], extra = false) => [{ id: 'orders', label: 'Orders', points: ids.map((id) => ({ id, x: id, y: 10 })) },
+      ...(extra ? [{ id: 'refunds', label: 'Refunds', points: ids.map((id) => ({ id, x: id, y: 5 })) }] : [])];
+    const render = (ids: readonly string[], extra = false) => <StackedSeriesChart theme={theme} label="Orders" series={at(ids, extra)} width={200}
       variant="bar" size="full" barMotion={motion} reducedMotion={false} testID="orders" />;
     const mount = mountThroughReactNativeWeb(render(['b', 'c']));
-    // RNW's real spring driver reads Date.now. Hold its clock while async React
-    // admission settles, then let actual frames prove the entering animation.
-    const now = Date.now();
-    const animationClock = vi.spyOn(Date, 'now').mockReturnValue(now);
     try {
       const retained = find(mount.container, 'orders-bar-0-0');
+
       expect(Number.parseFloat(retained.style.height)).toBe(150);
       await mount.render(render(['a', 'b', 'c']));
-      // The day that stays is the same mark; the day that joins rises from the axis.
+      // The day that stays is the same mark and does not replay; the day that joins rises whole, at its final height.
       expect(find(mount.container, 'orders-bar-1-0')).toBe(retained);
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBe(0);
-      animationClock.mockRestore();
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
-      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBeGreaterThan(100);
-    } finally { animationClock.mockRestore(); mount.unmount(); }
+      expect(animates(find(mount.container, 'orders-stack-1'))).toBe(false);
+      expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBe(150);
+      expect(animates(find(mount.container, 'orders-stack-0'))).toBe(true);
+      // A segment joining a column that is already drawn appears at its final height, never as a floating sliver.
+      await mount.render(render(['a', 'b', 'c'], true));
+      expect(Number.parseFloat(find(mount.container, 'orders-bar-1-1').style.height)).toBeGreaterThan(20);
+    } finally { mount.unmount(); }
   });
   it('keys series that look the same once, so many comparable lines read as one legend entry', () => {
     const line = (id: string, label: string, color: string) => ({ id, label, color, points: [0, 1, 2].map((x) => ({ id: String(x), x, y: x + id.length })) });
@@ -528,7 +535,7 @@ describe('few-bucket bar columns', () => {
     const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={input}
       width={600} viewportHeight={120} variant="bar" size="full" testID="few" />);
     try {
-      const column = find(mount.container, 'few-bar-0-0').parentElement!;
+      const column = find(mount.container, 'few-stack-0').parentElement!;
       expect(getComputedStyle(column).maxWidth).toBe(`${HAPPIER_DATA_METRICS.barMaxWidthPx}px`);
     } finally { mount.unmount(); }
   });

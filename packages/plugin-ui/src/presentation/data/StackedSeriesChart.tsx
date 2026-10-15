@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Animated, Easing, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, View, type ViewStyle } from 'react-native';
 import { Circle, ClipPath, Defs, Line, Path, Pattern, Rect, Svg } from 'react-native-svg';
 
 import type { HappierUiTheme } from '../../environment/types.js';
 import { useOptionalHappierUiAccessibility, useOptionalHappierUiLocalization } from '../../environment/context.js';
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierPressable } from '../interaction/Pressable.js';
+import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierPortableStyle } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
@@ -137,31 +138,66 @@ function HatchSwatch(props: Readonly<{ ink: string }>) {
 /** A column narrower than a compact peak figure ("12.4M") cannot centre it without cutting it at the plot's edge. */
 const PEAK_LABEL_SLOT_PX = 44;
 
-function SeriesBar(props: Readonly<{ top: number; height: number; color: string; opacity: number; index: number; fillPattern?: 'hatch'; patternInk: string;
-  /** A mark that joins an already drawn chart (a period change) rises from the axis; it never pops in. */
-  joining: boolean;
+/** A segment that already has a height follows its value changes with the host spring; it never starts from zero. */
+function SeriesBar(props: Readonly<{ top: number; height: number; color: string; opacity: number; fillPattern?: 'hatch'; patternInk: string;
   motion: StackedSeriesChartProps['barMotion']; reducedMotion: boolean; testID?: string }>) {
-  const joining = useRef(props.joining && props.motion?.change !== undefined).current;
-  const animatedHeight = useRef(new Animated.Value(!props.reducedMotion && (props.motion?.entrance || joining) ? 0 : props.height)).current;
+  const change = props.reducedMotion ? undefined : props.motion?.change;
+  const animatedHeight = useRef(new Animated.Value(props.height)).current;
   const mounted = useRef(false);
   useEffect(() => {
     const first = !mounted.current;
     mounted.current = true;
-    if (props.reducedMotion || !props.motion || (!first && !props.motion.change) || (first && !props.motion.entrance && !joining)) {
+    if (first || !change) {
       animatedHeight.setValue(props.height);
       return;
     }
-    const animation = first && props.motion.entrance && !joining
-      ? Animated.timing(animatedHeight, { toValue: props.height, duration: props.motion.entrance.durationMs,
-        delay: props.motion.entrance.delaysMs?.[props.index] ?? 0, useNativeDriver: false })
-      : props.motion.change ? Animated.spring(animatedHeight, { toValue: props.height, ...props.motion.change, useNativeDriver: false }) : null;
-    animation?.start();
-    return () => animation?.stop();
-  }, [animatedHeight, props.height, props.index, props.motion, props.reducedMotion]);
+    const animation = Animated.spring(animatedHeight, { toValue: props.height, ...change, useNativeDriver: false });
+    animation.start();
+    return () => animation.stop();
+  }, [animatedHeight, props.height, change]);
   const base = { position: 'absolute' as const, width: '100%' as const, backgroundColor: props.color, opacity: props.opacity };
   const pattern = props.fillPattern === 'hatch' ? <HatchSwatch ink={props.patternInk} /> : null;
-  if (props.reducedMotion || !props.motion) return <View testID={props.testID} style={{ ...base, top: props.top, height: props.height }}>{pattern}</View>;
+  if (!change) return <View testID={props.testID} style={{ ...base, top: props.top, height: props.height }}>{pattern}</View>;
   return <Animated.View testID={props.testID} style={{ ...base, top: Animated.subtract(props.top + props.height, animatedHeight), height: animatedHeight }}>{pattern}</Animated.View>;
+}
+
+type WebRiseStyle = ViewStyle & {
+  animationKeyframes?: ReadonlyArray<Record<string, { transform: ReadonlyArray<{ translateY: string }> }>>;
+  animationDuration?: string;
+  animationDelay?: string;
+  animationFillMode?: string;
+  animationTimingFunction?: string;
+};
+
+// react-native-web compiles keyframes only from a created style sheet, never from an inline style object.
+const riseStyles = StyleSheet.create({
+  fromAxis: { animationKeyframes: [{ '0%': { transform: [{ translateY: '100%' }] }, '100%': { transform: [{ translateY: '0%' }] } }] } as WebRiseStyle,
+});
+
+/**
+ * A column grows as one unit: the whole stack rises from the axis inside the column's clip, so no segment
+ * is ever drawn at a height of its own while its neighbours wait. On the web the browser runs the keyframes
+ * (they start with the element and survive a busy JS thread); on a native host the native driver does.
+ * Only a column that mounts decides to rise; a stack that already has its height never replays it.
+ */
+function StackRise(props: Readonly<{ rise: Readonly<{ durationMs: number; delayMs: number }> | null; height: number; testID?: string; children: ReactNode }>) {
+  const rise = useRef(props.rise).current;
+  const lift = useRef(new Animated.Value(rise ? props.height : 0)).current;
+  useEffect(() => {
+    if (!rise || Platform.OS === 'web') return;
+    const animation = Animated.timing(lift, { toValue: 0, duration: rise.durationMs, delay: rise.delayMs,
+      easing: Easing.bezier(...HAPPIER_MOTION_V1.standardBezier), useNativeDriver: true });
+    animation.start();
+    return () => animation.stop();
+  }, [lift, rise]);
+  const fill = { position: 'absolute' as const, left: 0, right: 0, top: 0, bottom: 0 };
+  if (!rise) return <View testID={props.testID} style={fill}>{props.children}</View>;
+  if (Platform.OS === 'web') {
+    const timing: WebRiseStyle = { ...fill, animationDuration: `${rise.durationMs}ms`, animationDelay: `${rise.delayMs}ms`,
+      animationFillMode: 'backwards', animationTimingFunction: HAPPIER_MOTION_V1.standardEasingCss };
+    return <View testID={props.testID} style={[riseStyles.fromAxis, timing]}>{props.children}</View>;
+  }
+  return <Animated.View testID={props.testID} style={[fill, { transform: [{ translateY: lift }] }]}>{props.children}</Animated.View>;
 }
 
 /** Finite series renderer. All variants share bucket identity, scale, interaction and exact facts. */
@@ -412,6 +448,9 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
               backgroundColor: shade.color ?? props.theme.colors.secondaryText, opacity: shade.opacity ?? HAPPIER_DATA_METRICS.bucketShadeOpacity }} /> : null}
           <View style={{ height, width: props.barWidth ?? '100%', maxWidth: props.barMaxWidth ?? (inline ? undefined : HAPPIER_DATA_METRICS.barMaxWidthPx), alignSelf: 'center', position: 'relative', overflow: 'hidden', backgroundColor: props.barTrackColor, borderTopLeftRadius: HAPPIER_DATA_METRICS.barRadiusPx, borderTopRightRadius: HAPPIER_DATA_METRICS.barRadiusPx }}>
+          <StackRise height={height} testID={props.testID ? `${props.testID}-stack-${index}` : undefined} rise={reducedMotion || !props.barMotion ? null
+            : props.barMotion.entrance && !drawn.current ? { durationMs: props.barMotion.entrance.durationMs, delayMs: props.barMotion.entrance.delaysMs?.[index] ?? 0 }
+              : props.barMotion.change && drawn.current ? { durationMs: HAPPIER_MOTION_V1.baseMs, delayMs: 0 } : null}>
           {bucket.values.map((entry, seriesIndex) => {
             if (entry.value === null) return null;
             const extent = Math.max(props.barMinHeight ?? (entry.value === 0 ? HAPPIER_DATA_METRICS.barStubPx : 0), Math.abs(geometry.yAt(entry.lower) - geometry.yAt(entry.upper)));
@@ -423,8 +462,8 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
               top={entry.value >= 0 ? Math.max(0, geometry.yAt(entry.lower) - extent) : geometry.yAt(entry.lower) + seam} height={barHeight}
               color={entry.color ?? color(seriesIndex)} opacity={entry.opacity ?? (selectedId === bucket.id || props.series.length > 1 || emphasized || props.barEmphasis === 'none' ? 1 : props.barEmphasis === 'maximum' ? Math.max(0.55, 0.9 * barHeight / height) : 0.65)}
               fillPattern={props.series[seriesIndex]?.fillPattern} patternInk={props.theme.colors.surface}
-              index={index} joining={drawn.current} motion={props.barMotion} reducedMotion={reducedMotion} />;
-          })}
+              motion={props.barMotion} reducedMotion={reducedMotion} />;
+          })}</StackRise>
           {bucket.values.every(entry => entry.value === null) ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
             testID={props.testID ? `${props.testID}-gap-${bucket.id}` : undefined}
             style={{ position: 'absolute', left: 0, right: 0, top: Math.max(0, geometry.yAt(0) - HAPPIER_DATA_METRICS.blockGapPx),
