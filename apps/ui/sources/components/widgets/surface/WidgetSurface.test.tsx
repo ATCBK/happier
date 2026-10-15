@@ -104,6 +104,21 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     // Shared Session content is an inline copy, never a foreign private Account reference.
     const scope: WidgetSurfaceRefV1 = { ...viewer, ...(kind === 'inline' ? { accountId: 'author' } : {}), owner: owner === 'home' ? { kind: owner }
         : owner === 'project' ? { kind: owner, projectId: 'project-one' } : { kind: owner, sessionId: 'destination' } };
+    if (kind === 'inline') {
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'mcp' as const, serverId: scope.serverId, expectedAccountId: viewer.accountId };
+        const catalog = await executor.execute('widgets.catalog.list', { surface: scope }, context);
+        expect(catalog).toMatchObject({ ok: true, result: { entries: expect.arrayContaining([
+            expect.objectContaining({ definition: reference, instanceCount: 1, availability: 'available' }),
+        ]) } });
+        const consumer = { kind: 'widget' as const, surface: scope, definition: reference };
+        expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'metric' }, context))
+            .toMatchObject({ ok: true, result: { options: expect.arrayContaining([expect.objectContaining({ value: 'tokens' })]) } });
+        const forged = { kind: 'inline' as const, definition: { ...saved, name: 'Unpublished replacement' } };
+        expect(await executor.execute('action.options.resolve', { consumer: { ...consumer, definition: forged }, fieldPath: 'metric' }, context))
+            .toMatchObject({ ok: false, errorCode: 'input_type_consumer_unavailable' });
+    }
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
     let containingCurrent = true;

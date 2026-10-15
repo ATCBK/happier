@@ -1,7 +1,7 @@
 import type { ActionExecuteFailure, ActionExecutorDeps } from '@happier-dev/protocol';
 import { readWidgetActionSurfacePortV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
-import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, describeAuthoredWidgetDefinitionV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { createSessionPluginPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState, resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -126,8 +126,19 @@ export function createWidgetCatalogActionDepsV1(account: LazyActionAccountContex
             const definitions = catalogDeps.widgetDefinitionArtifacts ? await catalogDeps.widgetDefinitionArtifacts.list(signal) : [];
             const authored = definitions.map(summary => describeWidgetDefinitionSummaryV1(summary,
                 summary.sourceDefinition ? candidates.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), summary.sourceDefinition!)) : null));
+            // Inline metadata is discoverable only from this surface's admitted
+            // records, never from the definition submitted by an options caller.
+            const placed: WidgetCandidate[] = [];
+            for (const { instance } of read.instances) {
+                const reference = instance.definition;
+                if (reference.kind !== 'inline' || placed.some(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), reference))) continue;
+                const body = reference.definition.body;
+                const installed = body.kind === 'installed'
+                    ? candidates.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), body)) : null;
+                placed.push(describeAuthoredWidgetDefinitionV1(reference.definition, reference, installed));
+            }
             account.assertCurrent();
-            return [...candidates, ...authored].map(candidate => ({ definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
+            return [...candidates, ...authored, ...placed].map(candidate => ({ definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
                 sizeDeclaration: candidate.sizeDeclaration,
                 fields: [...candidate.inputs?.fields ?? []], availability: candidate.sourceDefinition
                     && !candidates.some(current => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(current), candidate.sourceDefinition!))
