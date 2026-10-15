@@ -87,7 +87,9 @@ History/title-only updates retain the installed collector and mobile/desktop aut
 generation change retires that identity. These are source contracts, not a composed-live certification.
 
 The sidecar's canonical view binding derives navigation generations from engine document events,
-including same-URL reloads. URL/title/loading and controller events feed the existing browser event
+including same-URL reloads. Initial bootstrap also checks document readiness because a fast page
+can finish before page events are enabled; a later document commit invalidates that readiness reply.
+URL/title/loading and controller events feed the existing browser event
 reducer; command success is not evidence of a document commit. This is unreleased 0.3 behavior, not
 a claim that the composed stream journey has been live-verified.
 
@@ -176,6 +178,15 @@ writing media and uses the same Protocol privacy decision as UI context.
 `ephemeralOnly` facts still block export; missing or failed CDP privacy probes fail
 closed. Linux sandbox setup and recovery are described in
 [managed browser acquisition](./binary-runtime.md#managed-browser-acquisition-03-development).
+
+For confidential fill, the daemon's existing combined snapshot may return only the verified
+focused-field descriptor on a password-bearing page. This restricted observation carries the
+tab, frame, document, navigation generation, origin and field identity, with empty text and
+element lists and no URL, title, accessibility content or media. It uses the existing isolated-world
+field verifier; unavailable proof still refuses. Feature, Session policy and runtime admission
+remain required, and an active confidential hold suppresses even this descriptor. Password
+presence continues to block content capture and export. This is development source behavior;
+the complete SavedSecret/Remember journey still needs validation on the loaded daemon.
 
 Native desktop annotation and recording captures use the same source-owned,
 presence-only password-field probe before reading pixels. Only an explicit
