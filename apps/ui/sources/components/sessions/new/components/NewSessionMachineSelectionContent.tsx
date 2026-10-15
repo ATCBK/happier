@@ -23,7 +23,9 @@ import {
 import type { MachinePoolSelectionStatus } from '@/components/sessions/new/hooks/machines/useMachinePoolSelection';
 import type { ManagedMachineDestinationProjection, ManagedMachineSelectionDraft, ManagedMachineSelectionOffer } from './machineSelection/managedMachineSelection';
 
-const ManagedMachineSelectionOffers = retryableLazy(() => import('./machineSelection/ManagedMachineSelectionOffers')
+const ManagedMachineSelectionOffers = retryableLazy<React.ComponentProps<
+    typeof import('./machineSelection/ManagedMachineSelectionOffers').ManagedMachineSelectionOffers
+>>(() => import('./machineSelection/ManagedMachineSelectionOffers')
     .then(module => ({ default: module.ManagedMachineSelectionOffers })));
 
 /**

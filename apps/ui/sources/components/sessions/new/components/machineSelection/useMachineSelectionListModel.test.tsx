@@ -1,5 +1,5 @@
 import type * as React from 'react';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
@@ -54,10 +54,14 @@ afterEach(() => { clearMachineRequestReachabilityForTest(); network.resetRequest
 afterAll(() => network.dispose());
 
 beforeAll(async () => {
-    await network.addHome('https://server-a', 'account-a');
-    await network.addHome('https://server-b', 'account-b');
     ({ useMachineSelectionListModel } = await import('./useMachineSelectionListModel'));
 }, 240_000);
+
+// The package harness clears device storage before every test, including credentials and Homes.
+beforeEach(async () => {
+    await network.addHome('https://server-a', 'account-a');
+    await network.addHome('https://server-b', 'account-b');
+});
 
 function createMachine(id: string): Machine {
     return {
@@ -362,9 +366,10 @@ describe('useMachineSelectionListModel', () => {
         const model = await renderHook(() => useMachineSelectionListModel(params('session')));
         const shared = model.getCurrent().rootStep.sections.find((section) => section.id === 'server:server-a:shared:alice');
         if (shared?.kind !== 'static') throw new Error('expected a scoped shared ownership section');
-        expect(shared.title).toBe('Server A · machines.destinations.shared:Alice');
+        const { describeMachineSharedGroupTitle, describeMachineSharedOwnership } = await import('@/sync/domains/machines/machineOwnershipGroups');
+        expect(shared.title).toBe(`Server A · ${describeMachineSharedGroupTitle(ready.access!.custodian)}`);
         expect(shared.options.map((option) => option.id)).toEqual(['server-a::shared', 'server-a::pending']);
-        expect(shared.options[0]?.subtitle).toContain('machines.destinations.owner');
+        expect(shared.options[0]?.subtitle).toContain(describeMachineSharedOwnership(ready));
         expect(model.getCurrent().selectedOptionId).toBe('server-a::pending');
         expect(shared.options[1]?.disabled).toBe(true);
         shared.options[1]?.onSelect?.();
@@ -389,7 +394,8 @@ describe('useMachineSelectionListModel', () => {
             selectedMachine: null, selectedServerId: 'server-a', recentMachines: [], favoriteMachines: [], showFavorites: false, showRecent: false,
             showSearch: false, showCliGlyphs: false, autoDetectCliGlyphs: false, onSelectMachine: vi.fn(), onSelectScopedMachine: vi.fn() }));
         const section = model.getCurrent().rootStep.sections.find(section => section.id === (singleHome ? 'shared:' : 'server:server-a:shared:'));
-        expect(section?.title).toBe(`${singleHome ? '' : 'Server A · '}machines.destinations.sharedWithoutOwner`);
+        const { describeMachineSharedGroupTitle } = await import('@/sync/domains/machines/machineOwnershipGroups');
+        expect(section?.title).toBe(`${singleHome ? '' : 'Server A · '}${describeMachineSharedGroupTitle(undefined)}`);
         await model.unmount();
     });
     it('names a single Home\'s own machines "Your machines" (lab m-pick)', async () => {
@@ -996,8 +1002,10 @@ describe('useMachineSelectionListModel', () => {
 
         const poolOption = firstStaticOption(rendered.getCurrent());
         // A member whose details cannot be read is a locked machine, never a raw or short id.
-        expect(poolOption.subtitle).toContain('machine.lockedMachine');
-        expect(poolOption.accessibilityLabel).toContain('machine.lockedMachine');
+        const { getMachineDisplayName } = await import('@/utils/sessions/machineDisplayNames');
+        const lockedName = getMachineDisplayName(unidentifiedMachine);
+        expect(poolOption.subtitle).toContain(lockedName);
+        expect(poolOption.accessibilityLabel).toContain(lockedName);
         expect(poolOption.subtitle).not.toContain(machineId.slice(0, 8));
         await rendered.unmount();
     });
@@ -1185,6 +1193,12 @@ describe('useMachineSelectionListModel', () => {
         expect(pickSpecific?.label).toBe('machinePools.pickSpecificMachine');
         pickSpecific?.onSelect?.();
         expect(onDismissPoolSelection).toHaveBeenCalledOnce();
+
+        await rendered.rerender({ ...base, poolSelectionStatus: {
+            kind: 'unavailable', serverId: 'server-a', accountId: 'account-a', poolId, reason: 'worker_status_unavailable',
+        } });
+        expect(optionIdsOf().find(option => option.id === `pool:server-a:${poolId}`)?.subtitle)
+            .toBe('projectWorkers.statusUnavailable');
 
         // A current Home with a cached zero-connected summary still reaches the authoritative
         // resolve; only the Home's own currentness may deny activation.

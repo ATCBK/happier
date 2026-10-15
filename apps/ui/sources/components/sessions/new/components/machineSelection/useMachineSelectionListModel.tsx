@@ -294,6 +294,7 @@ function poolSelectionFeedback(
         case 'empty': return t('machinePools.resolveEmpty');
         case 'no_available_machine': return t('machinePools.resolveNoAvailable');
         case 'presence_unavailable': return t('machinePools.resolvePresenceUnavailable');
+        case 'worker_status_unavailable': return t('projectWorkers.statusUnavailable');
     }
 }
 

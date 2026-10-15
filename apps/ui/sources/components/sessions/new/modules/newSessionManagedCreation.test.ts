@@ -34,8 +34,9 @@ const baseMachine: ManagedMachineV1 = { id: 'paid', homeId: 'home', custodianAcc
     creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 1,
     retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
 
-function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>; custodianAccountId?: string }> = {}) {
+function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>; custodianAccountId?: string; confirm?: boolean }> = {}) {
     const rows = new Map<string, AutomationDefinitionDetail>();
+    const confirmations: string[] = [];
     const machine = { ...baseMachine, custodianAccountId: options.custodianAccountId ?? baseMachine.custodianAccountId,
         enrolledMachineId: 'guest', reviewedFacts: draft.receipt };
     let identity = 0;
@@ -78,6 +79,11 @@ function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>;
         },
     });
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+        // The host modal is external; canonical Action admission and confirmation policy stay real.
+        presentUserActionConfirmation: async ({ actionId }) => {
+            confirmations.push(actionId);
+            return options.confirm !== false;
+        },
         managedMachineAction: async request => {
             if (request.actionId === 'machines.managed.get') return machine;
             throw new Error('unexpected_power_effect');
@@ -93,7 +99,7 @@ function bindingTransport(options: Readonly<{ beforeWrite?: () => Promise<void>;
             throw new Error('unexpected_trigger_action');
         },
     }));
-    return { rows, machine, executeAction: createFrontDoorActionExecute(executor) };
+    return { rows, machine, confirmations, executeAction: createFrontDoorActionExecute(executor) };
 }
 
 function transport(input: Readonly<{ current?: () => boolean; wait?: () => Promise<void>; enrolled?: boolean; failed?: boolean; setupFails?: boolean; setupSucceeds?: boolean; custodianAccountId?: string; denyCrossMachine?: boolean;
@@ -387,9 +393,17 @@ describe('ordinary managed creation continuation', () => {
             receipt: { ...draft.receipt, retentionCapabilities: { supportedIntents: ['delete'] } } } }))
             .toEqual({ kind: 'incomplete', code: 'native_intent_unsupported' });
         expect(boundary.rows.size).toBe(0);
-        expect(await bindNewManagedMachineCreationScope(input)).toMatchObject({ kind: 'bound' });
+        const bound = await bindNewManagedMachineCreationScope(input);
+        expect(bound, JSON.stringify(bound)).toMatchObject({ kind: 'bound' });
+        expect(boundary.confirmations).toEqual(['workflow.trigger.add']);
         expect([...boundary.rows.values()][0]?.triggers[0]).toMatchObject({ kind: 'runLifecycle', condition: 'terminal',
             source: { kind: 'workflow_run', runId: 'actual-run' } });
+
+        const declined = bindingTransport({ confirm: false });
+        expect(await bindNewManagedMachineCreationScope({ ...input, machine: declined.machine, executeAction: declined.executeAction }))
+            .toEqual({ kind: 'incomplete', code: 'approval_canceled' });
+        expect(declined.confirmations).toEqual(['workflow.trigger.add']);
+        expect(declined.rows.size).toBe(0);
     });
 
     it('keeps a failed or unacknowledged FIN write visibly incomplete', async () => {
