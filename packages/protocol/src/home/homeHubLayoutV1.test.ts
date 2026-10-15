@@ -11,6 +11,7 @@ import {
     applyHomeHubLayoutIntent,
     homeHubDefaultWidgetInstanceId,
     listHiddenHomeSetupSteps,
+    normalizeHomeHubLayoutV1,
     moveHomeHubSection,
     reorderHomeHubSections,
     setHomeSetupStepHidden,
@@ -39,6 +40,37 @@ const SHOWN_ID = homeHubDefaultWidgetInstanceId(SHOWN.key);
 const AVAILABLE_ID = homeHubDefaultWidgetInstanceId(AVAILABLE.key);
 
 describe('configured Home placements', () => {
+    it.each(['widget', 'group'] as const)('hides and restores the same configured %s without losing placement or bindings', kind => {
+        const instance = { v: 1 as const, id: 'configured', definition: { kind: 'builtin' as const, id: 'machine_vitals' as const },
+            bindings: { machine: { kind: 'value' as const, value: { serverId: 'home', machineId: 'machine' } } } };
+        const widget = { kind: 'widget' as const, instance, size: 'small' as const, frameStyle: 'card' as const };
+        const item = kind === 'widget' ? widget : { kind: 'group' as const, id: 'group', title: 'Machines',
+            width: 'full' as const, frameStyle: 'card' as const, dividers: 'hairline' as const, children: [widget] };
+        const sectionId = kind === 'widget' ? instance.id : 'group';
+        const before: HomeHubLayoutValue = { v: 1, order: ['start', sectionId, 'attention', 'setup', 'machines', 'usage'], hidden: [], items: [item] };
+        const hidden = setHomeHubSectionHidden(before, BUILTINS, [], sectionId, true);
+        expect(hidden.items).toEqual(before.items);
+        expect(hidden.order).toEqual(before.order);
+        expect(hidden.hidden).toEqual([sectionId]);
+        expect(resolveHomeHubLayout(hidden, BUILTINS, []).sections.find(section => section.id === sectionId)).toMatchObject({ hidden: true });
+        expect(setHomeHubSectionHidden(hidden, BUILTINS, [], sectionId, true)).toBe(hidden);
+        // A neighboring item edit must not silently show hidden sections again.
+        const edited = applyHomeHubLayoutIntent(hidden, BUILTINS, [], { kind: 'rename', instanceId: instance.id, displayName: 'Pinned machine' });
+        expect(edited.hidden).toContain(sectionId);
+        const shown = setHomeHubSectionHidden(hidden, BUILTINS, [], sectionId, false);
+        expect(shown).toEqual(before);
+        const removed = applyHomeHubLayoutIntent(hidden, BUILTINS, [], { kind: 'remove', instanceId: sectionId });
+        expect(removed.items).toEqual([]);
+        expect(removed.hidden).not.toContain(sectionId);
+    });
+    it('normalizes hidden membership without dropping retained items, setup dismissals or default-removal tombstones', () => {
+        const item = { kind: 'widget', instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} } };
+        const normalized = normalizeHomeHubLayoutV1({ v: 1, order: ['copy', 'missing'], items: [item],
+            hidden: ['copy', 'missing', 'setup', 'setup:addPhone', SHOWN_ID] });
+        expect(normalized.items).toEqual([item]);
+        expect(normalized.order).toEqual(['copy', 'missing']);
+        expect(normalized.hidden).toEqual(['copy', 'setup', 'setup:addPhone', SHOWN_ID]);
+    });
     it('uses the loaded effective width when admitting a default-shown child into a group', () => {
         const widget = { ...SHOWN, sizeDeclaration: { sizes: ['wide'], defaultSize: 'wide' } satisfies WidgetSizeDeclarationV1 };
         expect(() => applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [widget],
@@ -345,7 +377,7 @@ describe('home hub layout', () => {
         expect(ids(added, [SHOWN, AVAILABLE]))
             .toEqual(['start', 'attention', 'setup', 'machines', 'usage', SHOWN_ID, AVAILABLE_ID]);
 
-        const removed = setHomeHubSectionHidden(added, BUILTINS, [SHOWN, AVAILABLE], SHOWN_ID, true);
+        const removed = applyHomeHubLayoutIntent(added, BUILTINS, [SHOWN, AVAILABLE], { kind: 'remove', instanceId: SHOWN_ID });
         expect(ids(removed, [SHOWN, AVAILABLE])).not.toContain(SHOWN_ID);
         expect(resolveHomeHubLayout(removed, BUILTINS, [SHOWN, AVAILABLE]).available).toEqual([SHOWN, AVAILABLE]);
         // The next app launch re-reads the default; the recorded choice still wins.
@@ -353,6 +385,9 @@ describe('home hub layout', () => {
 
         const readded = applyHomeHubLayoutIntent(removed, BUILTINS, [SHOWN, AVAILABLE], { kind: 'widget_add', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} } });
         expect(ids(readded, [SHOWN, AVAILABLE])).toContain(SHOWN_ID);
+        const hidden = setHomeHubSectionHidden(readded, BUILTINS, [SHOWN, AVAILABLE], SHOWN_ID, true);
+        const removedHidden = applyHomeHubLayoutIntent(hidden, BUILTINS, [SHOWN, AVAILABLE], { kind: 'remove', instanceId: SHOWN_ID });
+        expect(resolveHomeHubLayout(removedHidden, BUILTINS, [SHOWN, AVAILABLE]).sections.some(section => section.id === SHOWN_ID)).toBe(false);
     });
 
     it('keeps an uninstalled widget\'s place so it comes back where it was', () => {

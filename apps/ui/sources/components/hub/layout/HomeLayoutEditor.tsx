@@ -189,9 +189,7 @@ function EditorRowView(props: Readonly<{
     const { theme } = useUnistyles();
     const { row, layout } = props;
     const title = homeHubSectionTitle(row.section);
-    // Hiding a group would remove its widgets: it has no switch, and its options are on its bar.
-    const group = row.section.kind === 'group';
-    const alwaysShown = !group && !row.section.hideable;
+    const alwaysShown = !row.section.hideable;
     const shown = !row.section.hidden;
     const sizeChoices = row.section.kind === 'widget' ? resolveWidgetSizeChoicesV1('home', row.section.widget?.sizeDeclaration) : null;
     const size = row.section.kind === 'widget' && row.section.widget && sizeChoices?.defaultSize ? (
@@ -213,7 +211,7 @@ function EditorRowView(props: Readonly<{
                         icon={<Icon name={rowIcon(row)} />}
                         showChevron={false}
                         showDivider={props.showDivider && size === null}
-                        rightElement={group ? undefined : alwaysShown ? (
+                        rightElement={alwaysShown ? (
                             // The lock alone: a word here would take the title's room ("Needs your attent…"); hover or
                             // focus says it, and assistive tech reads it.
                             <Tooltip testID={`home-layout.${row.id}.locked`} label={t('homeIndex.alwaysShown')} style={styles.locked}>

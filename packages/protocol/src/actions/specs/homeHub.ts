@@ -18,8 +18,8 @@ export const HomeHubLayoutUpdateInputSchema = lazyZodSchema(() => z.strictObject
 export const HomeReachNudgeDismissInputSchema = lazyZodSchema(() => z.strictObject({ homeServerId: z.string().check(z.trim(), z.minLength(1)) }));
 export const HomeReachNudgeDismissResultSchema = lazyZodSchema(() => z.strictObject({ homeIdentityId: z.string().check(z.minLength(1)), dismissed: z.literal(true) }));
 const builtinSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('builtin'), hidden: z.boolean(), hideable: z.boolean(), frameStyle: z.optional(z.enum(['card', 'plain'])) }));
-const widgetSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('widget'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.optional(z.enum(['card', 'plain'])), instance: WidgetInstanceV1Schema, size: WidgetSizeV1Schema }));
-const groupSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('group'), hidden: z.literal(false), hideable: z.literal(true), frameStyle: z.enum(['card', 'plain']), group: WidgetLayoutGroupV1Schema, children: z.array(widgetSectionSchema) }));
+const widgetSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('widget'), hidden: z.boolean(), hideable: z.literal(true), frameStyle: z.optional(z.enum(['card', 'plain'])), instance: WidgetInstanceV1Schema, size: WidgetSizeV1Schema }));
+const groupSectionSchema = lazyZodSchema(() => z.strictObject({ id: sectionId, kind: z.literal('group'), hidden: z.boolean(), hideable: z.literal(true), frameStyle: z.enum(['card', 'plain']), group: WidgetLayoutGroupV1Schema, children: z.array(widgetSectionSchema) }));
 export const HomeHubLayoutResultSchema = lazyZodSchema(() => z.strictObject({
   layout: HomeHubLayoutV1Schema,
   sections: z.array(z.discriminatedUnion('kind', [builtinSectionSchema, widgetSectionSchema, groupSectionSchema])),

@@ -62,8 +62,8 @@ export type HomeHubWidgetInput = WidgetCandidateIdentityV1 & Readonly<{
 export type HomeHubSection<W extends HomeHubWidgetInput = HomeHubWidgetInput> =
     | Readonly<{ kind: 'builtin'; id: string; hidden: boolean; hideable: boolean; frameStyle?: 'card' | 'plain' }>
     | HomeHubWidgetSection<W>
-    | Readonly<{ kind: 'group'; id: string; group: WidgetLayoutGroupV1; children: readonly HomeHubWidgetSection<W>[]; hidden: false; hideable: true; frameStyle: 'card' | 'plain' }>;
-export type HomeHubWidgetSection<W extends HomeHubWidgetInput = HomeHubWidgetInput> = Readonly<{ kind: 'widget'; id: string; instance: WidgetInstanceV1; widget?: W; hidden: false; hideable: true; size: WidgetSizeV1; frameStyle?: 'card' | 'plain' }>;
+    | Readonly<{ kind: 'group'; id: string; group: WidgetLayoutGroupV1; children: readonly HomeHubWidgetSection<W>[]; hidden: boolean; hideable: true; frameStyle: 'card' | 'plain' }>;
+export type HomeHubWidgetSection<W extends HomeHubWidgetInput = HomeHubWidgetInput> = Readonly<{ kind: 'widget'; id: string; instance: WidgetInstanceV1; widget?: W; hidden: boolean; hideable: true; size: WidgetSizeV1; frameStyle?: 'card' | 'plain' }>;
 export type ResolvedHomeHubLayout<W extends HomeHubWidgetInput = HomeHubWidgetInput> = Readonly<{
     /** Owner-native order, including retained unresolved slots; sections are its renderable projection. */
     order: readonly string[];
@@ -82,7 +82,13 @@ export const HOME_HUB_DEFAULT_LAYOUT: HomeHubLayoutValue = { v: 1, order: [], hi
 /** Normalize stored personal layout content without persisting recovery defaults. */
 export function normalizeHomeHubLayoutV1(value: unknown): HomeHubLayoutValue {
     const parsed = storedLayoutSchema.safeParse(value);
-    return parsed.success ? parsed.data : HOME_HUB_DEFAULT_LAYOUT;
+    if (!parsed.success) return HOME_HUB_DEFAULT_LAYOUT;
+    const layout = parsed.data;
+    const retained = new Set([...HOME_HUB_BUILTIN_DEFINITIONS.map(section => section.id),
+        ...layout.items.map(getWidgetLayoutItemIdV1), ...flattenWidgetLayoutWidgetsV1(layout.items).map(item => item.instance.id)]);
+    // Default tombstones suppress re-projection and setup dismissals are not widget items.
+    // An unresolved order slot alone does not establish hidden membership.
+    return { ...layout, hidden: layout.hidden.filter(id => retained.has(id) || id.startsWith(SETUP_PREFIX) || id.startsWith('default:')) };
 }
 const SETUP_PREFIX = 'setup:';
 /** Only defaults derive an identity from a declaration. Explicit copies have independent ids. */
@@ -121,7 +127,7 @@ export function resolveHomeHubLayout<W extends HomeHubWidgetInput>(layout: HomeH
     const projectWidget = (item: WidgetLayoutWidgetV1, inGroup = false): HomeHubWidgetSection<W> => {
         const instance = item.instance;
         const widget = widgets.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), instance.definition));
-        return { kind: 'widget', id: instance.id, instance, ...(widget ? { widget } : {}), hidden: false, hideable: true,
+        return { kind: 'widget', id: instance.id, instance, ...(widget ? { widget } : {}), hidden: !inGroup && layout.hidden.includes(instance.id), hideable: true,
             size: resolveHomeHubWidgetSizeV1(instance, item.size, widget?.sizeDeclaration), ...(inGroup ? { frameStyle: 'plain' } as const : item.frameStyle ? { frameStyle: item.frameStyle } : {}) };
     };
     const sections: HomeHubSection<W>[] = [];
@@ -136,12 +142,12 @@ export function resolveHomeHubLayout<W extends HomeHubWidgetInput>(layout: HomeH
             continue;
         }
         const item = itemById.get(sectionId);
-        if (!item || layout.hidden.includes(sectionId)) continue;
+        if (!item) continue;
         if (item.kind === 'widget') sections.push(projectWidget(item));
         else {
             const children = item.children.map(child => projectWidget(child, true));
             sections.push({ kind: 'group', id: item.id, group: { ...item, children: item.children.map((child, index) => ({ ...child, size: children[index]!.size })) },
-                children, hidden: false, hideable: true, frameStyle: item.frameStyle });
+                children, hidden: layout.hidden.includes(sectionId), hideable: true, frameStyle: item.frameStyle });
         }
     }
     return { order, sections, available: widgets };
@@ -188,7 +194,6 @@ export function setHomeHubSectionHidden(layout: HomeHubLayoutValue, builtins: re
     const section = resolveHomeHubLayout(layout, builtins, widgets).sections.find(section => section.id === sectionId);
     if (!section) throw new HomeHubMutationErrorV1('home_hub_section_not_found');
     if (!section.hideable || section.hidden === hidden) return layout;
-    if (section.kind !== 'builtin' && hidden) return applyHomeHubLayoutIntent(layout, builtins, widgets, { kind: 'remove', instanceId: sectionId });
     const base = materialize(layout, builtins, widgets);
     return { ...base, hidden: hidden ? [...base.hidden, sectionId] : base.hidden.filter(id => id !== sectionId) };
 }
@@ -284,7 +289,9 @@ function applyItemIntent(layout: HomeHubLayoutValue, builtins: readonly HomeHubB
         order = order.map(id => slots.has(id) ? afterIds[index++]! : id);
     }
     const removedWidgets = flattenWidgetLayoutWidgetsV1(base.items).filter(item => !findWidgetLayoutItemV1(nextItems, item.instance.id));
-    const hidden = [...base.hidden.filter(id => !afterIds.includes(id)), ...removedWidgets.map(item => item.instance.id).filter(id => id.startsWith('default:') && !base.hidden.includes(id))];
+    const added = new Set(afterIds.filter(id => !beforeIds.includes(id)));
+    const hidden = [...new Set([...base.hidden.filter(id => !removed.has(id) && !added.has(id)),
+        ...removedWidgets.map(item => item.instance.id).filter(id => id.startsWith('default:'))])];
     return { ...base, items: nextItems, order: [...new Set(order)], hidden };
 }
 export function applyHomeHubLayoutIntent(layout: HomeHubLayoutValue, builtins: readonly HomeHubBuiltinDefinition[], widgets: readonly HomeHubWidgetInput[], intent: HomeHubLayoutIntent): HomeHubLayoutValue {

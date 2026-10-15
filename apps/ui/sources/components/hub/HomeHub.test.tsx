@@ -525,6 +525,61 @@ describe('HomeHub plugin widgets', () => {
         await flushHookEffects({ cycles: 2 });
     }
 
+    it.each(['widget', 'group'] as const)('keeps a hidden %s in Sections, suspends its data subscription, and restores the same copy', async kind => {
+        widgets.projection = widgetProjectionOf([{ pluginId: 'acme.ci', localId: 'checks', title: 'Checks', target: 'app' }],
+            { 'acme.ci': widgetInstalledPackage('acme.ci', 'CI') });
+        const instance: WidgetInstanceV1 = { v: 1, id: 'checks-copy', definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'checks' } }, bindings: {} };
+        const child = { kind: 'widget' as const, instance, size: 'small' as const };
+        const sectionId = kind === 'widget' ? instance.id : 'checks-group';
+        const items: HomeHubLayoutValue['items'] = kind === 'widget' ? [child] : [{ kind: 'group', id: sectionId, title: 'Checks group',
+            width: 'full', frameStyle: 'card', dividers: 'hairline', children: [child] }];
+        settings.layout = { order: ['start', 'attention', 'setup', sectionId, 'automations'], hidden: [], items };
+        const screen = await renderHome(async (input, init) => {
+            // Exercise the explicit Remove under the existing persisted UI waiver.
+            // This single-layout HTTP boundary does not host approval Artifacts.
+            if (new URL(String(input)).pathname === '/v2/account/settings') return Response.json({
+                content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
+                    approvalWaivedSurfaces: { 'widgets.item.remove': ['ui'] } } } }, version: 1,
+            });
+            return artifact.request(input, init);
+        });
+        await lay(screen, { [instance.id]: 300 });
+        await vi.waitFor(() => expect(widgets.bodyMounts.checks).toBe(1));
+        await openSections(screen);
+        const before = structuredClone(artifact.layout());
+        const toggle = () => screen.findByTestId(`home-layout.${sectionId}.shown`);
+        expect(toggle()).not.toBeNull();
+        await act(async () => toggle()!.props.onValueChange(false));
+        await vi.waitFor(() => expect(artifact.layout().hidden).toContain(sectionId));
+        expect(artifact.layout().items).toEqual(before.items);
+        expect(artifact.layout().order).toEqual(before.order);
+        expect(toggle()!.props.value).toBe(false);
+        expect(screen.findByTestId(`home-hub.section.${instance.id}`)).toBeNull();
+        expect(widgets.bodyMounts.checks).toBe(0);
+        expect(widgets.dataListeners.size).toBe(0);
+        await act(async () => screen.pressByTestId('home-hub.customizing.add'));
+        await flushHookEffects({ cycles: 3 });
+        const add = screen.root.findAllByType(WidgetAddSurface).find(node => node.props.open === true)!;
+        const entry = add.props.sections.flatMap((section: WidgetAddSection) => section.entries)
+            .find((candidate: { title: string }) => candidate.title === 'Checks')!;
+        // Off in Sections means it does not contribute to "N on Home" or "On Home" in Add.
+        expect(entry.added).toBe(false);
+        expect(entry.count).toBeUndefined();
+        await act(async () => add.props.onRequestClose());
+        await act(async () => toggle()!.props.onValueChange(true));
+        await vi.waitFor(() => expect(artifact.layout().hidden).not.toContain(sectionId));
+        await lay(screen, { [instance.id]: 300 });
+        await vi.waitFor(() => expect(widgets.bodyMounts.checks).toBe(1));
+        expect(toggle()!.props.value).toBe(true);
+        expect(artifact.layout()).toEqual(before);
+        if (kind === 'widget') {
+            const menu = screen.findAllByType(ItemRowActions).find(node => node.props.overflowTriggerTestID === `home-hub.${instance.id}.menuTrigger`)!;
+            await act(async () => menu.props.actions.find((action: { id: string }) => action.id === 'hide').onPress());
+            await vi.waitFor(() => expect(artifact.layout().items).toEqual([]));
+            expect(artifact.layout().hidden).not.toContain(instance.id);
+        }
+    });
+
     it('draws a group as one frame around its widgets; a grouped widget offers group entries, never its own frame', async () => {
         widgets.projection = widgetProjectionOf([
             { pluginId: 'acme.ci', localId: 'checks', title: 'Checks', target: 'app' },
@@ -745,7 +800,7 @@ describe('HomeHub plugin widgets', () => {
         });
     });
 
-    it('renders independently bound stored copies and full width on phone, retaining a missing type until it is removed', async () => {
+    it('renders independently bound stored copies and full width on phone, retaining a hidden missing type', async () => {
         const copy = (id: string, branch: string): WidgetInstanceV1 => ({ v: 1, id, displayName: branch,
             definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'checks' } },
             bindings: { branch: { kind: 'value', value: branch } } });
@@ -776,7 +831,8 @@ describe('HomeHub plugin widgets', () => {
         await openSections(screen);
         await act(async () => { await screen.findByTestId(`home-layout.${missing.id}.shown`)!.props.onValueChange(false); });
         await flushHookEffects({ cycles: 3 });
-        expect(storedInstances()).toEqual([first, second]);
+        expect(storedInstances()).toEqual([first, second, missing]);
+        expect(artifact.layout().hidden).toContain(missing.id);
         expect(storedItems().find(item => item.kind === 'widget' && item.instance.id === second.id)).toMatchObject({ size: 'full' });
         expect(screen.findByTestId(`home-hub.section.${missing.id}`)).toBeNull();
         expect(screen.getTextContent()).toContain('branch:release');
@@ -887,7 +943,7 @@ describe('HomeHub plugin widgets', () => {
         });
         await flushHookEffects({ cycles: 2 });
         expect(artifact.layout().hidden).toEqual([LATEST]);
-        expect(screen.findByTestId(`home-layout.${LATEST}.shown`)).toBeNull();
+        expect(screen.findByTestId(`home-layout.${LATEST}.shown`)!.props.value).toBe(false);
         expect(screen.findByTestId(`home-hub.section.${LATEST}`)).toBeNull();
         expect(screen.findByTestId(`home-hub.section.${CHECKS}`)).toBeTruthy();
     });

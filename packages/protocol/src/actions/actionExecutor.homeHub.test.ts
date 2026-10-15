@@ -58,11 +58,22 @@ describe('Home layout Account Actions', () => {
         expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_add', instance } }, { surface: 'cli' })).toMatchObject({ ok: true });
         expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'setup_visibility', stepId: 'addPhone', hidden: true } }, { surface: 'agent' })).toMatchObject({ ok: true });
         expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_size', instanceId: 'copy', size: 'full' } }, { surface: 'cli' })).toMatchObject({ ok: true });
+        const configured = await port.read();
+        for (const hidden of [true, false]) {
+            expect(getActionSpec('home.hub.layout.update').inputSchema.safeParse({ intent: { kind: 'visibility', sectionId: 'copy', hidden } }).success).toBe(true);
+            const result = await executor.execute('home.hub.layout.update', { intent: { kind: 'visibility', sectionId: 'copy', hidden } }, { surface: 'agent' });
+            expect(result).toMatchObject({ ok: true, result: { layout: { items: configured.items },
+                sections: expect.arrayContaining([expect.objectContaining({ id: 'copy', hidden })]) } });
+            if (result.ok) expect(getActionSpec('home.hub.layout.update').outputSchema!.safeParse(result.result).success).toBe(true);
+            const reloaded = await createHomeHubArtifactPortV1(boundary.forAccount(accountId), { accountId }).read();
+            expect(reloaded.hidden.includes('copy')).toBe(hidden);
+            expect(reloaded.items).toEqual(configured.items);
+        }
         const otherClient = createActionExecutor({ ...deps,
             homeHubArtifacts: createHomeHubArtifactPortV1(boundary.forAccount(accountId), { accountId }),
         });
         expect(await otherClient.execute('home.hub.layout.get', {}, { surface: 'mcp' })).toMatchObject({ ok: true, result: {
-            layout: { items: [{ kind: 'widget', instance, size: 'full' }] }, hiddenSetupStepIds: ['addPhone'],
+            layout: { items: configured.items }, hiddenSetupStepIds: ['addPhone'],
             sections: expect.arrayContaining([{ kind: 'widget', id: 'copy', instance, size: 'full', hidden: false, hideable: true }]),
         } });
         expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'visibility', sectionId: 'attention', hidden: true } }, { surface: 'cli' })).toMatchObject({ ok: true });
@@ -73,8 +84,18 @@ describe('Home layout Account Actions', () => {
         expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'group_create', groupId: 'counts', instanceIds: ['copy'], title: 'Counts' } }, { surface: 'cli' }))
             .toMatchObject({ ok: true });
         expect(await otherClient.execute('home.hub.layout.get', {}, { surface: 'mcp' })).toMatchObject({ ok: true, result: {
-            layout: { items: [{ kind: 'group', id: 'counts', children: [{ instance, size: 'full' }] }] },
+            layout: { items: expect.arrayContaining([expect.objectContaining({ kind: 'group', id: 'counts', children: [expect.objectContaining({ instance, size: 'full' })] })]) },
             sections: expect.arrayContaining([expect.objectContaining({ kind: 'group', id: 'counts', children: [{ kind: 'widget', id: 'copy', instance, size: 'full', hidden: false, hideable: true, frameStyle: 'plain' }] })]),
         } });
+        const grouped = await port.read();
+        for (const hidden of [true, false]) {
+            const result = await executor.execute('home.hub.layout.update', { intent: { kind: 'visibility', sectionId: 'counts', hidden } }, { surface: 'agent' });
+            expect(result).toMatchObject({ ok: true, result: { sections: expect.arrayContaining([expect.objectContaining({ id: 'counts', hidden })]) } });
+            if (result.ok) expect(getActionSpec('home.hub.layout.update').outputSchema!.safeParse(result.result).success).toBe(true);
+            const reloaded = await createHomeHubArtifactPortV1(boundary.forAccount(accountId), { accountId }).read();
+            expect(reloaded.items).toEqual(grouped.items);
+            expect(reloaded.order).toEqual(grouped.order);
+            expect(reloaded.hidden.includes('counts')).toBe(hidden);
+        }
     });
 });

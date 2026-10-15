@@ -54,8 +54,8 @@ function OpenHomeWidgetAddPopover(props: React.ComponentProps<typeof HomeWidgetA
         account ? { serverId: account.serverId, accountId: account.accountId, owner: { kind: 'home' } } : null
     ), [account]);
     const instances = React.useMemo(
-        // Grouped widgets are on Home too: the gallery counts every copy.
-        () => layout.sections.flatMap((section) => (section.kind === 'widget' ? [section.instance]
+        // Count visible copies, including group children. Hidden copies remain restorable in Sections.
+        () => layout.sections.flatMap((section) => section.hidden ? [] : (section.kind === 'widget' ? [section.instance]
             : section.kind === 'group' ? section.children.map(child => child.instance) : [])),
         [layout.sections],
     );

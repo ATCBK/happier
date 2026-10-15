@@ -125,7 +125,7 @@ export function HubSectionMenu(props: Readonly<{
                             ? t('settingsOverview.homeRemoveWidget')
                             : t('settingsOverview.homeHideSection'),
                         icon: 'eye-slash' as const,
-                        onPress: () => { void (props.inGroup ? layout.remove(section.id) : layout.setHidden(section.id, true)).catch(() => {}); },
+                        onPress: () => { void (section.kind === 'widget' ? layout.remove(section.id) : layout.setHidden(section.id, true)).catch(() => {}); },
                     }] : [],
                 })}
             />

@@ -245,10 +245,10 @@ describe('Home Customize entity reorder binding', () => {
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
         const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /></AccountShell>);
         await flushHookEffects({ cycles: 3 });
-        // Hiding a group would remove its widgets, so it has no switch; it still moves by its grip.
+        // Groups have the same reversible visibility switch as standalone widgets.
         expect(screen.findByTestId('home-layout.g')).not.toBeNull();
         expect(screen.findByTestId('home-layout.g.grip')).not.toBeNull();
-        expect(screen.findByTestId('home-layout.g.shown')).toBeNull();
+        expect(screen.findByTestId('home-layout.g.shown')!.props.value).toBe(true);
         // One owner for a group's name, width and ⋯: its bar on the page, never a second copy in this list.
         expect(screen.findByTestId('home-layout.g.groupMenu')).toBeNull();
         expect(screen.root.findAll(node => node.props.testIDPrefix === 'home-layout.g.group.width')).toHaveLength(0);
