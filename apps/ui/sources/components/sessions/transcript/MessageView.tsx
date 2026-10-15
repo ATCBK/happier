@@ -679,6 +679,7 @@ function UserTextBlock(props: {
   if (isStructuredOnly) {
     return (
       <Pressable
+        disabled={!isWeb}
         {...(isWeb
           ? {
               onHoverIn: () => setIsMessageHovered(true),
@@ -805,6 +806,7 @@ function UserTextBlock(props: {
 
   return (
     <Pressable
+      disabled={!isWeb}
       {...(isWeb
         ? {
             onHoverIn: () => setIsMessageHovered(true),
@@ -1250,6 +1252,7 @@ function AgentTextBlock(props: {
 
   return (
     <Pressable
+      disabled={!isWeb}
       {...(isWeb
         ? {
             onHoverIn: () => setIsMessageHovered(true),
