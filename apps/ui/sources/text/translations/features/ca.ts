@@ -13358,6 +13358,7 @@ const widgetFrameTranslations = { ca: {
         groupA11y: ({ name }) => `Grup: ${name}`,
         groupCount: ({ count }) => `Grup · ${count}`,
         groupCopyOf: ({ count, index, total }) => `Grup · ${count} · Còpia ${index} de ${total}`,
+        groupNameCopyOf: ({ name, index, total }) => `${name} · Còpia ${index} de ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Grup · 1 widget' : `Grup · ${count} widgets`,
         addsAtWidth: ({ width }) => `L’afegeix amb amplada ${width}.`,
         presetEdited: "Editat",

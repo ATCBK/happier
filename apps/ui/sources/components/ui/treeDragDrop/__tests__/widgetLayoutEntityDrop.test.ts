@@ -14,6 +14,7 @@ import { resolveWidgetLayoutEntityDrop, WIDGET_MOVE_PENDING_CODE } from '../widg
 import { widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { describeEntityDropOutcome } from '../ui/entityDropOutcome';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetGroupTakesEffect, widgetLayoutCardDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
+import { describeWidgetGroupAmong } from '@/components/widgets/group/widgetGroupMenu';
 import { t } from '@/text';
 import { resolveHappierDropChooserSections } from '@happier-dev/plugin-ui/presentation';
 
@@ -389,6 +390,24 @@ describe('shared layout DnD admission', () => {
         ]);
         expect(places(widgetLayoutCardDropTarget({ surface, items, itemId: 'child', title: 'Child', groupId: 'group', groupLabel: 'happier' }).listDestinations!))
             .toEqual([['happier', t('entityDragDrop.preview.moveAbove', { target: 'Child' })], ['happier', t('entityDragDrop.preview.moveBelow', { target: 'Child' })]]);
+    });
+    it('keeps same-named groups apart in the chooser: one heading per container, each saying which copy it is (H21)', () => {
+        const copy = (id: string): WidgetLayoutGroupV1 => ({ ...group, id, title: 'Capacity copy', children: [widget(`${id}-child`)] });
+        const items = [copy('one'), copy('two'), widget('moving')];
+        const childTitle = (instanceId: string) => instanceId;
+        const source: EntityDragItemV1 = { kind: 'widget-area-instance', scope, ref: { surface, instanceId: 'moving' } };
+        const destinations = items.flatMap(item => item.kind !== 'group' ? [] : widgetLayoutCardDropTarget({ surface, items, itemId: `${item.id}-child`,
+            title: 'Child', groupId: item.id, groupLabel: describeWidgetGroupAmong(items, item, childTitle) })
+            .listDestinations!(source).map(entry => ({ ...entry, targetId: item.id,
+                admission: { status: 'allowed' as const, effect: { actionId: 'widgets.item.move', input: {}, preview: { verb: entry.label, target: item.id } } } })));
+        const sections = resolveSurfaceChooserSections(destinations);
+        expect(sections.map(section => section.title)).toEqual([
+            t('widgetFrame.groupNameCopyOf', { name: 'Capacity copy', index: 1, total: 2 }),
+            t('widgetFrame.groupNameCopyOf', { name: 'Capacity copy', index: 2, total: 2 }),
+        ]);
+        expect(sections.map(section => section.options.length)).toEqual([2, 2]);
+        // A group that shares its name with no other keeps it as is.
+        expect(describeWidgetGroupAmong([...items, { ...group, id: 'solo', title: 'Release room' }], { ...group, id: 'solo', title: 'Release room' }, childTitle)).toBe('Release room');
     });
     it('says "Loading…" once while the widget admission is read, then lists the places under their containers', () => {
         const target = widgetLayoutCardDropTarget({ surface, items: [widget('top'), widget('tail'), widget('moving')], itemId: 'top', title: 'Top', groupLabel: 'Home' });

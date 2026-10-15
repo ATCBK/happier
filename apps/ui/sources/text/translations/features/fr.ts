@@ -13382,6 +13382,7 @@ const widgetFrameTranslations = { fr: {
         groupA11y: ({ name }) => `Groupe : ${name}`,
         groupCount: ({ count }) => `Groupe · ${count}`,
         groupCopyOf: ({ count, index, total }) => `Groupe · ${count} · Copie ${index} sur ${total}`,
+        groupNameCopyOf: ({ name, index, total }) => `${name} · Copie ${index} sur ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Groupe · 1 widget' : `Groupe · ${count} widgets`,
         addsAtWidth: ({ width }) => `L’ajoute en largeur ${width}.`,
         presetEdited: "Modifié",

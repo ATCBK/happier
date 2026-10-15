@@ -10,7 +10,7 @@ import { WidgetGroupFrame, type WidgetGroupChildPlacement } from '@/components/w
 import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMenuButton';
 import { WidgetGroupBar } from '@/components/widgets/group/WidgetGroupBar';
 import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
-import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { buildWidgetGroupMembershipActions, describeWidgetGroup, describeWidgetGroupAmong, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
 import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupFollowSource, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@/components/widgets/group/widgetGroupLayout';
@@ -521,7 +521,7 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
     const hover = useRowActionHoverHost();
     const phone = useDeviceType() === 'phone';
     const testID = `${props.testID}.group.${group.id}`;
-    const name = describeWidgetGroup(group, props.childTitle);
+    const name = describeWidgetGroupAmong(props.items, group, props.childTitle);
     const menu = useWidgetGroupMenu({
         group, childTitle: props.childTitle, candidates: props.descriptors, scope: props.canEdit ? props.surface : null, context: props.context,
         operations: props.operations, showWidth: true, geometry: { phone, columns: props.columns }, testID,
@@ -714,7 +714,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         // Inside a group, the line on the hairline reorders within it (lab wgdnd B).
         pointerDestination: (bounds, pointer) => ({ ...resolveEntityFlatRowPosition(instance.id, bounds, pointer), ...(parent ? { groupId: parent.group.id } : {}) }),
         target: widgetLayoutCardDropTarget({ surface, items: props.layoutItems, itemId: instance.id, title,
-            groupLabel: parent ? describeWidgetGroup(parent.group, props.childTitle) : props.surfaceName, groupId: parent?.group.id,
+            groupLabel: parent ? describeWidgetGroupAmong(props.layoutItems, parent.group, props.childTitle) : props.surfaceName, groupId: parent?.group.id,
             describeGroup: group => describeWidgetGroup(group, props.childTitle),
             sourceItem: props.movementSourceItem, area: props.area, canEdit: props.canEdit }),
     } : null);

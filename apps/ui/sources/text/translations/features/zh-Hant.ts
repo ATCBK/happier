@@ -13319,6 +13319,7 @@ const widgetFrameTranslations = { 'zh-Hant': {
         groupA11y: ({ name }) => `群組：${name}`,
         groupCount: ({ count }) => `群組 · ${count}`,
         groupCopyOf: ({ count, index, total }) => `群組 · ${count} · 副本 ${index}/${total}`,
+        groupNameCopyOf: ({ name, index, total }) => `${name} · 副本 ${index}/${total}`,
         groupWidgetCount: ({ count }) => `群組 · ${count} 個小工具`,
         addsAtWidth: ({ width }) => `將以${width}加入。`,
         presetEdited: "已編輯",

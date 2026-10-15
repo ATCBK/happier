@@ -23,7 +23,7 @@ import { WidgetGroupFrame } from '@/components/widgets/group/WidgetGroupFrame';
 import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMenuButton';
 import { WidgetGroupBar } from '@/components/widgets/group/WidgetGroupBar';
-import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { buildWidgetGroupMembershipActions, describeWidgetGroup, describeWidgetGroupAmong, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
 import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
 import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
@@ -150,7 +150,7 @@ function HubBuiltinSlot(props: SlotProps & Readonly<{
 
 function describeContainer(items: readonly WidgetLayoutItemV1[], groupId: string | undefined, childTitle: (instanceId: string) => string): string {
     const group = groupId ? items.find((item): item is WidgetLayoutGroupV1 => item.kind === 'group' && item.id === groupId) : undefined;
-    return group ? describeWidgetGroup(group, childTitle) : t('common.home');
+    return group ? describeWidgetGroupAmong(items, group, childTitle) : t('common.home');
 }
 
 /** A Home card's drop target: the line above or below it, in its group when it is grouped. */
@@ -197,7 +197,7 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
     const group = section.group;
     const testID = `home-hub.section.${section.id}`;
     const childTitle = React.useMemo(() => homeChildTitle(layout), [layout]);
-    const name = describeWidgetGroup(group, childTitle);
+    const name = describeWidgetGroupAmong(layout.items, group, childTitle);
     const candidates = React.useMemo(() => section.children.map(child => child.widget ?? null), [section.children]);
     const cells = React.useMemo(() => resolveWidgetGroupCells('home', section.children.map(child => ({ id: child.id, size: child.size }))),
         [section.children]);

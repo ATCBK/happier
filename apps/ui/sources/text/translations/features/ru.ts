@@ -13361,6 +13361,7 @@ const widgetFrameTranslations = { ru: {
         groupA11y: ({ name }) => `Группа: ${name}`,
         groupCount: ({ count }) => `Группа · ${count}`,
         groupCopyOf: ({ count, index, total }) => `Группа · ${count} · Копия ${index} из ${total}`,
+        groupNameCopyOf: ({ name, index, total }) => `${name} · Копия ${index} из ${total}`,
         groupWidgetCount: ({ count }) => `Группа · виджетов: ${count}`,
         addsAtWidth: ({ width }) => `Добавит с шириной: ${width}.`,
         presetEdited: "Изменено",

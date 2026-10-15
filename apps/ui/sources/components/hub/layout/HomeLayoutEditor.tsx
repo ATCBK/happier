@@ -24,7 +24,7 @@ import { t } from '@/text';
 import { findHomeHubBuiltinSection, homeHubSectionTitle } from '../homeHubSections';
 import type { HomeHubSection } from './homeHubLayout';
 import { useHomeHubLayout, type HomeHubLayout } from './useHomeHubLayout';
-import { WIDGET_GROUP_ICON } from '@/components/widgets/group/widgetGroupMenu';
+import { WIDGET_GROUP_ICON, widgetGroupCopyPosition } from '@/components/widgets/group/widgetGroupMenu';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { useHomeHubLayoutWritePending } from './useHomeHubArtifactLayout';
@@ -164,11 +164,13 @@ function rowIcon(row: EditorRow): IconName {
  * Groups placed from one saved group read the same, so a row says which copy it is among those that share
  * its title (in the order Home shows them); a group with a title of its own needs no such mark.
  */
-function groupCopyOf(rows: readonly EditorRow[], row: EditorRow): Readonly<{ index: number; total: number }> | null {
+function groupCopyOf(rows: readonly EditorRow[], row: EditorRow): ReturnType<typeof widgetGroupCopyPosition> {
     if (row.section.kind !== 'group') return null;
-    const title = homeHubSectionTitle(row.section);
-    const same = rows.filter(other => other.section.kind === 'group' && homeHubSectionTitle(other.section) === title);
-    return same.length > 1 ? { index: same.indexOf(row) + 1, total: same.length } : null;
+    return widgetGroupCopyPosition(
+        rows.flatMap(other => other.section.kind === 'group' ? [other.section] : []),
+        row.section,
+        homeHubSectionTitle,
+    );
 }
 
 function rowSubtitle(row: EditorRow, copy: ReturnType<typeof groupCopyOf>): string {

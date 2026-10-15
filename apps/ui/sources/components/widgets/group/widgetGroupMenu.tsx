@@ -47,6 +47,40 @@ export function describeWidgetGroup(
   );
 }
 
+/**
+ * Which copy a group is among the groups that share its name (in the order given), or null when its name is its
+ * own. One rule for Customize's rows and for every place a group is named beside others.
+ */
+export function widgetGroupCopyPosition<Group extends Readonly<{ id: string }>>(
+  groups: readonly Group[],
+  group: Group,
+  nameOf: (group: Group) => string,
+): Readonly<{ index: number; total: number }> | null {
+  const name = nameOf(group);
+  const same = groups.filter((other) => nameOf(other) === name);
+  return same.length > 1
+    ? { index: same.findIndex((other) => other.id === group.id) + 1, total: same.length }
+    : null;
+}
+
+/**
+ * A group's name among its layout's groups: groups that read alike say which copy they are, so a chooser
+ * heading, preview or grip label never merges two groups into one.
+ */
+export function describeWidgetGroupAmong(
+  items: readonly WidgetLayoutItemV1[],
+  group: WidgetLayoutGroupV1,
+  childTitle: (instanceId: string) => string,
+): string {
+  const name = describeWidgetGroup(group, childTitle);
+  const copy = widgetGroupCopyPosition(
+    items.filter((item): item is WidgetLayoutGroupV1 => item.kind === 'group'),
+    group,
+    (other) => describeWidgetGroup(other, childTitle),
+  );
+  return copy ? t('widgetFrame.groupNameCopyOf', { name, ...copy }) : name;
+}
+
 /** The widths a group can take, each unavailable one naming the widget that prevents it. */
 export function resolveWidgetGroupWidthChoices(
   children: readonly Readonly<{
